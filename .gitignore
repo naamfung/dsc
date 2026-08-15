@@ -1,0 +1,6 @@
+# Executables
+*.exe
+
+# Protobuf compiler files
+protoc.zip
+protoc_dir/

@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package dsc;
+
+option go_package = "dsc/proto";
+
+service DSCPluginService {
+  rpc Name(NameRequest) returns (NameResponse);
+  rpc Version(VersionRequest) returns (VersionResponse);
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message NameRequest {}
+message NameResponse { string name = 1; }
+
+message VersionRequest {}
+message VersionResponse { string version = 1; }
+
+message ExecuteRequest {
+  string input = 1;
+  map<string, string> params = 2;
+}
+
+message ExecuteResponse {
+  string output = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message HealthCheckRequest {}
+message HealthCheckResponse {
+  string status = 1;
+  string message = 2;
+}
