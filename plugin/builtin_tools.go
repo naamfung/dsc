@@ -10,6 +10,29 @@ import (
 
 var WorkspaceRoot = "./workspace" // 可改為環境變數或配置
 
+// safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接繞過）
+func safePath(base, reqPath string) (string, error) {
+	// 1. 清理並獲取絕對路徑
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	absReq, err := filepath.Abs(filepath.Join(absBase, reqPath))
+	if err != nil {
+		return "", err
+	}
+	// 2. 解析符號鏈接（關鍵！）
+	realReq, err := filepath.EvalSymlinks(absReq)
+	if err != nil {
+		return "", err
+	}
+	// 3. 嚴格前綴匹配
+	if !strings.HasPrefix(realReq, absBase+string(os.PathSeparator)) && realReq != absBase {
+		return "", os.ErrPermission
+	}
+	return realReq, nil
+}
+
 // ReadFileTool 讀取文件
 type ReadFileTool struct{}
 
@@ -37,17 +60,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (s
 		return "", err
 	}
 
-	// 獲取安全工作目錄的絕對路徑
-	base, err := filepath.Abs(WorkspaceRoot)
+	// 使用安全路徑檢查
+	reqPath, err := safePath(WorkspaceRoot, args.Path)
 	if err != nil {
 		return "", err
-	}
-	// 構建請求路徑（相對 base）
-	reqPath := filepath.Join(base, args.Path)
-	// 檢查是否在 base 內（防止 .. 繞過）
-	rel, err := filepath.Rel(base, reqPath)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", os.ErrPermission
 	}
 
 	content, err := os.ReadFile(reqPath)
@@ -86,14 +102,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (
 		return "", err
 	}
 
-	base, err := filepath.Abs(WorkspaceRoot)
+	// 使用安全路徑檢查
+	reqPath, err := safePath(WorkspaceRoot, args.Path)
 	if err != nil {
 		return "", err
-	}
-	reqPath := filepath.Join(base, args.Path)
-	rel, err := filepath.Rel(base, reqPath)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", os.ErrPermission
 	}
 
 	dir := filepath.Dir(reqPath)

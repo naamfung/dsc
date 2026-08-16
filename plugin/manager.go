@@ -494,7 +494,14 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new agent plugin does not implement Agent interface")
 	}
 
-	// 2. 卸載舊 client（若存在）
+	// 2. 卸載舊 client（若存在），先嘗試優雅關閉
+	if oldAgent, exists := m.agents[name]; exists {
+		// 嘗試優雅關閉，不強制
+		err := oldAgent.Shutdown(context.Background(), false)
+		if err != nil {
+			m.logger.Warn("agent shutdown failed, falling back to kill", "name", name, "error", err)
+		}
+	}
 	if oldClient, exists := m.clients[name]; exists {
 		oldClient.Kill()
 	}

@@ -1122,6 +1122,102 @@ func (x *ListToolsResponse) GetTools() []*Tool {
 	return nil
 }
 
+type ShutdownRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Force         bool                   `protobuf:"varint,1,opt,name=force,proto3" json:"force,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShutdownRequest) Reset() {
+	*x = ShutdownRequest{}
+	mi := &file_dsc_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShutdownRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShutdownRequest) ProtoMessage() {}
+
+func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
+func (*ShutdownRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ShutdownRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+type ShutdownResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShutdownResponse) Reset() {
+	*x = ShutdownResponse{}
+	mi := &file_dsc_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShutdownResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShutdownResponse) ProtoMessage() {}
+
+func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
+func (*ShutdownResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ShutdownResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ShutdownResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_dsc_proto protoreflect.FileDescriptor
 
 const file_dsc_proto_rawDesc = "" +
@@ -1226,7 +1322,7 @@ func file_dsc_proto_rawDescGZIP() []byte {
 	return file_dsc_proto_rawDescData
 }
 
-var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_dsc_proto_goTypes = []any{
 	(*NameRequest)(nil),              // 0: dsc.NameRequest
 	(*NameResponse)(nil),             // 1: dsc.NameResponse
@@ -1251,10 +1347,12 @@ var file_dsc_proto_goTypes = []any{
 	(*ExecuteToolResponse)(nil),      // 20: dsc.ExecuteToolResponse
 	(*ListToolsRequest)(nil),         // 21: dsc.ListToolsRequest
 	(*ListToolsResponse)(nil),        // 22: dsc.ListToolsResponse
-	nil,                              // 23: dsc.ExecuteRequest.ParamsEntry
+	(*ShutdownRequest)(nil),          // 23: dsc.ShutdownRequest
+	(*ShutdownResponse)(nil),         // 24: dsc.ShutdownResponse
+	nil,                              // 25: dsc.ExecuteRequest.ParamsEntry
 }
 var file_dsc_proto_depIdxs = []int32{
-	23, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	25, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	11, // 1: dsc.ChatRequest.messages:type_name -> dsc.Message
 	12, // 2: dsc.ChatRequest.tools:type_name -> dsc.Tool
 	14, // 3: dsc.ChatResponse.tool_calls:type_name -> dsc.ToolCall
@@ -1268,28 +1366,30 @@ var file_dsc_proto_depIdxs = []int32{
 	2,  // 11: dsc.AgentService.Version:input_type -> dsc.VersionRequest
 	15, // 12: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
 	17, // 13: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
-	10, // 14: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	0,  // 15: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	2,  // 16: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	6,  // 17: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	19, // 18: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
-	21, // 19: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
-	1,  // 20: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 21: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 22: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 23: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 24: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	1,  // 25: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 26: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	16, // 27: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
-	18, // 28: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
-	13, // 29: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	1,  // 30: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 31: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 32: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	20, // 33: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	22, // 34: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	20, // [20:35] is the sub-list for method output_type
+	23, // 14: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
+	10, // 15: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	0,  // 16: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	2,  // 17: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	6,  // 18: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	19, // 19: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	21, // 20: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	1,  // 21: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 22: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 23: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 24: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 25: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	1,  // 26: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 27: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	16, // 28: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
+	18, // 29: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
+	24, // 30: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	13, // 31: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	1,  // 32: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 33: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 34: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	20, // 35: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	22, // 36: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	20, // [20:37] is the sub-list for method output_type
 	5,  // [5:20] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee

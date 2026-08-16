@@ -1,4 +1,4 @@
-# DSC - Golang Reimplementation of DeepSeek Harness
+# DSC
 
 本项目系使用 Golang 實現的編程代理系統，遵循 DeepSeek Harness 的一齐皆插件的设计哲学。
 

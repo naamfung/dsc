@@ -240,6 +240,7 @@ const (
 	AgentService_Version_FullMethodName          = "/dsc.AgentService/Version"
 	AgentService_SetLLMServiceID_FullMethodName  = "/dsc.AgentService/SetLLMServiceID"
 	AgentService_SetToolServiceID_FullMethodName = "/dsc.AgentService/SetToolServiceID"
+	AgentService_Shutdown_FullMethodName         = "/dsc.AgentService/Shutdown"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -251,6 +252,7 @@ type AgentServiceClient interface {
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error)
 	SetToolServiceID(ctx context.Context, in *SetToolServiceIDRequest, opts ...grpc.CallOption) (*SetToolServiceIDResponse, error)
+	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
 type agentServiceClient struct {
@@ -311,6 +313,16 @@ func (c *agentServiceClient) SetToolServiceID(ctx context.Context, in *SetToolSe
 	return out, nil
 }
 
+func (c *agentServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ShutdownResponse)
+	err := c.cc.Invoke(ctx, AgentService_Shutdown_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -320,6 +332,7 @@ type AgentServiceServer interface {
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
 	SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error)
 	SetToolServiceID(context.Context, *SetToolServiceIDRequest) (*SetToolServiceIDResponse, error)
+	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -344,6 +357,9 @@ func (UnimplementedAgentServiceServer) SetLLMServiceID(context.Context, *SetLLMS
 }
 func (UnimplementedAgentServiceServer) SetToolServiceID(context.Context, *SetToolServiceIDRequest) (*SetToolServiceIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetToolServiceID not implemented")
+}
+func (UnimplementedAgentServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -456,6 +472,24 @@ func _AgentService_SetToolServiceID_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShutdownRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).Shutdown(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_Shutdown_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).Shutdown(ctx, req.(*ShutdownRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -482,6 +516,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetToolServiceID",
 			Handler:    _AgentService_SetToolServiceID_Handler,
+		},
+		{
+			MethodName: "Shutdown",
+			Handler:    _AgentService_Shutdown_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

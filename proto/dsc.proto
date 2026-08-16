@@ -17,6 +17,7 @@ service AgentService {
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc SetLLMServiceID(SetLLMServiceIDRequest) returns (SetLLMServiceIDResponse);
   rpc SetToolServiceID(SetToolServiceIDRequest) returns (SetToolServiceIDResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
 service LLMService {
@@ -105,6 +106,15 @@ message SetToolServiceIDRequest {
 }
 
 message SetToolServiceIDResponse {
+}
+
+message ShutdownRequest {
+  bool force = 1; // 是否強制關閉
+}
+
+message ShutdownResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message ExecuteToolRequest {

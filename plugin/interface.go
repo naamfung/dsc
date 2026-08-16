@@ -42,6 +42,8 @@ type Agent interface {
 	SetLLMServiceID(ctx context.Context, id uint32) error
 	// SetToolServiceID 设置 Tool service ID
 	SetToolServiceID(ctx context.Context, id uint32) error
+	// Shutdown 优雅关闭 Agent（用于热加载前）
+	Shutdown(ctx context.Context, force bool) error
 }
 
 // AgentResult 是 Agent 执行后的结果

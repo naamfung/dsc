@@ -51,6 +51,14 @@ func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest
 	return &proto.VersionResponse{Version: s.impl.Version(ctx)}, nil
 }
 
+func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {
+	err := s.impl.Shutdown(ctx, req.Force)
+	if err != nil {
+		return &proto.ShutdownResponse{Success: false, Message: err.Error()}, err
+	}
+	return &proto.ShutdownResponse{Success: true, Message: "shutdown successful"}, nil
+}
+
 // agentGRPCClient 是 gRPC 客户端代理
 type agentGRPCClient struct {
 	client proto.AgentServiceClient
@@ -90,5 +98,10 @@ func (c *agentGRPCClient) SetLLMServiceID(ctx context.Context, id uint32) error 
 
 func (c *agentGRPCClient) SetToolServiceID(ctx context.Context, id uint32) error {
 	_, err := c.client.SetToolServiceID(ctx, &proto.SetToolServiceIDRequest{ServiceId: id})
+	return err
+}
+
+func (c *agentGRPCClient) Shutdown(ctx context.Context, force bool) error {
+	_, err := c.client.Shutdown(ctx, &proto.ShutdownRequest{Force: force})
 	return err
 }

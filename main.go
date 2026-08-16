@@ -8,10 +8,12 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
 	"dsc/plugin"
 	"dsc/proto"
 	"github.com/hashicorp/go-hclog"
+	goplugin "github.com/hashicorp/go-plugin"
 	"gopkg.in/yaml.v3"
 	"google.golang.org/grpc"
 )
@@ -101,6 +103,19 @@ func loadConfig(path string) (*plugin.Config, error) {
 	return &cfg, nil
 }
 
+// waitForService 等待 broker 服務就緒
+func waitForService(broker *goplugin.GRPCBroker, id uint32) error {
+	for i := 0; i < 10; i++ {
+		conn, err := broker.Dial(id)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("service %d not ready", id)
+}
+
 func main() {
 	// 加載配置文件
 	cfgPath := os.Getenv("DSC_CONFIG")
@@ -188,6 +203,17 @@ func main() {
 		})
 	}()
 	logger.Info("tool service id generated", "serviceID", toolServiceID)
+
+	// 等待服務就緒
+	if err := waitForService(broker, llmServiceID); err != nil {
+		logger.Error("failed to wait for LLM service", "error", err)
+		os.Exit(1)
+	}
+	if err := waitForService(broker, toolServiceID); err != nil {
+		logger.Error("failed to wait for tool service", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("services are ready")
 
 	agent, ok := mgr.GetAgent("react_agent")
 	if !ok {
