@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -17,11 +18,7 @@ type AnthropicProvider struct {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
-	// 临时降级：忽略工具，仅文本对话（打印警告到 stderr）
-	if len(tools) > 0 {
-		fmt.Fprintf(os.Stderr, "[WARN] Anthropic plugin does not support tools yet, ignoring %d tools\n", len(tools))
-	}
-
+	// 1. 构建 Anthropic 消息
 	var systemMsg string
 	userMessages := make([]anthropic.MessageParam, 0, len(messages))
 
@@ -33,57 +30,108 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message,
 			userMessages = append(userMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
 		case "assistant":
 			userMessages = append(userMessages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(m.Content)))
-		// 注意：Anthropic 不支持 tool 消息角色，需要特殊處理（將 tool 響應作為 user 或 assistant 部分）
+		case "tool":
+			// Anthropic 工具结果应以 user 角色发送，并包含 tool_use_id
+			// 由于我们当前没有 tool_call_id，这里暂时将内容包装为文本，但会丢失关联
+			// 更好的做法是扩展协议，但为了演示，我们简单处理
+			userMessages = append(userMessages, anthropic.NewUserMessage(
+				anthropic.NewTextBlock(fmt.Sprintf("Tool result: %s", m.Content)),
+			))
 		default:
-			// 默認為 user
 			userMessages = append(userMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
 		}
 	}
 
-	params := anthropic.MessageNewParams{
+	// 2. 转换工具定义
+	var toolParams []anthropic.ToolUnionParam
+	if len(tools) > 0 {
+		for _, t := range tools {
+			var inputSchema map[string]any
+			if err := json.Unmarshal([]byte(t.ParametersJSON), &inputSchema); err != nil {
+				// 若 schema 解析失败，使用空对象
+				inputSchema = map[string]any{"type": "object"}
+			}
+			toolParams = append(toolParams, anthropic.ToolUnionParam{
+				OfTool: &anthropic.ToolParam{
+					Name: t.Name,
+					InputSchema: anthropic.ToolInputSchemaParam{
+						Properties: inputSchema,
+					},
+					Description: anthropic.String(t.Description),
+				},
+			})
+		}
+	}
+
+	// 3. 构建请求参数
+	msgParams := anthropic.MessageNewParams{
 		MaxTokens: 1024,
 		Model:     anthropic.Model(p.model),
 		Messages:  userMessages,
 	}
 	if systemMsg != "" {
-		params.System = []anthropic.TextBlockParam{
-			{
-				Text: systemMsg,
-				Type: "text",
-			},
+		msgParams.System = []anthropic.TextBlockParam{
+			{Text: systemMsg, Type: "text"},
 		}
 	}
+	if len(toolParams) > 0 {
+		msgParams.Tools = toolParams
+	}
 
-	// 如果提供了工具，可轉換為 Anthropic 的 tool 參數（此處省略，保持與現有功能一致）
-	// 如果需要，可參考 SDK 文檔添加 Tools 字段
-
-	resp, err := p.client.Messages.New(ctx, params)
+	// 4. 调用 API
+	resp, err := p.client.Messages.New(ctx, msgParams)
 	if err != nil {
 		return nil, err
 	}
 
+	// 5. 解析响应
 	var content string
+	var toolCalls []plugin.ToolCall
+
 	for _, block := range resp.Content {
-		if block.Type == "text" {
+		switch block.Type {
+		case "text":
 			content += block.Text
+		case "tool_use":
+			toolUse := block.AsToolUse()
+			argsMap := make(map[string]any)
+			if err := json.Unmarshal(toolUse.Input, &argsMap); err != nil {
+				// 若 JSON 解析失敗，嘗試直接轉換
+				var rawArgs map[string]any
+				if err2 := json.Unmarshal(toolUse.Input, &rawArgs); err2 == nil {
+					argsMap = rawArgs
+				}
+			}
+			toolCalls = append(toolCalls, plugin.ToolCall{
+				Name:      toolUse.Name,
+				Arguments: argsMap,
+			})
 		}
 	}
 
 	return &plugin.ChatResponse{
 		Content:      content,
 		FinishReason: string(resp.StopReason),
-		ToolCalls:    nil, // 暫不處理工具調用
+		ToolCalls:    toolCalls,
 	}, nil
 }
 
-func (p *AnthropicProvider) Name(ctx context.Context) string { return "anthropic" }
-func (p *AnthropicProvider) Version(ctx context.Context) string { return "1.0.0" }
-func (p *AnthropicProvider) HealthCheck(ctx context.Context) error { return nil }
+func (p *AnthropicProvider) Name(ctx context.Context) string {
+	return "anthropic"
+}
+
+func (p *AnthropicProvider) Version(ctx context.Context) string {
+	return "1.1.0" // 版本升级，支持工具调用
+}
+
+func (p *AnthropicProvider) HealthCheck(ctx context.Context) error {
+	return nil
+}
 
 func main() {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		// 對於 llama.cpp server，API key 通常是可選的或接受任意值
+		// 对于 llama.cpp server 或测试，可忽略
 		apiKey = "sk-llama-cpp-not-used"
 	}
 	baseURL := os.Getenv("ANTHROPIC_BASE_URL")

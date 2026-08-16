@@ -1,6 +1,11 @@
+!build.sh
+
 # Executables
 *.exe
+*.sh
 
 # Protobuf compiler files
 protoc.zip
 protoc_dir/
+
+*.txt
