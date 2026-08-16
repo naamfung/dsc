@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"dsc/plugin"
@@ -101,10 +102,14 @@ func main() {
 	if llmName == "" {
 		llmName = "openai"
 	}
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
 	llmBinary := map[string]string{
-		"openai":    "./plugins/llm-openai/llm-openai.exe",
-		"anthropic": "./plugins/llm-anthropic/llm-anthropic.exe",
-		"ollama":    "./plugins/llm-ollama/llm-ollama.exe",
+		"openai":    "./plugins/llm-openai/llm-openai" + ext,
+		"anthropic": "./plugins/llm-anthropic/llm-anthropic" + ext,
+		"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
 	}[llmName]
 	if llmBinary == "" {
 		log.Fatalf("Unknown LLM provider: %s", llmName)
@@ -115,34 +120,12 @@ func main() {
 	}
 	fmt.Printf("[Main] Loaded LLM: %s\n", llmName)
 
-	agentBinary := "./plugins/react_loop/react_loop.exe"
-	agentCmd := exec.Command(agentBinary)
-	// 預設設定 serviceID 為 1，因為 broker.NextId() 第一次調用返回 1
-	agentCmd.Args = append(agentCmd.Args, "-llm-service-id", "1")
-
-	agentClient := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"agent": &plugin.AgentGRPCPlugin{},
-		},
-		Cmd:              agentCmd,
-		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "agent-client"}),
-	})
-	defer agentClient.Kill()
-
-	rpcClient, err := agentClient.Client()
+	// 使用 Manager 加載 Agent
+	agentBinary := "./plugins/react_loop/react_loop" + ext
+	broker, serviceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
 	if err != nil {
-		log.Fatalf("Failed to get client: %v", err)
+		log.Fatalf("Failed to load Agent: %v", err)
 	}
-
-	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
-	if !ok {
-		log.Fatal("Not a gRPC client")
-	}
-
-	broker := grpcClient.Broker()
-	serviceID := broker.NextId()
 	fmt.Printf("[Main] Generated serviceID: %d\n", serviceID)
 
 	// 注册 LLM 服务（在 goroutine 中，避免阻塞）
@@ -154,14 +137,9 @@ func main() {
 		})
 	}()
 
-	// 然后 Dispense
-	raw, err := rpcClient.Dispense("agent")
-	if err != nil {
-		log.Fatalf("Failed to dispense agent: %v", err)
-	}
-	agent, ok := raw.(plugin.Agent)
+	agent, ok := mgr.GetAgent("react_agent")
 	if !ok {
-		log.Fatalf("Agent does not implement Agent interface")
+		log.Fatalf("Agent not found after loading")
 	}
 
 	ctx := context.Background()

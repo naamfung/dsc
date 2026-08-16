@@ -129,6 +129,10 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if serviceID == 0 {
+		return fmt.Errorf("serviceID must not be 0")
+	}
+
 	// 如果已加載，先卸載
 	if _, exists := m.agents[name]; exists {
 		m.unloadAgentLocked(name)
@@ -202,6 +206,65 @@ func (m *Manager) GetAgent(name string) (Agent, bool) {
 	defer m.mu.RUnlock()
 	p, ok := m.agents[name]
 	return p, ok
+}
+
+// LoadAgentAndGetBroker 加載 Agent 插件，並返回其 GRPCBroker 和 serviceID 以供宿主註冊服務。
+// 該方法會將 Agent 納入 Manager 管理，支持後續熱重載。
+func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBroker, uint32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 如果已加載，先卸載
+	if _, exists := m.agents[name]; exists {
+		m.unloadAgentLocked(name)
+	}
+
+	// 創建插件客戶端（先不傳遞 serviceID，稍後通過 broker 生成）
+	cmd := exec.Command(binaryPath)
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			"agent": &AgentGRPCPlugin{},
+		},
+		Cmd:              cmd,
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+	})
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return nil, 0, fmt.Errorf("failed to connect to agent plugin: %w", err)
+	}
+
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		client.Kill()
+		return nil, 0, fmt.Errorf("agent plugin is not a gRPC client")
+	}
+
+	broker := grpcClient.Broker()
+	serviceID := broker.NextId()
+
+	// 獲取插件實例
+	raw, err := rpcClient.Dispense("agent")
+	if err != nil {
+		client.Kill()
+		return nil, 0, fmt.Errorf("failed to dispense agent plugin: %w", err)
+	}
+
+	impl, ok := raw.(Agent)
+	if !ok {
+		client.Kill()
+		return nil, 0, fmt.Errorf("plugin does not implement Agent interface")
+	}
+
+	m.clients[name] = client
+	m.agents[name] = impl
+	m.typeMap[name] = "agent"
+
+	fmt.Printf("[Manager] Agent plugin '%s' loaded successfully, serviceID: %d\n", name, serviceID)
+	return broker, serviceID, nil
 }
 
 // LoadLLM 加載 LLM 插件
@@ -392,11 +455,8 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 
 // hotReloadLLMLocked 內部重載 LLM（需已持有鎖）
 func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
-	if err := m.unloadLLMLocked(name); err != nil {
-		// 忽略未找到錯誤
-	}
-
-	client := plugin.NewClient(&plugin.ClientConfig{
+	// 1. 建立新 client 並驗證
+	newClient := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"llm": &LLMGRPCPlugin{},
@@ -406,26 +466,32 @@ func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
 	})
 
-	rpcClient, err := client.Client()
+	rpcClient, err := newClient.Client()
 	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to connect to LLM plugin: %w", err)
+		newClient.Kill()
+		return fmt.Errorf("new LLM plugin connection failed: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("llm")
 	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to dispense LLM plugin: %w", err)
+		newClient.Kill()
+		return fmt.Errorf("dispense new LLM plugin failed: %w", err)
 	}
 
-	impl, ok := raw.(LLMProvider)
+	newImpl, ok := raw.(LLMProvider)
 	if !ok {
-		client.Kill()
-		return fmt.Errorf("plugin does not implement LLMProvider interface")
+		newClient.Kill()
+		return fmt.Errorf("new LLM plugin does not implement LLMProvider interface")
 	}
 
-	m.clients[name] = client
-	m.llms[name] = impl
+	// 2. 卸載舊 client（若存在）
+	if oldClient, exists := m.clients[name]; exists {
+		oldClient.Kill()
+	}
+	// 3. 更新映射
+	m.clients[name] = newClient
+	m.llms[name] = newImpl
+	m.typeMap[name] = "llm"
 
 	fmt.Printf("[Manager] LLM plugin '%s' hot-reloaded\n", name)
 	return nil
@@ -454,4 +520,16 @@ func (m *Manager) Shutdown() {
 	m.plugins = make(map[string]DSCPlugin)
 	m.agents = make(map[string]Agent)
 	m.llms = make(map[string]LLMProvider)
+	m.typeMap = make(map[string]string)
+}
+
+// ListAgents 列出所有已加載的 Agent 插件
+func (m *Manager) ListAgents() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.agents))
+	for name := range m.agents {
+		names = append(names, name)
+	}
+	return names
 }
