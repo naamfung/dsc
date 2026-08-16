@@ -74,6 +74,19 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 
 	maxIterations := 5
 	for i := 0; i < maxIterations; i++ {
+		// 上下文管理與截斷
+		const maxMessages = 20
+		if len(messages) > maxMessages {
+			// 保留 system 和 user 第一条，删除中间，保留最后几条
+			// 简单实现：保留前 2 条（system + initial user）和最后 (maxMessages-2) 条
+			kept := messages[:2]
+			tailStart := len(messages) - (maxMessages - 2)
+			if tailStart < 2 {
+				tailStart = 2
+			}
+			messages = append(kept, messages[tailStart:]...)
+		}
+
 		// 调用 LLM
 		req := &proto.ChatRequest{
 			Messages: messages,
@@ -104,25 +117,29 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 			toolReq := &proto.ExecuteToolRequest{
 				ToolName:      tc.Name,
 				ArgumentsJson: tc.ArgumentsJson,
+				ToolCallId:    tc.Id,
 			}
 			toolResp, err := toolClient.ExecuteTool(ctx, toolReq)
 			if err != nil {
 				// 错误也追加为 tool 消息
 				messages = append(messages, &proto.Message{
-					Role:    "tool",
-					Content: fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
+					Role:       "tool",
+					Content:    fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
+					ToolCallId: tc.Id,
 				})
 				continue
 			}
 			if toolResp.Error != "" {
 				messages = append(messages, &proto.Message{
-					Role:    "tool",
-					Content: fmt.Sprintf("Tool error: %s", toolResp.Error),
+					Role:       "tool",
+					Content:    fmt.Sprintf("Tool error: %s", toolResp.Error),
+					ToolCallId: tc.Id,
 				})
 			} else {
 				messages = append(messages, &proto.Message{
-					Role:    "tool",
-					Content: toolResp.Content,
+					Role:       "tool",
+					Content:    toolResp.Content,
+					ToolCallId: tc.Id,
 				})
 			}
 		}

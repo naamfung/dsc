@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"dsc/proto"
 	"github.com/hashicorp/go-plugin"
@@ -20,8 +22,9 @@ type LLMProvider interface {
 
 // Message 消息结构体
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string `json:"role"`
+	Content    string `json:"content"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 // Tool 工具结构体
@@ -40,6 +43,7 @@ type ChatResponse struct {
 
 // ToolCall 工具调用结构体
 type ToolCall struct {
+	ID        string                 `json:"id"`
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments"`
 }
@@ -69,7 +73,7 @@ func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*prot
 	// 转换 proto 消息到内部结构
 	messages := make([]Message, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = Message{Role: m.Role, Content: m.Content}
+		messages[i] = Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallId}
 	}
 	tools := make([]Tool, len(req.Tools))
 	for i, t := range req.Tools {
@@ -85,7 +89,7 @@ func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*prot
 	toolCalls := make([]*proto.ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		argsJSON, _ := json.Marshal(tc.Arguments)
-		toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
+		toolCalls[i] = &proto.ToolCall{Id: tc.ID, Name: tc.Name, ArgumentsJson: string(argsJSON)}
 	}
 
 	return &proto.ChatResponse{
@@ -123,19 +127,32 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 	// 转换内部结构到 proto 消息
 	protoMessages := make([]*proto.Message, len(messages))
 	for i, m := range messages {
-		protoMessages[i] = &proto.Message{Role: m.Role, Content: m.Content}
+		protoMessages[i] = &proto.Message{Role: m.Role, Content: m.Content, ToolCallId: m.ToolCallID}
 	}
 	protoTools := make([]*proto.Tool, len(tools))
 	for i, t := range tools {
 		protoTools[i] = &proto.Tool{Name: t.Name, Description: t.Description, ParametersJson: t.ParametersJSON}
 	}
 
-	resp, err := c.client.Chat(ctx, &proto.ChatRequest{
-		Messages: protoMessages,
-		Tools:    protoTools,
-	})
+	var resp *proto.ChatResponse
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		req := &proto.ChatRequest{
+			Messages: protoMessages,
+			Tools:    protoTools,
+		}
+		resp, err = c.client.Chat(ctx, req)
+		if err == nil {
+			break
+		}
+		// 如果是不可恢復錯誤（如參數錯誤），直接返回
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "failed to parse") {
+			return nil, err
+		}
+		time.Sleep(time.Duration(1<<attempt) * time.Second) // 指數退避
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("LLM call failed after retries: %w", err)
 	}
 
 	toolCalls := make([]ToolCall, len(resp.ToolCalls))
@@ -144,7 +161,7 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 		if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
 			return nil, fmt.Errorf("failed to parse tool call arguments for %s: %w", tc.Name, err)
 		}
-		toolCalls[i] = ToolCall{Name: tc.Name, Arguments: args}
+		toolCalls[i] = ToolCall{ID: tc.Id, Name: tc.Name, Arguments: args}
 	}
 
 	return &ChatResponse{

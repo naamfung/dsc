@@ -534,6 +534,7 @@ type Message struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Role          string                 `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"` // "system", "user", "assistant", "tool"
 	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	ToolCallId    string                 `protobuf:"bytes,3,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"` // 用于 tool 角色关联
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -578,6 +579,13 @@ func (x *Message) GetRole() string {
 func (x *Message) GetContent() string {
 	if x != nil {
 		return x.Content
+	}
+	return ""
+}
+
+func (x *Message) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
 	}
 	return ""
 }
@@ -704,8 +712,9 @@ func (x *ChatResponse) GetToolCalls() []*ToolCall {
 
 type ToolCall struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	ArgumentsJson string                 `protobuf:"bytes,2,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"` // JSON 字符串
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	ArgumentsJson string                 `protobuf:"bytes,3,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"` // JSON 字符串
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -738,6 +747,13 @@ func (x *ToolCall) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ToolCall.ProtoReflect.Descriptor instead.
 func (*ToolCall) Descriptor() ([]byte, []int) {
 	return file_dsc_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ToolCall) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
 }
 
 func (x *ToolCall) GetName() string {
@@ -918,6 +934,7 @@ type ExecuteToolRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	ArgumentsJson string                 `protobuf:"bytes,2,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"` // JSON string
+	ToolCallId    string                 `protobuf:"bytes,3,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`        // 用于关联
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -962,6 +979,13 @@ func (x *ExecuteToolRequest) GetToolName() string {
 func (x *ExecuteToolRequest) GetArgumentsJson() string {
 	if x != nil {
 		return x.ArgumentsJson
+	}
+	return ""
+}
+
+func (x *ExecuteToolRequest) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
 	}
 	return ""
 }
@@ -1131,10 +1155,12 @@ const file_dsc_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\tR\x06status\"X\n" +
 	"\vChatRequest\x12(\n" +
 	"\bmessages\x18\x01 \x03(\v2\f.dsc.MessageR\bmessages\x12\x1f\n" +
-	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\"7\n" +
+	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\"Y\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\"e\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\x12 \n" +
+	"\ftool_call_id\x18\x03 \x01(\tR\n" +
+	"toolCallId\"e\n" +
 	"\x04Tool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12'\n" +
@@ -1143,10 +1169,11 @@ const file_dsc_proto_rawDesc = "" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12#\n" +
 	"\rfinish_reason\x18\x02 \x01(\tR\ffinishReason\x12,\n" +
 	"\n" +
-	"tool_calls\x18\x03 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"E\n" +
-	"\bToolCall\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
-	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson\"7\n" +
+	"tool_calls\x18\x03 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"U\n" +
+	"\bToolCall\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
+	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\"7\n" +
 	"\x16SetLLMServiceIDRequest\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x01 \x01(\rR\tserviceId\"\x19\n" +
@@ -1154,10 +1181,12 @@ const file_dsc_proto_rawDesc = "" +
 	"\x17SetToolServiceIDRequest\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x01 \x01(\rR\tserviceId\"\x1a\n" +
-	"\x18SetToolServiceIDResponse\"X\n" +
+	"\x18SetToolServiceIDResponse\"z\n" +
 	"\x12ExecuteToolRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12%\n" +
-	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson\"E\n" +
+	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson\x12 \n" +
+	"\ftool_call_id\x18\x03 \x01(\tR\n" +
+	"toolCallId\"E\n" +
 	"\x13ExecuteToolResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x12\n" +

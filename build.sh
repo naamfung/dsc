@@ -41,5 +41,3 @@ echo "Building llm-ollama plugin..."
 go build -o plugins/llm-ollama/llm-ollama.exe ./plugins/llm-ollama
 
 echo "Build completed successfully."
-
-./concat_safe.sh . > v9_src.txt

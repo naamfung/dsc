@@ -72,6 +72,7 @@ message ChatRequest {
 message Message {
   string role = 1;    // "system", "user", "assistant", "tool"
   string content = 2;
+  string tool_call_id = 3;   // 用于 tool 角色关联
 }
 
 message Tool {
@@ -87,8 +88,9 @@ message ChatResponse {
 }
 
 message ToolCall {
-  string name = 1;
-  string arguments_json = 2;  // JSON 字符串
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3;  // JSON 字符串
 }
 
 message SetLLMServiceIDRequest {
@@ -108,6 +110,7 @@ message SetToolServiceIDResponse {
 message ExecuteToolRequest {
   string tool_name = 1;
   string arguments_json = 2;  // JSON string
+  string tool_call_id = 3;   // 用于关联
 }
 
 message ExecuteToolResponse {
