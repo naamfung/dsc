@@ -153,7 +153,7 @@ func main() {
 	go func() {
 		broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
 			s := grpc.NewServer(opts...)
-			proto.RegisterLLMServiceServer(s, &LLMProxyServer{llm: llm})
+			proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
 			return s
 		})
 	}()
