@@ -31,6 +31,21 @@ type ExecuteResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
+// Agent 定义了核心循环的契约
+type Agent interface {
+	// Run 是 Agent 的主入口，负责执行整个循环
+	Run(ctx context.Context, input string) (*AgentResult, error)
+	// 可以添加其他方法，如 Name(), Version() 等
+	Name(ctx context.Context) string
+	Version(ctx context.Context) string
+}
+
+// AgentResult 是 Agent 执行后的结果
+type AgentResult struct {
+	Output string `json:"output"`
+	Status string `json:"status"` // "success", "error"
+}
+
 // Handshake 是宿主和插件间的握手配置
 var Handshake = plugin.HandshakeConfig{
 	ProtocolVersion:  1,

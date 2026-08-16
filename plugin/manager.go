@@ -13,7 +13,9 @@ import (
 type Manager struct {
 	mu      sync.RWMutex
 	clients map[string]*plugin.Client // 插件名 -> 客戶端
-	plugins map[string]DSCPlugin      // 插件名 -> 業務接口
+	plugins map[string]DSCPlugin      // 插件名 -> DSC業務接口
+	agents  map[string]Agent          // 插件名 -> Agent接口
+	llms    map[string]LLMProvider    // 插件名 -> LLMProvider接口
 	config  *ManagerConfig
 }
 
@@ -26,6 +28,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	return &Manager{
 		clients: make(map[string]*plugin.Client),
 		plugins: make(map[string]DSCPlugin),
+		agents:  make(map[string]Agent),
+		llms:    make(map[string]LLMProvider),
 		config:  cfg,
 	}
 }
@@ -115,6 +119,154 @@ func (m *Manager) List() []string {
 	return names
 }
 
+// LoadAgent 加載一個 Agent 插件（啟動子進程）
+func (m *Manager) LoadAgent(name string, binaryPath string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 如果已加載，先卸載
+	if _, exists := m.agents[name]; exists {
+		m.unloadAgentLocked(name)
+	}
+
+	// 創建插件客戶端
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			"agent": &AgentGRPCPlugin{},
+		},
+		Cmd:              exec.Command(binaryPath),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+	})
+
+	// 建立 RPC 連接
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to connect to agent plugin: %w", err)
+	}
+
+	// 獲取插件實例
+	raw, err := rpcClient.Dispense("agent")
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to dispense agent plugin: %w", err)
+	}
+
+	impl, ok := raw.(Agent)
+	if !ok {
+		client.Kill()
+		return fmt.Errorf("plugin does not implement Agent interface")
+	}
+
+	m.clients[name] = client
+	m.agents[name] = impl
+
+	fmt.Printf("[Manager] Agent plugin '%s' loaded successfully\n", name)
+	return nil
+}
+
+// UnloadAgent 卸載 Agent 插件（殺死子進程，釋放資源）
+func (m *Manager) UnloadAgent(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unloadAgentLocked(name)
+}
+
+func (m *Manager) unloadAgentLocked(name string) error {
+	if client, exists := m.clients[name]; exists {
+		client.Kill() // 殺死插件子進程
+		delete(m.clients, name)
+		delete(m.agents, name)
+		fmt.Printf("[Manager] Agent plugin '%s' unloaded\n", name)
+		return nil
+	}
+	return fmt.Errorf("agent plugin '%s' not found", name)
+}
+
+// GetAgent 獲取已加載的 Agent 實例
+func (m *Manager) GetAgent(name string) (Agent, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.agents[name]
+	return p, ok
+}
+
+// LoadLLM 加載 LLM 插件
+func (m *Manager) LoadLLM(name string, binaryPath string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 如果已加載，先卸載
+	if _, exists := m.llms[name]; exists {
+		m.unloadLLMLocked(name)
+	}
+
+	// 創建插件客戶端
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			"llm": &LLMGRPCPlugin{},
+		},
+		Cmd:              exec.Command(binaryPath),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
+	})
+
+	// 建立 RPC 連接
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to connect to LLM plugin: %w", err)
+	}
+
+	// 獲取插件實例
+	raw, err := rpcClient.Dispense("llm")
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to dispense LLM plugin: %w", err)
+	}
+
+	impl, ok := raw.(LLMProvider)
+	if !ok {
+		client.Kill()
+		return fmt.Errorf("plugin does not implement LLMProvider interface")
+	}
+
+	m.clients[name] = client
+	m.llms[name] = impl
+
+	fmt.Printf("[Manager] LLM plugin '%s' loaded successfully\n", name)
+	return nil
+}
+
+// GetLLM 獲取已加載的 LLM 實例
+func (m *Manager) GetLLM(name string) (LLMProvider, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, ok := m.llms[name]
+	return p, ok
+}
+
+// UnloadLLM 卸載 LLM 插件
+func (m *Manager) UnloadLLM(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unloadLLMLocked(name)
+}
+
+func (m *Manager) unloadLLMLocked(name string) error {
+	if client, exists := m.clients[name]; exists {
+		client.Kill() // 殺死插件子進程
+		delete(m.clients, name)
+		delete(m.llms, name)
+		fmt.Printf("[Manager] LLM plugin '%s' unloaded\n", name)
+		return nil
+	}
+	return fmt.Errorf("LLM plugin '%s' not found", name)
+}
+
 // HotReload 熱重載：卸載舊版本，加載新版本
 func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	m.mu.Lock()
@@ -161,6 +313,17 @@ func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	return nil
 }
 
+// ListLLMs 列出所有已加載的 LLM 插件
+func (m *Manager) ListLLMs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.llms))
+	for name := range m.llms {
+		names = append(names, name)
+	}
+	return names
+}
+
 // Shutdown 關閉所有插件
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
@@ -171,4 +334,6 @@ func (m *Manager) Shutdown() {
 	}
 	m.clients = make(map[string]*plugin.Client)
 	m.plugins = make(map[string]DSCPlugin)
+	m.agents = make(map[string]Agent)
+	m.llms = make(map[string]LLMProvider)
 }

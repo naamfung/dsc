@@ -11,6 +11,19 @@ service DSCPluginService {
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
+service AgentService {
+  rpc Run(RunRequest) returns (RunResponse);
+  rpc Name(NameRequest) returns (NameResponse);
+  rpc Version(VersionRequest) returns (VersionResponse);
+}
+
+service LLMService {
+  rpc Chat(ChatRequest) returns (ChatResponse);
+  rpc Name(NameRequest) returns (NameResponse);
+  rpc Version(VersionRequest) returns (VersionResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
 message NameRequest {}
 message NameResponse { string name = 1; }
 
@@ -32,4 +45,41 @@ message HealthCheckRequest {}
 message HealthCheckResponse {
   string status = 1;
   string message = 2;
+}
+
+message RunRequest {
+  string input = 1;
+}
+
+message RunResponse {
+  string output = 1;
+  string status = 2;
+}
+
+// --- LLM Service 消息定義 ---
+message ChatRequest {
+  repeated Message messages = 1;
+  repeated Tool tools = 2;
+}
+
+message Message {
+  string role = 1;    // "system", "user", "assistant", "tool"
+  string content = 2;
+}
+
+message Tool {
+  string name = 1;
+  string description = 2;
+  string parameters_json = 3; // JSON Schema 字符串
+}
+
+message ChatResponse {
+  string content = 1;
+  string finish_reason = 2;   // "stop", "tool_calls"
+  repeated ToolCall tool_calls = 3;
+}
+
+message ToolCall {
+  string name = 1;
+  string arguments_json = 2;  // JSON 字符串
 }
