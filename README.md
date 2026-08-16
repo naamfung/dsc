@@ -1,6 +1,6 @@
-# DSC (Distributed Smart Controller / Agent)
+# DSC - Golang Reimplementation of DeepSeek Harness
 
-一個基於 Go 和 `go-plugin` 架構的編程代理（Programming Agent）系統，支持多 LLM 插件與 ReAct 循環工具調用。
+本项目使用 Go 語言重新實現 DeepSeek Harness 的編程代理（Programming Agent）系統，基於 `go-plugin` 架構，支持多 LLM 插件與 ReAct 循環工具調用。
 
 ## 核心功能
 
