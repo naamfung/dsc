@@ -268,16 +268,32 @@ func (m *Manager) unloadLLMLocked(name string) error {
 }
 
 // HotReload 熱重載：卸載舊版本，加載新版本
+// 支持 DSCPlugin、Agent、LLM 三種類型的插件，根據當前 name 對應的類型自動判斷
 func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 1. 先卸載舊的
+	// 判斷類型並調用對應的重載邏輯
+	if _, ok := m.plugins[name]; ok {
+		return m.hotReloadPluginLocked(name, newBinaryPath)
+	}
+	if _, ok := m.agents[name]; ok {
+		return m.hotReloadAgentLocked(name, newBinaryPath)
+	}
+	if _, ok := m.llms[name]; ok {
+		return m.hotReloadLLMLocked(name, newBinaryPath)
+	}
+	return fmt.Errorf("plugin '%s' not found (no registered type)", name)
+}
+
+// hotReloadPluginLocked 內部重載 DSCPlugin（需已持有鎖）
+func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
+	// 1. 卸載舊的
 	if err := m.unloadLocked(name); err != nil {
 		// 忽略未找到錯誤，繼續加載
 	}
 
-	// 2. 加載新的
+	// 2. 加載新的（複製 Load 中的邏輯）
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]plugin.Plugin{
@@ -291,13 +307,13 @@ func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
-		return err
+		return fmt.Errorf("failed to connect to plugin: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("dsc_plugin")
 	if err != nil {
 		client.Kill()
-		return err
+		return fmt.Errorf("failed to dispense plugin: %w", err)
 	}
 
 	impl, ok := raw.(DSCPlugin)
@@ -310,6 +326,88 @@ func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	m.plugins[name] = impl
 
 	fmt.Printf("[Manager] Plugin '%s' hot-reloaded\n", name)
+	return nil
+}
+
+// hotReloadAgentLocked 內部重載 Agent（需已持有鎖）
+func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
+	if err := m.unloadAgentLocked(name); err != nil {
+		// 忽略未找到錯誤
+	}
+
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			"agent": &AgentGRPCPlugin{},
+		},
+		Cmd:              exec.Command(newBinaryPath),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+	})
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to connect to agent plugin: %w", err)
+	}
+
+	raw, err := rpcClient.Dispense("agent")
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to dispense agent plugin: %w", err)
+	}
+
+	impl, ok := raw.(Agent)
+	if !ok {
+		client.Kill()
+		return fmt.Errorf("plugin does not implement Agent interface")
+	}
+
+	m.clients[name] = client
+	m.agents[name] = impl
+
+	fmt.Printf("[Manager] Agent plugin '%s' hot-reloaded\n", name)
+	return nil
+}
+
+// hotReloadLLMLocked 內部重載 LLM（需已持有鎖）
+func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
+	if err := m.unloadLLMLocked(name); err != nil {
+		// 忽略未找到錯誤
+	}
+
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			"llm": &LLMGRPCPlugin{},
+		},
+		Cmd:              exec.Command(newBinaryPath),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
+	})
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to connect to LLM plugin: %w", err)
+	}
+
+	raw, err := rpcClient.Dispense("llm")
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to dispense LLM plugin: %w", err)
+	}
+
+	impl, ok := raw.(LLMProvider)
+	if !ok {
+		client.Kill()
+		return fmt.Errorf("plugin does not implement LLMProvider interface")
+	}
+
+	m.clients[name] = client
+	m.llms[name] = impl
+
+	fmt.Printf("[Manager] LLM plugin '%s' hot-reloaded\n", name)
 	return nil
 }
 
