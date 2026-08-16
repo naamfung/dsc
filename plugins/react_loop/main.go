@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"dsc/plugin"
 	"dsc/proto"
@@ -16,6 +17,12 @@ type ReactLoopAgent struct {
 	llmServiceID  uint32
 	toolServiceID uint32
 	mu            sync.Mutex // 保護 serviceID
+
+	// 新增字段
+	cancelFunc    context.CancelFunc // 用於取消當前 Run
+	runWg         sync.WaitGroup     // 等待 Run 完成
+	shutdownMu    sync.Mutex         // 保護關閉狀態
+	isShutdown    bool
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
@@ -33,6 +40,24 @@ func (a *ReactLoopAgent) SetToolServiceID(ctx context.Context, id uint32) error 
 }
 
 func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentResult, error) {
+	// 创建一个可取消的 context，保存 cancelFunc
+	ctx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	// 如果已有 cancelFunc，先取消（防止并发 Run）
+	if a.cancelFunc != nil {
+		a.cancelFunc()
+	}
+	a.cancelFunc = cancel
+	a.mu.Unlock()
+
+	defer func() {
+		a.mu.Lock()
+		a.cancelFunc = nil
+		a.mu.Unlock()
+		a.runWg.Done() // 标记 Run 结束
+	}()
+	a.runWg.Add(1)
+
 	fmt.Printf("[Agent Loop] Starting turn with input: %s\n", input)
 
 	a.mu.Lock()
@@ -74,6 +99,16 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 
 	maxIterations := 5
 	for i := 0; i < maxIterations; i++ {
+		// 检查 ctx.Done()
+		select {
+		case <-ctx.Done():
+			return &plugin.AgentResult{
+				Output: "Agent canceled",
+				Status: "error",
+			}, ctx.Err()
+		default:
+		}
+
 		// 上下文管理與截斷
 		const maxMessages = 20
 		if len(messages) > maxMessages {
@@ -113,6 +148,16 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 
 		// 执行每个工具并追加结果
 		for _, tc := range resp.ToolCalls {
+			// 检查 ctx.Done()
+			select {
+			case <-ctx.Done():
+				return &plugin.AgentResult{
+					Output: "Agent canceled",
+					Status: "error",
+				}, ctx.Err()
+			default:
+			}
+
 			// 执行工具
 			toolReq := &proto.ExecuteToolRequest{
 				ToolName:      tc.Name,
@@ -155,7 +200,38 @@ func (a *ReactLoopAgent) Name(ctx context.Context) string { return "react_agent"
 func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
 
 func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
-	// 簡單的實現，沒有特定資源需要清理
+	a.shutdownMu.Lock()
+	defer a.shutdownMu.Unlock()
+
+	if a.isShutdown {
+		return nil
+	}
+
+	// 1. 取消當前 Run
+	a.mu.Lock()
+	if a.cancelFunc != nil {
+		a.cancelFunc()
+	}
+	a.mu.Unlock()
+
+	// 2. 等待 Run 完成（非強制模式）
+	if !force {
+		done := make(chan struct{})
+		go func() {
+			a.runWg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			// 正常完成
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second): // 超時保護
+			// 超時後強制繼續
+		}
+	}
+
+	a.isShutdown = true
 	return nil
 }
 
