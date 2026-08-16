@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -12,6 +11,8 @@ import (
 
 	"dsc/plugin"
 	"dsc/proto"
+	"github.com/hashicorp/go-hclog"
+	"gopkg.in/yaml.v3"
 	"google.golang.org/grpc"
 )
 
@@ -88,10 +89,50 @@ func (s *LLMProxyServer) HealthCheck(ctx context.Context, req *proto.HealthCheck
 	return &proto.HealthCheckResponse{Status: status, Message: msg}, nil
 }
 
+func loadConfig(path string) (*plugin.Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg plugin.Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
 func main() {
+	// 加載配置文件
+	cfgPath := os.Getenv("DSC_CONFIG")
+	if cfgPath == "" {
+		cfgPath = "config.yaml"
+	}
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		// 配置文件不存在或加載失敗時，使用默認配置
+		logger := hclog.New(&hclog.LoggerOptions{
+			Name:   "dsc-host",
+			Level:  hclog.Info,
+			Output: os.Stderr,
+		})
+		logger.Info("config file not found or invalid, using default config", "path", cfgPath)
+	} else {
+		// 設置配置中的 workspace root
+		if cfg.WorkspaceRoot != "" {
+			plugin.WorkspaceRoot = cfg.WorkspaceRoot
+		}
+	}
+
+	logger := hclog.New(&hclog.LoggerOptions{
+		Name:   "dsc-host",
+		Level:  hclog.Info,
+		Output: os.Stderr,
+	})
+
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
 		PluginDir: "./plugins/",
 		Handshake: plugin.Handshake,
+		Logger:    logger,
 	})
 	defer mgr.Shutdown()
 
@@ -109,21 +150,24 @@ func main() {
 		"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
 	}[llmName]
 	if llmBinary == "" {
-		log.Fatalf("Unknown LLM provider: %s", llmName)
+		logger.Error("unknown LLM provider", "name", llmName)
+		os.Exit(1)
 	}
 
 	if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
-		log.Fatalf("Failed to load LLM: %v", err)
+		logger.Error("failed to load LLM", "name", llmName, "error", err)
+		os.Exit(1)
 	}
-	fmt.Printf("[Main] Loaded LLM: %s\n", llmName)
+	logger.Info("llm loaded", "name", llmName)
 
 	// 使用 Manager 加載 Agent
 	agentBinary := "./plugins/react_loop/react_loop" + ext
 	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
 	if err != nil {
-		log.Fatalf("Failed to load Agent: %v", err)
+		logger.Error("failed to load Agent", "error", err)
+		os.Exit(1)
 	}
-	fmt.Printf("[Main] Generated LLM serviceID: %d\n", llmServiceID)
+	logger.Info("llm service id generated", "serviceID", llmServiceID)
 
 	// 注册 LLM 服务（在 goroutine 中，避免阻塞）
 	go func() {
@@ -143,27 +187,30 @@ func main() {
 			return s
 		})
 	}()
-	fmt.Printf("[Main] Generated Tool serviceID: %d\n", toolServiceID)
+	logger.Info("tool service id generated", "serviceID", toolServiceID)
 
 	agent, ok := mgr.GetAgent("react_agent")
 	if !ok {
-		log.Fatalf("Agent not found after loading")
+		logger.Error("agent not found after loading")
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
 	// 设置 Tool Service ID
 	if err := agent.SetToolServiceID(ctx, toolServiceID); err != nil {
-		log.Fatalf("Failed to set tool service ID on agent: %v", err)
+		logger.Error("failed to set tool service ID on agent", "error", err)
+		os.Exit(1)
 	}
 
 	result, err := agent.Run(ctx, "What is the weather in Tokyo?")
 	if err != nil {
-		log.Fatalf("Agent run failed: %v", err)
+		logger.Error("agent run failed", "error", err)
+		os.Exit(1)
 	}
-	fmt.Printf("Agent Result: %+v\n", result)
+	logger.Info("agent result", "result", result)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
-	fmt.Println("\n[Main] Shutting down...")
+	logger.Info("shutting down...")
 }

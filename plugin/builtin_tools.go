@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const workspaceRoot = "./workspace" // 可改為環境變數或配置
+var WorkspaceRoot = "./workspace" // 可改為環境變數或配置
 
 // ReadFileTool 讀取文件
 type ReadFileTool struct{}
@@ -38,7 +38,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (s
 	}
 
 	// 獲取安全工作目錄的絕對路徑
-	base, err := filepath.Abs(workspaceRoot)
+	base, err := filepath.Abs(WorkspaceRoot)
 	if err != nil {
 		return "", err
 	}
@@ -86,7 +86,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (
 		return "", err
 	}
 
-	base, err := filepath.Abs(workspaceRoot)
+	base, err := filepath.Abs(WorkspaceRoot)
 	if err != nil {
 		return "", err
 	}

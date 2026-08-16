@@ -31,12 +31,17 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message,
 		case "assistant":
 			userMessages = append(userMessages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(m.Content)))
 		case "tool":
-			// Anthropic 工具结果应以 user 角色发送，并包含 tool_use_id
-			// 由于我们当前没有 tool_call_id，这里暂时将内容包装为文本，但会丢失关联
-			// 更好的做法是扩展协议，但为了演示，我们简单处理
-			userMessages = append(userMessages, anthropic.NewUserMessage(
-				anthropic.NewTextBlock(fmt.Sprintf("Tool result: %s", m.Content)),
-			))
+			// Anthropic 要求 tool 结果以 user 消息发送，并附上对应的 tool_use_id
+			// 如果 m.ToolCallID 为空，降级为纯文本（兼容旧逻辑）
+			if m.ToolCallID != "" {
+				userMessages = append(userMessages, anthropic.NewUserMessage(
+					anthropic.NewToolResultBlock(m.ToolCallID, m.Content, false),
+				))
+			} else {
+				userMessages = append(userMessages, anthropic.NewUserMessage(
+					anthropic.NewTextBlock(fmt.Sprintf("Tool result: %s", m.Content)),
+				))
+			}
 		default:
 			userMessages = append(userMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
 		}

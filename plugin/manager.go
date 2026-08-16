@@ -24,14 +24,23 @@ type Manager struct {
 	agentServiceIDs map[string]uint32         // agent name -> serviceID
 	config          *ManagerConfig
 	toolRegistry    *ToolRegistry             // 新增
+	logger          hclog.Logger
 }
 
 type ManagerConfig struct {
 	PluginDir string
 	Handshake plugin.HandshakeConfig
+	Logger    hclog.Logger
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = hclog.New(&hclog.LoggerOptions{
+			Name:  "manager",
+			Level: hclog.Info,
+		})
+	}
 	m := &Manager{
 		clients:         make(map[string]*plugin.Client),
 		plugins:         make(map[string]DSCPlugin),
@@ -43,8 +52,12 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		toolRegistry:    NewToolRegistry(),
 	}
 	// 註冊內置工具
-	_ = m.toolRegistry.Register(&ReadFileTool{})
-	_ = m.toolRegistry.Register(&WriteFileTool{})
+	if err := m.toolRegistry.Register(&ReadFileTool{}); err != nil {
+		logger.Warn("failed to register read_file tool", "error", err)
+	}
+	if err := m.toolRegistry.Register(&WriteFileTool{}); err != nil {
+		logger.Warn("failed to register write_file tool", "error", err)
+	}
 	// 後續可註冊更多工具
 	return m
 }
@@ -94,7 +107,7 @@ func (m *Manager) Load(name string, binaryPath string) error {
 	m.plugins[name] = impl
 	m.typeMap[name] = "dsc"
 
-	fmt.Printf("[Manager] Plugin '%s' loaded successfully\n", name)
+	m.logger.Info("plugin loaded", "name", name)
 	return nil
 }
 
@@ -111,7 +124,7 @@ func (m *Manager) unloadLocked(name string) error {
 		delete(m.clients, name)
 		delete(m.plugins, name)
 		delete(m.typeMap, name)
-		fmt.Printf("[Manager] Plugin '%s' unloaded\n", name)
+		m.logger.Info("plugin unloaded", "name", name)
 		return nil
 	}
 	return fmt.Errorf("plugin '%s' not found", name)
@@ -189,7 +202,7 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	m.agents[name] = impl
 	m.typeMap[name] = "agent"
 
-	fmt.Printf("[Manager] Agent plugin '%s' loaded successfully\n", name)
+	m.logger.Info("agent plugin loaded", "name", name)
 	return nil
 }
 
@@ -207,7 +220,7 @@ func (m *Manager) unloadAgentLocked(name string) error {
 		delete(m.agents, name)
 		delete(m.typeMap, name)
 		delete(m.agentServiceIDs, name)
-		fmt.Printf("[Manager] Agent plugin '%s' unloaded\n", name)
+		m.logger.Info("agent plugin unloaded", "name", name)
 		return nil
 	}
 	return fmt.Errorf("agent plugin '%s' not found", name)
@@ -285,7 +298,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBr
 	m.typeMap[name] = "agent"
 	m.agentServiceIDs[name] = serviceID
 
-	fmt.Printf("[Manager] Agent plugin '%s' loaded successfully, serviceID: %d\n", name, serviceID)
+	m.logger.Info("agent plugin loaded", "name", name, "serviceID", serviceID)
 	return broker, serviceID, nil
 }
 
@@ -334,7 +347,7 @@ func (m *Manager) LoadLLM(name string, binaryPath string) error {
 	m.llms[name] = impl
 	m.typeMap[name] = "llm"
 
-	fmt.Printf("[Manager] LLM plugin '%s' loaded successfully\n", name)
+	m.logger.Info("llm plugin loaded", "name", name)
 	return nil
 }
 
@@ -359,7 +372,7 @@ func (m *Manager) unloadLLMLocked(name string) error {
 		delete(m.clients, name)
 		delete(m.llms, name)
 		delete(m.typeMap, name)
-		fmt.Printf("[Manager] LLM plugin '%s' unloaded\n", name)
+		m.logger.Info("llm plugin unloaded", "name", name)
 		return nil
 	}
 	return fmt.Errorf("LLM plugin '%s' not found", name)
@@ -427,7 +440,7 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 	m.plugins[name] = newImpl
 	m.typeMap[name] = "dsc"
 
-	fmt.Printf("[Manager] Plugin '%s' hot-reloaded\n", name)
+	m.logger.Info("plugin hot-reloaded", "name", name)
 	return nil
 }
 
@@ -490,7 +503,7 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	m.agents[name] = newImpl
 	m.typeMap[name] = "agent"
 
-	fmt.Printf("[Manager] Agent plugin '%s' hot-reloaded, serviceID: %d\n", name, oldServiceID)
+	m.logger.Info("agent plugin hot-reloaded", "name", name, "serviceID", oldServiceID)
 	return nil
 }
 
@@ -555,7 +568,7 @@ func (m *Manager) Shutdown() {
 	defer m.mu.Unlock()
 	for name, client := range m.clients {
 		client.Kill()
-		fmt.Printf("[Manager] Plugin '%s' killed\n", name)
+		m.logger.Info("plugin killed", "name", name)
 	}
 	m.clients = make(map[string]*plugin.Client)
 	m.plugins = make(map[string]DSCPlugin)

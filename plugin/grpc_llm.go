@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"dsc/proto"
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // LLMProvider 是插件必须实现的业务接口
@@ -145,11 +146,12 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 		if err == nil {
 			break
 		}
-		// 如果是不可恢復錯誤（如參數錯誤），直接返回
-		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "failed to parse") {
+		// 如果是參數錯誤（InvalidArgument），直接返回
+		if s, ok := status.FromError(err); ok && s.Code() == codes.InvalidArgument {
 			return nil, err
 		}
-		time.Sleep(time.Duration(1<<attempt) * time.Second) // 指數退避
+		// 其他錯誤重試
+		time.Sleep(time.Duration(1<<attempt) * time.Second)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("LLM call failed after retries: %w", err)
