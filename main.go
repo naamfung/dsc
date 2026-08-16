@@ -113,10 +113,6 @@ func main() {
 	if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
 		log.Fatalf("Failed to load LLM: %v", err)
 	}
-	llm, ok := mgr.GetLLM(llmName)
-	if !ok {
-		log.Fatalf("LLM not found")
-	}
 	fmt.Printf("[Main] Loaded LLM: %s\n", llmName)
 
 	agentBinary := "./plugins/react_loop/react_loop.exe"
