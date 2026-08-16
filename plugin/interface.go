@@ -38,6 +38,8 @@ type Agent interface {
 	// 可以添加其他方法，如 Name(), Version() 等
 	Name(ctx context.Context) string
 	Version(ctx context.Context) string
+	// SetLLMServiceID 设置 LLM service ID
+	SetLLMServiceID(ctx context.Context, id uint32) error
 }
 
 // AgentResult 是 Agent 执行后的结果

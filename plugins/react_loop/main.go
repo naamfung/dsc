@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"sync"
 
@@ -66,13 +65,11 @@ func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
 
 type customAgentPlugin struct {
 	goplugin.Plugin
-	serviceID uint32
 }
 
 func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	agent := &ReactLoopAgent{
-		broker:    broker,
-		serviceID: p.serviceID,
+		broker: broker,
 	}
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
 	return nil
