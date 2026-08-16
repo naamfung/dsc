@@ -6,15 +6,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"runtime"
 	"syscall"
 
 	"dsc/plugin"
 	"dsc/proto"
-	"github.com/hashicorp/go-hclog"
-	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
 
