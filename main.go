@@ -20,10 +20,23 @@ import (
 // LLMProxyServer 实现 LLMService，转发到 LLMProvider
 type LLMProxyServer struct {
 	proto.UnimplementedLLMServiceServer
-	llm plugin.LLMProvider
+	mgr     *plugin.Manager
+	llmName string
+}
+
+func (s *LLMProxyServer) getLLM() plugin.LLMProvider {
+	llm, ok := s.mgr.GetLLM(s.llmName)
+	if !ok {
+		return nil
+	}
+	return llm
 }
 
 func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
+	llm := s.getLLM()
+	if llm == nil {
+		return nil, fmt.Errorf("LLM not available")
+	}
 	messages := make([]plugin.Message, len(req.Messages))
 	for i, m := range req.Messages {
 		messages[i] = plugin.Message{Role: m.Role, Content: m.Content}
@@ -32,7 +45,7 @@ func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*pro
 	for i, t := range req.Tools {
 		tools[i] = plugin.Tool{Name: t.Name, Description: t.Description, ParametersJSON: t.ParametersJson}
 	}
-	resp, err := s.llm.Chat(ctx, messages, tools)
+	resp, err := llm.Chat(ctx, messages, tools)
 	if err != nil {
 		return nil, err
 	}
@@ -49,13 +62,25 @@ func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*pro
 }
 
 func (s *LLMProxyServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
-	return &proto.NameResponse{Name: s.llm.Name(ctx)}, nil
+	llm := s.getLLM()
+	if llm == nil {
+		return nil, fmt.Errorf("LLM not available")
+	}
+	return &proto.NameResponse{Name: llm.Name(ctx)}, nil
 }
 func (s *LLMProxyServer) Version(ctx context.Context, req *proto.VersionRequest) (*proto.VersionResponse, error) {
-	return &proto.VersionResponse{Version: s.llm.Version(ctx)}, nil
+	llm := s.getLLM()
+	if llm == nil {
+		return nil, fmt.Errorf("LLM not available")
+	}
+	return &proto.VersionResponse{Version: llm.Version(ctx)}, nil
 }
 func (s *LLMProxyServer) HealthCheck(ctx context.Context, req *proto.HealthCheckRequest) (*proto.HealthCheckResponse, error) {
-	err := s.llm.HealthCheck(ctx)
+	llm := s.getLLM()
+	if llm == nil {
+		return nil, fmt.Errorf("LLM not available")
+	}
+	err := llm.HealthCheck(ctx)
 	status := "okay"
 	msg := ""
 	if err != nil {

@@ -3,6 +3,7 @@ package plugin
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"sync"
 
 	"github.com/hashicorp/go-hclog"
@@ -16,6 +17,7 @@ type Manager struct {
 	plugins map[string]DSCPlugin      // 插件名 -> DSC業務接口
 	agents  map[string]Agent          // 插件名 -> Agent接口
 	llms    map[string]LLMProvider    // 插件名 -> LLMProvider接口
+	typeMap map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm")
 	config  *ManagerConfig
 }
 
@@ -30,6 +32,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		plugins: make(map[string]DSCPlugin),
 		agents:  make(map[string]Agent),
 		llms:    make(map[string]LLMProvider),
+		typeMap: make(map[string]string),
 		config:  cfg,
 	}
 }
@@ -77,6 +80,7 @@ func (m *Manager) Load(name string, binaryPath string) error {
 
 	m.clients[name] = client
 	m.plugins[name] = impl
+	m.typeMap[name] = "dsc"
 
 	fmt.Printf("[Manager] Plugin '%s' loaded successfully\n", name)
 	return nil
@@ -94,6 +98,7 @@ func (m *Manager) unloadLocked(name string) error {
 		client.Kill() // 殺死插件子進程
 		delete(m.clients, name)
 		delete(m.plugins, name)
+		delete(m.typeMap, name)
 		fmt.Printf("[Manager] Plugin '%s' unloaded\n", name)
 		return nil
 	}
@@ -120,7 +125,7 @@ func (m *Manager) List() []string {
 }
 
 // LoadAgent 加載一個 Agent 插件（啟動子進程）
-func (m *Manager) LoadAgent(name string, binaryPath string) error {
+func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -129,13 +134,17 @@ func (m *Manager) LoadAgent(name string, binaryPath string) error {
 		m.unloadAgentLocked(name)
 	}
 
+	// 構建命令，加入 -llm-service-id 參數
+	cmdArgs := []string{"-llm-service-id", strconv.FormatUint(uint64(serviceID), 10)}
+	cmd := exec.Command(binaryPath, cmdArgs...)
+
 	// 創建插件客戶端
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
 		},
-		Cmd:              exec.Command(binaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
@@ -162,6 +171,7 @@ func (m *Manager) LoadAgent(name string, binaryPath string) error {
 
 	m.clients[name] = client
 	m.agents[name] = impl
+	m.typeMap[name] = "agent"
 
 	fmt.Printf("[Manager] Agent plugin '%s' loaded successfully\n", name)
 	return nil
@@ -179,6 +189,7 @@ func (m *Manager) unloadAgentLocked(name string) error {
 		client.Kill() // 殺死插件子進程
 		delete(m.clients, name)
 		delete(m.agents, name)
+		delete(m.typeMap, name)
 		fmt.Printf("[Manager] Agent plugin '%s' unloaded\n", name)
 		return nil
 	}
@@ -236,6 +247,7 @@ func (m *Manager) LoadLLM(name string, binaryPath string) error {
 
 	m.clients[name] = client
 	m.llms[name] = impl
+	m.typeMap[name] = "llm"
 
 	fmt.Printf("[Manager] LLM plugin '%s' loaded successfully\n", name)
 	return nil
@@ -261,6 +273,7 @@ func (m *Manager) unloadLLMLocked(name string) error {
 		client.Kill() // 殺死插件子進程
 		delete(m.clients, name)
 		delete(m.llms, name)
+		delete(m.typeMap, name)
 		fmt.Printf("[Manager] LLM plugin '%s' unloaded\n", name)
 		return nil
 	}
@@ -268,33 +281,31 @@ func (m *Manager) unloadLLMLocked(name string) error {
 }
 
 // HotReload 熱重載：卸載舊版本，加載新版本
-// 支持 DSCPlugin、Agent、LLM 三種類型的插件，根據當前 name 對應的類型自動判斷
+// 支持 DSCPlugin、Agent、LLM 三種類型的插件，根據 typeMap 記錄的類型自動判斷
 func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 判斷類型並調用對應的重載邏輯
-	if _, ok := m.plugins[name]; ok {
+	typ, ok := m.typeMap[name]
+	if !ok {
+		return fmt.Errorf("plugin '%s' not found (no registered type)", name)
+	}
+	switch typ {
+	case "dsc":
 		return m.hotReloadPluginLocked(name, newBinaryPath)
-	}
-	if _, ok := m.agents[name]; ok {
+	case "agent":
 		return m.hotReloadAgentLocked(name, newBinaryPath)
-	}
-	if _, ok := m.llms[name]; ok {
+	case "llm":
 		return m.hotReloadLLMLocked(name, newBinaryPath)
+	default:
+		return fmt.Errorf("unknown plugin type '%s' for name '%s'", typ, name)
 	}
-	return fmt.Errorf("plugin '%s' not found (no registered type)", name)
 }
 
 // hotReloadPluginLocked 內部重載 DSCPlugin（需已持有鎖）
 func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
-	// 1. 卸載舊的
-	if err := m.unloadLocked(name); err != nil {
-		// 忽略未找到錯誤，繼續加載
-	}
-
-	// 2. 加載新的（複製 Load 中的邏輯）
-	client := plugin.NewClient(&plugin.ClientConfig{
+	// 1. 建立新 client 並驗證
+	newClient := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"dsc_plugin": &DSCPluginGRPC{},
@@ -304,26 +315,32 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
-	rpcClient, err := client.Client()
+	rpcClient, err := newClient.Client()
 	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to connect to plugin: %w", err)
+		newClient.Kill()
+		return fmt.Errorf("new plugin connection failed: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("dsc_plugin")
 	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to dispense plugin: %w", err)
+		newClient.Kill()
+		return fmt.Errorf("dispense new plugin failed: %w", err)
 	}
 
-	impl, ok := raw.(DSCPlugin)
+	newImpl, ok := raw.(DSCPlugin)
 	if !ok {
-		client.Kill()
-		return fmt.Errorf("plugin does not implement DSCPlugin interface")
+		newClient.Kill()
+		return fmt.Errorf("new plugin does not implement DSCPlugin interface")
 	}
 
-	m.clients[name] = client
-	m.plugins[name] = impl
+	// 2. 卸載舊 client（若存在）
+	if oldClient, exists := m.clients[name]; exists {
+		oldClient.Kill()
+	}
+	// 3. 更新映射
+	m.clients[name] = newClient
+	m.plugins[name] = newImpl
+	m.typeMap[name] = "dsc"
 
 	fmt.Printf("[Manager] Plugin '%s' hot-reloaded\n", name)
 	return nil
@@ -331,11 +348,8 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 
 // hotReloadAgentLocked 內部重載 Agent（需已持有鎖）
 func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
-	if err := m.unloadAgentLocked(name); err != nil {
-		// 忽略未找到錯誤
-	}
-
-	client := plugin.NewClient(&plugin.ClientConfig{
+	// 1. 建立新 client 並驗證
+	newClient := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]plugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
@@ -345,26 +359,32 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
-	rpcClient, err := client.Client()
+	rpcClient, err := newClient.Client()
 	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to connect to agent plugin: %w", err)
+		newClient.Kill()
+		return fmt.Errorf("new agent plugin connection failed: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to dispense agent plugin: %w", err)
+		newClient.Kill()
+		return fmt.Errorf("dispense new agent plugin failed: %w", err)
 	}
 
-	impl, ok := raw.(Agent)
+	newImpl, ok := raw.(Agent)
 	if !ok {
-		client.Kill()
-		return fmt.Errorf("plugin does not implement Agent interface")
+		newClient.Kill()
+		return fmt.Errorf("new agent plugin does not implement Agent interface")
 	}
 
-	m.clients[name] = client
-	m.agents[name] = impl
+	// 2. 卸載舊 client（若存在）
+	if oldClient, exists := m.clients[name]; exists {
+		oldClient.Kill()
+	}
+	// 3. 更新映射
+	m.clients[name] = newClient
+	m.agents[name] = newImpl
+	m.typeMap[name] = "agent"
 
 	fmt.Printf("[Manager] Agent plugin '%s' hot-reloaded\n", name)
 	return nil
