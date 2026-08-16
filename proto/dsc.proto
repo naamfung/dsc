@@ -15,6 +15,7 @@ service AgentService {
   rpc Run(RunRequest) returns (RunResponse);
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
+  rpc SetLLMServiceID(SetLLMServiceIDRequest) returns (SetLLMServiceIDResponse);
 }
 
 service LLMService {
@@ -82,4 +83,11 @@ message ChatResponse {
 message ToolCall {
   string name = 1;
   string arguments_json = 2;  // JSON 字符串
+}
+
+message SetLLMServiceIDRequest {
+  uint32 service_id = 1;
+}
+
+message SetLLMServiceIDResponse {
 }

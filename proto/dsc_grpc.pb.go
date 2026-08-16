@@ -235,9 +235,10 @@ var DSCPluginService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentService_Run_FullMethodName     = "/dsc.AgentService/Run"
-	AgentService_Name_FullMethodName    = "/dsc.AgentService/Name"
-	AgentService_Version_FullMethodName = "/dsc.AgentService/Version"
+	AgentService_Run_FullMethodName             = "/dsc.AgentService/Run"
+	AgentService_Name_FullMethodName            = "/dsc.AgentService/Name"
+	AgentService_Version_FullMethodName         = "/dsc.AgentService/Version"
+	AgentService_SetLLMServiceID_FullMethodName = "/dsc.AgentService/SetLLMServiceID"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -247,6 +248,7 @@ type AgentServiceClient interface {
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error)
 	Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error)
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
+	SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error)
 }
 
 type agentServiceClient struct {
@@ -287,6 +289,16 @@ func (c *agentServiceClient) Version(ctx context.Context, in *VersionRequest, op
 	return out, nil
 }
 
+func (c *agentServiceClient) SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetLLMServiceIDResponse)
+	err := c.cc.Invoke(ctx, AgentService_SetLLMServiceID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -294,6 +306,7 @@ type AgentServiceServer interface {
 	Run(context.Context, *RunRequest) (*RunResponse, error)
 	Name(context.Context, *NameRequest) (*NameResponse, error)
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
+	SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -312,6 +325,9 @@ func (UnimplementedAgentServiceServer) Name(context.Context, *NameRequest) (*Nam
 }
 func (UnimplementedAgentServiceServer) Version(context.Context, *VersionRequest) (*VersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Version not implemented")
+}
+func (UnimplementedAgentServiceServer) SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetLLMServiceID not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -388,6 +404,24 @@ func _AgentService_Version_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_SetLLMServiceID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetLLMServiceIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).SetLLMServiceID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_SetLLMServiceID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).SetLLMServiceID(ctx, req.(*SetLLMServiceIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -406,6 +440,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Version",
 			Handler:    _AgentService_Version_Handler,
+		},
+		{
+			MethodName: "SetLLMServiceID",
+			Handler:    _AgentService_SetLLMServiceID_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

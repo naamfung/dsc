@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"sync"
 
 	"dsc/plugin"
 	"dsc/proto"
@@ -12,15 +13,30 @@ import (
 )
 
 type ReactLoopAgent struct {
-	broker    *goplugin.GRPCBroker
-	serviceID uint32
+	broker      *goplugin.GRPCBroker
+	serviceID   uint32
+	mu          sync.Mutex // 保護 serviceID
+}
+
+func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.serviceID = id
+	return nil
 }
 
 func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentResult, error) {
 	fmt.Printf("[Agent Loop] Starting turn with input: %s\n", input)
 
+	a.mu.Lock()
+	id := a.serviceID
+	a.mu.Unlock()
+	if id == 0 {
+		return nil, fmt.Errorf("serviceID not set, call SetLLMServiceID first")
+	}
+
 	// 每次调用时 Dial 连接 LLM 服务
-	llmConn, err := a.broker.Dial(a.serviceID)
+	llmConn, err := a.broker.Dial(id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial LLM service: %w", err)
 	}
@@ -90,15 +106,16 @@ func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest
 	return &proto.VersionResponse{Version: s.impl.Version(ctx)}, nil
 }
 
-func main() {
-	var serviceID uint
-	flag.UintVar(&serviceID, "llm-service-id", 0, "LLM service ID from host broker")
-	flag.Parse()
+func (s *agentGRPCServer) SetLLMServiceID(ctx context.Context, req *proto.SetLLMServiceIDRequest) (*proto.SetLLMServiceIDResponse, error) {
+	err := s.impl.SetLLMServiceID(ctx, req.ServiceId)
+	return &proto.SetLLMServiceIDResponse{}, err
+}
 
+func main() {
 	goplugin.Serve(&goplugin.ServeConfig{
 		HandshakeConfig: plugin.Handshake,
 		Plugins: map[string]goplugin.Plugin{
-			"agent": &customAgentPlugin{serviceID: uint32(serviceID)},
+			"agent": &customAgentPlugin{},
 		},
 		GRPCServer: goplugin.DefaultGRPCServer,
 	})

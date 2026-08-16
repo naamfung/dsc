@@ -1,24 +1,27 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"sync"
 
+	"dsc/proto"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 )
 
 // Manager 插件管理器
 type Manager struct {
-	mu      sync.RWMutex
-	clients map[string]*plugin.Client // 插件名 -> 客戶端
-	plugins map[string]DSCPlugin      // 插件名 -> DSC業務接口
-	agents  map[string]Agent          // 插件名 -> Agent接口
-	llms    map[string]LLMProvider    // 插件名 -> LLMProvider接口
-	typeMap map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm")
-	config  *ManagerConfig
+	mu              sync.RWMutex
+	clients         map[string]*plugin.Client // 插件名 -> 客戶端
+	plugins         map[string]DSCPlugin      // 插件名 -> DSC業務接口
+	agents          map[string]Agent          // 插件名 -> Agent接口
+	llms            map[string]LLMProvider    // 插件名 -> LLMProvider接口
+	typeMap         map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm")
+	agentServiceIDs map[string]uint32         // agent name -> serviceID
+	config          *ManagerConfig
 }
 
 type ManagerConfig struct {
@@ -28,12 +31,13 @@ type ManagerConfig struct {
 
 func NewManager(cfg *ManagerConfig) *Manager {
 	return &Manager{
-		clients: make(map[string]*plugin.Client),
-		plugins: make(map[string]DSCPlugin),
-		agents:  make(map[string]Agent),
-		llms:    make(map[string]LLMProvider),
-		typeMap: make(map[string]string),
-		config:  cfg,
+		clients:         make(map[string]*plugin.Client),
+		plugins:         make(map[string]DSCPlugin),
+		agents:          make(map[string]Agent),
+		llms:            make(map[string]LLMProvider),
+		typeMap:         make(map[string]string),
+		agentServiceIDs: make(map[string]uint32),
+		config:          cfg,
 	}
 }
 
@@ -194,6 +198,7 @@ func (m *Manager) unloadAgentLocked(name string) error {
 		delete(m.clients, name)
 		delete(m.agents, name)
 		delete(m.typeMap, name)
+		delete(m.agentServiceIDs, name)
 		fmt.Printf("[Manager] Agent plugin '%s' unloaded\n", name)
 		return nil
 	}
@@ -246,7 +251,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBr
 	broker := grpcClient.Broker()
 	serviceID := broker.NextId()
 
-	// 獲取插件實例
+	// 獲取 Agent 實例（用於調用 RPC）
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
 		client.Kill()
@@ -259,9 +264,18 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBr
 		return nil, 0, fmt.Errorf("plugin does not implement Agent interface")
 	}
 
+	// 透過 RPC 設置 serviceID
+	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
+	_, err = agentClient.SetLLMServiceID(context.Background(), &proto.SetLLMServiceIDRequest{ServiceId: serviceID})
+	if err != nil {
+		client.Kill()
+		return nil, 0, fmt.Errorf("failed to set service ID on agent: %w", err)
+	}
+
 	m.clients[name] = client
 	m.agents[name] = impl
 	m.typeMap[name] = "agent"
+	m.agentServiceIDs[name] = serviceID
 
 	fmt.Printf("[Manager] Agent plugin '%s' loaded successfully, serviceID: %d\n", name, serviceID)
 	return broker, serviceID, nil
@@ -411,6 +425,11 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 
 // hotReloadAgentLocked 內部重載 Agent（需已持有鎖）
 func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
+	oldServiceID, ok := m.agentServiceIDs[name]
+	if !ok {
+		return fmt.Errorf("no serviceID recorded for agent %s", name)
+	}
+
 	// 1. 建立新 client 並驗證
 	newClient := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
@@ -426,6 +445,20 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	if err != nil {
 		newClient.Kill()
 		return fmt.Errorf("new agent plugin connection failed: %w", err)
+	}
+
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		newClient.Kill()
+		return fmt.Errorf("new agent plugin is not a gRPC client")
+	}
+
+	// 透過 RPC 設置 serviceID
+	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
+	_, err = agentClient.SetLLMServiceID(context.Background(), &proto.SetLLMServiceIDRequest{ServiceId: oldServiceID})
+	if err != nil {
+		newClient.Kill()
+		return fmt.Errorf("failed to set service ID on agent: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("agent")
@@ -449,7 +482,7 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	m.agents[name] = newImpl
 	m.typeMap[name] = "agent"
 
-	fmt.Printf("[Manager] Agent plugin '%s' hot-reloaded\n", name)
+	fmt.Printf("[Manager] Agent plugin '%s' hot-reloaded, serviceID: %d\n", name, oldServiceID)
 	return nil
 }
 
@@ -521,6 +554,7 @@ func (m *Manager) Shutdown() {
 	m.agents = make(map[string]Agent)
 	m.llms = make(map[string]LLMProvider)
 	m.typeMap = make(map[string]string)
+	m.agentServiceIDs = make(map[string]uint32)
 }
 
 // ListAgents 列出所有已加載的 Agent 插件

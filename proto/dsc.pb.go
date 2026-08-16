@@ -754,6 +754,86 @@ func (x *ToolCall) GetArgumentsJson() string {
 	return ""
 }
 
+type SetLLMServiceIDRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServiceId     uint32                 `protobuf:"varint,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetLLMServiceIDRequest) Reset() {
+	*x = SetLLMServiceIDRequest{}
+	mi := &file_dsc_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetLLMServiceIDRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetLLMServiceIDRequest) ProtoMessage() {}
+
+func (x *SetLLMServiceIDRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetLLMServiceIDRequest.ProtoReflect.Descriptor instead.
+func (*SetLLMServiceIDRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SetLLMServiceIDRequest) GetServiceId() uint32 {
+	if x != nil {
+		return x.ServiceId
+	}
+	return 0
+}
+
+type SetLLMServiceIDResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetLLMServiceIDResponse) Reset() {
+	*x = SetLLMServiceIDResponse{}
+	mi := &file_dsc_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetLLMServiceIDResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetLLMServiceIDResponse) ProtoMessage() {}
+
+func (x *SetLLMServiceIDResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetLLMServiceIDResponse.ProtoReflect.Descriptor instead.
+func (*SetLLMServiceIDResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{16}
+}
+
 var File_dsc_proto protoreflect.FileDescriptor
 
 const file_dsc_proto_rawDesc = "" +
@@ -802,16 +882,21 @@ const file_dsc_proto_rawDesc = "" +
 	"tool_calls\x18\x03 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"E\n" +
 	"\bToolCall\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12%\n" +
-	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson2\xed\x01\n" +
+	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson\"7\n" +
+	"\x16SetLLMServiceIDRequest\x12\x1d\n" +
+	"\n" +
+	"service_id\x18\x01 \x01(\rR\tserviceId\"\x19\n" +
+	"\x17SetLLMServiceIDResponse2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +
 	"\aExecute\x12\x13.dsc.ExecuteRequest\x1a\x14.dsc.ExecuteResponse\x12@\n" +
-	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\x9b\x01\n" +
+	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\xe9\x01\n" +
 	"\fAgentService\x12(\n" +
 	"\x03Run\x12\x0f.dsc.RunRequest\x1a\x10.dsc.RunResponse\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
-	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse2\xde\x01\n" +
+	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x12L\n" +
+	"\x0fSetLLMServiceID\x12\x1b.dsc.SetLLMServiceIDRequest\x1a\x1c.dsc.SetLLMServiceIDResponse2\xde\x01\n" +
 	"\n" +
 	"LLMService\x12+\n" +
 	"\x04Chat\x12\x10.dsc.ChatRequest\x1a\x11.dsc.ChatResponse\x12+\n" +
@@ -831,27 +916,29 @@ func file_dsc_proto_rawDescGZIP() []byte {
 	return file_dsc_proto_rawDescData
 }
 
-var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_dsc_proto_goTypes = []any{
-	(*NameRequest)(nil),         // 0: dsc.NameRequest
-	(*NameResponse)(nil),        // 1: dsc.NameResponse
-	(*VersionRequest)(nil),      // 2: dsc.VersionRequest
-	(*VersionResponse)(nil),     // 3: dsc.VersionResponse
-	(*ExecuteRequest)(nil),      // 4: dsc.ExecuteRequest
-	(*ExecuteResponse)(nil),     // 5: dsc.ExecuteResponse
-	(*HealthCheckRequest)(nil),  // 6: dsc.HealthCheckRequest
-	(*HealthCheckResponse)(nil), // 7: dsc.HealthCheckResponse
-	(*RunRequest)(nil),          // 8: dsc.RunRequest
-	(*RunResponse)(nil),         // 9: dsc.RunResponse
-	(*ChatRequest)(nil),         // 10: dsc.ChatRequest
-	(*Message)(nil),             // 11: dsc.Message
-	(*Tool)(nil),                // 12: dsc.Tool
-	(*ChatResponse)(nil),        // 13: dsc.ChatResponse
-	(*ToolCall)(nil),            // 14: dsc.ToolCall
-	nil,                         // 15: dsc.ExecuteRequest.ParamsEntry
+	(*NameRequest)(nil),             // 0: dsc.NameRequest
+	(*NameResponse)(nil),            // 1: dsc.NameResponse
+	(*VersionRequest)(nil),          // 2: dsc.VersionRequest
+	(*VersionResponse)(nil),         // 3: dsc.VersionResponse
+	(*ExecuteRequest)(nil),          // 4: dsc.ExecuteRequest
+	(*ExecuteResponse)(nil),         // 5: dsc.ExecuteResponse
+	(*HealthCheckRequest)(nil),      // 6: dsc.HealthCheckRequest
+	(*HealthCheckResponse)(nil),     // 7: dsc.HealthCheckResponse
+	(*RunRequest)(nil),              // 8: dsc.RunRequest
+	(*RunResponse)(nil),             // 9: dsc.RunResponse
+	(*ChatRequest)(nil),             // 10: dsc.ChatRequest
+	(*Message)(nil),                 // 11: dsc.Message
+	(*Tool)(nil),                    // 12: dsc.Tool
+	(*ChatResponse)(nil),            // 13: dsc.ChatResponse
+	(*ToolCall)(nil),                // 14: dsc.ToolCall
+	(*SetLLMServiceIDRequest)(nil),  // 15: dsc.SetLLMServiceIDRequest
+	(*SetLLMServiceIDResponse)(nil), // 16: dsc.SetLLMServiceIDResponse
+	nil,                             // 17: dsc.ExecuteRequest.ParamsEntry
 }
 var file_dsc_proto_depIdxs = []int32{
-	15, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	17, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	11, // 1: dsc.ChatRequest.messages:type_name -> dsc.Message
 	12, // 2: dsc.ChatRequest.tools:type_name -> dsc.Tool
 	14, // 3: dsc.ChatResponse.tool_calls:type_name -> dsc.ToolCall
@@ -862,23 +949,25 @@ var file_dsc_proto_depIdxs = []int32{
 	8,  // 8: dsc.AgentService.Run:input_type -> dsc.RunRequest
 	0,  // 9: dsc.AgentService.Name:input_type -> dsc.NameRequest
 	2,  // 10: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	10, // 11: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	0,  // 12: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	2,  // 13: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	6,  // 14: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	1,  // 15: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 16: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 17: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 18: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 19: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	1,  // 20: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 21: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	13, // 22: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	1,  // 23: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 24: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 25: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	15, // [15:26] is the sub-list for method output_type
-	4,  // [4:15] is the sub-list for method input_type
+	15, // 11: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
+	10, // 12: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	0,  // 13: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	2,  // 14: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	6,  // 15: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	1,  // 16: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 17: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 18: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 19: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 20: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	1,  // 21: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 22: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	16, // 23: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
+	13, // 24: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	1,  // 25: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 26: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 27: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	16, // [16:28] is the sub-list for method output_type
+	4,  // [4:16] is the sub-list for method input_type
 	4,  // [4:4] is the sub-list for extension type_name
 	4,  // [4:4] is the sub-list for extension extendee
 	0,  // [0:4] is the sub-list for field type_name
@@ -895,7 +984,7 @@ func file_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dsc_proto_rawDesc), len(file_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   3,
 		},
