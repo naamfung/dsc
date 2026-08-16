@@ -82,3 +82,13 @@ func (c *agentGRPCClient) Version(ctx context.Context) string {
 	}
 	return resp.Version
 }
+
+func (c *agentGRPCClient) SetLLMServiceID(ctx context.Context, id uint32) error {
+	_, err := c.client.SetLLMServiceID(ctx, &proto.SetLLMServiceIDRequest{ServiceId: id})
+	return err
+}
+
+func (c *agentGRPCClient) SetToolServiceID(ctx context.Context, id uint32) error {
+	_, err := c.client.SetToolServiceID(ctx, &proto.SetToolServiceIDRequest{ServiceId: id})
+	return err
+}

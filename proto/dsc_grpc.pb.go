@@ -235,10 +235,11 @@ var DSCPluginService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentService_Run_FullMethodName             = "/dsc.AgentService/Run"
-	AgentService_Name_FullMethodName            = "/dsc.AgentService/Name"
-	AgentService_Version_FullMethodName         = "/dsc.AgentService/Version"
-	AgentService_SetLLMServiceID_FullMethodName = "/dsc.AgentService/SetLLMServiceID"
+	AgentService_Run_FullMethodName              = "/dsc.AgentService/Run"
+	AgentService_Name_FullMethodName             = "/dsc.AgentService/Name"
+	AgentService_Version_FullMethodName          = "/dsc.AgentService/Version"
+	AgentService_SetLLMServiceID_FullMethodName  = "/dsc.AgentService/SetLLMServiceID"
+	AgentService_SetToolServiceID_FullMethodName = "/dsc.AgentService/SetToolServiceID"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -249,6 +250,7 @@ type AgentServiceClient interface {
 	Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error)
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error)
+	SetToolServiceID(ctx context.Context, in *SetToolServiceIDRequest, opts ...grpc.CallOption) (*SetToolServiceIDResponse, error)
 }
 
 type agentServiceClient struct {
@@ -299,6 +301,16 @@ func (c *agentServiceClient) SetLLMServiceID(ctx context.Context, in *SetLLMServ
 	return out, nil
 }
 
+func (c *agentServiceClient) SetToolServiceID(ctx context.Context, in *SetToolServiceIDRequest, opts ...grpc.CallOption) (*SetToolServiceIDResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetToolServiceIDResponse)
+	err := c.cc.Invoke(ctx, AgentService_SetToolServiceID_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -307,6 +319,7 @@ type AgentServiceServer interface {
 	Name(context.Context, *NameRequest) (*NameResponse, error)
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
 	SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error)
+	SetToolServiceID(context.Context, *SetToolServiceIDRequest) (*SetToolServiceIDResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -328,6 +341,9 @@ func (UnimplementedAgentServiceServer) Version(context.Context, *VersionRequest)
 }
 func (UnimplementedAgentServiceServer) SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetLLMServiceID not implemented")
+}
+func (UnimplementedAgentServiceServer) SetToolServiceID(context.Context, *SetToolServiceIDRequest) (*SetToolServiceIDResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetToolServiceID not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -422,6 +438,24 @@ func _AgentService_SetLLMServiceID_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_SetToolServiceID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetToolServiceIDRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).SetToolServiceID(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_SetToolServiceID_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).SetToolServiceID(ctx, req.(*SetToolServiceIDRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -444,6 +478,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetLLMServiceID",
 			Handler:    _AgentService_SetLLMServiceID_Handler,
+		},
+		{
+			MethodName: "SetToolServiceID",
+			Handler:    _AgentService_SetToolServiceID_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -660,6 +698,146 @@ var LLMService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HealthCheck",
 			Handler:    _LLMService_HealthCheck_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dsc.proto",
+}
+
+const (
+	ToolService_ExecuteTool_FullMethodName = "/dsc.ToolService/ExecuteTool"
+	ToolService_ListTools_FullMethodName   = "/dsc.ToolService/ListTools"
+)
+
+// ToolServiceClient is the client API for ToolService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type ToolServiceClient interface {
+	ExecuteTool(ctx context.Context, in *ExecuteToolRequest, opts ...grpc.CallOption) (*ExecuteToolResponse, error)
+	ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error)
+}
+
+type toolServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewToolServiceClient(cc grpc.ClientConnInterface) ToolServiceClient {
+	return &toolServiceClient{cc}
+}
+
+func (c *toolServiceClient) ExecuteTool(ctx context.Context, in *ExecuteToolRequest, opts ...grpc.CallOption) (*ExecuteToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecuteToolResponse)
+	err := c.cc.Invoke(ctx, ToolService_ExecuteTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *toolServiceClient) ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListToolsResponse)
+	err := c.cc.Invoke(ctx, ToolService_ListTools_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ToolServiceServer is the server API for ToolService service.
+// All implementations must embed UnimplementedToolServiceServer
+// for forward compatibility.
+type ToolServiceServer interface {
+	ExecuteTool(context.Context, *ExecuteToolRequest) (*ExecuteToolResponse, error)
+	ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error)
+	mustEmbedUnimplementedToolServiceServer()
+}
+
+// UnimplementedToolServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedToolServiceServer struct{}
+
+func (UnimplementedToolServiceServer) ExecuteTool(context.Context, *ExecuteToolRequest) (*ExecuteToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteTool not implemented")
+}
+func (UnimplementedToolServiceServer) ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTools not implemented")
+}
+func (UnimplementedToolServiceServer) mustEmbedUnimplementedToolServiceServer() {}
+func (UnimplementedToolServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeToolServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ToolServiceServer will
+// result in compilation errors.
+type UnsafeToolServiceServer interface {
+	mustEmbedUnimplementedToolServiceServer()
+}
+
+func RegisterToolServiceServer(s grpc.ServiceRegistrar, srv ToolServiceServer) {
+	// If the following call panics, it indicates UnimplementedToolServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ToolService_ServiceDesc, srv)
+}
+
+func _ToolService_ExecuteTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecuteToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolServiceServer).ExecuteTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolService_ExecuteTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolServiceServer).ExecuteTool(ctx, req.(*ExecuteToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ToolService_ListTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolServiceServer).ListTools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolService_ListTools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolServiceServer).ListTools(ctx, req.(*ListToolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ToolService_ServiceDesc is the grpc.ServiceDesc for ToolService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ToolService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dsc.ToolService",
+	HandlerType: (*ToolServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ExecuteTool",
+			Handler:    _ToolService_ExecuteTool_Handler,
+		},
+		{
+			MethodName: "ListTools",
+			Handler:    _ToolService_ListTools_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

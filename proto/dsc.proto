@@ -16,6 +16,7 @@ service AgentService {
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc SetLLMServiceID(SetLLMServiceIDRequest) returns (SetLLMServiceIDResponse);
+  rpc SetToolServiceID(SetToolServiceIDRequest) returns (SetToolServiceIDResponse);
 }
 
 service LLMService {
@@ -23,6 +24,11 @@ service LLMService {
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+service ToolService {
+  rpc ExecuteTool(ExecuteToolRequest) returns (ExecuteToolResponse);
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
 }
 
 message NameRequest {}
@@ -90,4 +96,28 @@ message SetLLMServiceIDRequest {
 }
 
 message SetLLMServiceIDResponse {
+}
+
+message SetToolServiceIDRequest {
+  uint32 service_id = 1;
+}
+
+message SetToolServiceIDResponse {
+}
+
+message ExecuteToolRequest {
+  string tool_name = 1;
+  string arguments_json = 2;  // JSON string
+}
+
+message ExecuteToolResponse {
+  string content = 1;
+  string error = 2;
+}
+
+message ListToolsRequest {
+}
+
+message ListToolsResponse {
+  repeated Tool tools = 1;
 }

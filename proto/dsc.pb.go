@@ -834,6 +834,270 @@ func (*SetLLMServiceIDResponse) Descriptor() ([]byte, []int) {
 	return file_dsc_proto_rawDescGZIP(), []int{16}
 }
 
+type SetToolServiceIDRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ServiceId     uint32                 `protobuf:"varint,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetToolServiceIDRequest) Reset() {
+	*x = SetToolServiceIDRequest{}
+	mi := &file_dsc_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetToolServiceIDRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetToolServiceIDRequest) ProtoMessage() {}
+
+func (x *SetToolServiceIDRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetToolServiceIDRequest.ProtoReflect.Descriptor instead.
+func (*SetToolServiceIDRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SetToolServiceIDRequest) GetServiceId() uint32 {
+	if x != nil {
+		return x.ServiceId
+	}
+	return 0
+}
+
+type SetToolServiceIDResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetToolServiceIDResponse) Reset() {
+	*x = SetToolServiceIDResponse{}
+	mi := &file_dsc_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetToolServiceIDResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetToolServiceIDResponse) ProtoMessage() {}
+
+func (x *SetToolServiceIDResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetToolServiceIDResponse.ProtoReflect.Descriptor instead.
+func (*SetToolServiceIDResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{18}
+}
+
+type ExecuteToolRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ArgumentsJson string                 `protobuf:"bytes,2,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"` // JSON string
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecuteToolRequest) Reset() {
+	*x = ExecuteToolRequest{}
+	mi := &file_dsc_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecuteToolRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecuteToolRequest) ProtoMessage() {}
+
+func (x *ExecuteToolRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecuteToolRequest.ProtoReflect.Descriptor instead.
+func (*ExecuteToolRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ExecuteToolRequest) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ExecuteToolRequest) GetArgumentsJson() string {
+	if x != nil {
+		return x.ArgumentsJson
+	}
+	return ""
+}
+
+type ExecuteToolResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecuteToolResponse) Reset() {
+	*x = ExecuteToolResponse{}
+	mi := &file_dsc_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecuteToolResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecuteToolResponse) ProtoMessage() {}
+
+func (x *ExecuteToolResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecuteToolResponse.ProtoReflect.Descriptor instead.
+func (*ExecuteToolResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ExecuteToolResponse) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *ExecuteToolResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ListToolsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListToolsRequest) Reset() {
+	*x = ListToolsRequest{}
+	mi := &file_dsc_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListToolsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListToolsRequest) ProtoMessage() {}
+
+func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
+func (*ListToolsRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{21}
+}
+
+type ListToolsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tools         []*Tool                `protobuf:"bytes,1,rep,name=tools,proto3" json:"tools,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListToolsResponse) Reset() {
+	*x = ListToolsResponse{}
+	mi := &file_dsc_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListToolsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListToolsResponse) ProtoMessage() {}
+
+func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
+func (*ListToolsResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ListToolsResponse) GetTools() []*Tool {
+	if x != nil {
+		return x.Tools
+	}
+	return nil
+}
+
 var File_dsc_proto protoreflect.FileDescriptor
 
 const file_dsc_proto_rawDesc = "" +
@@ -886,23 +1150,40 @@ const file_dsc_proto_rawDesc = "" +
 	"\x16SetLLMServiceIDRequest\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x01 \x01(\rR\tserviceId\"\x19\n" +
-	"\x17SetLLMServiceIDResponse2\xed\x01\n" +
+	"\x17SetLLMServiceIDResponse\"8\n" +
+	"\x17SetToolServiceIDRequest\x12\x1d\n" +
+	"\n" +
+	"service_id\x18\x01 \x01(\rR\tserviceId\"\x1a\n" +
+	"\x18SetToolServiceIDResponse\"X\n" +
+	"\x12ExecuteToolRequest\x12\x1b\n" +
+	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12%\n" +
+	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson\"E\n" +
+	"\x13ExecuteToolResponse\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x12\n" +
+	"\x10ListToolsRequest\"4\n" +
+	"\x11ListToolsResponse\x12\x1f\n" +
+	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +
 	"\aExecute\x12\x13.dsc.ExecuteRequest\x1a\x14.dsc.ExecuteResponse\x12@\n" +
-	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\xe9\x01\n" +
+	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\xba\x02\n" +
 	"\fAgentService\x12(\n" +
 	"\x03Run\x12\x0f.dsc.RunRequest\x1a\x10.dsc.RunResponse\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x12L\n" +
-	"\x0fSetLLMServiceID\x12\x1b.dsc.SetLLMServiceIDRequest\x1a\x1c.dsc.SetLLMServiceIDResponse2\xde\x01\n" +
+	"\x0fSetLLMServiceID\x12\x1b.dsc.SetLLMServiceIDRequest\x1a\x1c.dsc.SetLLMServiceIDResponse\x12O\n" +
+	"\x10SetToolServiceID\x12\x1c.dsc.SetToolServiceIDRequest\x1a\x1d.dsc.SetToolServiceIDResponse2\xde\x01\n" +
 	"\n" +
 	"LLMService\x12+\n" +
 	"\x04Chat\x12\x10.dsc.ChatRequest\x1a\x11.dsc.ChatResponse\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x12@\n" +
-	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponseB\vZ\tdsc/protob\x06proto3"
+	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\x8b\x01\n" +
+	"\vToolService\x12@\n" +
+	"\vExecuteTool\x12\x17.dsc.ExecuteToolRequest\x1a\x18.dsc.ExecuteToolResponse\x12:\n" +
+	"\tListTools\x12\x15.dsc.ListToolsRequest\x1a\x16.dsc.ListToolsResponseB\vZ\tdsc/protob\x06proto3"
 
 var (
 	file_dsc_proto_rawDescOnce sync.Once
@@ -916,61 +1197,74 @@ func file_dsc_proto_rawDescGZIP() []byte {
 	return file_dsc_proto_rawDescData
 }
 
-var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_dsc_proto_goTypes = []any{
-	(*NameRequest)(nil),             // 0: dsc.NameRequest
-	(*NameResponse)(nil),            // 1: dsc.NameResponse
-	(*VersionRequest)(nil),          // 2: dsc.VersionRequest
-	(*VersionResponse)(nil),         // 3: dsc.VersionResponse
-	(*ExecuteRequest)(nil),          // 4: dsc.ExecuteRequest
-	(*ExecuteResponse)(nil),         // 5: dsc.ExecuteResponse
-	(*HealthCheckRequest)(nil),      // 6: dsc.HealthCheckRequest
-	(*HealthCheckResponse)(nil),     // 7: dsc.HealthCheckResponse
-	(*RunRequest)(nil),              // 8: dsc.RunRequest
-	(*RunResponse)(nil),             // 9: dsc.RunResponse
-	(*ChatRequest)(nil),             // 10: dsc.ChatRequest
-	(*Message)(nil),                 // 11: dsc.Message
-	(*Tool)(nil),                    // 12: dsc.Tool
-	(*ChatResponse)(nil),            // 13: dsc.ChatResponse
-	(*ToolCall)(nil),                // 14: dsc.ToolCall
-	(*SetLLMServiceIDRequest)(nil),  // 15: dsc.SetLLMServiceIDRequest
-	(*SetLLMServiceIDResponse)(nil), // 16: dsc.SetLLMServiceIDResponse
-	nil,                             // 17: dsc.ExecuteRequest.ParamsEntry
+	(*NameRequest)(nil),              // 0: dsc.NameRequest
+	(*NameResponse)(nil),             // 1: dsc.NameResponse
+	(*VersionRequest)(nil),           // 2: dsc.VersionRequest
+	(*VersionResponse)(nil),          // 3: dsc.VersionResponse
+	(*ExecuteRequest)(nil),           // 4: dsc.ExecuteRequest
+	(*ExecuteResponse)(nil),          // 5: dsc.ExecuteResponse
+	(*HealthCheckRequest)(nil),       // 6: dsc.HealthCheckRequest
+	(*HealthCheckResponse)(nil),      // 7: dsc.HealthCheckResponse
+	(*RunRequest)(nil),               // 8: dsc.RunRequest
+	(*RunResponse)(nil),              // 9: dsc.RunResponse
+	(*ChatRequest)(nil),              // 10: dsc.ChatRequest
+	(*Message)(nil),                  // 11: dsc.Message
+	(*Tool)(nil),                     // 12: dsc.Tool
+	(*ChatResponse)(nil),             // 13: dsc.ChatResponse
+	(*ToolCall)(nil),                 // 14: dsc.ToolCall
+	(*SetLLMServiceIDRequest)(nil),   // 15: dsc.SetLLMServiceIDRequest
+	(*SetLLMServiceIDResponse)(nil),  // 16: dsc.SetLLMServiceIDResponse
+	(*SetToolServiceIDRequest)(nil),  // 17: dsc.SetToolServiceIDRequest
+	(*SetToolServiceIDResponse)(nil), // 18: dsc.SetToolServiceIDResponse
+	(*ExecuteToolRequest)(nil),       // 19: dsc.ExecuteToolRequest
+	(*ExecuteToolResponse)(nil),      // 20: dsc.ExecuteToolResponse
+	(*ListToolsRequest)(nil),         // 21: dsc.ListToolsRequest
+	(*ListToolsResponse)(nil),        // 22: dsc.ListToolsResponse
+	nil,                              // 23: dsc.ExecuteRequest.ParamsEntry
 }
 var file_dsc_proto_depIdxs = []int32{
-	17, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	23, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	11, // 1: dsc.ChatRequest.messages:type_name -> dsc.Message
 	12, // 2: dsc.ChatRequest.tools:type_name -> dsc.Tool
 	14, // 3: dsc.ChatResponse.tool_calls:type_name -> dsc.ToolCall
-	0,  // 4: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
-	2,  // 5: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
-	4,  // 6: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
-	6,  // 7: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	8,  // 8: dsc.AgentService.Run:input_type -> dsc.RunRequest
-	0,  // 9: dsc.AgentService.Name:input_type -> dsc.NameRequest
-	2,  // 10: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	15, // 11: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
-	10, // 12: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	0,  // 13: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	2,  // 14: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	6,  // 15: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	1,  // 16: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 17: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 18: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 19: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 20: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	1,  // 21: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 22: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	16, // 23: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
-	13, // 24: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	1,  // 25: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 26: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 27: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	16, // [16:28] is the sub-list for method output_type
-	4,  // [4:16] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	12, // 4: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
+	0,  // 5: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
+	2,  // 6: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
+	4,  // 7: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
+	6,  // 8: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	8,  // 9: dsc.AgentService.Run:input_type -> dsc.RunRequest
+	0,  // 10: dsc.AgentService.Name:input_type -> dsc.NameRequest
+	2,  // 11: dsc.AgentService.Version:input_type -> dsc.VersionRequest
+	15, // 12: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
+	17, // 13: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
+	10, // 14: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	0,  // 15: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	2,  // 16: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	6,  // 17: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	19, // 18: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	21, // 19: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	1,  // 20: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 21: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 22: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 23: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 24: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	1,  // 25: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 26: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	16, // 27: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
+	18, // 28: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
+	13, // 29: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	1,  // 30: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 31: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 32: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	20, // 33: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	22, // 34: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	20, // [20:35] is the sub-list for method output_type
+	5,  // [5:20] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_dsc_proto_init() }
@@ -984,9 +1278,9 @@ func file_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dsc_proto_rawDesc), len(file_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   24,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   4,
 		},
 		GoTypes:           file_dsc_proto_goTypes,
 		DependencyIndexes: file_dsc_proto_depIdxs,

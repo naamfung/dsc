@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -22,6 +23,7 @@ type Manager struct {
 	typeMap         map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm")
 	agentServiceIDs map[string]uint32         // agent name -> serviceID
 	config          *ManagerConfig
+	toolRegistry    *ToolRegistry             // 新增
 }
 
 type ManagerConfig struct {
@@ -30,7 +32,7 @@ type ManagerConfig struct {
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {
-	return &Manager{
+	m := &Manager{
 		clients:         make(map[string]*plugin.Client),
 		plugins:         make(map[string]DSCPlugin),
 		agents:          make(map[string]Agent),
@@ -38,7 +40,13 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		typeMap:         make(map[string]string),
 		agentServiceIDs: make(map[string]uint32),
 		config:          cfg,
+		toolRegistry:    NewToolRegistry(),
 	}
+	// 註冊內置工具
+	_ = m.toolRegistry.Register(&ReadFileTool{})
+	_ = m.toolRegistry.Register(&WriteFileTool{})
+	// 後續可註冊更多工具
+	return m
 }
 
 // Load 加載一個插件（啟動子進程）
@@ -566,4 +574,18 @@ func (m *Manager) ListAgents() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// GetToolRegistry 暴露工具註冊表
+func (m *Manager) GetToolRegistry() *ToolRegistry {
+	return m.toolRegistry
+}
+
+// ExecuteTool 執行工具（供 RPC 調用）
+func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, error) {
+	tool, ok := m.toolRegistry.Get(toolName)
+	if !ok {
+		return "", fmt.Errorf("tool not found: %s", toolName)
+	}
+	return tool.Execute(ctx, argsJSON)
 }

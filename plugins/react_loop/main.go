@@ -12,15 +12,23 @@ import (
 )
 
 type ReactLoopAgent struct {
-	broker      *goplugin.GRPCBroker
-	serviceID   uint32
-	mu          sync.Mutex // 保護 serviceID
+	broker        *goplugin.GRPCBroker
+	llmServiceID  uint32
+	toolServiceID uint32
+	mu            sync.Mutex // 保護 serviceID
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.serviceID = id
+	a.llmServiceID = id
+	return nil
+}
+
+func (a *ReactLoopAgent) SetToolServiceID(ctx context.Context, id uint32) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolServiceID = id
 	return nil
 }
 
@@ -28,35 +36,101 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 	fmt.Printf("[Agent Loop] Starting turn with input: %s\n", input)
 
 	a.mu.Lock()
-	id := a.serviceID
+	llmID := a.llmServiceID
+	toolID := a.toolServiceID
 	a.mu.Unlock()
-	if id == 0 {
-		return nil, fmt.Errorf("serviceID not set, call SetLLMServiceID first")
+
+	if llmID == 0 || toolID == 0 {
+		return nil, fmt.Errorf("service IDs not set, call SetLLMServiceID and SetToolServiceID first")
 	}
 
-	// 每次调用时 Dial 连接 LLM 服务
-	llmConn, err := a.broker.Dial(id)
+	// 连接 LLM 服务
+	llmConn, err := a.broker.Dial(llmID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial LLM service: %w", err)
 	}
 	defer llmConn.Close()
 	llmClient := proto.NewLLMServiceClient(llmConn)
 
+	// 连接 ToolService
+	toolConn, err := a.broker.Dial(toolID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial tool service: %w", err)
+	}
+	defer toolConn.Close()
+	toolClient := proto.NewToolServiceClient(toolConn)
+
+	// 在循环外获取工具列表（一次即可）
+	listToolsResp, err := toolClient.ListTools(ctx, &proto.ListToolsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tools: %w", err)
+	}
+	availableTools := listToolsResp.Tools
+
 	messages := []*proto.Message{
-		{Role: "system", Content: "You are a helpful assistant."},
+		{Role: "system", Content: "You are a helpful assistant with access to tools."},
 		{Role: "user", Content: input},
 	}
-	req := &proto.ChatRequest{
-		Messages: messages,
-		Tools:    nil,
+
+	maxIterations := 5
+	for i := 0; i < maxIterations; i++ {
+		// 调用 LLM
+		req := &proto.ChatRequest{
+			Messages: messages,
+			Tools:    availableTools,
+		}
+		resp, err := llmClient.Chat(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("LLM chat failed: %w", err)
+		}
+
+		// 追加助手消息（包含文本回复）
+		messages = append(messages, &proto.Message{
+			Role:    "assistant",
+			Content: resp.Content,
+		})
+
+		// 没有工具调用 → 返回最终结果
+		if len(resp.ToolCalls) == 0 {
+			return &plugin.AgentResult{
+				Output: resp.Content,
+				Status: "success",
+			}, nil
+		}
+
+		// 执行每个工具并追加结果
+		for _, tc := range resp.ToolCalls {
+			// 执行工具
+			toolReq := &proto.ExecuteToolRequest{
+				ToolName:      tc.Name,
+				ArgumentsJson: tc.ArgumentsJson,
+			}
+			toolResp, err := toolClient.ExecuteTool(ctx, toolReq)
+			if err != nil {
+				// 错误也追加为 tool 消息
+				messages = append(messages, &proto.Message{
+					Role:    "tool",
+					Content: fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
+				})
+				continue
+			}
+			if toolResp.Error != "" {
+				messages = append(messages, &proto.Message{
+					Role:    "tool",
+					Content: fmt.Sprintf("Tool error: %s", toolResp.Error),
+				})
+			} else {
+				messages = append(messages, &proto.Message{
+					Role:    "tool",
+					Content: toolResp.Content,
+				})
+			}
+		}
 	}
-	resp, err := llmClient.Chat(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("LLM chat failed: %w", err)
-	}
+	// 超过最大迭代次数
 	return &plugin.AgentResult{
-		Output: resp.Content,
-		Status: "success",
+		Output: "Max iterations reached",
+		Status: "error",
 	}, nil
 }
 
@@ -106,6 +180,11 @@ func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest
 func (s *agentGRPCServer) SetLLMServiceID(ctx context.Context, req *proto.SetLLMServiceIDRequest) (*proto.SetLLMServiceIDResponse, error) {
 	err := s.impl.SetLLMServiceID(ctx, req.ServiceId)
 	return &proto.SetLLMServiceIDResponse{}, err
+}
+
+func (s *agentGRPCServer) SetToolServiceID(ctx context.Context, req *proto.SetToolServiceIDRequest) (*proto.SetToolServiceIDResponse, error) {
+	err := s.impl.SetToolServiceID(ctx, req.ServiceId)
+	return &proto.SetToolServiceIDResponse{}, err
 }
 
 func main() {

@@ -141,7 +141,9 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 	toolCalls := make([]ToolCall, len(resp.ToolCalls))
 	for i, tc := range resp.ToolCalls {
 		var args map[string]interface{}
-		json.Unmarshal([]byte(tc.ArgumentsJson), &args)
+		if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
+			return nil, fmt.Errorf("failed to parse tool call arguments for %s: %w", tc.Name, err)
+		}
 		toolCalls[i] = ToolCall{Name: tc.Name, Arguments: args}
 	}
 

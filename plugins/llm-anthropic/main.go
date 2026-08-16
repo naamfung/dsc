@@ -17,9 +17,9 @@ type AnthropicProvider struct {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
-	// Anthropic 插件尚未支持工具調用
+	// 临时降级：忽略工具，仅文本对话（打印警告到 stderr）
 	if len(tools) > 0 {
-		return nil, fmt.Errorf("Anthropic plugin does not support tool calls yet")
+		fmt.Fprintf(os.Stderr, "[WARN] Anthropic plugin does not support tools yet, ignoring %d tools\n", len(tools))
 	}
 
 	var systemMsg string

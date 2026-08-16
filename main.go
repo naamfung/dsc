@@ -119,20 +119,31 @@ func main() {
 
 	// 使用 Manager 加載 Agent
 	agentBinary := "./plugins/react_loop/react_loop" + ext
-	broker, serviceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
+	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
 	if err != nil {
 		log.Fatalf("Failed to load Agent: %v", err)
 	}
-	fmt.Printf("[Main] Generated serviceID: %d\n", serviceID)
+	fmt.Printf("[Main] Generated LLM serviceID: %d\n", llmServiceID)
 
 	// 注册 LLM 服务（在 goroutine 中，避免阻塞）
 	go func() {
-		broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+		broker.AcceptAndServe(llmServiceID, func(opts []grpc.ServerOption) *grpc.Server {
 			s := grpc.NewServer(opts...)
 			proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
 			return s
 		})
 	}()
+
+	// 注册 ToolService（在 goroutine 中，避免阻塞）
+	toolServiceID := broker.NextId()
+	go func() {
+		broker.AcceptAndServe(toolServiceID, func(opts []grpc.ServerOption) *grpc.Server {
+			s := grpc.NewServer(opts...)
+			proto.RegisterToolServiceServer(s, plugin.NewToolGRPCServer(mgr))
+			return s
+		})
+	}()
+	fmt.Printf("[Main] Generated Tool serviceID: %d\n", toolServiceID)
 
 	agent, ok := mgr.GetAgent("react_agent")
 	if !ok {
@@ -140,6 +151,11 @@ func main() {
 	}
 
 	ctx := context.Background()
+	// 设置 Tool Service ID
+	if err := agent.SetToolServiceID(ctx, toolServiceID); err != nil {
+		log.Fatalf("Failed to set tool service ID on agent: %v", err)
+	}
+
 	result, err := agent.Run(ctx, "What is the weather in Tokyo?")
 	if err != nil {
 		log.Fatalf("Agent run failed: %v", err)

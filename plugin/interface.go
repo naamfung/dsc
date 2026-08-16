@@ -40,6 +40,8 @@ type Agent interface {
 	Version(ctx context.Context) string
 	// SetLLMServiceID 设置 LLM service ID
 	SetLLMServiceID(ctx context.Context, id uint32) error
+	// SetToolServiceID 设置 Tool service ID
+	SetToolServiceID(ctx context.Context, id uint32) error
 }
 
 // AgentResult 是 Agent 执行后的结果
