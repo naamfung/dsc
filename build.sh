@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # 设置 GOPATH 和 PATH 以包含 protoc 生成插件
 GOPATH=$(go env GOPATH)

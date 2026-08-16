@@ -154,6 +154,11 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 func (a *ReactLoopAgent) Name(ctx context.Context) string { return "react_agent" }
 func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
 
+func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
+	// 簡單的實現，沒有特定資源需要清理
+	return nil
+}
+
 type customAgentPlugin struct {
 	goplugin.Plugin
 }
@@ -202,6 +207,14 @@ func (s *agentGRPCServer) SetLLMServiceID(ctx context.Context, req *proto.SetLLM
 func (s *agentGRPCServer) SetToolServiceID(ctx context.Context, req *proto.SetToolServiceIDRequest) (*proto.SetToolServiceIDResponse, error) {
 	err := s.impl.SetToolServiceID(ctx, req.ServiceId)
 	return &proto.SetToolServiceIDResponse{}, err
+}
+
+func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {
+	err := s.impl.Shutdown(ctx, req.Force)
+	if err != nil {
+		return &proto.ShutdownResponse{Success: false, Message: err.Error()}, err
+	}
+	return &proto.ShutdownResponse{Success: true, Message: "shutdown successful"}, nil
 }
 
 func main() {
