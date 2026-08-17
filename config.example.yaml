@@ -10,10 +10,23 @@ default_llm: openai
 # 插件列表配置
 plugins:
   # LLM 插件配置
-  - name: openai
+  # env 字段是環境變量的配置文件等價寫法：宿主環境變量與此處變量合併後傳給插件子進程，此處優先。
+  - name: anthropic
     type: llm
-    binary_path: ./plugins/llm-openai/llm-openai.exe
+    binary_path: ./plugins/llm-anthropic/llm-anthropic.exe
     enabled: true
+    env:
+      ANTHROPIC_BASE_URL: "http://192.168.124.197:8008/"
+      ANTHROPIC_MODEL: "Agentic-Turbo-Coder"
+
+  # 使用 OpenAI 兼容接口的示例（若需要可同時保留多個 LLM）
+  # - name: openai
+  #   type: llm
+  #   binary_path: ./plugins/llm-openai/llm-openai.exe
+  #   enabled: false
+  #   env:
+  #     OPENAI_BASE_URL: "http://192.168.124.197:8008/v1"
+  #     OPENAI_MODEL: "Agentic-Turbo-Coder"
 
   # Tool 插件配置（文件系統工具）
   - name: filesystem
@@ -27,5 +40,5 @@ plugins:
     binary_path: ./plugins/react-loop/react-loop.exe
     enabled: true
     depends_on:
-      llm: openai
+      llm: anthropic
       tools: [filesystem]

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -65,6 +66,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		config:          cfg,
 		toolRegistry:    NewToolRegistry(),
 		pluginMetadata:  make(map[string]*metadata.PluginInfo),
+		logger:          logger,
 		broker:          nil,
 		mainAgentName:   "",
 		llmServiceIDs:   make(map[string]uint32),
@@ -865,7 +867,8 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 
 		if len(agentEntry.DependsOn.Tools) > 0 {
 			toolName := agentEntry.DependsOn.Tools[0]
-			// 尋找提供該工具的插件服務 ID
+			// 尋找提供該工具的插件服務 ID：
+			// 依賴值可為工具名（如 read_file），也可為提供該工具的插件名（如 filesystem）
 			foundToolID := false
 			for pluginName, serviceID := range m.toolServiceIDs {
 				if toolNames, ok := m.pluginToolNames[pluginName]; ok {
@@ -877,6 +880,12 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 							break
 						}
 					}
+				}
+				// 依賴值即插件名時直接命中
+				if pluginName == toolName {
+					toolID = serviceID
+					foundToolID = true
+					hasTool = true
 				}
 				if foundToolID {
 					break
@@ -911,6 +920,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	// 跨平台處理二進制路徑
 	binaryPath := normalizeBinaryPath(entry.BinaryPath)
 	cmd := exec.Command(binaryPath)
+	cmd.Env = buildEnv(entry.Env)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
@@ -963,12 +973,14 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	binaryPath := normalizeBinaryPath(entry.BinaryPath)
 
 	// 創建客戶端
+	cmd := exec.Command(binaryPath)
+	cmd.Env = buildEnv(entry.Env)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"dummy": &dummyGRPCPlugin{},
 		},
-		Cmd:              exec.Command(binaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
@@ -1084,4 +1096,22 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		return fmt.Errorf("unsupported plugin type: %s", info.Type)
 	}
 	return nil
+}
+
+// buildEnv 合併宿主環境與插件自定義環境變量，插件變量優先
+func buildEnv(custom map[string]string) []string {
+	envMap := make(map[string]string)
+	for _, kv := range os.Environ() {
+		if i := strings.Index(kv, "="); i > 0 {
+			envMap[kv[:i]] = kv[i+1:]
+		}
+	}
+	for k, v := range custom {
+		envMap[k] = v
+	}
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		env = append(env, k+"="+v)
+	}
+	return env
 }

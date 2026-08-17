@@ -1,13 +1,29 @@
 workspace_root: ./workspace
-default_llm: openai
+default_llm: anthropic
 plugins:
+  - name: anthropic
+    type: llm
+    binary_path: ./plugins/llm-anthropic/llm-anthropic.exe
+    enabled: true
+    env:
+      ANTHROPIC_BASE_URL: "http://192.168.124.197:8008/"
+      ANTHROPIC_MODEL: "Agentic-Turbo-Coder"
   - name: openai
     type: llm
     binary_path: ./plugins/llm-openai/llm-openai.exe
     enabled: true
+    env:
+      OPENAI_BASE_URL: "http://192.168.124.197:8008/v1"
+      OPENAI_MODEL: "Agentic-Turbo-Coder"
+  - name: filesystem
+    type: tool
+    binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
+    enabled: true
+
   - name: react-agent
     type: agent
     binary_path: ./plugins/react-loop/react-loop.exe
     enabled: true
     depends_on:
-      llm: openai
+      llm: anthropic
+      tools: [filesystem]
