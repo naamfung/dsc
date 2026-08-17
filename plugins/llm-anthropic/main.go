@@ -51,17 +51,17 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message,
 	var toolParams []anthropic.ToolUnionParam
 	if len(tools) > 0 {
 		for _, t := range tools {
-			var inputSchema map[string]any
+			// 直接反序列化 JSON Schema 為 ToolInputSchemaParam，
+			// 避免把完整 schema 錯誤地包進 properties 導致服務端解析失敗
+			var inputSchema anthropic.ToolInputSchemaParam
 			if err := json.Unmarshal([]byte(t.ParametersJSON), &inputSchema); err != nil {
-				// 若 schema 解析失败，使用空对象
-				inputSchema = map[string]any{"type": "object"}
+				// 若 schema 解析失败，使用空对象（type 默認為 object）
+				inputSchema = anthropic.ToolInputSchemaParam{}
 			}
 			toolParams = append(toolParams, anthropic.ToolUnionParam{
 				OfTool: &anthropic.ToolParam{
-					Name: t.Name,
-					InputSchema: anthropic.ToolInputSchemaParam{
-						Properties: inputSchema,
-					},
+					Name:        t.Name,
+					InputSchema: inputSchema,
 					Description: anthropic.String(t.Description),
 				},
 			})
