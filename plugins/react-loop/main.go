@@ -18,11 +18,22 @@ type ReactLoopAgent struct {
 	toolServiceID uint32
 	mu            sync.Mutex // 保護 serviceID
 
+	// 快取的服務連接（broker.Dial 為一次性握手，需跨 Run 重用）
+	connMu     sync.Mutex
+	llmConn    *grpc.ClientConn
+	toolConn   *grpc.ClientConn
+	llmClient  proto.LLMServiceClient
+	toolClient proto.ToolServiceClient
+
 	// 新增字段
 	cancelFunc    context.CancelFunc // 用於取消當前 Run
 	runWg         sync.WaitGroup     // 等待 Run 完成
 	shutdownMu    sync.Mutex         // 保護關閉狀態
 	isShutdown    bool
+
+	// 多輪對話記憶：跨 Run 保留會話歷史
+	historyMu sync.Mutex
+	history   []*proto.Message
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
@@ -34,8 +45,22 @@ func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
 
 func (a *ReactLoopAgent) SetToolServiceID(ctx context.Context, id uint32) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.toolServiceID = id
+	llmID := a.llmServiceID
+	toolID := a.toolServiceID
+	a.mu.Unlock()
+
+	// 當兩個 serviceID 都設好後，立即建立連接（在 broker 的 5 秒超時前）
+	if llmID != 0 && toolID != 0 {
+		go func() {
+			_, _, err := a.ensureConnected(llmID, toolID)
+			if err != nil {
+				fmt.Printf("[Agent Loop] eager connect failed: %v\n", err)
+			} else {
+				fmt.Printf("[Agent Loop] eager connect successful\n")
+			}
+		}()
+	}
 	return nil
 }
 
@@ -69,21 +94,11 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 		return nil, fmt.Errorf("service IDs not set, call SetLLMServiceID and SetToolServiceID first")
 	}
 
-	// 连接 LLM 服务
-	llmConn, err := a.broker.Dial(llmID)
+	// 獲取（或首次建立）LLM 與 Tool 服務連接
+	llmClient, toolClient, err := a.ensureConnected(llmID, toolID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial LLM service: %w", err)
+		return nil, err
 	}
-	defer llmConn.Close()
-	llmClient := proto.NewLLMServiceClient(llmConn)
-
-	// 连接 ToolService
-	toolConn, err := a.broker.Dial(toolID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial tool service: %w", err)
-	}
-	defer toolConn.Close()
-	toolClient := proto.NewToolServiceClient(toolConn)
 
 	// 在循环外获取工具列表（一次即可）
 	listToolsResp, err := toolClient.ListTools(ctx, &proto.ListToolsRequest{})
@@ -92,10 +107,17 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 	}
 	availableTools := listToolsResp.Tools
 
-	messages := []*proto.Message{
-		{Role: "system", Content: "You are a helpful assistant with access to tools."},
-		{Role: "user", Content: input},
+	// 讀取/追加當前用戶輸入到歷史
+	a.historyMu.Lock()
+	if len(a.history) == 0 {
+		// 第一次對話，添加 system prompt
+		a.history = []*proto.Message{
+			{Role: "system", Content: "You are a helpful assistant with access to tools."},
+		}
 	}
+	a.history = append(a.history, &proto.Message{Role: "user", Content: input})
+	currentHistory := a.history
+	a.historyMu.Unlock()
 
 	maxIterations := 5
 	for i := 0; i < maxIterations; i++ {
@@ -111,20 +133,20 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 
 		// 上下文管理與截斷
 		const maxMessages = 20
-		if len(messages) > maxMessages {
+		if len(currentHistory) > maxMessages {
 			// 保留 system 和 user 第一条，删除中间，保留最后几条
 			// 简单实现：保留前 2 条（system + initial user）和最后 (maxMessages-2) 条
-			kept := messages[:2]
-			tailStart := len(messages) - (maxMessages - 2)
+			kept := currentHistory[:2]
+			tailStart := len(currentHistory) - (maxMessages - 2)
 			if tailStart < 2 {
 				tailStart = 2
 			}
-			messages = append(kept, messages[tailStart:]...)
+			currentHistory = append(kept, currentHistory[tailStart:]...)
 		}
 
 		// 调用 LLM
 		req := &proto.ChatRequest{
-			Messages: messages,
+			Messages: currentHistory,
 			Tools:    availableTools,
 		}
 		resp, err := llmClient.Chat(ctx, req)
@@ -140,10 +162,11 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 		if len(resp.ToolCalls) > 0 {
 			assistantMsg.ToolCalls = resp.ToolCalls
 		}
-		messages = append(messages, assistantMsg)
+		currentHistory = append(currentHistory, assistantMsg)
 
-		// 没有工具调用 → 返回最终结果
+		// 没有工具调用 → 返回最终结果（先持久化歷史）
 		if len(resp.ToolCalls) == 0 {
+			a.saveHistory(currentHistory)
 			return &plugin.AgentResult{
 				Output: resp.Content,
 				Status: "success",
@@ -171,7 +194,7 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 			toolResp, err := toolClient.ExecuteTool(ctx, toolReq)
 			if err != nil {
 				// 错误也追加为 tool 消息
-				messages = append(messages, &proto.Message{
+				currentHistory = append(currentHistory, &proto.Message{
 					Role:       "tool",
 					Content:    fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
 					ToolCallId: tc.Id,
@@ -179,13 +202,13 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 				continue
 			}
 			if toolResp.Error != "" {
-				messages = append(messages, &proto.Message{
+				currentHistory = append(currentHistory, &proto.Message{
 					Role:       "tool",
 					Content:    fmt.Sprintf("Tool error: %s", toolResp.Error),
 					ToolCallId: tc.Id,
 				})
 			} else {
-				messages = append(messages, &proto.Message{
+				currentHistory = append(currentHistory, &proto.Message{
 					Role:       "tool",
 					Content:    toolResp.Content,
 					ToolCallId: tc.Id,
@@ -193,11 +216,47 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 			}
 		}
 	}
-	// 超过最大迭代次数
+	// 超过最大迭代次数（持久化歷史）
+	a.saveHistory(currentHistory)
 	return &plugin.AgentResult{
 		Output: "Max iterations reached",
 		Status: "error",
 	}, nil
+}
+
+// saveHistory 將當前的會話上下文寫回 agent 歷史，供下一輪 Run 使用
+func (a *ReactLoopAgent) saveHistory(messages []*proto.Message) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
+	a.history = messages
+}
+
+// ensureConnected 建立並快取 LLM/Tool 服務連接。
+// broker.Dial 對同一 serviceID 是一次性握手，連接信息只會發送一次，
+// 因此必須跨 Run 重用連接，否則第二次 Dial 會因收不到連接信息而超時。
+func (a *ReactLoopAgent) ensureConnected(llmID, toolID uint32) (proto.LLMServiceClient, proto.ToolServiceClient, error) {
+	a.connMu.Lock()
+	defer a.connMu.Unlock()
+
+	if a.llmClient == nil || a.toolClient == nil {
+		llmConn, err := a.broker.Dial(llmID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to dial LLM service: %w", err)
+		}
+		a.llmConn = llmConn
+		a.llmClient = proto.NewLLMServiceClient(llmConn)
+
+		toolConn, err := a.broker.Dial(toolID)
+		if err != nil {
+			_ = a.llmConn.Close()
+			a.llmConn = nil
+			a.llmClient = nil
+			return nil, nil, fmt.Errorf("failed to dial tool service: %w", err)
+		}
+		a.toolConn = toolConn
+		a.toolClient = proto.NewToolServiceClient(toolConn)
+	}
+	return a.llmClient, a.toolClient, nil
 }
 
 func (a *ReactLoopAgent) Name(ctx context.Context) string { return "react-agent" }
@@ -236,6 +295,21 @@ func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 	}
 
 	a.isShutdown = true
+
+	// 關閉快取的服務連接
+	a.connMu.Lock()
+	if a.llmConn != nil {
+		_ = a.llmConn.Close()
+		a.llmConn = nil
+		a.llmClient = nil
+	}
+	if a.toolConn != nil {
+		_ = a.toolConn.Close()
+		a.toolConn = nil
+		a.toolClient = nil
+	}
+	a.connMu.Unlock()
+
 	return nil
 }
 

@@ -8,12 +8,11 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
-	"time"
 
 	"dsc/plugin"
 	"dsc/proto"
+	"dsc/tui"
 	"github.com/hashicorp/go-hclog"
-	goplugin "github.com/hashicorp/go-plugin"
 	"gopkg.in/yaml.v3"
 	"google.golang.org/grpc"
 )
@@ -114,19 +113,6 @@ func loadConfig(path string) (*plugin.Config, error) {
 	return &cfg, nil
 }
 
-// waitForService 等待 broker 服務就緒
-func waitForService(broker *goplugin.GRPCBroker, id uint32) error {
-	for i := 0; i < 10; i++ {
-		conn, err := broker.Dial(id)
-		if err == nil {
-			conn.Close()
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return fmt.Errorf("service %d not ready", id)
-}
-
 func main() {
 	// 加載配置文件
 	cfgPath := os.Getenv("DSC_CONFIG")
@@ -183,7 +169,7 @@ func main() {
 		mgr.StartAdmin(adminAddr)
 		logger.Info("admin api started", "addr", adminAddr)
 
-		// 獲取 Agent 並運行
+		// 获取 Agent 并运行 TUI 聊天界面
 		agentName := mgr.GetMainAgentName()
 		agent, ok := mgr.GetAgent(agentName)
 		if !ok {
@@ -191,13 +177,27 @@ func main() {
 			os.Exit(1)
 		}
 
+		// 从配置中提取 LLM 模型名称
+		llmModelName := "Unknown"
+		for _, entry := range cfg.Plugins {
+			if entry.Type == "llm" && entry.Enabled {
+				if v, ok := entry.Env["ANTHROPIC_MODEL"]; ok {
+					llmModelName = v
+				} else if v, ok := entry.Env["OPENAI_MODEL"]; ok {
+					llmModelName = v
+				} else if v, ok := entry.Env["OLLAMA_MODEL"]; ok {
+					llmModelName = v
+				}
+				break
+			}
+		}
+
 		ctx := context.Background()
-		result, err := agent.Run(ctx, "What is the weather in Tokyo?")
-		if err != nil {
-			logger.Error("agent run failed", "error", err)
+		if err := tui.Run(agent, ctx, llmModelName); err != nil {
+			logger.Error("tui run failed", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("agent result", "result", result)
+		logger.Info("tui exited")
 	} else {
 		// 兼容舊的加載方式
 		llmName := os.Getenv("LLM_PROVIDER")
@@ -256,17 +256,6 @@ func main() {
 		}()
 		logger.Info("tool service id generated", "serviceID", toolServiceID)
 
-		// 等待服務就緒
-		if err := waitForService(broker, llmServiceID); err != nil {
-			logger.Error("failed to wait for LLM service", "error", err)
-			os.Exit(1)
-		}
-		if err := waitForService(broker, toolServiceID); err != nil {
-			logger.Error("failed to wait for tool service", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("services are ready")
-
 		agent, ok := mgr.GetAgent("react_agent")
 		if !ok {
 			logger.Error("agent not found after loading")
@@ -280,12 +269,15 @@ func main() {
 			os.Exit(1)
 		}
 
-		result, err := agent.Run(ctx, "What is the weather in Tokyo?")
-		if err != nil {
-			logger.Error("agent run failed", "error", err)
+		// 舊路徑沒有明確的模型名稱配置，設置為空字符串，TUI會回退到agent.Name()
+		llmModelNameLegacy := ""
+
+		// 启动 TUI 聊天界面（替换原来的硬编码 Agent.Run 调用）
+		if err := tui.Run(agent, ctx, llmModelNameLegacy); err != nil {
+			logger.Error("tui run failed", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("agent result", "result", result)
+		logger.Info("tui exited")
 	}
 
 	sigCh := make(chan os.Signal, 1)
