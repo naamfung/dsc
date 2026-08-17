@@ -11,13 +11,14 @@ import (
 	"dsc/proto"
 	"dsc/proto/metadata"
 	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-plugin"
+	goplugin "github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
 )
 
 // Manager 插件管理器
 type Manager struct {
 	mu              sync.RWMutex
-	clients         map[string]*plugin.Client // 插件名 -> 客戶端
+	clients         map[string]*goplugin.Client // 插件名 -> 客戶端
 	plugins         map[string]DSCPlugin      // 插件名 -> DSC業務接口
 	agents          map[string]Agent          // 插件名 -> Agent接口
 	llms            map[string]LLMProvider    // 插件名 -> LLMProvider接口
@@ -27,11 +28,18 @@ type Manager struct {
 	toolRegistry    *ToolRegistry             // 新增
 	logger          hclog.Logger
 	pluginMetadata  map[string]*metadata.PluginInfo // 插件名 -> 元數據
+
+	// 新增字段用於 Broker 和服務 ID 管理
+	broker           *goplugin.GRPCBroker      // 統一的 broker，由 Agent 提供
+	mainAgentName    string                    // 主 Agent 名稱
+	llmServiceIDs    map[string]uint32         // llm name -> serviceID
+	toolServiceIDs   map[string]uint32         // tool plugin name -> serviceID
+	pluginToolNames  map[string][]string       // tool plugin name -> list of tool names it provides
 }
 
 type ManagerConfig struct {
 	PluginDir string
-	Handshake plugin.HandshakeConfig
+	Handshake goplugin.HandshakeConfig
 	Logger    hclog.Logger
 }
 
@@ -44,7 +52,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		})
 	}
 	m := &Manager{
-		clients:         make(map[string]*plugin.Client),
+		clients:         make(map[string]*goplugin.Client),
 		plugins:         make(map[string]DSCPlugin),
 		agents:          make(map[string]Agent),
 		llms:            make(map[string]LLMProvider),
@@ -53,6 +61,11 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		config:          cfg,
 		toolRegistry:    NewToolRegistry(),
 		pluginMetadata:  make(map[string]*metadata.PluginInfo),
+		broker:          nil,
+		mainAgentName:   "",
+		llmServiceIDs:   make(map[string]uint32),
+		toolServiceIDs:  make(map[string]uint32),
+		pluginToolNames: make(map[string][]string),
 	}
 	// 註冊內置工具
 	if err := m.toolRegistry.Register(&ReadFileTool{}); err != nil {
@@ -76,13 +89,13 @@ func (m *Manager) Load(name string, binaryPath string) error {
 	}
 
 	// 創建插件客戶端
-	client := plugin.NewClient(&plugin.ClientConfig{
+	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"dsc_plugin": &DSCPluginGRPC{},
 		},
 		Cmd:              exec.Command(binaryPath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
@@ -171,13 +184,13 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	cmd := exec.Command(binaryPath, cmdArgs...)
 
 	// 創建插件客戶端
-	client := plugin.NewClient(&plugin.ClientConfig{
+	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
 		},
 		Cmd:              cmd,
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
@@ -239,7 +252,7 @@ func (m *Manager) GetAgent(name string) (Agent, bool) {
 
 // LoadAgentAndGetBroker 加載 Agent 插件，並返回其 GRPCBroker 和 serviceID 以供宿主註冊服務。
 // 該方法會將 Agent 納入 Manager 管理，支持後續熱重載。
-func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBroker, uint32, error) {
+func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*goplugin.GRPCBroker, uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -250,13 +263,13 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBr
 
 	// 創建插件客戶端（先不傳遞 serviceID，稍後通過 broker 生成）
 	cmd := exec.Command(binaryPath)
-	client := plugin.NewClient(&plugin.ClientConfig{
+	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
 		},
 		Cmd:              cmd,
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
@@ -266,7 +279,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*plugin.GRPCBr
 		return nil, 0, fmt.Errorf("failed to connect to agent plugin: %w", err)
 	}
 
-	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
 	if !ok {
 		client.Kill()
 		return nil, 0, fmt.Errorf("agent plugin is not a gRPC client")
@@ -316,13 +329,13 @@ func (m *Manager) LoadLLM(name string, binaryPath string) error {
 	}
 
 	// 創建插件客戶端
-	client := plugin.NewClient(&plugin.ClientConfig{
+	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"llm": &LLMGRPCPlugin{},
 		},
 		Cmd:              exec.Command(binaryPath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
 	})
 
@@ -406,13 +419,13 @@ func (m *Manager) HotReload(name string, newBinaryPath string) error {
 // hotReloadPluginLocked 內部重載 DSCPlugin（需已持有鎖）
 func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 	// 1. 建立新 client 並驗證
-	newClient := plugin.NewClient(&plugin.ClientConfig{
+	newClient := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"dsc_plugin": &DSCPluginGRPC{},
 		},
 		Cmd:              exec.Command(newBinaryPath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
@@ -455,13 +468,13 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	}
 
 	// 1. 建立新 client 並驗證
-	newClient := plugin.NewClient(&plugin.ClientConfig{
+	newClient := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
 		},
 		Cmd:              exec.Command(newBinaryPath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
 
@@ -471,7 +484,7 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new agent plugin connection failed: %w", err)
 	}
 
-	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
 	if !ok {
 		newClient.Kill()
 		return fmt.Errorf("new agent plugin is not a gRPC client")
@@ -520,13 +533,13 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 // hotReloadLLMLocked 內部重載 LLM（需已持有鎖）
 func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 	// 1. 建立新 client 並驗證
-	newClient := plugin.NewClient(&plugin.ClientConfig{
+	newClient := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
+		Plugins: map[string]goplugin.Plugin{
 			"llm": &LLMGRPCPlugin{},
 		},
 		Cmd:              exec.Command(newBinaryPath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
 	})
 
@@ -580,7 +593,7 @@ func (m *Manager) Shutdown() {
 		client.Kill()
 		m.logger.Info("plugin killed", "name", name)
 	}
-	m.clients = make(map[string]*plugin.Client)
+	m.clients = make(map[string]*goplugin.Client)
 	m.plugins = make(map[string]DSCPlugin)
 	m.agents = make(map[string]Agent)
 	m.llms = make(map[string]LLMProvider)
@@ -614,116 +627,6 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 	return tool.Execute(ctx, argsJSON)
 }
 
-// LoadFromConfig 從配置加載所有插件
-func (m *Manager) LoadFromConfig(cfg *Config) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, entry := range cfg.Plugins {
-		if !entry.Enabled {
-			m.logger.Info("plugin disabled, skipping", "name", entry.Name)
-			continue
-		}
-
-		if err := m.loadPluginFromEntryLocked(entry); err != nil {
-			return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
-		}
-	}
-
-	m.logger.Info("all plugins loaded from config", "count", len(cfg.Plugins))
-	return nil
-}
-
-// loadPluginFromEntryLocked 根據插件入口加載插件（需已持有鎖）
-func (m *Manager) loadPluginFromEntryLocked(entry PluginEntry) error {
-	// 創建插件客戶端 - 使用 dummy plugin 以獲取 gRPC 連接
-	client := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig: m.config.Handshake,
-		Plugins: map[string]plugin.Plugin{
-			"dummy": &dummyGRPCPlugin{},
-		},
-		Cmd:              exec.Command(entry.BinaryPath),
-		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
-	})
-
-	// 建立 RPC 連接
-	rpcClient, err := client.Client()
-	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to connect to plugin: %w", err)
-	}
-
-	// 獲取 gRPC 客戶端
-	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
-	if !ok {
-		client.Kill()
-		return fmt.Errorf("plugin is not a gRPC client")
-	}
-
-	// 獲取插件元數據
-	info, err := GetPluginInfo(grpcClient.Conn)
-	if err != nil {
-		client.Kill()
-		return fmt.Errorf("failed to get plugin info: %w", err)
-	}
-
-	// 驗證 type 是否匹配 entry.Type
-	if info.Type != entry.Type {
-		client.Kill()
-		return fmt.Errorf("plugin type mismatch: expected %s, got %s", entry.Type, info.Type)
-	}
-
-	// 根據類型進行業務加載
-	switch info.Type {
-	case "llm":
-		// 獲取 LLMService 客戶端
-		llmClient := proto.NewLLMServiceClient(grpcClient.Conn)
-		provider := &llmGRPCClient{client: llmClient}
-		m.llms[entry.Name] = provider
-		m.typeMap[entry.Name] = "llm"
-
-	case "agent":
-		agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-		agent := &agentGRPCClient{client: agentClient}
-		m.agents[entry.Name] = agent
-		m.typeMap[entry.Name] = "agent"
-
-	case "tool":
-		// 獲取工具列表
-		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
-		listResp, err := toolClient.ListTools(context.Background(), &proto.ListToolsRequest{})
-		if err != nil {
-			client.Kill()
-			return fmt.Errorf("failed to list tools: %w", err)
-		}
-		// 為每個工具註冊 RemoteTool
-		for _, t := range listResp.Tools {
-			remote := &RemoteTool{
-				name:        t.Name,
-				description: t.Description,
-				schema:      json.RawMessage(t.ParametersJson),
-				client:      toolClient,
-			}
-			if err := m.toolRegistry.Register(remote); err != nil {
-				m.logger.Warn("failed to register tool", "tool", t.Name, "error", err)
-			}
-		}
-		m.typeMap[entry.Name] = "tool"
-
-	default:
-		client.Kill()
-		return fmt.Errorf("unsupported plugin type: %s", info.Type)
-	}
-
-	// 存儲客戶端以便卸載
-	m.clients[entry.Name] = client
-	m.pluginMetadata[entry.Name] = info
-
-	m.logger.Info("plugin loaded", "name", entry.Name, "type", info.Type, "version", info.Version)
-	return nil
-}
-
 // UnloadPlugin 卸載插件
 func (m *Manager) UnloadPlugin(name string) error {
 	m.mu.Lock()
@@ -736,8 +639,19 @@ func (m *Manager) UnloadPlugin(name string) error {
 
 	// 從註冊表中移除工具
 	if m.typeMap[name] == "tool" {
-		// 工具插件的工具已經註冊到 toolRegistry，這裡需要移除
-		// 暫時不實現詳細的工具移除邏輯
+		// 獲取該工具插件註冊的工具名稱列表
+		toolNames, hasToolNames := m.pluginToolNames[name]
+		if hasToolNames {
+			for _, toolName := range toolNames {
+				m.toolRegistry.Unregister(toolName)
+				m.logger.Info("unregistered tool", "tool", toolName, "plugin", name)
+			}
+		}
+		// 刪除相關記錄
+		delete(m.toolServiceIDs, name)
+		delete(m.pluginToolNames, name)
+	} else if m.typeMap[name] == "llm" {
+		delete(m.llmServiceIDs, name)
 	}
 
 	client.Kill() // 殺死插件子進程
@@ -795,4 +709,316 @@ func (m *Manager) GetPluginMetadata(name string) (*metadata.PluginInfo, bool) {
 	defer m.mu.RUnlock()
 	info, exists := m.pluginMetadata[name]
 	return info, exists
+}
+
+// GetMainAgentName 獲取主 Agent 名稱
+func (m *Manager) GetMainAgentName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.mainAgentName
+}
+
+// LoadPlugin 動態加載插件（供 Admin API 使用）
+func (m *Manager) LoadPlugin(entry PluginEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 如果是 agent 插件
+	if entry.Type == "agent" {
+		_, _, err := m.loadAgentAndGetBroker(entry)
+		return err
+	}
+
+	// 對於 llm/tool 插件，需要 broker
+	if m.broker == nil {
+		return fmt.Errorf("broker not available, cannot load plugin type %s", entry.Type)
+	}
+
+	return m.loadPluginWithBroker(entry, m.broker)
+}
+
+// llmProxyServer 實現 LLMService，轉發到 LLMProvider
+type llmProxyServer struct {
+	proto.UnimplementedLLMServiceServer
+	client proto.LLMServiceClient
+}
+
+func (s *llmProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
+	return s.client.Chat(ctx, req)
+}
+
+func (s *llmProxyServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
+	return s.client.Name(ctx, req)
+}
+
+func (s *llmProxyServer) Version(ctx context.Context, req *proto.VersionRequest) (*proto.VersionResponse, error) {
+	return s.client.Version(ctx, req)
+}
+
+func (s *llmProxyServer) HealthCheck(ctx context.Context, req *proto.HealthCheckRequest) (*proto.HealthCheckResponse, error) {
+	return s.client.HealthCheck(ctx, req)
+}
+
+// toolProxyServer 實現 ToolService，轉發到 ToolServiceClient
+type toolProxyServer struct {
+	proto.UnimplementedToolServiceServer
+	client proto.ToolServiceClient
+}
+
+func (s *toolProxyServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
+	return s.client.ExecuteTool(ctx, req)
+}
+
+func (s *toolProxyServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
+	return s.client.ListTools(ctx, req)
+}
+
+// LoadFromConfig 從配置加載所有插件（重新設計版：先加載 Agent 獲取 Broker，再加載 LLM/Tool）
+func (m *Manager) LoadFromConfig(cfg *Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 第一步：找到 Agent 插件（假設第一個類型為 agent 的）
+	var agentEntry *PluginEntry
+	var otherEntries []PluginEntry
+	for _, entry := range cfg.Plugins {
+		if !entry.Enabled {
+			continue
+		}
+		if entry.Type == "agent" {
+			if agentEntry == nil {
+				agentEntry = &entry
+			} else {
+				m.logger.Warn("multiple agent plugins found, using first one", "first", agentEntry.Name, "ignored", entry.Name)
+			}
+		} else {
+			otherEntries = append(otherEntries, entry)
+		}
+	}
+
+	if agentEntry == nil {
+		return fmt.Errorf("no agent plugin found in config")
+	}
+
+	// 第二步：加載 Agent 並獲取 Broker
+	broker, agent, err := m.loadAgentAndGetBroker(*agentEntry)
+	if err != nil {
+		return fmt.Errorf("failed to load agent: %w", err)
+	}
+	m.broker = broker
+	m.mainAgentName = agentEntry.Name
+
+	// 第三步：加載其他插件（LLM、Tool）
+	for _, entry := range otherEntries {
+		if err := m.loadPluginWithBroker(entry, broker); err != nil {
+			return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
+		}
+	}
+
+	// 第四步：為 Agent 設置 LLM 和 Tool 服務 ID
+	if agentEntry.DependsOn != nil {
+		var llmID, toolID uint32
+		hasLLM := false
+		hasTool := false
+
+		if agentEntry.DependsOn.LLM != "" {
+			if id, ok := m.llmServiceIDs[agentEntry.DependsOn.LLM]; ok {
+				llmID = id
+				hasLLM = true
+			} else {
+				return fmt.Errorf("dependent LLM '%s' not loaded", agentEntry.DependsOn.LLM)
+			}
+		}
+
+		if len(agentEntry.DependsOn.Tools) > 0 {
+			toolName := agentEntry.DependsOn.Tools[0]
+			// 尋找提供該工具的插件服務 ID
+			foundToolID := false
+			for pluginName, serviceID := range m.toolServiceIDs {
+				if toolNames, ok := m.pluginToolNames[pluginName]; ok {
+					for _, tn := range toolNames {
+						if tn == toolName {
+							toolID = serviceID
+							foundToolID = true
+							hasTool = true
+							break
+						}
+					}
+				}
+				if foundToolID {
+					break
+				}
+			}
+
+			if !hasTool {
+				return fmt.Errorf("dependent Tool '%s' not loaded", toolName)
+			}
+		}
+
+		// 調用 Agent 的 RPC 設置 ID
+		if err := agent.SetLLMServiceID(context.Background(), llmID); err != nil && hasLLM {
+			return fmt.Errorf("failed to set LLM service ID: %w", err)
+		}
+		if err := agent.SetToolServiceID(context.Background(), toolID); err != nil && hasTool {
+			return fmt.Errorf("failed to set Tool service ID: %w", err)
+		}
+		m.logger.Info("agent dependencies set", "llmID", llmID, "toolID", toolID)
+	}
+
+	m.logger.Info("all plugins loaded from config", "agent", agentEntry.Name)
+	return nil
+}
+
+// loadAgentAndGetBroker 加載 Agent 插件，返回 broker 和 Agent 實例（尚未設置依賴）
+func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker, Agent, error) {
+	if _, exists := m.agents[entry.Name]; exists {
+		m.unloadAgentLocked(entry.Name)
+	}
+
+	cmd := exec.Command(entry.BinaryPath)
+	client := goplugin.NewClient(&goplugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]goplugin.Plugin{
+			"agent": &AgentGRPCPlugin{},
+		},
+		Cmd:              cmd,
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+	})
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return nil, nil, fmt.Errorf("failed to connect to agent plugin: %w", err)
+	}
+
+	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
+	if !ok {
+		client.Kill()
+		return nil, nil, fmt.Errorf("agent plugin is not a gRPC client")
+	}
+
+	broker := grpcClient.Broker()
+
+	// 獲取 Agent 實例（但不需要立即設置 LLM 服務 ID）
+	raw, err := rpcClient.Dispense("agent")
+	if err != nil {
+		client.Kill()
+		return nil, nil, fmt.Errorf("failed to dispense agent plugin: %w", err)
+	}
+	agent, ok := raw.(Agent)
+	if !ok {
+		client.Kill()
+		return nil, nil, fmt.Errorf("plugin does not implement Agent interface")
+	}
+
+	// 存儲客戶端和 agent（不設置 serviceID，稍後設置）
+	m.clients[entry.Name] = client
+	m.agents[entry.Name] = agent
+	m.typeMap[entry.Name] = "agent"
+	m.agentServiceIDs[entry.Name] = 0 // 占位
+
+	m.logger.Info("agent plugin loaded for broker", "name", entry.Name)
+	return broker, agent, nil
+}
+
+// loadPluginWithBroker 用於 LLM/Tool 插件加載，通過 broker 註冊服務
+func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCBroker) error {
+	// 創建客戶端
+	client := goplugin.NewClient(&goplugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]goplugin.Plugin{
+			"dummy": &dummyGRPCPlugin{},
+		},
+		Cmd:              exec.Command(entry.BinaryPath),
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+	})
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to connect to plugin: %w", err)
+	}
+
+	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
+	if !ok {
+		client.Kill()
+		return fmt.Errorf("plugin is not a gRPC client")
+	}
+
+	// 獲取元數據
+	info, err := GetPluginInfo(grpcClient.Conn)
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to get plugin info: %w", err)
+	}
+
+	// 版本兼容性檢查
+	if info.ApiVersion != "1.0" {
+		client.Kill()
+		return fmt.Errorf("unsupported API version %s, expected 1.0", info.ApiVersion)
+	}
+
+	if info.Type != entry.Type {
+		client.Kill()
+		return fmt.Errorf("plugin type mismatch: expected %s, got %s", entry.Type, info.Type)
+	}
+
+	switch info.Type {
+	case "llm":
+		llmClient := proto.NewLLMServiceClient(grpcClient.Conn)
+		proxy := &llmProxyServer{client: llmClient}
+		serviceID := broker.NextId()
+		go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+			s := grpc.NewServer(opts...)
+			proto.RegisterLLMServiceServer(s, proxy)
+			return s
+		})
+		m.llmServiceIDs[entry.Name] = serviceID
+		m.clients[entry.Name] = client
+		m.typeMap[entry.Name] = "llm"
+		m.pluginMetadata[entry.Name] = info
+		m.logger.Info("LLM service registered", "name", entry.Name, "serviceID", serviceID)
+
+	case "tool":
+		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
+		listResp, err := toolClient.ListTools(context.Background(), &proto.ListToolsRequest{})
+		if err != nil {
+			client.Kill()
+			return fmt.Errorf("failed to list tools: %w", err)
+		}
+		var toolNames []string
+		for _, t := range listResp.Tools {
+			remote := &RemoteTool{
+				name:        t.Name,
+				description: t.Description,
+				schema:      json.RawMessage(t.ParametersJson),
+				client:      toolClient,
+			}
+			if err := m.toolRegistry.Register(remote); err != nil {
+				m.logger.Warn("failed to register tool", "tool", t.Name, "error", err)
+				continue
+			}
+			toolNames = append(toolNames, t.Name)
+		}
+		proxy := &toolProxyServer{client: toolClient}
+		serviceID := broker.NextId()
+		go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+			s := grpc.NewServer(opts...)
+			proto.RegisterToolServiceServer(s, proxy)
+			return s
+		})
+		m.toolServiceIDs[entry.Name] = serviceID
+		m.pluginToolNames[entry.Name] = toolNames
+		m.clients[entry.Name] = client
+		m.typeMap[entry.Name] = "tool"
+		m.pluginMetadata[entry.Name] = info
+		m.logger.Info("Tool service registered", "name", entry.Name, "serviceID", serviceID)
+
+	default:
+		client.Kill()
+		return fmt.Errorf("unsupported plugin type: %s", info.Type)
+	}
+	return nil
 }

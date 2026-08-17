@@ -30,6 +30,17 @@ func (r *ToolRegistry) Register(t ToolDefinition) error {
 	return nil
 }
 
+// Unregister 卸載工具（線程安全）
+func (r *ToolRegistry) Unregister(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.tools[name]; exists {
+		delete(r.tools, name)
+		return true
+	}
+	return false
+}
+
 // Get 獲取工具
 func (r *ToolRegistry) Get(name string) (ToolDefinition, bool) {
 	r.mu.RLock()

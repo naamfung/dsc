@@ -37,7 +37,7 @@ func (m *Manager) handleLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := m.loadPluginFromEntryLocked(entry); err != nil {
+	if err := m.LoadPlugin(entry); err != nil {
 		http.Error(w, fmt.Sprintf("failed to load plugin: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -90,7 +90,7 @@ func (m *Manager) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 再加載
-	if err := m.loadPluginFromEntryLocked(entry); err != nil {
+	if err := m.LoadPlugin(entry); err != nil {
 		http.Error(w, fmt.Sprintf("failed to reload plugin: %v", err), http.StatusInternalServerError)
 		return
 	}

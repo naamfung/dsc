@@ -171,6 +171,22 @@ func main() {
 		}
 		mgr.StartAdmin(adminAddr)
 		logger.Info("admin api started", "addr", adminAddr)
+
+		// 獲取 Agent 並運行
+		agentName := mgr.GetMainAgentName()
+		agent, ok := mgr.GetAgent(agentName)
+		if !ok {
+			logger.Error("agent not found after loading", "agentName", agentName)
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		result, err := agent.Run(ctx, "What is the weather in Tokyo?")
+		if err != nil {
+			logger.Error("agent run failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("agent result", "result", result)
 	} else {
 		// 兼容舊的加載方式
 		llmName := os.Getenv("LLM_PROVIDER")

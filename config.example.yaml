@@ -1,0 +1,31 @@
+# DSC 絕對插件化配置文件示例
+# 此文件展示了如何配置 LLM、Agent 和 Tool 插件
+
+# 工作區根目錄（可選）
+workspace_root: ./workspace
+
+# 默認 LLM 提供者（兼容舊配置）
+default_llm: openai
+
+# 插件列表配置
+plugins:
+  # LLM 插件配置
+  - name: openai
+    type: llm
+    binary_path: ./plugins/llm-openai/llm-openai.exe
+    enabled: true
+
+  # Tool 插件配置（文件系統工具）
+  - name: filesystem
+    type: tool
+    binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
+    enabled: true
+
+  # Agent 插件配置
+  - name: react-agent
+    type: agent
+    binary_path: ./plugins/react-loop/react-loop.exe
+    enabled: true
+    depends_on:
+      llm: openai
+      tools: [filesystem]
