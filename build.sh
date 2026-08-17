@@ -37,4 +37,8 @@ go build -o plugins/llm-anthropic/llm-anthropic.exe ./plugins/llm-anthropic
 echo "Building llm-ollama plugin..."
 go build -o plugins/llm-ollama/llm-ollama.exe ./plugins/llm-ollama
 
+# 构建 tool-filesystem 插件
+echo "Building tool-filesystem plugin..."
+go build -o plugins/tool-filesystem/tool-filesystem.exe ./plugins/tool-filesystem
+
 echo "Build completed successfully."

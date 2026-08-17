@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"dsc/proto"
 	"dsc/proto/metadata"
@@ -578,7 +579,7 @@ func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 	m.llms[name] = newImpl
 	m.typeMap[name] = "llm"
 
-	fmt.Printf("[Manager] LLM plugin '%s' hot-reloaded\n", name)
+	m.logger.Info("LLM plugin hot-reloaded", "name", name)
 	return nil
 }
 
@@ -1019,10 +1020,23 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 
 	case "tool":
 		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
-		listResp, err := toolClient.ListTools(context.Background(), &proto.ListToolsRequest{})
+
+		// 为 gRPC 调用创建带超时的 context
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var listResp *proto.ListToolsResponse
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			listResp, err = toolClient.ListTools(ctx, &proto.ListToolsRequest{})
+			if err == nil {
+				break
+			}
+			time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+		}
 		if err != nil {
 			client.Kill()
-			return fmt.Errorf("failed to list tools: %w", err)
+			return fmt.Errorf("failed to list tools after retries: %w", err)
 		}
 		var toolNames []string
 		for _, t := range listResp.Tools {
