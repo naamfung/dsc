@@ -24,22 +24,23 @@ import (
 type Manager struct {
 	mu              sync.RWMutex
 	clients         map[string]*goplugin.Client // 插件名 -> 客戶端
-	plugins         map[string]DSCPlugin      // 插件名 -> DSC業務接口
-	agents          map[string]Agent          // 插件名 -> Agent接口
-	llms            map[string]LLMProvider    // 插件名 -> LLMProvider接口
-	typeMap         map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm", "tool")
-	agentServiceIDs map[string]uint32         // agent name -> serviceID
+	plugins         map[string]DSCPlugin        // 插件名 -> DSC業務接口
+	agents          map[string]Agent            // 插件名 -> Agent接口
+	llms            map[string]LLMProvider      // 插件名 -> LLMProvider接口
+	typeMap         map[string]string           // 插件名 -> 類型 ("dsc", "agent", "llm", "tool")
+	agentServiceIDs map[string]uint32           // agent name -> serviceID
 	config          *ManagerConfig
-	toolRegistry    *ToolRegistry             // 新增
+	toolRegistry    *ToolRegistry // 新增
 	logger          hclog.Logger
 	pluginMetadata  map[string]*metadata.PluginInfo // 插件名 -> 元數據
 
 	// 新增字段用於 Broker 和服務 ID 管理
-	broker           *goplugin.GRPCBroker      // 統一的 broker，由 Agent 提供
-	mainAgentName    string                    // 主 Agent 名稱
-	llmServiceIDs    map[string]uint32         // llm name -> serviceID
-	toolServiceIDs   map[string]uint32         // tool plugin name -> serviceID
-	pluginToolNames  map[string][]string       // tool plugin name -> list of tool names it provides
+	broker              *goplugin.GRPCBroker // 統一的 broker，由 Agent 提供
+	mainAgentName       string               // 主 Agent 名稱
+	llmServiceIDs       map[string]uint32    // llm name -> serviceID
+	toolServiceIDs      map[string]uint32    // tool plugin name -> serviceID
+	pluginToolNames     map[string][]string  // tool plugin name -> list of tool names it provides
+	toolNameToServiceID map[string]uint32    // tool name -> serviceID
 }
 
 type ManagerConfig struct {
@@ -57,21 +58,22 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		})
 	}
 	m := &Manager{
-		clients:         make(map[string]*goplugin.Client),
-		plugins:         make(map[string]DSCPlugin),
-		agents:          make(map[string]Agent),
-		llms:            make(map[string]LLMProvider),
-		typeMap:         make(map[string]string),
-		agentServiceIDs: make(map[string]uint32),
-		config:          cfg,
-		toolRegistry:    NewToolRegistry(),
-		pluginMetadata:  make(map[string]*metadata.PluginInfo),
-		logger:          logger,
-		broker:          nil,
-		mainAgentName:   "",
-		llmServiceIDs:   make(map[string]uint32),
-		toolServiceIDs:  make(map[string]uint32),
-		pluginToolNames: make(map[string][]string),
+		clients:             make(map[string]*goplugin.Client),
+		plugins:             make(map[string]DSCPlugin),
+		agents:              make(map[string]Agent),
+		llms:                make(map[string]LLMProvider),
+		typeMap:             make(map[string]string),
+		agentServiceIDs:     make(map[string]uint32),
+		config:              cfg,
+		toolRegistry:        NewToolRegistry(),
+		pluginMetadata:      make(map[string]*metadata.PluginInfo),
+		logger:              logger,
+		broker:              nil,
+		mainAgentName:       "",
+		llmServiceIDs:       make(map[string]uint32),
+		toolServiceIDs:      make(map[string]uint32),
+		pluginToolNames:     make(map[string][]string),
+		toolNameToServiceID: make(map[string]uint32),
 	}
 	// 註冊內置工具
 	if err := m.toolRegistry.Register(&ReadFileTool{}); err != nil {
@@ -611,6 +613,7 @@ func (m *Manager) Shutdown() {
 	m.llms = make(map[string]LLMProvider)
 	m.typeMap = make(map[string]string)
 	m.agentServiceIDs = make(map[string]uint32)
+	m.toolNameToServiceID = make(map[string]uint32)
 	m.pluginMetadata = make(map[string]*metadata.PluginInfo)
 }
 
@@ -656,6 +659,7 @@ func (m *Manager) UnloadPlugin(name string) error {
 		if hasToolNames {
 			for _, toolName := range toolNames {
 				m.toolRegistry.Unregister(toolName)
+				delete(m.toolNameToServiceID, toolName)
 				m.logger.Info("unregistered tool", "tool", toolName, "plugin", name)
 			}
 		}
@@ -867,32 +871,14 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 
 		if len(agentEntry.DependsOn.Tools) > 0 {
 			toolName := agentEntry.DependsOn.Tools[0]
-			// 尋找提供該工具的插件服務 ID：
 			// 依賴值可為工具名（如 read_file），也可為提供該工具的插件名（如 filesystem）
-			foundToolID := false
-			for pluginName, serviceID := range m.toolServiceIDs {
-				if toolNames, ok := m.pluginToolNames[pluginName]; ok {
-					for _, tn := range toolNames {
-						if tn == toolName {
-							toolID = serviceID
-							foundToolID = true
-							hasTool = true
-							break
-						}
-					}
-				}
-				// 依賴值即插件名時直接命中
-				if pluginName == toolName {
-					toolID = serviceID
-					foundToolID = true
-					hasTool = true
-				}
-				if foundToolID {
-					break
-				}
-			}
-
-			if !hasTool {
+			if id, ok := m.toolNameToServiceID[toolName]; ok {
+				toolID = id
+				hasTool = true
+			} else if id, ok := m.toolServiceIDs[toolName]; ok {
+				toolID = id
+				hasTool = true
+			} else {
 				return fmt.Errorf("dependent Tool '%s' not loaded", toolName)
 			}
 		}
@@ -1045,6 +1031,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 
 	case "tool":
 		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
+		serviceID := broker.NextId()
 
 		// 为 gRPC 调用创建带超时的 context
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1076,9 +1063,9 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 				continue
 			}
 			toolNames = append(toolNames, t.Name)
+			m.toolNameToServiceID[t.Name] = serviceID
 		}
 		proxy := &toolProxyServer{client: toolClient}
-		serviceID := broker.NextId()
 		go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
 			s := grpc.NewServer(opts...)
 			proto.RegisterToolServiceServer(s, proxy)

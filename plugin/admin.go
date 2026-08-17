@@ -3,15 +3,36 @@ package plugin
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	"dsc/libs/vodka"
 )
+
+// adminAuth 管理 API 的 Token 认证中间件。
+// 通过环境变量 DSC_ADMIN_TOKEN 配置认证 Token，未设置则不启用认证。
+// 支持请求头 "Authorization: Bearer <token>" 或直接 "<token>"。
+func adminAuth(c *vodka.Context) error {
+	token := os.Getenv("DSC_ADMIN_TOKEN")
+	if token == "" {
+		return c.Next()
+	}
+	provided := c.Request.Header.Get("Authorization")
+	if strings.HasPrefix(provided, "Bearer ") {
+		provided = strings.TrimPrefix(provided, "Bearer ")
+	}
+	if provided != token {
+		return vodka.NewHTTPError(http.StatusUnauthorized, "unauthorized")
+	}
+	return c.Next()
+}
 
 // StartAdmin 啟動管理 API HTTP 服務（基於 Vodka 框架）
 func (m *Manager) StartAdmin(addr string) {
 	e := vodka.New()
 
 	admin := e.Group("/plugins")
+	admin.Use(adminAuth)
 	admin.Post("/load", m.handleLoad)
 	admin.Post("/unload", m.handleUnload)
 	admin.Post("/reload", m.handleReload)
