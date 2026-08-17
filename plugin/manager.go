@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -761,6 +762,26 @@ type llmProxyServer struct {
 
 func (s *llmProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
 	return s.client.Chat(ctx, req)
+}
+
+// ChatStream 将上游 LLM 插件的流式响应逐帧转发给下游（react-loop agent）
+func (s *llmProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
+	cli, err := s.client.ChatStream(stream.Context(), req)
+	if err != nil {
+		return err
+	}
+	for {
+		msg, err := cli.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := stream.Send(msg); err != nil {
+			return err
+		}
+	}
 }
 
 func (s *llmProxyServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {

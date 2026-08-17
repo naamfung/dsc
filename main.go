@@ -37,6 +37,56 @@ func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*pro
 	if llm == nil {
 		return nil, fmt.Errorf("LLM not available")
 	}
+	messages, tools := convertChatRequest(req)
+	resp, err := llm.Chat(ctx, messages, tools)
+	if err != nil {
+		return nil, err
+	}
+	toolCalls := make([]*proto.ToolCall, len(resp.ToolCalls))
+	for i, tc := range resp.ToolCalls {
+		argsJSON, _ := json.Marshal(tc.Arguments)
+		toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
+	}
+	return &proto.ChatResponse{
+		Content:      resp.Content,
+		FinishReason: resp.FinishReason,
+		ToolCalls:    toolCalls,
+	}, nil
+}
+
+// ChatStream 转发 LLM 插件的流式响应（旧版直连路径使用）
+func (s *LLMProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
+	llm := s.getLLM()
+	if llm == nil {
+		return fmt.Errorf("LLM not available")
+	}
+	messages, tools := convertChatRequest(req)
+	ch, err := llm.ChatStream(stream.Context(), messages, tools)
+	if err != nil {
+		return err
+	}
+	for item := range ch {
+		if item.Error != "" {
+			return fmt.Errorf("LLM stream error: %s", item.Error)
+		}
+		toolCalls := make([]*proto.ToolCall, len(item.ToolCalls))
+		for i, tc := range item.ToolCalls {
+			argsJSON, _ := json.Marshal(tc.Arguments)
+			toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
+		}
+		if err := stream.Send(&proto.ChatStreamResponse{
+			Content:      item.Content,
+			FinishReason: item.FinishReason,
+			ToolCalls:    toolCalls,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// convertChatRequest 将 proto 请求转换为内部消息与工具列表（旧版直连路径使用）
+func convertChatRequest(req *proto.ChatRequest) ([]plugin.Message, []plugin.Tool) {
 	messages := make([]plugin.Message, len(req.Messages))
 	for i, m := range req.Messages {
 		msg := plugin.Message{Role: m.Role, Content: m.Content}
@@ -56,20 +106,7 @@ func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*pro
 	for i, t := range req.Tools {
 		tools[i] = plugin.Tool{Name: t.Name, Description: t.Description, ParametersJSON: t.ParametersJson}
 	}
-	resp, err := llm.Chat(ctx, messages, tools)
-	if err != nil {
-		return nil, err
-	}
-	toolCalls := make([]*proto.ToolCall, len(resp.ToolCalls))
-	for i, tc := range resp.ToolCalls {
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
-	}
-	return &proto.ChatResponse{
-		Content:      resp.Content,
-		FinishReason: resp.FinishReason,
-		ToolCalls:    toolCalls,
-	}, nil
+	return messages, tools
 }
 
 func (s *LLMProxyServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {

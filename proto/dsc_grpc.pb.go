@@ -236,6 +236,7 @@ var DSCPluginService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	AgentService_Run_FullMethodName              = "/dsc.AgentService/Run"
+	AgentService_RunStream_FullMethodName        = "/dsc.AgentService/RunStream"
 	AgentService_Name_FullMethodName             = "/dsc.AgentService/Name"
 	AgentService_Version_FullMethodName          = "/dsc.AgentService/Version"
 	AgentService_SetLLMServiceID_FullMethodName  = "/dsc.AgentService/SetLLMServiceID"
@@ -248,6 +249,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AgentServiceClient interface {
 	Run(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (*RunResponse, error)
+	RunStream(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RunStreamResponse], error)
 	Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error)
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error)
@@ -272,6 +274,25 @@ func (c *agentServiceClient) Run(ctx context.Context, in *RunRequest, opts ...gr
 	}
 	return out, nil
 }
+
+func (c *agentServiceClient) RunStream(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RunStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[0], AgentService_RunStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RunRequest, RunStreamResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_RunStreamClient = grpc.ServerStreamingClient[RunStreamResponse]
 
 func (c *agentServiceClient) Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -328,6 +349,7 @@ func (c *agentServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, 
 // for forward compatibility.
 type AgentServiceServer interface {
 	Run(context.Context, *RunRequest) (*RunResponse, error)
+	RunStream(*RunRequest, grpc.ServerStreamingServer[RunStreamResponse]) error
 	Name(context.Context, *NameRequest) (*NameResponse, error)
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
 	SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error)
@@ -345,6 +367,9 @@ type UnimplementedAgentServiceServer struct{}
 
 func (UnimplementedAgentServiceServer) Run(context.Context, *RunRequest) (*RunResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Run not implemented")
+}
+func (UnimplementedAgentServiceServer) RunStream(*RunRequest, grpc.ServerStreamingServer[RunStreamResponse]) error {
+	return status.Error(codes.Unimplemented, "method RunStream not implemented")
 }
 func (UnimplementedAgentServiceServer) Name(context.Context, *NameRequest) (*NameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Name not implemented")
@@ -399,6 +424,17 @@ func _AgentService_Run_Handler(srv interface{}, ctx context.Context, dec func(in
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _AgentService_RunStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(RunRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AgentServiceServer).RunStream(m, &grpc.GenericServerStream[RunRequest, RunStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_RunStreamServer = grpc.ServerStreamingServer[RunStreamResponse]
 
 func _AgentService_Name_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NameRequest)
@@ -522,12 +558,19 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentService_Shutdown_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "RunStream",
+			Handler:       _AgentService_RunStream_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "dsc.proto",
 }
 
 const (
 	LLMService_Chat_FullMethodName        = "/dsc.LLMService/Chat"
+	LLMService_ChatStream_FullMethodName  = "/dsc.LLMService/ChatStream"
 	LLMService_Name_FullMethodName        = "/dsc.LLMService/Name"
 	LLMService_Version_FullMethodName     = "/dsc.LLMService/Version"
 	LLMService_HealthCheck_FullMethodName = "/dsc.LLMService/HealthCheck"
@@ -538,6 +581,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type LLMServiceClient interface {
 	Chat(ctx context.Context, in *ChatRequest, opts ...grpc.CallOption) (*ChatResponse, error)
+	ChatStream(ctx context.Context, in *ChatRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatStreamResponse], error)
 	Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error)
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
@@ -560,6 +604,25 @@ func (c *lLMServiceClient) Chat(ctx context.Context, in *ChatRequest, opts ...gr
 	}
 	return out, nil
 }
+
+func (c *lLMServiceClient) ChatStream(ctx context.Context, in *ChatRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &LLMService_ServiceDesc.Streams[0], LLMService_ChatStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ChatRequest, ChatStreamResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LLMService_ChatStreamClient = grpc.ServerStreamingClient[ChatStreamResponse]
 
 func (c *lLMServiceClient) Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -596,6 +659,7 @@ func (c *lLMServiceClient) HealthCheck(ctx context.Context, in *HealthCheckReque
 // for forward compatibility.
 type LLMServiceServer interface {
 	Chat(context.Context, *ChatRequest) (*ChatResponse, error)
+	ChatStream(*ChatRequest, grpc.ServerStreamingServer[ChatStreamResponse]) error
 	Name(context.Context, *NameRequest) (*NameResponse, error)
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
@@ -611,6 +675,9 @@ type UnimplementedLLMServiceServer struct{}
 
 func (UnimplementedLLMServiceServer) Chat(context.Context, *ChatRequest) (*ChatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Chat not implemented")
+}
+func (UnimplementedLLMServiceServer) ChatStream(*ChatRequest, grpc.ServerStreamingServer[ChatStreamResponse]) error {
+	return status.Error(codes.Unimplemented, "method ChatStream not implemented")
 }
 func (UnimplementedLLMServiceServer) Name(context.Context, *NameRequest) (*NameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Name not implemented")
@@ -659,6 +726,17 @@ func _LLMService_Chat_Handler(srv interface{}, ctx context.Context, dec func(int
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _LLMService_ChatStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ChatRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(LLMServiceServer).ChatStream(m, &grpc.GenericServerStream[ChatRequest, ChatStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type LLMService_ChatStreamServer = grpc.ServerStreamingServer[ChatStreamResponse]
 
 func _LLMService_Name_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(NameRequest)
@@ -738,7 +816,13 @@ var LLMService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _LLMService_HealthCheck_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ChatStream",
+			Handler:       _LLMService_ChatStream_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "dsc.proto",
 }
 

@@ -13,6 +13,7 @@ service DSCPluginService {
 
 service AgentService {
   rpc Run(RunRequest) returns (RunResponse);
+  rpc RunStream(RunRequest) returns (stream RunStreamResponse);
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc SetLLMServiceID(SetLLMServiceIDRequest) returns (SetLLMServiceIDResponse);
@@ -22,6 +23,7 @@ service AgentService {
 
 service LLMService {
   rpc Chat(ChatRequest) returns (ChatResponse);
+  rpc ChatStream(ChatRequest) returns (stream ChatStreamResponse);
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
@@ -64,6 +66,13 @@ message RunResponse {
   string status = 2;
 }
 
+// 流式运行响应：每帧携带一段增量输出，status 标记流的状态
+message RunStreamResponse {
+  string output = 1; // 增量输出（文本增量或工具调用提示）
+  string status = 2; // "streaming" | "tool" | "success" | "error"
+  string error = 3;
+}
+
 // --- LLM Service 消息定義 ---
 message ChatRequest {
   repeated Message messages = 1;
@@ -87,6 +96,14 @@ message ChatResponse {
   string content = 1;
   string finish_reason = 2;   // "stop", "tool_calls"
   repeated ToolCall tool_calls = 3;
+}
+
+// 流式聊天响应：每帧携带一段增量内容；finish_reason 非空表示该轮结束
+message ChatStreamResponse {
+  string content = 1;         // 增量文本
+  string finish_reason = 2;   // 非空表示该轮结束
+  repeated ToolCall tool_calls = 3;
+  string error = 4;           // 错误信息
 }
 
 message ToolCall {

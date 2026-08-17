@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"dsc/plugin"
 	"github.com/anthropics/anthropic-sdk-go"
@@ -17,7 +18,8 @@ type AnthropicProvider struct {
 	model  string
 }
 
-func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
+// buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）
+func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools []plugin.Tool) anthropic.MessageNewParams {
 	// 1. 构建 Anthropic 消息
 	var systemMsg string
 	userMessages := make([]anthropic.MessageParam, 0, len(messages))
@@ -82,43 +84,89 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message,
 	if len(toolParams) > 0 {
 		msgParams.Tools = toolParams
 	}
+	return msgParams
+}
 
-	// 4. 调用 API
-	resp, err := p.client.Messages.New(ctx, msgParams)
+// concatText 拼接消息中所有 text 块的内容
+func concatText(blocks []anthropic.ContentBlockUnion) string {
+	var b strings.Builder
+	for _, block := range blocks {
+		if block.Type == "text" {
+			b.WriteString(block.Text)
+		}
+	}
+	return b.String()
+}
+
+// extractToolCalls 从消息内容块中提取工具调用
+func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
+	var toolCalls []plugin.ToolCall
+	for _, block := range blocks {
+		if block.Type != "tool_use" {
+			continue
+		}
+		toolUse := block.AsToolUse()
+		argsMap := make(map[string]any)
+		if err := json.Unmarshal(toolUse.Input, &argsMap); err != nil {
+			var rawArgs map[string]any
+			if err2 := json.Unmarshal(toolUse.Input, &rawArgs); err2 == nil {
+				argsMap = rawArgs
+			}
+		}
+		toolCalls = append(toolCalls, plugin.ToolCall{
+			ID:        toolUse.ID,
+			Name:      toolUse.Name,
+			Arguments: argsMap,
+		})
+	}
+	return toolCalls
+}
+
+func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
+	resp, err := p.client.Messages.New(ctx, p.buildMessageParams(messages, tools))
 	if err != nil {
 		return nil, err
 	}
 
-	// 5. 解析响应
-	var content string
-	var toolCalls []plugin.ToolCall
-
-	for _, block := range resp.Content {
-		switch block.Type {
-		case "text":
-			content += block.Text
-		case "tool_use":
-			toolUse := block.AsToolUse()
-			argsMap := make(map[string]any)
-			if err := json.Unmarshal(toolUse.Input, &argsMap); err != nil {
-				// 若 JSON 解析失敗，嘗試直接轉換
-				var rawArgs map[string]any
-				if err2 := json.Unmarshal(toolUse.Input, &rawArgs); err2 == nil {
-					argsMap = rawArgs
-				}
-			}
-			toolCalls = append(toolCalls, plugin.ToolCall{
-				Name:      toolUse.Name,
-				Arguments: argsMap,
-			})
-		}
-	}
-
 	return &plugin.ChatResponse{
-		Content:      content,
+		Content:      concatText(resp.Content),
 		FinishReason: string(resp.StopReason),
-		ToolCalls:    toolCalls,
+		ToolCalls:    extractToolCalls(resp.Content),
 	}, nil
+}
+
+func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (<-chan *plugin.ChatStreamResponse, error) {
+	stream := p.client.Messages.NewStreaming(ctx, p.buildMessageParams(messages, tools))
+
+	ch := make(chan *plugin.ChatStreamResponse)
+	go func() {
+		defer close(ch)
+		var msg anthropic.Message
+		prevLen := 0
+		for stream.Next() {
+			event := stream.Current()
+			if err := msg.Accumulate(event); err != nil {
+				ch <- &plugin.ChatStreamResponse{Error: fmt.Sprintf("stream accumulate error: %v", err)}
+				return
+			}
+			// 仅当文本有新增时才发送增量帧
+			text := concatText(msg.Content)
+			if len(text) > prevLen {
+				ch <- &plugin.ChatStreamResponse{Content: text[prevLen:]}
+				prevLen = len(text)
+			}
+		}
+		if err := stream.Err(); err != nil {
+			ch <- &plugin.ChatStreamResponse{Error: err.Error()}
+			return
+		}
+		// 流结束：发送最终帧（工具调用与结束原因；文本已增量发送，不再重复）
+		ch <- &plugin.ChatStreamResponse{
+			FinishReason: string(msg.StopReason),
+			ToolCalls:    extractToolCalls(msg.Content),
+		}
+	}()
+	return ch, nil
 }
 
 func (p *AnthropicProvider) Name(ctx context.Context) string {

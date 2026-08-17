@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -65,6 +66,23 @@ func (a *ReactLoopAgent) SetToolServiceID(ctx context.Context, id uint32) error 
 }
 
 func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentResult, error) {
+	return a.runLoop(ctx, input, nil)
+}
+
+// RunStream 以流式方式执行循环：LLM 文本增量、工具调用提示以帧的形式发送到通道，关闭表示结束
+func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *plugin.RunStreamResponse, error) {
+	ch := make(chan *plugin.RunStreamResponse)
+	go func() {
+		defer close(ch)
+		a.runLoop(ctx, input, func(item *plugin.RunStreamResponse) {
+			ch <- item
+		})
+	}()
+	return ch, nil
+}
+
+// runLoop 是 Agent 的核心循环；emit 非空时输出流式帧（文本增量 / 工具提示 / 结束状态），否则保持非流式
+func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*plugin.RunStreamResponse)) (*plugin.AgentResult, error) {
 	// 创建一个可取消的 context，保存 cancelFunc
 	ctx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
@@ -119,15 +137,20 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 	currentHistory := a.history
 	a.historyMu.Unlock()
 
+	// cancelLoop 返回被取消的结果
+	cancelResult := func() (*plugin.AgentResult, error) {
+		return &plugin.AgentResult{
+			Output: "Agent canceled",
+			Status: "error",
+		}, ctx.Err()
+	}
+
 	maxIterations := 5
 	for i := 0; i < maxIterations; i++ {
 		// 检查 ctx.Done()
 		select {
 		case <-ctx.Done():
-			return &plugin.AgentResult{
-				Output: "Agent canceled",
-				Status: "error",
-			}, ctx.Err()
+			return cancelResult()
 		default:
 		}
 
@@ -144,45 +167,83 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 			currentHistory = append(kept, currentHistory[tailStart:]...)
 		}
 
-		// 调用 LLM
+		// 调用 LLM（流式或非流式）
 		req := &proto.ChatRequest{
 			Messages: currentHistory,
 			Tools:    availableTools,
 		}
-		resp, err := llmClient.Chat(ctx, req)
-		if err != nil {
-			return nil, fmt.Errorf("LLM chat failed: %w", err)
+		var content string
+		var toolCalls []*proto.ToolCall
+		if emit == nil {
+			resp, err := llmClient.Chat(ctx, req)
+			if err != nil {
+				return nil, fmt.Errorf("LLM chat failed: %w", err)
+			}
+			content = resp.Content
+			toolCalls = resp.ToolCalls
+		} else {
+			s, err := llmClient.ChatStream(ctx, req)
+			if err != nil {
+				emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+				return nil, fmt.Errorf("LLM chat stream failed: %w", err)
+			}
+			for {
+				cr, err := s.Recv()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+					return nil, fmt.Errorf("LLM chat stream recv failed: %w", err)
+				}
+				if cr.Error != "" {
+					emit(&plugin.RunStreamResponse{Status: "error", Error: cr.Error})
+					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
+				}
+				content += cr.Content
+				if cr.Content != "" {
+					emit(&plugin.RunStreamResponse{Output: cr.Content, Status: "streaming"})
+				}
+				if len(cr.ToolCalls) > 0 {
+					toolCalls = cr.ToolCalls
+				}
+			}
 		}
 
 		// 追加助手消息（包含文本回复及工具调用；OpenAI 格式要求 assistant 回带 tool_calls）
 		assistantMsg := &proto.Message{
 			Role:    "assistant",
-			Content: resp.Content,
+			Content: content,
 		}
-		if len(resp.ToolCalls) > 0 {
-			assistantMsg.ToolCalls = resp.ToolCalls
+		if len(toolCalls) > 0 {
+			assistantMsg.ToolCalls = toolCalls
 		}
 		currentHistory = append(currentHistory, assistantMsg)
 
 		// 没有工具调用 → 返回最终结果（先持久化歷史）
-		if len(resp.ToolCalls) == 0 {
+		if len(toolCalls) == 0 {
 			a.saveHistory(currentHistory)
+			if emit != nil {
+				emit(&plugin.RunStreamResponse{Status: "success"})
+			}
 			return &plugin.AgentResult{
-				Output: resp.Content,
+				Output: content,
 				Status: "success",
 			}, nil
 		}
 
 		// 执行每个工具并追加结果
-		for _, tc := range resp.ToolCalls {
+		for _, tc := range toolCalls {
 			// 检查 ctx.Done()
 			select {
 			case <-ctx.Done():
-				return &plugin.AgentResult{
-					Output: "Agent canceled",
-					Status: "error",
-				}, ctx.Err()
+				return cancelResult()
 			default:
+			}
+
+			// 向客户端提示正在调用工具
+			if emit != nil {
+				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool"})
 			}
 
 			// 执行工具
@@ -218,6 +279,9 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 	}
 	// 超过最大迭代次数（持久化歷史）
 	a.saveHistory(currentHistory)
+	if emit != nil {
+		emit(&plugin.RunStreamResponse{Output: "Max iterations reached", Status: "error"})
+	}
 	return &plugin.AgentResult{
 		Output: "Max iterations reached",
 		Status: "error",

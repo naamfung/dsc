@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"io"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -43,6 +44,23 @@ func (s *agentGRPCServer) Run(ctx context.Context, req *proto.RunRequest) (*prot
 	}, nil
 }
 
+func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentService_RunStreamServer) error {
+	ch, err := s.impl.RunStream(stream.Context(), req.Input)
+	if err != nil {
+		return err
+	}
+	for item := range ch {
+		if err := stream.Send(&proto.RunStreamResponse{
+			Output: item.Output,
+			Status: item.Status,
+			Error:  item.Error,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *agentGRPCServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
 	return &proto.NameResponse{Name: s.impl.Name(ctx)}, nil
 }
@@ -73,6 +91,30 @@ func (c *agentGRPCClient) Run(ctx context.Context, input string) (*AgentResult, 
 		Output: resp.Output,
 		Status: resp.Status,
 	}, nil
+}
+
+func (c *agentGRPCClient) RunStream(ctx context.Context, input string) (<-chan *RunStreamResponse, error) {
+	stream, err := c.client.RunStream(ctx, &proto.RunRequest{Input: input})
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan *RunStreamResponse)
+	go func() {
+		defer close(ch)
+		for {
+			resp, err := stream.Recv()
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				ch <- &RunStreamResponse{Status: "error", Error: err.Error()}
+				return
+			}
+			ch <- &RunStreamResponse{Output: resp.Output, Status: resp.Status, Error: resp.Error}
+		}
+	}()
+	return ch, nil
 }
 
 func (c *agentGRPCClient) Name(ctx context.Context) string {

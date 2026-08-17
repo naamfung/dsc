@@ -68,6 +68,16 @@ type submitResult struct {
 	err    error
 }
 
+// streamFrame 是流式響應的一幀
+type streamFrame struct {
+	input string
+	frame *plugin.RunStreamResponse
+	ch    <-chan *plugin.RunStreamResponse
+	first bool
+	done  bool
+	err   error
+}
+
 // compItem 是斜杠命令菜单的一行：label 是完整命令，hint 是右侧提示。
 type compItem struct {
 	label  string
@@ -94,12 +104,18 @@ type Model struct {
 
 	ready    bool // viewport 在收到首个窗口尺寸后初始化
 	thinking bool // 正在等待 agent 响应
+	streaming bool // 正在流式输出
 
 	completion completion // 斜杠命令补全菜单
 
 	lines []string // 渲染后的历史行
 	width int
 	high  int
+
+	// 流式渲染状态
+	streamBuffer string
+	streamOpen   bool
+	streamMsgIdx int
 }
 
 // New 创建一个聊天界面模型
@@ -145,11 +161,25 @@ func (m *Model) Init() tea.Cmd {
 	)
 }
 
-// submitCmd 发起一次 agent.Run，结果通过 submitResult 消息返回
+// submitCmd 发起一次 agent.RunStream，结果通过 streamFrame 消息返回
 func (m *Model) submitCmd(input string) tea.Cmd {
 	return func() tea.Msg {
-		result, err := m.agent.Run(m.ctx, input)
-		return submitResult{input: input, result: result, err: err}
+		ch, err := m.agent.RunStream(m.ctx, input)
+		if err != nil {
+			return streamFrame{input: input, err: err, done: true}
+		}
+		return streamFrame{input: input, ch: ch, first: true}
+	}
+}
+
+// pumpStream 读取通道的下一帧
+func (m *Model) pumpStream(input string, ch <-chan *plugin.RunStreamResponse) tea.Cmd {
+	return func() tea.Msg {
+		frame, ok := <-ch
+		if !ok {
+			return streamFrame{input: input, done: true}
+		}
+		return streamFrame{input: input, frame: frame, ch: ch}
 	}
 }
 
@@ -211,8 +241,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 
 	case tea.KeyPressMsg:
-		if m.thinking {
-			// 响应期间不处理输入，但允许 Ctrl+C 退出
+		if m.thinking || m.streaming {
+			// 响应/流式输出期间不处理输入，但允许 Ctrl+C 退出
 			if msg.String() == "ctrl+c" {
 				return m, tea.Quit
 			}
@@ -276,6 +306,106 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case streamFrame:
+		if msg.first {
+			m.thinking = false
+			m.streaming = true
+			m.streamBuffer = ""
+			m.streamOpen = true
+			// 創建助手消息佔位符（僅身份頭）
+			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+			m.appendMessage(header + "\n")
+			m.streamMsgIdx = len(m.lines) - 1
+			m.render()
+			m.viewport.GotoBottom()
+			if msg.ch == nil {
+				m.streaming = false
+				m.streamOpen = false
+				if msg.err != nil {
+					m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
+				}
+				m.input.Focus()
+				m.viewport.GotoBottom()
+				return m, nil
+			}
+			return m, m.pumpStream(msg.input, msg.ch)
+		}
+		if msg.done {
+			m.thinking = false
+			m.streaming = false
+			m.streamOpen = false
+			if msg.err != nil {
+				m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
+			} else if msg.frame != nil && msg.frame.Status == "success" {
+				// 最終渲染：將 streamBuffer 作為正文添加到助手消息中
+				if m.streamMsgIdx < len(m.lines) {
+					body := renderMarkdown(m.streamBuffer, max(m.width-4, 20))
+					header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+					m.lines[m.streamMsgIdx] = header + "\n" + body
+				}
+			}
+			m.viewport.SetHeight(m.vpHeight())
+			m.render()
+			m.input.Focus()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		if msg.err != nil {
+			m.thinking = false
+			m.streaming = false
+			m.streamOpen = false
+			m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
+			m.viewport.SetHeight(m.vpHeight())
+			m.render()
+			m.input.Focus()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		f := msg.frame
+		switch f.Status {
+		case "streaming":
+			m.streaming = true
+			if !m.streamOpen {
+				// 開始新的助手消息塊
+				header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+				m.appendMessage(header + "\n")
+				m.streamMsgIdx = len(m.lines) - 1
+				m.streamOpen = true
+			}
+			m.streamBuffer += f.Output
+			body := renderMarkdown(m.streamBuffer, max(m.width-4, 20))
+			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+			m.lines[m.streamMsgIdx] = header + "\n" + body
+			m.render()
+			m.viewport.GotoBottom()
+			return m, m.pumpStream(msg.input, msg.ch)
+		case "tool":
+			m.streaming = false
+			m.streamOpen = false
+			toolLine := dimSty.Render(f.Output)
+			if len(m.lines) > 0 && m.lines[len(m.lines)-1] == "\n"+toolLine {
+				// 避免重複追加
+			} else {
+				m.appendMessage(toolLine)
+			}
+			m.render()
+			m.viewport.GotoBottom()
+			return m, m.pumpStream(msg.input, msg.ch)
+		case "success", "error":
+			m.thinking = false
+			m.streaming = false
+			m.streamOpen = false
+			if f.Status == "error" && f.Error != "" {
+				m.appendMessage(errorSty.Render("错误: ") + f.Error)
+			}
+			m.viewport.SetHeight(m.vpHeight())
+			m.render()
+			m.input.Focus()
+			m.viewport.GotoBottom()
+			return m, nil
+		}
+		return m, m.pumpStream(msg.input, msg.ch)
 
 	case submitResult:
 		m.thinking = false

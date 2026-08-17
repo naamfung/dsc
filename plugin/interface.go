@@ -35,6 +35,8 @@ type ExecuteResponse struct {
 type Agent interface {
 	// Run 是 Agent 的主入口，负责执行整个循环
 	Run(ctx context.Context, input string) (*AgentResult, error)
+	// RunStream 以流式方式执行循环，返回增量输出通道；关闭表示结束
+	RunStream(ctx context.Context, input string) (<-chan *RunStreamResponse, error)
 	// 可以添加其他方法，如 Name(), Version() 等
 	Name(ctx context.Context) string
 	Version(ctx context.Context) string
@@ -50,6 +52,13 @@ type Agent interface {
 type AgentResult struct {
 	Output string `json:"output"`
 	Status string `json:"status"` // "success", "error"
+}
+
+// RunStreamResponse 是 Agent 流式运行过程中的一帧增量输出
+type RunStreamResponse struct {
+	Output string `json:"output"` // 增量输出（文本增量或工具调用提示）
+	Status string `json:"status"` // "streaming" | "tool" | "success" | "error"
+	Error  string `json:"error,omitempty"`
 }
 
 // Handshake 是宿主和插件间的握手配置

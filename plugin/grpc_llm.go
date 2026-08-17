@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"dsc/proto"
@@ -17,6 +18,8 @@ import (
 // LLMProvider 是插件必须实现的业务接口
 type LLMProvider interface {
 	Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error)
+	// ChatStream 以流式方式调用 LLM，返回增量内容通道；通道关闭表示该轮结束
+	ChatStream(ctx context.Context, messages []Message, tools []Tool) (<-chan *ChatStreamResponse, error)
 	Name(ctx context.Context) string
 	Version(ctx context.Context) string
 	HealthCheck(ctx context.Context) error
@@ -42,6 +45,14 @@ type ChatResponse struct {
 	Content      string      `json:"content"`
 	FinishReason string      `json:"finish_reason"`
 	ToolCalls    []ToolCall  `json:"tool_calls"`
+}
+
+// ChatStreamResponse 是 LLM 流式响应中的一帧增量内容
+type ChatStreamResponse struct {
+	Content      string     `json:"content"`       // 增量文本
+	FinishReason string     `json:"finish_reason"` // 非空表示该轮结束
+	ToolCalls    []ToolCall `json:"tool_calls"`
+	Error        string     `json:"error,omitempty"`
 }
 
 // ToolCall 工具调用结构体
@@ -88,8 +99,8 @@ type llmGRPCServer struct {
 	impl LLMProvider
 }
 
-func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
-	// 转换 proto 消息到内部结构
+// convertLLMChatRequest 将 proto 请求转换为内部消息与工具列表
+func convertLLMChatRequest(req *proto.ChatRequest) ([]Message, []Tool) {
 	messages := make([]Message, len(req.Messages))
 	for i, m := range req.Messages {
 		msg := Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallId}
@@ -109,24 +120,54 @@ func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*prot
 	for i, t := range req.Tools {
 		tools[i] = Tool{Name: t.Name, Description: t.Description, ParametersJSON: t.ParametersJson}
 	}
+	return messages, tools
+}
+
+// convertToolCallsToProto 将内部工具调用列表转换为 proto 形式
+func convertToolCallsToProto(toolCalls []ToolCall) []*proto.ToolCall {
+	out := make([]*proto.ToolCall, len(toolCalls))
+	for i, tc := range toolCalls {
+		argsJSON, _ := json.Marshal(tc.Arguments)
+		out[i] = &proto.ToolCall{Id: tc.ID, Name: tc.Name, ArgumentsJson: string(argsJSON)}
+	}
+	return out
+}
+
+func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
+	messages, tools := convertLLMChatRequest(req)
 
 	resp, err := s.impl.Chat(ctx, messages, tools)
 	if err != nil {
 		return nil, err
 	}
 
-	// 转换返回结果
-	toolCalls := make([]*proto.ToolCall, len(resp.ToolCalls))
-	for i, tc := range resp.ToolCalls {
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		toolCalls[i] = &proto.ToolCall{Id: tc.ID, Name: tc.Name, ArgumentsJson: string(argsJSON)}
-	}
-
 	return &proto.ChatResponse{
 		Content:      resp.Content,
 		FinishReason: resp.FinishReason,
-		ToolCalls:    toolCalls,
+		ToolCalls:    convertToolCallsToProto(resp.ToolCalls),
 	}, nil
+}
+
+func (s *llmGRPCServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
+	messages, tools := convertLLMChatRequest(req)
+
+	ch, err := s.impl.ChatStream(stream.Context(), messages, tools)
+	if err != nil {
+		return err
+	}
+	for item := range ch {
+		if item.Error != "" {
+			return status.Errorf(codes.Unknown, "LLM stream error: %s", item.Error)
+		}
+		if err := stream.Send(&proto.ChatStreamResponse{
+			Content:      item.Content,
+			FinishReason: item.FinishReason,
+			ToolCalls:    convertToolCallsToProto(item.ToolCalls),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *llmGRPCServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
@@ -153,8 +194,8 @@ type llmGRPCClient struct {
 	client proto.LLMServiceClient
 }
 
-func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error) {
-	// 转换内部结构到 proto 消息
+// convertToProtoMessages 将内部消息列表转换为 proto 形式
+func convertToProtoMessages(messages []Message) []*proto.Message {
 	protoMessages := make([]*proto.Message, len(messages))
 	for i, m := range messages {
 		pm := &proto.Message{Role: m.Role, Content: m.Content, ToolCallId: m.ToolCallID}
@@ -167,18 +208,27 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 		}
 		protoMessages[i] = pm
 	}
+	return protoMessages
+}
+
+// convertToProtoTools 将内部工具列表转换为 proto 形式
+func convertToProtoTools(tools []Tool) []*proto.Tool {
 	protoTools := make([]*proto.Tool, len(tools))
 	for i, t := range tools {
 		protoTools[i] = &proto.Tool{Name: t.Name, Description: t.Description, ParametersJson: t.ParametersJSON}
+	}
+	return protoTools
+}
+
+func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error) {
+	req := &proto.ChatRequest{
+		Messages: convertToProtoMessages(messages),
+		Tools:    convertToProtoTools(tools),
 	}
 
 	var resp *proto.ChatResponse
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		req := &proto.ChatRequest{
-			Messages: protoMessages,
-			Tools:    protoTools,
-		}
 		resp, err = c.client.Chat(ctx, req)
 		if err == nil {
 			break
@@ -208,6 +258,46 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 		FinishReason: resp.FinishReason,
 		ToolCalls:    toolCalls,
 	}, nil
+}
+
+func (c *llmGRPCClient) ChatStream(ctx context.Context, messages []Message, tools []Tool) (<-chan *ChatStreamResponse, error) {
+	req := &proto.ChatRequest{
+		Messages: convertToProtoMessages(messages),
+		Tools:    convertToProtoTools(tools),
+	}
+	stream, err := c.client.ChatStream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan *ChatStreamResponse)
+	go func() {
+		defer close(ch)
+		for {
+			resp, err := stream.Recv()
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				ch <- &ChatStreamResponse{Error: err.Error()}
+				return
+			}
+			toolCalls := make([]ToolCall, len(resp.ToolCalls))
+			for i, tc := range resp.ToolCalls {
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
+					args = map[string]interface{}{}
+				}
+				toolCalls[i] = ToolCall{ID: tc.Id, Name: tc.Name, Arguments: args}
+			}
+			ch <- &ChatStreamResponse{
+				Content:      resp.Content,
+				FinishReason: resp.FinishReason,
+				ToolCalls:    toolCalls,
+			}
+		}
+	}()
+	return ch, nil
 }
 
 func (c *llmGRPCClient) Name(ctx context.Context) string {
