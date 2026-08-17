@@ -137,12 +137,15 @@ func main() {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		// 对于 llama.cpp server 或测试，可忽略
-		apiKey = "sk-llama-cpp-not-used"
+		apiKey = "sk-laamaafung-not-used"
 	}
 	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.deepseek.com/anthropic"
+	}
 	model := os.Getenv("ANTHROPIC_MODEL")
 	if model == "" {
-		model = "claude-3-opus-20240229"
+		model = "deepseek-v4-flash"
 	}
 
 	opts := []option.RequestOption{

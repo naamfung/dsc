@@ -100,11 +100,11 @@ func main() {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		// 對於 llama.cpp server，API key 通常是可選的或接受任意值
-		apiKey = "sk-llama-cpp-not-used"
+		apiKey = "sk-laamaafung-not-used"
 	}
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = "https://api.deepseek.com"
 	}
 
 	config := openai.DefaultConfig(apiKey)
@@ -112,7 +112,7 @@ func main() {
 
 	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
-		model = "Agentic-Turbo-Coder" // 根據 llama.cpp 返回的模型名稱
+		model = "deepseek-v4-flash"
 	}
 
 	provider := &OpenAIProvider{

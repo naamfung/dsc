@@ -1,6 +1,7 @@
 !build.sh
 
 # Executables
+*.exe~
 *.exe
 *.sh
 

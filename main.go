@@ -164,7 +164,7 @@ func main() {
 		// 啟動管理 API
 		adminAddr := os.Getenv("DSC_ADMIN_ADDR")
 		if adminAddr == "" {
-			adminAddr = ":8080"
+			adminAddr = ":9999"
 		}
 		mgr.StartAdmin(adminAddr)
 		logger.Info("admin api started", "addr", adminAddr)
@@ -228,8 +228,8 @@ func main() {
 		logger.Info("llm loaded", "name", llmName)
 
 		// 使用 Manager 加載 Agent
-		agentBinary := "./plugins/react_loop/react_loop" + ext
-		broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
+		agentBinary := "./plugins/react-loop/react-loop" + ext
+		broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary)
 		if err != nil {
 			logger.Error("failed to load Agent", "error", err)
 			os.Exit(1)

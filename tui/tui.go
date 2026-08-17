@@ -124,7 +124,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
-			m.lines = append(m.lines, userStyle.Render("你: ")+text)
+			m.lines = append(m.lines, userStyle.Render("‹#› ")+text)
 			m.render()
 			m.input.SetValue("")
 			m.thinking = true
@@ -153,7 +153,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, errorSty.Render("错误: ")+msg.err.Error())
 		} else if msg.result != nil {
 			if msg.result.Status == "success" {
-				m.lines = append(m.lines, assistantSty.Render("助手: ")+msg.result.Output)
+				m.lines = append(m.lines, assistantSty.Render("‹\\› ")+msg.result.Output)
 			} else {
 				m.lines = append(m.lines, errorSty.Render("错误: ")+msg.result.Output)
 			}
@@ -184,12 +184,12 @@ func (m *Model) View() string {
 	if modelName == "" {
 		modelName = m.agent.Name(m.ctx)
 	}
-	title := titleSty.Render(fmt.Sprintf(" DSC Agent Chat | 模型: %s ", modelName))
+	title := titleSty.Render(fmt.Sprintf(" DSC | 模型: %s ", modelName))
 	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
 
 	var status string
 	if m.thinking {
-		status = m.spinner.View() + " 助手思考中..."
+		status = m.spinner.View() + " 思考中..."
 	} else {
 		status = "就绪 | 滚动: ↑/↓ 或鼠标滚轮"
 	}
