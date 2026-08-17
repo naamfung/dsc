@@ -7,7 +7,7 @@ plugins:
     enabled: true
   - name: react-agent
     type: agent
-    binary_path: ./plugins/react_loop/react_loop.exe
+    binary_path: ./plugins/react-loop/react-loop.exe
     enabled: true
     depends_on:
       llm: openai

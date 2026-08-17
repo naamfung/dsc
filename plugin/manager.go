@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	"dsc/proto"
@@ -82,6 +84,9 @@ func NewManager(cfg *ManagerConfig) *Manager {
 func (m *Manager) Load(name string, binaryPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 跨平台處理二進制路徑
+	binaryPath = normalizeBinaryPath(binaryPath)
 
 	// 如果已加載，先卸載
 	if _, exists := m.plugins[name]; exists {
@@ -173,6 +178,9 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	if serviceID == 0 {
 		return fmt.Errorf("serviceID must not be 0")
 	}
+
+	// 跨平台處理二進制路徑
+	binaryPath = normalizeBinaryPath(binaryPath)
 
 	// 如果已加載，先卸載
 	if _, exists := m.agents[name]; exists {
@@ -773,6 +781,24 @@ func (s *toolProxyServer) ListTools(ctx context.Context, req *proto.ListToolsReq
 	return s.client.ListTools(ctx, req)
 }
 
+// normalizeBinaryPath 跨平台處理二進制路徑
+// Windows 系統：確保有 .exe 後綴
+// 非 Windows 系統：移除 .exe 後綴
+func normalizeBinaryPath(path string) string {
+	pathLower := strings.ToLower(path)
+	if runtime.GOOS == "windows" {
+		if !strings.HasSuffix(pathLower, ".exe") {
+			return path + ".exe"
+		}
+	} else {
+		if strings.HasSuffix(pathLower, ".exe") {
+			// 移除後綴 .exe
+			return path[:len(path)-4]
+		}
+	}
+	return path
+}
+
 // LoadFromConfig 從配置加載所有插件（重新設計版：先加載 Agent 獲取 Broker，再加載 LLM/Tool）
 func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.mu.Lock()
@@ -875,7 +901,9 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 		m.unloadAgentLocked(entry.Name)
 	}
 
-	cmd := exec.Command(entry.BinaryPath)
+	// 跨平台處理二進制路徑
+	binaryPath := normalizeBinaryPath(entry.BinaryPath)
+	cmd := exec.Command(binaryPath)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
@@ -924,13 +952,16 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 
 // loadPluginWithBroker 用於 LLM/Tool 插件加載，通過 broker 註冊服務
 func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCBroker) error {
+	// 跨平台處理二進制路徑
+	binaryPath := normalizeBinaryPath(entry.BinaryPath)
+
 	// 創建客戶端
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"dummy": &dummyGRPCPlugin{},
 		},
-		Cmd:              exec.Command(entry.BinaryPath),
+		Cmd:              exec.Command(binaryPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
 	})
