@@ -1,5 +1,5 @@
 workspace_root: ./workspace
-default_llm: anthropic
+default_llm: openai
 plugins:
   - name: anthropic
     type: llm

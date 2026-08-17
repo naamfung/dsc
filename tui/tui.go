@@ -474,7 +474,7 @@ func (m *Model) renderAssistant(body string) string {
 var slashCommands = []compItem{
 	{label: "/help", insert: "/help", hint: "显示帮助与快捷键"},
 	{label: "/clear", insert: "/clear", hint: "清空聊天记录"},
-	{label: "/quit", insert: "/quit", hint: "退出聊天"},
+	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
 // runSlashCommand 处理斜杠命令；返回是否已处理以及要执行的命令。
@@ -492,7 +492,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"斜杠命令:",
 			"  /help        显示本帮助",
 			"  /clear       清空聊天记录",
-			"  /quit        退出聊天",
+			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render("◈ DSC · 帮助") + "\n" + help)
 		m.input.SetValue("")
