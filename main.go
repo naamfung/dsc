@@ -256,7 +256,7 @@ func main() {
 		}()
 		logger.Info("tool service id generated", "serviceID", toolServiceID)
 
-		agent, ok := mgr.GetAgent("react_agent")
+		agent, ok := mgr.GetAgent("react-agent")
 		if !ok {
 			logger.Error("agent not found after loading")
 			os.Exit(1)

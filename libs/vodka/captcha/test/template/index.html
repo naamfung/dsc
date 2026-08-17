@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ title }}</title>
+</head>
+<body>
+    <form action="/verify/" method="post">
+        <p>{{ Flash.ErrorMsg }}{{ Flash.SuccessMsg }}</p>
+        {{ Captcha.CreateHTML | safe }}
+        <input aria-label="验证码" type="text" name="captcha">
+        <button type="submit">提交</button>
+    </form>
+</body>
+</html>
