@@ -20,7 +20,24 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, to
 	// 转换消息
 	ollamaMessages := make([]api.Message, len(messages))
 	for i, m := range messages {
-		ollamaMessages[i] = api.Message{Role: m.Role, Content: m.Content}
+		msg := api.Message{Role: m.Role, Content: m.Content}
+		// assistant 消息需回带工具调用，否则 ollama 无法关联后续 tool 结果
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			msg.ToolCalls = make([]api.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				var ollamaArgs api.ToolCallFunctionArguments
+				json.Unmarshal(argsJSON, &ollamaArgs)
+				msg.ToolCalls[j] = api.ToolCall{
+					ID: tc.ID,
+					Function: api.ToolCallFunction{
+						Name:      tc.Name,
+						Arguments: ollamaArgs,
+					},
+				}
+			}
+		}
+		ollamaMessages[i] = msg
 	}
 
 	// 转换工具（如果提供）
@@ -95,6 +112,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, to
 				json.Unmarshal(argsJSON, &args)
 			}
 			toolCalls = append(toolCalls, plugin.ToolCall{
+				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: args,
 			})

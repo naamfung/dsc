@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"dsc/proto"
+	"dsc/proto/metadata"
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,9 +24,10 @@ type LLMProvider interface {
 
 // Message 消息结构体
 type Message struct {
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"` // assistant 消息回传的工具调用
 }
 
 // Tool 工具结构体
@@ -57,7 +59,23 @@ type LLMGRPCPlugin struct {
 
 func (p *LLMGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
 	proto.RegisterLLMServiceServer(s, &llmGRPCServer{impl: p.Impl})
+	metadata.RegisterPluginMetadataServer(s, &llmMetadataServer{impl: p.Impl})
 	return nil
+}
+
+// llmMetadataServer 提供 LLM 插件的元數據服務，供宿主按配置加載時做類型/版本校驗
+type llmMetadataServer struct {
+	metadata.UnimplementedPluginMetadataServer
+	impl LLMProvider
+}
+
+func (s *llmMetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
+	return &metadata.PluginInfo{
+		Type:       "llm",
+		Name:       s.impl.Name(ctx),
+		Version:    s.impl.Version(ctx),
+		ApiVersion: "1.0",
+	}, nil
 }
 
 func (p *LLMGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
@@ -74,7 +92,18 @@ func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*prot
 	// 转换 proto 消息到内部结构
 	messages := make([]Message, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallId}
+		msg := Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallId}
+		if len(m.ToolCalls) > 0 {
+			msg.ToolCalls = make([]ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
+					args = map[string]interface{}{}
+				}
+				msg.ToolCalls[j] = ToolCall{ID: tc.Id, Name: tc.Name, Arguments: args}
+			}
+		}
+		messages[i] = msg
 	}
 	tools := make([]Tool, len(req.Tools))
 	for i, t := range req.Tools {
@@ -128,7 +157,15 @@ func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []To
 	// 转换内部结构到 proto 消息
 	protoMessages := make([]*proto.Message, len(messages))
 	for i, m := range messages {
-		protoMessages[i] = &proto.Message{Role: m.Role, Content: m.Content, ToolCallId: m.ToolCallID}
+		pm := &proto.Message{Role: m.Role, Content: m.Content, ToolCallId: m.ToolCallID}
+		if len(m.ToolCalls) > 0 {
+			pm.ToolCalls = make([]*proto.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				pm.ToolCalls[j] = &proto.ToolCall{Id: tc.ID, Name: tc.Name, ArgumentsJson: string(argsJSON)}
+			}
+		}
+		protoMessages[i] = pm
 	}
 	protoTools := make([]*proto.Tool, len(tools))
 	for i, t := range tools {

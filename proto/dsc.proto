@@ -74,6 +74,7 @@ message Message {
   string role = 1;    // "system", "user", "assistant", "tool"
   string content = 2;
   string tool_call_id = 3;   // 用于 tool 角色关联
+  repeated ToolCall tool_calls = 4;  // 用于 assistant 角色回传工具调用（OpenAI 格式必需）
 }
 
 message Tool {

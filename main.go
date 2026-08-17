@@ -40,7 +40,18 @@ func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*pro
 	}
 	messages := make([]plugin.Message, len(req.Messages))
 	for i, m := range req.Messages {
-		messages[i] = plugin.Message{Role: m.Role, Content: m.Content}
+		msg := plugin.Message{Role: m.Role, Content: m.Content}
+		if len(m.ToolCalls) > 0 {
+			msg.ToolCalls = make([]plugin.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
+					args = map[string]interface{}{}
+				}
+				msg.ToolCalls[j] = plugin.ToolCall{ID: tc.Id, Name: tc.Name, Arguments: args}
+			}
+		}
+		messages[i] = msg
 	}
 	tools := make([]plugin.Tool, len(req.Tools))
 	for i, t := range req.Tools {

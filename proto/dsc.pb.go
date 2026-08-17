@@ -535,6 +535,7 @@ type Message struct {
 	Role          string                 `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"` // "system", "user", "assistant", "tool"
 	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
 	ToolCallId    string                 `protobuf:"bytes,3,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"` // 用于 tool 角色关联
+	ToolCalls     []*ToolCall            `protobuf:"bytes,4,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`      // 用于 assistant 角色回传工具调用（OpenAI 格式必需）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -588,6 +589,13 @@ func (x *Message) GetToolCallId() string {
 		return x.ToolCallId
 	}
 	return ""
+}
+
+func (x *Message) GetToolCalls() []*ToolCall {
+	if x != nil {
+		return x.ToolCalls
+	}
+	return nil
 }
 
 type Tool struct {
@@ -1251,12 +1259,14 @@ const file_dsc_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\tR\x06status\"X\n" +
 	"\vChatRequest\x12(\n" +
 	"\bmessages\x18\x01 \x03(\v2\f.dsc.MessageR\bmessages\x12\x1f\n" +
-	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\"Y\n" +
+	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\"\x87\x01\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12 \n" +
 	"\ftool_call_id\x18\x03 \x01(\tR\n" +
-	"toolCallId\"e\n" +
+	"toolCallId\x12,\n" +
+	"\n" +
+	"tool_calls\x18\x04 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"e\n" +
 	"\x04Tool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12'\n" +
@@ -1361,45 +1371,46 @@ var file_dsc_proto_depIdxs = []int32{
 	25, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	11, // 1: dsc.ChatRequest.messages:type_name -> dsc.Message
 	12, // 2: dsc.ChatRequest.tools:type_name -> dsc.Tool
-	14, // 3: dsc.ChatResponse.tool_calls:type_name -> dsc.ToolCall
-	12, // 4: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
-	0,  // 5: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
-	2,  // 6: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
-	4,  // 7: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
-	6,  // 8: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	8,  // 9: dsc.AgentService.Run:input_type -> dsc.RunRequest
-	0,  // 10: dsc.AgentService.Name:input_type -> dsc.NameRequest
-	2,  // 11: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	15, // 12: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
-	17, // 13: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
-	19, // 14: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
-	10, // 15: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	0,  // 16: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	2,  // 17: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	6,  // 18: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	21, // 19: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
-	23, // 20: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
-	1,  // 21: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 22: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 23: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 24: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 25: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	1,  // 26: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 27: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	16, // 28: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
-	18, // 29: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
-	20, // 30: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	13, // 31: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	1,  // 32: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 33: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 34: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	22, // 35: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	24, // 36: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	21, // [21:37] is the sub-list for method output_type
-	5,  // [5:21] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	14, // 3: dsc.Message.tool_calls:type_name -> dsc.ToolCall
+	14, // 4: dsc.ChatResponse.tool_calls:type_name -> dsc.ToolCall
+	12, // 5: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
+	0,  // 6: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
+	2,  // 7: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
+	4,  // 8: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
+	6,  // 9: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	8,  // 10: dsc.AgentService.Run:input_type -> dsc.RunRequest
+	0,  // 11: dsc.AgentService.Name:input_type -> dsc.NameRequest
+	2,  // 12: dsc.AgentService.Version:input_type -> dsc.VersionRequest
+	15, // 13: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
+	17, // 14: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
+	19, // 15: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
+	10, // 16: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	0,  // 17: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	2,  // 18: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	6,  // 19: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	21, // 20: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	23, // 21: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	1,  // 22: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 23: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 24: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 25: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 26: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	1,  // 27: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 28: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	16, // 29: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
+	18, // 30: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
+	20, // 31: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	13, // 32: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	1,  // 33: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 34: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 35: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	22, // 36: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	24, // 37: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	22, // [22:38] is the sub-list for method output_type
+	6,  // [6:22] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_dsc_proto_init() }

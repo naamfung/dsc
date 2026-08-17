@@ -19,10 +19,26 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, to
 	// 转换消息格式
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, m := range messages {
-		openaiMessages[i] = openai.ChatCompletionMessage{
+		msg := openai.ChatCompletionMessage{
 			Role:    m.Role,
 			Content: m.Content,
 		}
+		// assistant 消息需回带工具调用（OpenAI 格式要求 tool_calls 与后续 tool 结果匹配）
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			msg.ToolCalls = make([]openai.ToolCall, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				msg.ToolCalls[j] = openai.ToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: openai.FunctionCall{
+						Name:      tc.Name,
+						Arguments: string(argsJSON),
+					},
+				}
+			}
+		}
+		openaiMessages[i] = msg
 	}
 
 	// 转换工具格式
@@ -66,6 +82,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, to
 			var args map[string]interface{}
 			json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			result.ToolCalls[i] = plugin.ToolCall{
+				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: args,
 			}

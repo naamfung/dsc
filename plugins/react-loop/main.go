@@ -132,11 +132,15 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 			return nil, fmt.Errorf("LLM chat failed: %w", err)
 		}
 
-		// 追加助手消息（包含文本回复）
-		messages = append(messages, &proto.Message{
+		// 追加助手消息（包含文本回复及工具调用；OpenAI 格式要求 assistant 回带 tool_calls）
+		assistantMsg := &proto.Message{
 			Role:    "assistant",
 			Content: resp.Content,
-		})
+		}
+		if len(resp.ToolCalls) > 0 {
+			assistantMsg.ToolCalls = resp.ToolCalls
+		}
+		messages = append(messages, assistantMsg)
 
 		// 没有工具调用 → 返回最终结果
 		if len(resp.ToolCalls) == 0 {
