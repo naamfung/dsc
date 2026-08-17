@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"os/signal"
 	"runtime"
-	"syscall"
+	"strings"
 
 	"dsc/plugin"
 	"dsc/proto"
@@ -151,6 +151,68 @@ func loadConfig(path string) (*plugin.Config, error) {
 }
 
 func main() {
+	// 解析啟動參數
+	logToScreen := false
+	logToFile := ""
+
+	for i, arg := range os.Args {
+		if arg == "-log" {
+			if i+1 < len(os.Args) {
+				nextArg := os.Args[i+1]
+				if strings.HasPrefix(nextArg, "-") {
+					logToScreen = true
+				} else {
+					logToFile = nextArg
+				}
+			} else {
+				logToScreen = true
+			}
+			break
+		}
+	}
+
+	// 初始化 logger
+	var logger hclog.Logger
+	var logOutput io.Writer
+
+	if logToFile != "" {
+		// 日志静默写到设定的path去
+		f, err := os.OpenFile(logToFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			// 如果打開文件失敗，回退到屏幕
+			logOutput = os.Stderr
+			logger = hclog.New(&hclog.LoggerOptions{
+				Name:   "dsc-host",
+				Level:  hclog.Info,
+				Output: logOutput,
+			})
+		} else {
+			logOutput = f
+			logger = hclog.New(&hclog.LoggerOptions{
+				Name:   "dsc-host",
+				Level:  hclog.Info,
+				Output: logOutput,
+			})
+			// 確保在退出時關閉文件
+			defer f.Close()
+		}
+	} else if logToScreen {
+		// -log 无指定路径时似如今一样打印日志到屏幕
+		logOutput = os.Stderr
+		logger = hclog.New(&hclog.LoggerOptions{
+			Name:   "dsc-host",
+			Level:  hclog.Info,
+			Output: logOutput,
+		})
+	} else {
+		// 無參數時，日誌静默放棄，不作記錄
+		logger = hclog.New(&hclog.LoggerOptions{
+			Name:   "dsc-host",
+			Level:  hclog.NoLevel,
+			Output: io.Discard,
+		})
+	}
+
 	// 加載配置文件
 	cfgPath := os.Getenv("DSC_CONFIG")
 	if cfgPath == "" {
@@ -159,11 +221,6 @@ func main() {
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		// 配置文件不存在或加載失敗時，使用默認配置
-		logger := hclog.New(&hclog.LoggerOptions{
-			Name:   "dsc-host",
-			Level:  hclog.Info,
-			Output: os.Stderr,
-		})
 		logger.Info("config file not found or invalid, using default config", "path", cfgPath)
 		// 使用默認配置
 		cfg = &plugin.Config{
@@ -176,12 +233,6 @@ func main() {
 			plugin.WorkspaceRoot = cfg.WorkspaceRoot
 		}
 	}
-
-	logger := hclog.New(&hclog.LoggerOptions{
-		Name:   "dsc-host",
-		Level:  hclog.Info,
-		Output: os.Stderr,
-	})
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
 		PluginDir: "./plugins/",
@@ -232,9 +283,13 @@ func main() {
 		ctx := context.Background()
 		if err := tui.Run(agent, ctx, llmModelName); err != nil {
 			logger.Error("tui run failed", "error", err)
-			os.Exit(1)
 		}
 		logger.Info("tui exited")
+
+		// 完成完整的清理過程再退出
+		logger.Info("shutting down...")
+		mgr.Shutdown()
+		os.Exit(0)
 	} else {
 		// 兼容舊的加載方式
 		llmName := os.Getenv("LLM_PROVIDER")
@@ -312,13 +367,12 @@ func main() {
 		// 启动 TUI 聊天界面（替换原来的硬编码 Agent.Run 调用）
 		if err := tui.Run(agent, ctx, llmModelNameLegacy); err != nil {
 			logger.Error("tui run failed", "error", err)
-			os.Exit(1)
 		}
 		logger.Info("tui exited")
-	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-	logger.Info("shutting down...")
+		// 完成完整的清理過程再退出
+		logger.Info("shutting down...")
+		mgr.Shutdown()
+		os.Exit(0)
+	}
 }
