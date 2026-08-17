@@ -131,6 +131,11 @@ func main() {
 			Output: os.Stderr,
 		})
 		logger.Info("config file not found or invalid, using default config", "path", cfgPath)
+		// 使用默認配置
+		cfg = &plugin.Config{
+			WorkspaceRoot: "",
+			DefaultLLM:    "openai",
+		}
 	} else {
 		// 設置配置中的 workspace root
 		if cfg.WorkspaceRoot != "" {
@@ -151,89 +156,110 @@ func main() {
 	})
 	defer mgr.Shutdown()
 
-	llmName := os.Getenv("LLM_PROVIDER")
-	if llmName == "" {
-		llmName = "openai"
-	}
-	ext := ""
-	if runtime.GOOS == "windows" {
-		ext = ".exe"
-	}
-	llmBinary := map[string]string{
-		"openai":    "./plugins/llm-openai/llm-openai" + ext,
-		"anthropic": "./plugins/llm-anthropic/llm-anthropic" + ext,
-		"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
-	}[llmName]
-	if llmBinary == "" {
-		logger.Error("unknown LLM provider", "name", llmName)
-		os.Exit(1)
-	}
+	// 如果配置中有插件列表，則從配置加載
+	if len(cfg.Plugins) > 0 {
+		if err := mgr.LoadFromConfig(cfg); err != nil {
+			logger.Error("failed to load plugins from config", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("plugins loaded from config", "count", len(cfg.Plugins))
 
-	if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
-		logger.Error("failed to load LLM", "name", llmName, "error", err)
-		os.Exit(1)
-	}
-	logger.Info("llm loaded", "name", llmName)
+		// 啟動管理 API
+		adminAddr := os.Getenv("DSC_ADMIN_ADDR")
+		if adminAddr == "" {
+			adminAddr = ":8080"
+		}
+		mgr.StartAdmin(adminAddr)
+		logger.Info("admin api started", "addr", adminAddr)
+	} else {
+		// 兼容舊的加載方式
+		llmName := os.Getenv("LLM_PROVIDER")
+		if llmName == "" && cfg.DefaultLLM != "" {
+			llmName = cfg.DefaultLLM
+		}
+		if llmName == "" {
+			llmName = "openai"
+		}
+		ext := ""
+		if runtime.GOOS == "windows" {
+			ext = ".exe"
+		}
+		llmBinary := map[string]string{
+			"openai":    "./plugins/llm-openai/llm-openai" + ext,
+			"anthropic": "./plugins/llm-anthropic/llm-anthropic" + ext,
+			"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
+		}[llmName]
+		if llmBinary == "" {
+			logger.Error("unknown LLM provider", "name", llmName)
+			os.Exit(1)
+		}
 
-	// 使用 Manager 加載 Agent
-	agentBinary := "./plugins/react_loop/react_loop" + ext
-	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
-	if err != nil {
-		logger.Error("failed to load Agent", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("llm service id generated", "serviceID", llmServiceID)
+		if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
+			logger.Error("failed to load LLM", "name", llmName, "error", err)
+			os.Exit(1)
+		}
+		logger.Info("llm loaded", "name", llmName)
 
-	// 注册 LLM 服务（在 goroutine 中，避免阻塞）
-	go func() {
-		broker.AcceptAndServe(llmServiceID, func(opts []grpc.ServerOption) *grpc.Server {
-			s := grpc.NewServer(opts...)
-			proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
-			return s
-		})
-	}()
+		// 使用 Manager 加載 Agent
+		agentBinary := "./plugins/react_loop/react_loop" + ext
+		broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react_agent", agentBinary)
+		if err != nil {
+			logger.Error("failed to load Agent", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("llm service id generated", "serviceID", llmServiceID)
 
-	// 注册 ToolService（在 goroutine 中，避免阻塞）
-	toolServiceID := broker.NextId()
-	go func() {
-		broker.AcceptAndServe(toolServiceID, func(opts []grpc.ServerOption) *grpc.Server {
-			s := grpc.NewServer(opts...)
-			proto.RegisterToolServiceServer(s, plugin.NewToolGRPCServer(mgr))
-			return s
-		})
-	}()
-	logger.Info("tool service id generated", "serviceID", toolServiceID)
+		// 注册 LLM 服务（在 goroutine 中，避免阻塞）
+		go func() {
+			broker.AcceptAndServe(llmServiceID, func(opts []grpc.ServerOption) *grpc.Server {
+				s := grpc.NewServer(opts...)
+				proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
+				return s
+			})
+		}()
 
-	// 等待服務就緒
-	if err := waitForService(broker, llmServiceID); err != nil {
-		logger.Error("failed to wait for LLM service", "error", err)
-		os.Exit(1)
-	}
-	if err := waitForService(broker, toolServiceID); err != nil {
-		logger.Error("failed to wait for tool service", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("services are ready")
+		// 注册 ToolService（在 goroutine 中，避免阻塞）
+		toolServiceID := broker.NextId()
+		go func() {
+			broker.AcceptAndServe(toolServiceID, func(opts []grpc.ServerOption) *grpc.Server {
+				s := grpc.NewServer(opts...)
+				proto.RegisterToolServiceServer(s, plugin.NewToolGRPCServer(mgr))
+				return s
+			})
+		}()
+		logger.Info("tool service id generated", "serviceID", toolServiceID)
 
-	agent, ok := mgr.GetAgent("react_agent")
-	if !ok {
-		logger.Error("agent not found after loading")
-		os.Exit(1)
-	}
+		// 等待服務就緒
+		if err := waitForService(broker, llmServiceID); err != nil {
+			logger.Error("failed to wait for LLM service", "error", err)
+			os.Exit(1)
+		}
+		if err := waitForService(broker, toolServiceID); err != nil {
+			logger.Error("failed to wait for tool service", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("services are ready")
 
-	ctx := context.Background()
-	// 设置 Tool Service ID
-	if err := agent.SetToolServiceID(ctx, toolServiceID); err != nil {
-		logger.Error("failed to set tool service ID on agent", "error", err)
-		os.Exit(1)
-	}
+		agent, ok := mgr.GetAgent("react_agent")
+		if !ok {
+			logger.Error("agent not found after loading")
+			os.Exit(1)
+		}
 
-	result, err := agent.Run(ctx, "What is the weather in Tokyo?")
-	if err != nil {
-		logger.Error("agent run failed", "error", err)
-		os.Exit(1)
+		ctx := context.Background()
+		// 设置 Tool Service ID
+		if err := agent.SetToolServiceID(ctx, toolServiceID); err != nil {
+			logger.Error("failed to set tool service ID on agent", "error", err)
+			os.Exit(1)
+		}
+
+		result, err := agent.Run(ctx, "What is the weather in Tokyo?")
+		if err != nil {
+			logger.Error("agent run failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("agent result", "result", result)
 	}
-	logger.Info("agent result", "result", result)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

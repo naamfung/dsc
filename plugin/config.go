@@ -1,16 +1,22 @@
 package plugin
 
 type Config struct {
-	LLM struct {
-		Provider string `json:"provider" yaml:"provider"`
-		Model    string `json:"model" yaml:"model"`
-		APIKey   string `json:"api_key" yaml:"api_key"`
-		BaseURL  string `json:"base_url" yaml:"base_url"`
-	} `json:"llm" yaml:"llm"`
-	Agent struct {
-		BinaryPath    string `json:"binary_path" yaml:"binary_path"`
-		MaxIterations int    `json:"max_iterations" yaml:"max_iterations"`
-		MaxMessages   int    `json:"max_messages" yaml:"max_messages"`
-	} `json:"agent" yaml:"agent"`
-	WorkspaceRoot string `json:"workspace_root" yaml:"workspace_root"`
+	WorkspaceRoot string        `json:"workspace_root" yaml:"workspace_root"`
+	Plugins       []PluginEntry `json:"plugins" yaml:"plugins"`
+	// 可保留舊的 LLM 字段便於過渡，但推薦統一使用 Plugins
+	DefaultLLM    string        `json:"default_llm" yaml:"default_llm"`
+}
+
+type PluginEntry struct {
+	Name       string         `json:"name" yaml:"name"`
+	Type       string         `json:"type" yaml:"type"` // "llm", "agent", "tool", "dsc"
+	BinaryPath string         `json:"binary_path" yaml:"binary_path"`
+	// 可選：是否啟用、參數等
+	Enabled   bool           `json:"enabled" yaml:"enabled" default:"true"`
+	DependsOn *PluginDepends `json:"depends_on" yaml:"depends_on"`
+}
+
+type PluginDepends struct {
+	LLM   string   `json:"llm" yaml:"llm"`
+	Tools []string `json:"tools" yaml:"tools"`
 }

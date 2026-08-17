@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"dsc/proto"
+	"dsc/proto/metadata"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 )
@@ -20,11 +21,12 @@ type Manager struct {
 	plugins         map[string]DSCPlugin      // 插件名 -> DSC業務接口
 	agents          map[string]Agent          // 插件名 -> Agent接口
 	llms            map[string]LLMProvider    // 插件名 -> LLMProvider接口
-	typeMap         map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm")
+	typeMap         map[string]string         // 插件名 -> 類型 ("dsc", "agent", "llm", "tool")
 	agentServiceIDs map[string]uint32         // agent name -> serviceID
 	config          *ManagerConfig
 	toolRegistry    *ToolRegistry             // 新增
 	logger          hclog.Logger
+	pluginMetadata  map[string]*metadata.PluginInfo // 插件名 -> 元數據
 }
 
 type ManagerConfig struct {
@@ -50,6 +52,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		agentServiceIDs: make(map[string]uint32),
 		config:          cfg,
 		toolRegistry:    NewToolRegistry(),
+		pluginMetadata:  make(map[string]*metadata.PluginInfo),
 	}
 	// 註冊內置工具
 	if err := m.toolRegistry.Register(&ReadFileTool{}); err != nil {
@@ -583,6 +586,7 @@ func (m *Manager) Shutdown() {
 	m.llms = make(map[string]LLMProvider)
 	m.typeMap = make(map[string]string)
 	m.agentServiceIDs = make(map[string]uint32)
+	m.pluginMetadata = make(map[string]*metadata.PluginInfo)
 }
 
 // ListAgents 列出所有已加載的 Agent 插件
@@ -608,4 +612,187 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 		return "", fmt.Errorf("tool not found: %s", toolName)
 	}
 	return tool.Execute(ctx, argsJSON)
+}
+
+// LoadFromConfig 從配置加載所有插件
+func (m *Manager) LoadFromConfig(cfg *Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, entry := range cfg.Plugins {
+		if !entry.Enabled {
+			m.logger.Info("plugin disabled, skipping", "name", entry.Name)
+			continue
+		}
+
+		if err := m.loadPluginFromEntryLocked(entry); err != nil {
+			return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
+		}
+	}
+
+	m.logger.Info("all plugins loaded from config", "count", len(cfg.Plugins))
+	return nil
+}
+
+// loadPluginFromEntryLocked 根據插件入口加載插件（需已持有鎖）
+func (m *Manager) loadPluginFromEntryLocked(entry PluginEntry) error {
+	// 創建插件客戶端 - 使用 dummy plugin 以獲取 gRPC 連接
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: m.config.Handshake,
+		Plugins: map[string]plugin.Plugin{
+			"dummy": &dummyGRPCPlugin{},
+		},
+		Cmd:              exec.Command(entry.BinaryPath),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+	})
+
+	// 建立 RPC 連接
+	rpcClient, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to connect to plugin: %w", err)
+	}
+
+	// 獲取 gRPC 客戶端
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		client.Kill()
+		return fmt.Errorf("plugin is not a gRPC client")
+	}
+
+	// 獲取插件元數據
+	info, err := GetPluginInfo(grpcClient.Conn)
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("failed to get plugin info: %w", err)
+	}
+
+	// 驗證 type 是否匹配 entry.Type
+	if info.Type != entry.Type {
+		client.Kill()
+		return fmt.Errorf("plugin type mismatch: expected %s, got %s", entry.Type, info.Type)
+	}
+
+	// 根據類型進行業務加載
+	switch info.Type {
+	case "llm":
+		// 獲取 LLMService 客戶端
+		llmClient := proto.NewLLMServiceClient(grpcClient.Conn)
+		provider := &llmGRPCClient{client: llmClient}
+		m.llms[entry.Name] = provider
+		m.typeMap[entry.Name] = "llm"
+
+	case "agent":
+		agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
+		agent := &agentGRPCClient{client: agentClient}
+		m.agents[entry.Name] = agent
+		m.typeMap[entry.Name] = "agent"
+
+	case "tool":
+		// 獲取工具列表
+		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
+		listResp, err := toolClient.ListTools(context.Background(), &proto.ListToolsRequest{})
+		if err != nil {
+			client.Kill()
+			return fmt.Errorf("failed to list tools: %w", err)
+		}
+		// 為每個工具註冊 RemoteTool
+		for _, t := range listResp.Tools {
+			remote := &RemoteTool{
+				name:        t.Name,
+				description: t.Description,
+				schema:      json.RawMessage(t.ParametersJson),
+				client:      toolClient,
+			}
+			if err := m.toolRegistry.Register(remote); err != nil {
+				m.logger.Warn("failed to register tool", "tool", t.Name, "error", err)
+			}
+		}
+		m.typeMap[entry.Name] = "tool"
+
+	default:
+		client.Kill()
+		return fmt.Errorf("unsupported plugin type: %s", info.Type)
+	}
+
+	// 存儲客戶端以便卸載
+	m.clients[entry.Name] = client
+	m.pluginMetadata[entry.Name] = info
+
+	m.logger.Info("plugin loaded", "name", entry.Name, "type", info.Type, "version", info.Version)
+	return nil
+}
+
+// UnloadPlugin 卸載插件
+func (m *Manager) UnloadPlugin(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	client, exists := m.clients[name]
+	if !exists {
+		return fmt.Errorf("plugin '%s' not found", name)
+	}
+
+	// 從註冊表中移除工具
+	if m.typeMap[name] == "tool" {
+		// 工具插件的工具已經註冊到 toolRegistry，這裡需要移除
+		// 暫時不實現詳細的工具移除邏輯
+	}
+
+	client.Kill() // 殺死插件子進程
+	delete(m.clients, name)
+	delete(m.plugins, name)
+	delete(m.agents, name)
+	delete(m.llms, name)
+	delete(m.typeMap, name)
+	delete(m.pluginMetadata, name)
+
+	m.logger.Info("plugin unloaded", "name", name)
+	return nil
+}
+
+// PluginInfoSummary 插件信息摘要
+type PluginInfoSummary struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Version string `json:"version"`
+	Enabled bool   `json:"enabled"`
+}
+
+// ListPlugins 返回所有已加載插件的列表
+func (m *Manager) ListPlugins() []PluginInfoSummary {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var plugins []PluginInfoSummary
+	for name, info := range m.pluginMetadata {
+		plugins = append(plugins, PluginInfoSummary{
+			Name:    name,
+			Type:    info.Type,
+			Version: info.Version,
+			Enabled: true,
+		})
+	}
+	for name, typ := range m.typeMap {
+		// 如果已經在 pluginMetadata 中，則跳過
+		if _, exists := m.pluginMetadata[name]; exists {
+			continue
+		}
+		plugins = append(plugins, PluginInfoSummary{
+			Name:    name,
+			Type:    typ,
+			Version: "unknown",
+			Enabled: true,
+		})
+	}
+	return plugins
+}
+
+// GetPluginMetadata 獲取特定插件的元數據
+func (m *Manager) GetPluginMetadata(name string) (*metadata.PluginInfo, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	info, exists := m.pluginMetadata[name]
+	return info, exists
 }

@@ -196,7 +196,7 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentRe
 	}, nil
 }
 
-func (a *ReactLoopAgent) Name(ctx context.Context) string { return "react_agent" }
+func (a *ReactLoopAgent) Name(ctx context.Context) string { return "react-agent" }
 func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
 
 func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {

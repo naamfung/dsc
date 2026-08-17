@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package metadata;
+
+option go_package = "dsc/proto/metadata";
+
+service PluginMetadata {
+  rpc GetInfo(Empty) returns (PluginInfo);
+}
+
+message Empty {}
+
+message PluginInfo {
+  string type = 1;      // "llm", "agent", "tool", "dsc"
+  string name = 2;
+  string version = 3;
+  // 可選擴展字段，如支持的API版本
+  string api_version = 4;
+}

@@ -1,0 +1,13 @@
+workspace_root: ./workspace
+default_llm: openai
+plugins:
+  - name: openai
+    type: llm
+    binary_path: ./plugins/llm-openai/llm-openai.exe
+    enabled: true
+  - name: react-agent
+    type: agent
+    binary_path: ./plugins/react_loop/react_loop.exe
+    enabled: true
+    depends_on:
+      llm: openai

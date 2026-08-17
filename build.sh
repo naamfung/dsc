@@ -21,13 +21,9 @@ fi
 echo "Building main program..."
 go build
 
-# 构建 example 插件
-echo "Building example plugin..."
-go build -o plugins/example/example.exe ./plugins/example
-
-# 构建 react_loop 插件
-echo "Building react_loop plugin..."
-go build -o plugins/react_loop/react_loop.exe ./plugins/react_loop
+# 构建 react-loop 插件
+echo "Building react-loop plugin..."
+go build -o plugins/react-loop/react-loop.exe ./plugins/react-loop
 
 # 构建 llm-openai 插件
 echo "Building llm-openai plugin..."
