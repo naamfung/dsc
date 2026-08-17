@@ -9,7 +9,7 @@ import (
 
 	"dsc/proto"
 	"dsc/proto/metadata"
-	"github.com/hashicorp/go-plugin"
+	goplugin "github.com/hashicorp/go-plugin"
 )
 
 // FileTool 文件工具實現
@@ -172,14 +172,19 @@ func main() {
 	metadataServer := &MetadataServer{}
 
 	// 啟動插件服務
-	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]plugin.Plugin{
+	handshakeConfig := goplugin.HandshakeConfig{
+		ProtocolVersion:  1,
+		MagicCookieKey:   "BASIC_PLUGIN",
+		MagicCookieValue: "hello",
+	}
+	goplugin.Serve(&goplugin.ServeConfig{
+		HandshakeConfig: handshakeConfig,
+		Plugins: map[string]goplugin.Plugin{
 			"tool": &ToolMetadataGRPCPlugin{
 				ToolImpl:   toolServer,
 				MetadataImpl: metadataServer,
 			},
 		},
-		GRPCServer: plugin.DefaultGRPCServer,
+		GRPCServer: goplugin.DefaultGRPCServer,
 	})
 }
