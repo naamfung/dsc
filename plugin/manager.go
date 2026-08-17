@@ -782,9 +782,14 @@ func (s *toolProxyServer) ListTools(ctx context.Context, req *proto.ListToolsReq
 }
 
 // normalizeBinaryPath 跨平台處理二進制路徑
+// 統一將路徑中的「\」轉換為「/」
 // Windows 系統：確保有 .exe 後綴
 // 非 Windows 系統：移除 .exe 後綴
 func normalizeBinaryPath(path string) string {
+	// 統一將反斜槓轉換為正斜槓
+	path = strings.ReplaceAll(path, `\\`, "/")
+	path = strings.ReplaceAll(path, "\\", "/")
+
 	pathLower := strings.ToLower(path)
 	if runtime.GOOS == "windows" {
 		if !strings.HasSuffix(pathLower, ".exe") {
