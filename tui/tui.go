@@ -183,12 +183,16 @@ func (m *Model) pumpStream(input string, ch <-chan *plugin.RunStreamResponse) te
 	}
 }
 
-// vpHeight 计算消息区高度：总高度减去标题、状态栏、输入区（含边框），思考时再减去指示行。
+// vpHeight 计算消息区高度：总高度减去标题、状态栏、输入区（含边框），思考时再减去指示行，补全菜单时再减去补全菜单行。
 // 输入区高度随内容行数变化（1~composerMin 行），这里以当前实际高度为准。
 func (m *Model) vpHeight() int {
 	h := m.high - titleRows - statusRows - boxBorder - m.input.Height()
 	if m.thinking {
 		h -= thinkingRow
+	}
+	if m.completion.active && len(m.completion.items) > 0 {
+		// 减去补全菜单的高度：items 数量 + 1 行提示
+		h -= (len(m.completion.items) + 1)
 	}
 	if h < 3 {
 		h = 3
