@@ -435,6 +435,23 @@ func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownReque
 	return &proto.ShutdownResponse{Success: true, Message: "shutdown successful"}, nil
 }
 
+func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentService_RunStreamServer) error {
+	ch, err := s.impl.RunStream(stream.Context(), req.Input)
+	if err != nil {
+		return err
+	}
+	for item := range ch {
+		if err := stream.Send(&proto.RunStreamResponse{
+			Output: item.Output,
+			Status: item.Status,
+			Error:  item.Error,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func main() {
 	goplugin.Serve(&goplugin.ServeConfig{
 		HandshakeConfig: plugin.Handshake,
