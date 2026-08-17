@@ -15,6 +15,7 @@ import (
 	"dsc/proto/metadata"
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
+	"github.com/hashicorp/go-version"
 	"google.golang.org/grpc"
 )
 
@@ -992,9 +993,21 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	}
 
 	// 版本兼容性檢查
-	if info.ApiVersion != "1.0" {
+	cons, err := version.NewConstraint(">= 1.0, < 2.0")
+	if err != nil {
 		client.Kill()
-		return fmt.Errorf("unsupported API version %s, expected 1.0", info.ApiVersion)
+		return fmt.Errorf("failed to create version constraint: %w", err)
+	}
+
+	v, err := version.NewVersion(info.ApiVersion)
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("invalid API version %s: %w", info.ApiVersion, err)
+	}
+
+	if !cons.Check(v) {
+		client.Kill()
+		return fmt.Errorf("unsupported API version %s, expected >=1.0 <2.0", info.ApiVersion)
 	}
 
 	if info.Type != entry.Type {
