@@ -49,4 +49,8 @@ go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugin
 echo "Building fs-observation-policy plugin..."
 go build -o plugins/fs-observation-policy/fs-observation-policy.exe ./plugins/fs-observation-policy
 
+# 构建 tool-browser-use 插件
+echo "Building tool-browser-use plugin..."
+go build -o plugins/tool-browser-use/tool-browser-use.exe ./plugins/tool-browser-use
+
 echo "Build completed successfully."
