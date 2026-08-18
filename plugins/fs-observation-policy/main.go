@@ -68,7 +68,7 @@ type MetadataServer struct {
 
 func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
 	return &metadata.PluginInfo{
-		Type:       "fs-observation-policy",
+		Type:       "policy",
 		Name:       "fs-observation-policy",
 		Version:    "1.0.0",
 		ApiVersion: "1.0",

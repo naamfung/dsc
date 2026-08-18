@@ -151,6 +151,13 @@ func loadConfig(path string) (*plugin.Config, error) {
 }
 
 func main() {
+	// 捕獲 panic 並輸出到 stderr，以便在日誌靜默時能調試啟動失敗原因
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "panic recovered: %v\n", r)
+		}
+	}()
+
 	// 解析啟動參數
 	logToScreen := false
 	logToFile := ""
@@ -267,6 +274,13 @@ func main() {
 	})
 	defer mgr.Shutdown()
 
+	// fail 記錄錯誤後先清理已加載的插件子進程再退出，避免 os.Exit 跳過 defer 導致殘留孤兒進程
+	fail := func(format string, args ...interface{}) {
+		logger.Error(fmt.Sprintf(format, args...))
+		mgr.Shutdown()
+		os.Exit(1)
+	}
+
 	// 1. 加載 LLM 插件（維持原來的啟動邏輯）
 	llmName := os.Getenv("LLM_PROVIDER")
 	if llmName == "" && presetCfg != nil && presetCfg.DefaultLLM != "" {
@@ -285,13 +299,11 @@ func main() {
 		"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
 	}[llmName]
 	if llmBinary == "" {
-		logger.Error("unknown LLM provider", "name", llmName)
-		os.Exit(1)
+		fail("unknown LLM provider %q", llmName)
 	}
 
 	if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
-		logger.Error("failed to load LLM", "name", llmName, "error", err)
-		os.Exit(1)
+		fail("failed to load LLM %s: %v", llmName, err)
 	}
 	logger.Info("llm loaded", "name", llmName)
 
@@ -299,8 +311,7 @@ func main() {
 	agentBinary := "./plugins/react-loop/react-loop" + ext
 	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary)
 	if err != nil {
-		logger.Error("failed to load Agent", "error", err)
-		os.Exit(1)
+		fail("failed to load Agent: %v", err)
 	}
 	logger.Info("llm service id generated", "serviceID", llmServiceID)
 
@@ -315,9 +326,8 @@ func main() {
 
 	// 4. 如果 preset 配置中有插件列表（tools 和 policies），則從配置加載
 	if presetCfg != nil && len(presetCfg.Plugins) > 0 {
-		if err := mgr.LoadFromConfig(presetCfg); err != nil {
-			logger.Error("failed to load plugins from preset config", "error", err)
-			os.Exit(1)
+		if err := mgr.LoadToolsAndPoliciesFromConfig(presetCfg); err != nil {
+			fail("failed to load plugins from preset config: %v", err)
 		}
 		logger.Info("plugins loaded from preset config", "count", len(presetCfg.Plugins), "mode", mode)
 	}
@@ -348,8 +358,7 @@ func main() {
 	}
 	agent, ok := mgr.GetAgent(agentName)
 	if !ok {
-		logger.Error("agent not found after loading", "agentName", agentName)
-		os.Exit(1)
+		fail("agent %s not found after loading", agentName)
 	}
 
 	// 从配置中提取 LLM 模型名称

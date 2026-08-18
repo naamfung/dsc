@@ -306,6 +306,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*goplugin.GRPC
 	}
 
 	broker := grpcClient.Broker()
+	m.broker = broker // 供後續 LoadToolsAndPoliciesFromConfig 等使用
 	serviceID := broker.NextId()
 
 	// 獲取 Agent 實例（用於調用 RPC）
