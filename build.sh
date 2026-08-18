@@ -45,4 +45,8 @@ go build -o plugins/tool-filesystem/tool-filesystem.exe ./plugins/tool-filesyste
 echo "Building tool-str-replace-editor plugin..."
 go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugins/tool-str-replace-editor
 
+# 构建 fs-observation-policy 插件
+echo "Building fs-observation-policy plugin..."
+go build -o plugins/fs-observation-policy/fs-observation-policy.exe ./plugins/fs-observation-policy
+
 echo "Build completed successfully."

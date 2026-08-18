@@ -1356,6 +1356,266 @@ func (x *ListToolsResponse) GetTools() []*Tool {
 	return nil
 }
 
+type FsObservation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`                                // "unseen", "absent", "present"
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`                            // 文件的內容 hash 或最後修改時間戳
+	LastContent   string                 `protobuf:"bytes,3,opt,name=last_content,json=lastContent,proto3" json:"last_content,omitempty"` // 最後一次觀測到的文件內容（可選）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FsObservation) Reset() {
+	*x = FsObservation{}
+	mi := &file_dsc_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FsObservation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FsObservation) ProtoMessage() {}
+
+func (x *FsObservation) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FsObservation.ProtoReflect.Descriptor instead.
+func (*FsObservation) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *FsObservation) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *FsObservation) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *FsObservation) GetLastContent() string {
+	if x != nil {
+		return x.LastContent
+	}
+	return ""
+}
+
+type GetObservationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FilePath      string                 `protobuf:"bytes,1,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetObservationRequest) Reset() {
+	*x = GetObservationRequest{}
+	mi := &file_dsc_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetObservationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetObservationRequest) ProtoMessage() {}
+
+func (x *GetObservationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetObservationRequest.ProtoReflect.Descriptor instead.
+func (*GetObservationRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *GetObservationRequest) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
+	}
+	return ""
+}
+
+type GetObservationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Observation   *FsObservation         `protobuf:"bytes,1,opt,name=observation,proto3" json:"observation,omitempty"`
+	Found         bool                   `protobuf:"varint,2,opt,name=found,proto3" json:"found,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetObservationResponse) Reset() {
+	*x = GetObservationResponse{}
+	mi := &file_dsc_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetObservationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetObservationResponse) ProtoMessage() {}
+
+func (x *GetObservationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetObservationResponse.ProtoReflect.Descriptor instead.
+func (*GetObservationResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *GetObservationResponse) GetObservation() *FsObservation {
+	if x != nil {
+		return x.Observation
+	}
+	return nil
+}
+
+func (x *GetObservationResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+type UpdateObservationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FilePath      string                 `protobuf:"bytes,1,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	Observation   *FsObservation         `protobuf:"bytes,2,opt,name=observation,proto3" json:"observation,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateObservationRequest) Reset() {
+	*x = UpdateObservationRequest{}
+	mi := &file_dsc_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateObservationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateObservationRequest) ProtoMessage() {}
+
+func (x *UpdateObservationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateObservationRequest.ProtoReflect.Descriptor instead.
+func (*UpdateObservationRequest) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *UpdateObservationRequest) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
+	}
+	return ""
+}
+
+func (x *UpdateObservationRequest) GetObservation() *FsObservation {
+	if x != nil {
+		return x.Observation
+	}
+	return nil
+}
+
+type UpdateObservationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateObservationResponse) Reset() {
+	*x = UpdateObservationResponse{}
+	mi := &file_dsc_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateObservationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateObservationResponse) ProtoMessage() {}
+
+func (x *UpdateObservationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dsc_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateObservationResponse.ProtoReflect.Descriptor instead.
+func (*UpdateObservationResponse) Descriptor() ([]byte, []int) {
+	return file_dsc_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *UpdateObservationResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *UpdateObservationResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 var File_dsc_proto protoreflect.FileDescriptor
 
 const file_dsc_proto_rawDesc = "" +
@@ -1443,7 +1703,22 @@ const file_dsc_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x12\n" +
 	"\x10ListToolsRequest\"4\n" +
 	"\x11ListToolsResponse\x12\x1f\n" +
-	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools2\xed\x01\n" +
+	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools\"b\n" +
+	"\rFsObservation\x12\x14\n" +
+	"\x05state\x18\x01 \x01(\tR\x05state\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12!\n" +
+	"\flast_content\x18\x03 \x01(\tR\vlastContent\"4\n" +
+	"\x15GetObservationRequest\x12\x1b\n" +
+	"\tfile_path\x18\x01 \x01(\tR\bfilePath\"d\n" +
+	"\x16GetObservationResponse\x124\n" +
+	"\vobservation\x18\x01 \x01(\v2\x12.dsc.FsObservationR\vobservation\x12\x14\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\"m\n" +
+	"\x18UpdateObservationRequest\x12\x1b\n" +
+	"\tfile_path\x18\x01 \x01(\tR\bfilePath\x124\n" +
+	"\vobservation\x18\x02 \x01(\v2\x12.dsc.FsObservationR\vobservation\"O\n" +
+	"\x19UpdateObservationResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +
@@ -1467,7 +1742,10 @@ const file_dsc_proto_rawDesc = "" +
 	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\x8b\x01\n" +
 	"\vToolService\x12@\n" +
 	"\vExecuteTool\x12\x17.dsc.ExecuteToolRequest\x1a\x18.dsc.ExecuteToolResponse\x12:\n" +
-	"\tListTools\x12\x15.dsc.ListToolsRequest\x1a\x16.dsc.ListToolsResponseB\vZ\tdsc/protob\x06proto3"
+	"\tListTools\x12\x15.dsc.ListToolsRequest\x1a\x16.dsc.ListToolsResponse2\xbb\x01\n" +
+	"\x1aFsObservationPolicyService\x12I\n" +
+	"\x0eGetObservation\x12\x1a.dsc.GetObservationRequest\x1a\x1b.dsc.GetObservationResponse\x12R\n" +
+	"\x11UpdateObservation\x12\x1d.dsc.UpdateObservationRequest\x1a\x1e.dsc.UpdateObservationResponseB\vZ\tdsc/protob\x06proto3"
 
 var (
 	file_dsc_proto_rawDescOnce sync.Once
@@ -1481,86 +1759,97 @@ func file_dsc_proto_rawDescGZIP() []byte {
 	return file_dsc_proto_rawDescData
 }
 
-var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_dsc_proto_goTypes = []any{
-	(*NameRequest)(nil),              // 0: dsc.NameRequest
-	(*NameResponse)(nil),             // 1: dsc.NameResponse
-	(*VersionRequest)(nil),           // 2: dsc.VersionRequest
-	(*VersionResponse)(nil),          // 3: dsc.VersionResponse
-	(*ExecuteRequest)(nil),           // 4: dsc.ExecuteRequest
-	(*ExecuteResponse)(nil),          // 5: dsc.ExecuteResponse
-	(*HealthCheckRequest)(nil),       // 6: dsc.HealthCheckRequest
-	(*HealthCheckResponse)(nil),      // 7: dsc.HealthCheckResponse
-	(*RunRequest)(nil),               // 8: dsc.RunRequest
-	(*RunResponse)(nil),              // 9: dsc.RunResponse
-	(*RunStreamResponse)(nil),        // 10: dsc.RunStreamResponse
-	(*ChatRequest)(nil),              // 11: dsc.ChatRequest
-	(*Message)(nil),                  // 12: dsc.Message
-	(*Tool)(nil),                     // 13: dsc.Tool
-	(*ChatResponse)(nil),             // 14: dsc.ChatResponse
-	(*ChatStreamResponse)(nil),       // 15: dsc.ChatStreamResponse
-	(*ToolCall)(nil),                 // 16: dsc.ToolCall
-	(*SetLLMServiceIDRequest)(nil),   // 17: dsc.SetLLMServiceIDRequest
-	(*SetLLMServiceIDResponse)(nil),  // 18: dsc.SetLLMServiceIDResponse
-	(*SetToolServiceIDRequest)(nil),  // 19: dsc.SetToolServiceIDRequest
-	(*SetToolServiceIDResponse)(nil), // 20: dsc.SetToolServiceIDResponse
-	(*ShutdownRequest)(nil),          // 21: dsc.ShutdownRequest
-	(*ShutdownResponse)(nil),         // 22: dsc.ShutdownResponse
-	(*ExecuteToolRequest)(nil),       // 23: dsc.ExecuteToolRequest
-	(*ExecuteToolResponse)(nil),      // 24: dsc.ExecuteToolResponse
-	(*ListToolsRequest)(nil),         // 25: dsc.ListToolsRequest
-	(*ListToolsResponse)(nil),        // 26: dsc.ListToolsResponse
-	nil,                              // 27: dsc.ExecuteRequest.ParamsEntry
+	(*NameRequest)(nil),               // 0: dsc.NameRequest
+	(*NameResponse)(nil),              // 1: dsc.NameResponse
+	(*VersionRequest)(nil),            // 2: dsc.VersionRequest
+	(*VersionResponse)(nil),           // 3: dsc.VersionResponse
+	(*ExecuteRequest)(nil),            // 4: dsc.ExecuteRequest
+	(*ExecuteResponse)(nil),           // 5: dsc.ExecuteResponse
+	(*HealthCheckRequest)(nil),        // 6: dsc.HealthCheckRequest
+	(*HealthCheckResponse)(nil),       // 7: dsc.HealthCheckResponse
+	(*RunRequest)(nil),                // 8: dsc.RunRequest
+	(*RunResponse)(nil),               // 9: dsc.RunResponse
+	(*RunStreamResponse)(nil),         // 10: dsc.RunStreamResponse
+	(*ChatRequest)(nil),               // 11: dsc.ChatRequest
+	(*Message)(nil),                   // 12: dsc.Message
+	(*Tool)(nil),                      // 13: dsc.Tool
+	(*ChatResponse)(nil),              // 14: dsc.ChatResponse
+	(*ChatStreamResponse)(nil),        // 15: dsc.ChatStreamResponse
+	(*ToolCall)(nil),                  // 16: dsc.ToolCall
+	(*SetLLMServiceIDRequest)(nil),    // 17: dsc.SetLLMServiceIDRequest
+	(*SetLLMServiceIDResponse)(nil),   // 18: dsc.SetLLMServiceIDResponse
+	(*SetToolServiceIDRequest)(nil),   // 19: dsc.SetToolServiceIDRequest
+	(*SetToolServiceIDResponse)(nil),  // 20: dsc.SetToolServiceIDResponse
+	(*ShutdownRequest)(nil),           // 21: dsc.ShutdownRequest
+	(*ShutdownResponse)(nil),          // 22: dsc.ShutdownResponse
+	(*ExecuteToolRequest)(nil),        // 23: dsc.ExecuteToolRequest
+	(*ExecuteToolResponse)(nil),       // 24: dsc.ExecuteToolResponse
+	(*ListToolsRequest)(nil),          // 25: dsc.ListToolsRequest
+	(*ListToolsResponse)(nil),         // 26: dsc.ListToolsResponse
+	(*FsObservation)(nil),             // 27: dsc.FsObservation
+	(*GetObservationRequest)(nil),     // 28: dsc.GetObservationRequest
+	(*GetObservationResponse)(nil),    // 29: dsc.GetObservationResponse
+	(*UpdateObservationRequest)(nil),  // 30: dsc.UpdateObservationRequest
+	(*UpdateObservationResponse)(nil), // 31: dsc.UpdateObservationResponse
+	nil,                               // 32: dsc.ExecuteRequest.ParamsEntry
 }
 var file_dsc_proto_depIdxs = []int32{
-	27, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	32, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	12, // 1: dsc.ChatRequest.messages:type_name -> dsc.Message
 	13, // 2: dsc.ChatRequest.tools:type_name -> dsc.Tool
 	16, // 3: dsc.Message.tool_calls:type_name -> dsc.ToolCall
 	16, // 4: dsc.ChatResponse.tool_calls:type_name -> dsc.ToolCall
 	16, // 5: dsc.ChatStreamResponse.tool_calls:type_name -> dsc.ToolCall
 	13, // 6: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
-	0,  // 7: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
-	2,  // 8: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
-	4,  // 9: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
-	6,  // 10: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	8,  // 11: dsc.AgentService.Run:input_type -> dsc.RunRequest
-	8,  // 12: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
-	0,  // 13: dsc.AgentService.Name:input_type -> dsc.NameRequest
-	2,  // 14: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	17, // 15: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
-	19, // 16: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
-	21, // 17: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
-	11, // 18: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	11, // 19: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
-	0,  // 20: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	2,  // 21: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	6,  // 22: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	23, // 23: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
-	25, // 24: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
-	1,  // 25: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 26: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 27: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 28: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 29: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	10, // 30: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
-	1,  // 31: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 32: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	18, // 33: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
-	20, // 34: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
-	22, // 35: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	14, // 36: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	15, // 37: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
-	1,  // 38: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 39: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 40: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	24, // 41: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	26, // 42: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	25, // [25:43] is the sub-list for method output_type
-	7,  // [7:25] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	27, // 7: dsc.GetObservationResponse.observation:type_name -> dsc.FsObservation
+	27, // 8: dsc.UpdateObservationRequest.observation:type_name -> dsc.FsObservation
+	0,  // 9: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
+	2,  // 10: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
+	4,  // 11: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
+	6,  // 12: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	8,  // 13: dsc.AgentService.Run:input_type -> dsc.RunRequest
+	8,  // 14: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
+	0,  // 15: dsc.AgentService.Name:input_type -> dsc.NameRequest
+	2,  // 16: dsc.AgentService.Version:input_type -> dsc.VersionRequest
+	17, // 17: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
+	19, // 18: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
+	21, // 19: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
+	11, // 20: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	11, // 21: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
+	0,  // 22: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	2,  // 23: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	6,  // 24: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	23, // 25: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	25, // 26: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	28, // 27: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
+	30, // 28: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
+	1,  // 29: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 30: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 31: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 32: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 33: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	10, // 34: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
+	1,  // 35: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 36: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	18, // 37: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
+	20, // 38: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
+	22, // 39: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	14, // 40: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	15, // 41: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
+	1,  // 42: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 43: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 44: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	24, // 45: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	26, // 46: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	29, // 47: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
+	31, // 48: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
+	29, // [29:49] is the sub-list for method output_type
+	9,  // [9:29] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_dsc_proto_init() }
@@ -1574,9 +1863,9 @@ func file_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dsc_proto_rawDesc), len(file_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   28,
+			NumMessages:   33,
 			NumExtensions: 0,
-			NumServices:   4,
+			NumServices:   5,
 		},
 		GoTypes:           file_dsc_proto_goTypes,
 		DependencyIndexes: file_dsc_proto_depIdxs,

@@ -152,3 +152,34 @@ message ListToolsRequest {
 message ListToolsResponse {
   repeated Tool tools = 1;
 }
+
+// FsObservationPolicyService 文件系統觀測策略服務
+service FsObservationPolicyService {
+  rpc GetObservation(GetObservationRequest) returns (GetObservationResponse);
+  rpc UpdateObservation(UpdateObservationRequest) returns (UpdateObservationResponse);
+}
+
+message FsObservation {
+  string state = 1; // "unseen", "absent", "present"
+  string version = 2; // 文件的內容 hash 或最後修改時間戳
+  string last_content = 3; // 最後一次觀測到的文件內容（可選）
+}
+
+message GetObservationRequest {
+  string file_path = 1;
+}
+
+message GetObservationResponse {
+  FsObservation observation = 1;
+  bool found = 2;
+}
+
+message UpdateObservationRequest {
+  string file_path = 1;
+  FsObservation observation = 2;
+}
+
+message UpdateObservationResponse {
+  bool success = 1;
+  string message = 2;
+}

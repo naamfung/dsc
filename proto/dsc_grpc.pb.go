@@ -965,3 +965,148 @@ var ToolService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "dsc.proto",
 }
+
+const (
+	FsObservationPolicyService_GetObservation_FullMethodName    = "/dsc.FsObservationPolicyService/GetObservation"
+	FsObservationPolicyService_UpdateObservation_FullMethodName = "/dsc.FsObservationPolicyService/UpdateObservation"
+)
+
+// FsObservationPolicyServiceClient is the client API for FsObservationPolicyService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// FsObservationPolicyService 文件系統觀測策略服務
+type FsObservationPolicyServiceClient interface {
+	GetObservation(ctx context.Context, in *GetObservationRequest, opts ...grpc.CallOption) (*GetObservationResponse, error)
+	UpdateObservation(ctx context.Context, in *UpdateObservationRequest, opts ...grpc.CallOption) (*UpdateObservationResponse, error)
+}
+
+type fsObservationPolicyServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewFsObservationPolicyServiceClient(cc grpc.ClientConnInterface) FsObservationPolicyServiceClient {
+	return &fsObservationPolicyServiceClient{cc}
+}
+
+func (c *fsObservationPolicyServiceClient) GetObservation(ctx context.Context, in *GetObservationRequest, opts ...grpc.CallOption) (*GetObservationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetObservationResponse)
+	err := c.cc.Invoke(ctx, FsObservationPolicyService_GetObservation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fsObservationPolicyServiceClient) UpdateObservation(ctx context.Context, in *UpdateObservationRequest, opts ...grpc.CallOption) (*UpdateObservationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateObservationResponse)
+	err := c.cc.Invoke(ctx, FsObservationPolicyService_UpdateObservation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FsObservationPolicyServiceServer is the server API for FsObservationPolicyService service.
+// All implementations must embed UnimplementedFsObservationPolicyServiceServer
+// for forward compatibility.
+//
+// FsObservationPolicyService 文件系統觀測策略服務
+type FsObservationPolicyServiceServer interface {
+	GetObservation(context.Context, *GetObservationRequest) (*GetObservationResponse, error)
+	UpdateObservation(context.Context, *UpdateObservationRequest) (*UpdateObservationResponse, error)
+	mustEmbedUnimplementedFsObservationPolicyServiceServer()
+}
+
+// UnimplementedFsObservationPolicyServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedFsObservationPolicyServiceServer struct{}
+
+func (UnimplementedFsObservationPolicyServiceServer) GetObservation(context.Context, *GetObservationRequest) (*GetObservationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetObservation not implemented")
+}
+func (UnimplementedFsObservationPolicyServiceServer) UpdateObservation(context.Context, *UpdateObservationRequest) (*UpdateObservationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateObservation not implemented")
+}
+func (UnimplementedFsObservationPolicyServiceServer) mustEmbedUnimplementedFsObservationPolicyServiceServer() {
+}
+func (UnimplementedFsObservationPolicyServiceServer) testEmbeddedByValue() {}
+
+// UnsafeFsObservationPolicyServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to FsObservationPolicyServiceServer will
+// result in compilation errors.
+type UnsafeFsObservationPolicyServiceServer interface {
+	mustEmbedUnimplementedFsObservationPolicyServiceServer()
+}
+
+func RegisterFsObservationPolicyServiceServer(s grpc.ServiceRegistrar, srv FsObservationPolicyServiceServer) {
+	// If the following call panics, it indicates UnimplementedFsObservationPolicyServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&FsObservationPolicyService_ServiceDesc, srv)
+}
+
+func _FsObservationPolicyService_GetObservation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetObservationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FsObservationPolicyServiceServer).GetObservation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FsObservationPolicyService_GetObservation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FsObservationPolicyServiceServer).GetObservation(ctx, req.(*GetObservationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FsObservationPolicyService_UpdateObservation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateObservationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FsObservationPolicyServiceServer).UpdateObservation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FsObservationPolicyService_UpdateObservation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FsObservationPolicyServiceServer).UpdateObservation(ctx, req.(*UpdateObservationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// FsObservationPolicyService_ServiceDesc is the grpc.ServiceDesc for FsObservationPolicyService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var FsObservationPolicyService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dsc.FsObservationPolicyService",
+	HandlerType: (*FsObservationPolicyServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetObservation",
+			Handler:    _FsObservationPolicyService_GetObservation_Handler,
+		},
+		{
+			MethodName: "UpdateObservation",
+			Handler:    _FsObservationPolicyService_UpdateObservation_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dsc.proto",
+}
