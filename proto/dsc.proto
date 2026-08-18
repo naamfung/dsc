@@ -183,3 +183,41 @@ message UpdateObservationResponse {
   bool success = 1;
   string message = 2;
 }
+
+// PersistentTerminalService 持久終端服務
+service PersistentTerminalService {
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc ExecSession(ExecSessionRequest) returns (ExecSessionResponse);
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+}
+
+message CreateSessionRequest {
+  string shell = 1; // e.g., "bash", "pwsh", "cmd"
+  string cwd = 2;   // working directory
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message ExecSessionRequest {
+  string session_id = 1;
+  string command = 2;
+}
+
+message ExecSessionResponse {
+  string output = 1;
+  int32 exit_code = 2;
+  string error = 3;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message CloseSessionResponse {
+  bool success = 1;
+  string message = 2;
+}

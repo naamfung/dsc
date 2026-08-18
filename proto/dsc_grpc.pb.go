@@ -1110,3 +1110,186 @@ var FsObservationPolicyService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "dsc.proto",
 }
+
+const (
+	PersistentTerminalService_CreateSession_FullMethodName = "/dsc.PersistentTerminalService/CreateSession"
+	PersistentTerminalService_ExecSession_FullMethodName   = "/dsc.PersistentTerminalService/ExecSession"
+	PersistentTerminalService_CloseSession_FullMethodName  = "/dsc.PersistentTerminalService/CloseSession"
+)
+
+// PersistentTerminalServiceClient is the client API for PersistentTerminalService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PersistentTerminalService 持久終端服務
+type PersistentTerminalServiceClient interface {
+	CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error)
+	ExecSession(ctx context.Context, in *ExecSessionRequest, opts ...grpc.CallOption) (*ExecSessionResponse, error)
+	CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error)
+}
+
+type persistentTerminalServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPersistentTerminalServiceClient(cc grpc.ClientConnInterface) PersistentTerminalServiceClient {
+	return &persistentTerminalServiceClient{cc}
+}
+
+func (c *persistentTerminalServiceClient) CreateSession(ctx context.Context, in *CreateSessionRequest, opts ...grpc.CallOption) (*CreateSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateSessionResponse)
+	err := c.cc.Invoke(ctx, PersistentTerminalService_CreateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *persistentTerminalServiceClient) ExecSession(ctx context.Context, in *ExecSessionRequest, opts ...grpc.CallOption) (*ExecSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecSessionResponse)
+	err := c.cc.Invoke(ctx, PersistentTerminalService_ExecSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *persistentTerminalServiceClient) CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloseSessionResponse)
+	err := c.cc.Invoke(ctx, PersistentTerminalService_CloseSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PersistentTerminalServiceServer is the server API for PersistentTerminalService service.
+// All implementations must embed UnimplementedPersistentTerminalServiceServer
+// for forward compatibility.
+//
+// PersistentTerminalService 持久終端服務
+type PersistentTerminalServiceServer interface {
+	CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error)
+	ExecSession(context.Context, *ExecSessionRequest) (*ExecSessionResponse, error)
+	CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error)
+	mustEmbedUnimplementedPersistentTerminalServiceServer()
+}
+
+// UnimplementedPersistentTerminalServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPersistentTerminalServiceServer struct{}
+
+func (UnimplementedPersistentTerminalServiceServer) CreateSession(context.Context, *CreateSessionRequest) (*CreateSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateSession not implemented")
+}
+func (UnimplementedPersistentTerminalServiceServer) ExecSession(context.Context, *ExecSessionRequest) (*ExecSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecSession not implemented")
+}
+func (UnimplementedPersistentTerminalServiceServer) CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloseSession not implemented")
+}
+func (UnimplementedPersistentTerminalServiceServer) mustEmbedUnimplementedPersistentTerminalServiceServer() {
+}
+func (UnimplementedPersistentTerminalServiceServer) testEmbeddedByValue() {}
+
+// UnsafePersistentTerminalServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PersistentTerminalServiceServer will
+// result in compilation errors.
+type UnsafePersistentTerminalServiceServer interface {
+	mustEmbedUnimplementedPersistentTerminalServiceServer()
+}
+
+func RegisterPersistentTerminalServiceServer(s grpc.ServiceRegistrar, srv PersistentTerminalServiceServer) {
+	// If the following call panics, it indicates UnimplementedPersistentTerminalServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PersistentTerminalService_ServiceDesc, srv)
+}
+
+func _PersistentTerminalService_CreateSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PersistentTerminalServiceServer).CreateSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PersistentTerminalService_CreateSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PersistentTerminalServiceServer).CreateSession(ctx, req.(*CreateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PersistentTerminalService_ExecSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PersistentTerminalServiceServer).ExecSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PersistentTerminalService_ExecSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PersistentTerminalServiceServer).ExecSession(ctx, req.(*ExecSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PersistentTerminalService_CloseSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloseSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PersistentTerminalServiceServer).CloseSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PersistentTerminalService_CloseSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PersistentTerminalServiceServer).CloseSession(ctx, req.(*CloseSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PersistentTerminalService_ServiceDesc is the grpc.ServiceDesc for PersistentTerminalService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PersistentTerminalService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dsc.PersistentTerminalService",
+	HandlerType: (*PersistentTerminalServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateSession",
+			Handler:    _PersistentTerminalService_CreateSession_Handler,
+		},
+		{
+			MethodName: "ExecSession",
+			Handler:    _PersistentTerminalService_ExecSession_Handler,
+		},
+		{
+			MethodName: "CloseSession",
+			Handler:    _PersistentTerminalService_CloseSession_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dsc.proto",
+}

@@ -49,4 +49,8 @@ go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugin
 echo "Building fs-observation-policy plugin..."
 go build -o plugins/fs-observation-policy/fs-observation-policy.exe ./plugins/fs-observation-policy
 
+# 构建 tool-persistent-shell 插件
+echo "Building tool-persistent-shell plugin..."
+go build -o plugins/tool-persistent-shell/tool-persistent-shell.exe ./plugins/tool-persistent-shell
+
 echo "Build completed successfully."
