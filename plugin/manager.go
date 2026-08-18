@@ -982,7 +982,16 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 // loadPluginWithBroker 用於 LLM/Tool 插件加載，通過 broker 註冊服務
 func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCBroker) error {
 	// 跨平台處理二進制路徑
-	binaryPath := normalizeBinaryPath(entry.BinaryPath)
+	binaryPath := entry.BinaryPath
+	if binaryPath == "" {
+		ext := ""
+		if runtime.GOOS == "windows" {
+			ext = ".exe"
+		}
+		// 根據插件名稱生成二進制路徑：./plugins/<name>/<name>.exe
+		binaryPath = fmt.Sprintf("./plugins/%s/%s%s", entry.Name, entry.Name, ext)
+	}
+	binaryPath = normalizeBinaryPath(binaryPath)
 
 	// 創建客戶端
 	cmd := exec.Command(binaryPath)
@@ -990,7 +999,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
-			"dummy": &dummyGRPCPlugin{},
+			"dsc_plugin": &DSCPluginGRPC{},
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
@@ -1104,6 +1113,13 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.pluginMetadata[entry.Name] = info
 		m.logger.Info("Tool service registered", "name", entry.Name, "serviceID", serviceID)
 
+	case "policy":
+		serviceID := broker.NextId()
+		m.clients[entry.Name] = client
+		m.typeMap[entry.Name] = "policy"
+		m.pluginMetadata[entry.Name] = info
+		m.logger.Info("Policy plugin loaded", "name", entry.Name, "serviceID", serviceID)
+
 	default:
 		client.Kill()
 		return fmt.Errorf("unsupported plugin type: %s", info.Type)
@@ -1127,6 +1143,24 @@ func buildEnv(custom map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// LoadToolsAndPoliciesFromConfig 從配置加載 tool 和 policy 插件
+func (m *Manager) LoadToolsAndPoliciesFromConfig(cfg *Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, entry := range cfg.Plugins {
+		if !entry.Enabled {
+			continue
+		}
+		if entry.Type == "tool" || entry.Type == "policy" {
+			if err := m.loadPluginWithBroker(entry, m.broker); err != nil {
+				return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // SwitchMode 實時切換工作模式（minimal / standard）

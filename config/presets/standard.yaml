@@ -1,14 +1,14 @@
 name: 标准模式
 description: 包含所有可用工具，支持完整的 Agent 能力。
 plugins:
+  - name: fs-observation-policy
+    type: policy
+    enabled: true
   - name: tool-str-replace-editor
     type: tool
     enabled: true
   - name: tool-filesystem
     type: tool
-    enabled: true
-  - name: fs-observation-policy
-    type: policy
     enabled: true
   - name: tool-browser-use
     type: tool
