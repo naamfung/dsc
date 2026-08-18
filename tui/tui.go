@@ -524,14 +524,20 @@ func (m *Model) updateCompletion() {
 	val := m.input.Value()
 	if !strings.HasPrefix(val, "/") || strings.ContainsAny(val, " \t\n") {
 		m.completion = completion{}
+		// 更新 viewport 高度以移除補全菜單佔用的空間
+		m.viewport.SetHeight(m.vpHeight())
 		return
 	}
 	items := filterSlash(slashCommands, val)
 	if len(items) == 0 {
 		m.completion = completion{}
+		// 更新 viewport 高度以移除補全菜單佔用的空間
+		m.viewport.SetHeight(m.vpHeight())
 		return
 	}
 	m.completion = completion{active: true, items: items}
+	// 更新 viewport 高度以適應補全菜單
+	m.viewport.SetHeight(m.vpHeight())
 }
 
 // filterSlash 按大小写不敏感的前缀或子序列过滤命令项。
