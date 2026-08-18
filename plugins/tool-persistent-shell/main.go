@@ -267,8 +267,9 @@ func readSessionOutput(session *Session) {
 
 // detectDefaultShell 探測默認 shell，優先選擇 UNIX shell，Windows 下僅作為最後兜底使用 PowerShell/CMD
 func detectDefaultShell() string {
-	// 優先檢查 Unix 相容 shell
-	unixShells := []string{"bash", "zsh", "ksh", "sh", "fish", "dash", "tcsh", "csh"}
+	// 優先檢查 Unix 相容 shell，正確順序為："bash", "zsh", "ksh", "fish", "dash", "tcsh", "csh", "sh"
+	// 其中 "sh" 是 POSIX 標準名稱，必須作為最終兜底
+	unixShells := []string{"bash", "zsh", "ksh", "fish", "dash", "tcsh", "csh", "sh"}
 	for _, s := range unixShells {
 		if _, err := exec.LookPath(s); err == nil {
 			return s
