@@ -86,10 +86,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		toolNameToServiceID: make(map[string]uint32),
 		pluginLogger:        pluginLogger,
 	}
-	// 註冊內置工具
-	if err := m.toolRegistry.Register(&StrReplaceEditorTool{}); err != nil {
-		logger.Warn("failed to register str_replace_editor tool", "error", err)
-	}
+	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
 	return m
 }

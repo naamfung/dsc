@@ -41,4 +41,8 @@ go build -o plugins/llm-ollama/llm-ollama.exe ./plugins/llm-ollama
 echo "Building tool-filesystem plugin..."
 go build -o plugins/tool-filesystem/tool-filesystem.exe ./plugins/tool-filesystem
 
+# 构建 tool-str-replace-editor 插件
+echo "Building tool-str-replace-editor plugin..."
+go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugins/tool-str-replace-editor
+
 echo "Build completed successfully."
