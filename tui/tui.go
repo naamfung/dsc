@@ -212,9 +212,10 @@ func (m *Model) syncInputHeight() {
 	}
 	if n != m.input.Height() {
 		m.input.SetHeight(n)
-		m.viewport.SetHeight(m.vpHeight())
-		m.viewport.GotoBottom()
 	}
+	// 总是同步 viewport 高度，以应对 thinking 等状态变化导致的高度重算
+	m.viewport.SetHeight(m.vpHeight())
+	m.viewport.GotoBottom()
 }
 
 // displayModelName 返回展示用模型名（优先取命令行/配置传入的，其次取 agent 自身名）。
