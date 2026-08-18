@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"dsc/plugin"
 	"dsc/proto"
@@ -19,7 +22,7 @@ type StrReplaceEditorTool struct {
 	name        string
 	description string
 	schema      json.RawMessage
-	handler     func(ctx context.Context, args json.RawMessage) (string, error)
+	server      *ToolServiceServer // 引用 ToolServiceServer 以訪問 observations
 }
 
 func (t *StrReplaceEditorTool) Name() string {
@@ -35,13 +38,37 @@ func (t *StrReplaceEditorTool) ParametersSchema() json.RawMessage {
 }
 
 func (t *StrReplaceEditorTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	return t.handler(ctx, args)
+	return strReplaceEditorHandler(ctx, t.server, args)
 }
 
 // ToolServiceServer 工具服務服務端實現
 type ToolServiceServer struct {
 	proto.UnimplementedToolServiceServer
-	tools []*StrReplaceEditorTool
+	tools        []*StrReplaceEditorTool
+	observations map[string]*proto.FsObservation
+	mu           sync.RWMutex
+}
+
+func (s *ToolServiceServer) getObservation(filePath string) (*proto.FsObservation, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	obs, found := s.observations[filePath]
+	return obs, found
+}
+
+func (s *ToolServiceServer) updateObservation(filePath string, state string, version string, lastContent string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.observations == nil {
+		s.observations = make(map[string]*proto.FsObservation)
+	}
+	s.observations[filePath] = &proto.FsObservation{
+		State:       state,
+		Version:     version,
+		LastContent: lastContent,
+	}
 }
 
 func (s *ToolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
@@ -129,7 +156,13 @@ type strReplaceEditorArgs struct {
 	InsertLine int    `json:"insert_line"`
 }
 
-func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (string, error) {
+// computeHash 計算字符串的 sha256 hash
+func computeHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
+}
+
+func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, argsJSON json.RawMessage) (string, error) {
 	var args strReplaceEditorArgs
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
 		return "", err
@@ -148,7 +181,11 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if err != nil {
 			return "", err
 		}
-		return string(content), nil
+		contentStr := string(content)
+		version := computeHash(contentStr)
+		// 更新觀測狀態
+		server.updateObservation(reqPath, "present", version, contentStr)
+		return contentStr, nil
 
 	case "create":
 		if args.FileText == "" {
@@ -161,6 +198,9 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if err := os.WriteFile(reqPath, []byte(args.FileText), 0644); err != nil {
 			return "", err
 		}
+		version := computeHash(args.FileText)
+		// 更新觀測狀態
+		server.updateObservation(reqPath, "present", version, args.FileText)
 		return "File created successfully.", nil
 
 	case "str_replace":
@@ -170,11 +210,24 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if args.NewStr == "" {
 			return "", fmt.Errorf("new_str is required for str_replace command")
 		}
+
+		// 檢查觀測狀態
+		obs, found := server.getObservation(reqPath)
+		if !found || obs.State == "unseen" || obs.State == "absent" {
+			return "", fmt.Errorf("str_replace failed: file has not been observed (viewed). Please use 'view' command first.")
+		}
+
 		content, err := os.ReadFile(reqPath)
 		if err != nil {
 			return "", err
 		}
 		contentStr := string(content)
+
+		// 驗證版本/內容是否匹配
+		if obs.LastContent != "" && obs.LastContent != contentStr {
+			return "", fmt.Errorf("str_replace failed: file content has changed since last observation. Please use 'view' to get the latest content.")
+		}
+
 		if !strings.Contains(contentStr, args.OldStr) {
 			return "", fmt.Errorf("str_replace failed: old_str not found in file. File content:\n%s", contentStr)
 		}
@@ -182,6 +235,11 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if err := os.WriteFile(reqPath, []byte(newContentStr), 0644); err != nil {
 			return "", err
 		}
+
+		// 更新觀測狀態
+		newVersion := computeHash(newContentStr)
+		server.updateObservation(reqPath, "present", newVersion, newContentStr)
+
 		return "File replaced successfully.", nil
 
 	case "insert":
@@ -191,11 +249,25 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if args.InsertLine <= 0 {
 			return "", fmt.Errorf("insert_line must be a positive integer for insert command")
 		}
+
+		// 檢查觀測狀態
+		obs, found := server.getObservation(reqPath)
+		if !found || obs.State == "unseen" || obs.State == "absent" {
+			return "", fmt.Errorf("insert failed: file has not been observed (viewed). Please use 'view' command first.")
+		}
+
 		content, err := os.ReadFile(reqPath)
 		if err != nil {
 			return "", err
 		}
-		lines := strings.Split(string(content), "\n")
+		contentStr := string(content)
+
+		// 驗證版本/內容是否匹配
+		if obs.LastContent != "" && obs.LastContent != contentStr {
+			return "", fmt.Errorf("insert failed: file content has changed since last observation. Please use 'view' to get the latest content.")
+		}
+
+		lines := strings.Split(contentStr, "\n")
 		// insert_line is 1-based
 		// If insert_line is greater than len(lines), append to the end
 		var newLines []string
@@ -211,6 +283,11 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if err := os.WriteFile(reqPath, []byte(newContent), 0644); err != nil {
 			return "", err
 		}
+
+		// 更新觀測狀態
+		newVersion := computeHash(newContent)
+		server.updateObservation(reqPath, "present", newVersion, newContent)
+
 		return "File inserted successfully.", nil
 
 	default:
@@ -219,6 +296,11 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 }
 
 func main() {
+	// 創建工具服務服務端
+	toolServer := &ToolServiceServer{
+		observations: make(map[string]*proto.FsObservation),
+	}
+
 	// 定義 str_replace_editor 工具
 	strReplaceEditorTool := &StrReplaceEditorTool{
 		name:        "str_replace_editor",
@@ -254,13 +336,10 @@ func main() {
 			},
 			"required": ["command", "path"]
 		}`),
-		handler: strReplaceEditorHandler,
+		server: toolServer,
 	}
 
-	// 創建工具服務服務端
-	toolServer := &ToolServiceServer{
-		tools: []*StrReplaceEditorTool{strReplaceEditorTool},
-	}
+	toolServer.tools = []*StrReplaceEditorTool{strReplaceEditorTool}
 
 	// 創建元數據服務服務端
 	metadataServer := &MetadataServer{}
