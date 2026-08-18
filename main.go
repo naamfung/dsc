@@ -171,8 +171,9 @@ func main() {
 		}
 	}
 
-	// 初始化 logger
+	// 初始化 logger 和 pluginLogger
 	var logger hclog.Logger
+	var pluginLogger hclog.Logger
 	var logOutput io.Writer
 
 	if logToFile != "" {
@@ -186,10 +187,20 @@ func main() {
 				Level:  hclog.Info,
 				Output: logOutput,
 			})
+			pluginLogger = hclog.New(&hclog.LoggerOptions{
+				Name:   "plugin",
+				Level:  hclog.Info,
+				Output: logOutput,
+			})
 		} else {
 			logOutput = f
 			logger = hclog.New(&hclog.LoggerOptions{
 				Name:   "dsc-host",
+				Level:  hclog.Info,
+				Output: logOutput,
+			})
+			pluginLogger = hclog.New(&hclog.LoggerOptions{
+				Name:   "plugin",
 				Level:  hclog.Info,
 				Output: logOutput,
 			})
@@ -204,10 +215,20 @@ func main() {
 			Level:  hclog.Info,
 			Output: logOutput,
 		})
+		pluginLogger = hclog.New(&hclog.LoggerOptions{
+			Name:   "plugin",
+			Level:  hclog.Info,
+			Output: logOutput,
+		})
 	} else {
 		// 無參數時，日誌静默放棄，不作記錄
 		logger = hclog.New(&hclog.LoggerOptions{
 			Name:   "dsc-host",
+			Level:  hclog.NoLevel,
+			Output: io.Discard,
+		})
+		pluginLogger = hclog.New(&hclog.LoggerOptions{
+			Name:   "plugin",
 			Level:  hclog.NoLevel,
 			Output: io.Discard,
 		})
@@ -235,9 +256,10 @@ func main() {
 	}
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
-		PluginDir: "./plugins/",
-		Handshake: plugin.Handshake,
-		Logger:    logger,
+		PluginDir:    "./plugins/",
+		Handshake:    plugin.Handshake,
+		Logger:       logger,
+		PluginLogger: pluginLogger,
 	})
 	defer mgr.Shutdown()
 

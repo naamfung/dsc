@@ -34,6 +34,7 @@ type Manager struct {
 	toolRegistry    *ToolRegistry // 新增
 	logger          hclog.Logger
 	pluginMetadata  map[string]*metadata.PluginInfo // 插件名 -> 元數據
+	pluginLogger    hclog.Logger                    // logger for go-plugin internal logs
 
 	// 新增字段用於 Broker 和服務 ID 管理
 	broker              *goplugin.GRPCBroker // 統一的 broker，由 Agent 提供
@@ -45,9 +46,10 @@ type Manager struct {
 }
 
 type ManagerConfig struct {
-	PluginDir string
-	Handshake goplugin.HandshakeConfig
-	Logger    hclog.Logger
+	PluginDir    string
+	Handshake    goplugin.HandshakeConfig
+	Logger       hclog.Logger
+	PluginLogger hclog.Logger // logger for go-plugin internal logs (e.g., plugin process exited)
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {
@@ -55,6 +57,13 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	if logger == nil {
 		logger = hclog.New(&hclog.LoggerOptions{
 			Name:  "manager",
+			Level: hclog.Info,
+		})
+	}
+	pluginLogger := cfg.PluginLogger
+	if pluginLogger == nil {
+		pluginLogger = hclog.New(&hclog.LoggerOptions{
+			Name:  "plugin",
 			Level: hclog.Info,
 		})
 	}
@@ -75,6 +84,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		toolServiceIDs:      make(map[string]uint32),
 		pluginToolNames:     make(map[string][]string),
 		toolNameToServiceID: make(map[string]uint32),
+		pluginLogger:        pluginLogger,
 	}
 	// 註冊內置工具
 	if err := m.toolRegistry.Register(&ReadFileTool{}); err != nil {
@@ -108,7 +118,7 @@ func (m *Manager) Load(name string, binaryPath string) error {
 		},
 		Cmd:              exec.Command(binaryPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	// 建立 RPC 連接
@@ -206,7 +216,7 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	// 建立 RPC 連接
@@ -285,7 +295,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*goplugin.GRPC
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	rpcClient, err := client.Client()
@@ -351,7 +361,7 @@ func (m *Manager) LoadLLM(name string, binaryPath string) error {
 		},
 		Cmd:              exec.Command(binaryPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	// 建立 RPC 連接
@@ -441,7 +451,7 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 		},
 		Cmd:              exec.Command(newBinaryPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -490,7 +500,7 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		},
 		Cmd:              exec.Command(newBinaryPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -555,7 +565,7 @@ func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 		},
 		Cmd:              exec.Command(newBinaryPath),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "llm-plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -935,7 +945,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	rpcClient, err := client.Client()
@@ -989,7 +999,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
-		Logger:           hclog.New(&hclog.LoggerOptions{Name: "plugin"}),
+		Logger:           m.pluginLogger,
 	})
 
 	rpcClient, err := client.Client()
