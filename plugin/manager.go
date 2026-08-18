@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/go-version"
+	"gopkg.in/yaml.v3"
 	"google.golang.org/grpc"
 )
 
@@ -1126,4 +1127,78 @@ func buildEnv(custom map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// SwitchMode 實時切換工作模式（minimal / standard）
+func (m *Manager) SwitchMode(mode string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
+	data, err := os.ReadFile(presetPath)
+	if err != nil {
+		return fmt.Errorf("failed to read preset config: %w", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to unmarshal preset config: %w", err)
+	}
+
+	// 獲取當前已加載的 tool/policy 插件列表
+	currentTools := make(map[string]bool)
+	for name, typ := range m.typeMap {
+		if typ == "tool" || typ == "policy" {
+			currentTools[name] = true
+		}
+	}
+
+	// 獲取目標模式的 tool/policy 插件列表
+	targetTools := make(map[string]bool)
+	for _, entry := range cfg.Plugins {
+		if (entry.Type == "tool" || entry.Type == "policy") && entry.Enabled {
+			targetTools[entry.Name] = true
+		}
+	}
+
+	// 卸載不再需要的插件
+	for name := range currentTools {
+		if !targetTools[name] {
+			// 卸載 tool/plugin
+			if client, exists := m.clients[name]; exists {
+				client.Kill()
+			}
+			delete(m.clients, name)
+			delete(m.typeMap, name)
+			delete(m.pluginMetadata, name)
+
+			// 清理 tool 相關的映射
+			if _, ok := m.toolServiceIDs[name]; ok {
+				// 移除 toolNameToServiceID 中的條目
+				if toolNames, exists := m.pluginToolNames[name]; exists {
+					for _, tname := range toolNames {
+						delete(m.toolNameToServiceID, tname)
+					}
+				}
+				delete(m.toolServiceIDs, name)
+				delete(m.pluginToolNames, name)
+			}
+
+			m.logger.Info("plugin unloaded during mode switch", "name", name, "mode", mode)
+		}
+	}
+
+	// 加載新的插件
+	for _, entry := range cfg.Plugins {
+		if (entry.Type == "tool" || entry.Type == "policy") && entry.Enabled {
+			if !currentTools[entry.Name] {
+				if err := m.loadPluginWithBroker(entry, m.broker); err != nil {
+					return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
+				}
+				m.logger.Info("plugin loaded during mode switch", "name", entry.Name, "mode", mode)
+			}
+		}
+	}
+
+	return nil
 }

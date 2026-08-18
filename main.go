@@ -383,7 +383,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	if err := tui.Run(agent, ctx, llmModelName); err != nil {
+	if err := tui.Run(agent, mgr, ctx, llmModelName); err != nil {
 		logger.Error("tui run failed", "error", err)
 	}
 	logger.Info("tui exited")

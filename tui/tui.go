@@ -95,6 +95,7 @@ type completion struct {
 // Model 是聊天界面的状态模型
 type Model struct {
 	agent     plugin.Agent
+	manager   *plugin.Manager // 插件管理器，用於實時切換模式
 	ctx       context.Context
 	modelName string
 
@@ -119,7 +120,7 @@ type Model struct {
 }
 
 // New 创建一个聊天界面模型
-func New(agent plugin.Agent, ctx context.Context, modelName string) *Model {
+func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName string) *Model {
 	input := textarea.New()
 	input.Placeholder = "输入消息，回车发送，Ctrl+J 换行，Ctrl+C 退出"
 	input.CharLimit = 4096
@@ -146,6 +147,7 @@ func New(agent plugin.Agent, ctx context.Context, modelName string) *Model {
 
 	return &Model{
 		agent:     agent,
+		manager:   manager,
 		ctx:       ctx,
 		modelName: modelName,
 		input:     input,
@@ -479,6 +481,8 @@ func (m *Model) renderAssistant(body string) string {
 var slashCommands = []compItem{
 	{label: "/help", insert: "/help", hint: "显示帮助与快捷键"},
 	{label: "/clear", insert: "/clear", hint: "清空聊天记录"},
+	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
+	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -497,6 +501,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"斜杠命令:",
 			"  /help        显示本帮助",
 			"  /clear       清空聊天记录",
+			"  /mode minimal   切换至极简模式",
+			"  /mode standard  切换至标准模式",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render("◈ DSC · 帮助") + "\n" + help)
@@ -512,6 +518,40 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
+		return true, nil
+	case "/mode minimal":
+		if m.manager != nil {
+			err := m.manager.SwitchMode("minimal")
+			if err != nil {
+				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
+			} else {
+				m.appendMessage(assistantNameSty.Render("◈ DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
+			}
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/mode standard":
+		if m.manager != nil {
+			err := m.manager.SwitchMode("standard")
+			if err != nil {
+				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
+			} else {
+				m.appendMessage(assistantNameSty.Render("◈ DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
+			}
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
 		return true, nil
 	case "/quit", "/exit":
 		return true, tea.Quit
@@ -682,8 +722,8 @@ func (m *Model) viewOf(content string) tea.View {
 }
 
 // Run 运行聊天界面，阻塞直到退出
-func Run(agent plugin.Agent, ctx context.Context, modelName string) error {
-	m := New(agent, ctx, modelName)
+func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName string) error {
+	m := New(agent, manager, ctx, modelName)
 	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
