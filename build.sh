@@ -53,4 +53,8 @@ go build -o plugins/fs-observation-policy/fs-observation-policy.exe ./plugins/fs
 echo "Building tool-browser-use plugin..."
 go build -o plugins/tool-browser-use/tool-browser-use.exe ./plugins/tool-browser-use
 
+# 构建 tool-lisp-eval 插件
+echo "Building tool-lisp-eval plugin..."
+go build -o plugins/tool-lisp-eval/tool-lisp-eval.exe ./plugins/tool-lisp-eval
+
 echo "Build completed successfully."
