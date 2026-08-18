@@ -181,12 +181,20 @@ func startShellProcess(shellType, cwd string) (*exec.Cmd, io.WriteCloser, io.Rea
 	case "cmd":
 		cmd = exec.Command("cmd.exe", "/K")
 	default:
-		// 默認使用 bash 或 sh
-		if runtime.GOOS == "windows" {
-			// Windows 下默認使用 pwsh
-			cmd = exec.Command("pwsh", "-NoExit", "-NoLogo", "-Command", "-")
+		// UNIX shell (bash, zsh, sh, etc.)
+		// 使用互動式模式 (-i) 以維持狀態
+		if shellType == "fish" {
+			cmd = exec.Command(shellType, "-i")
 		} else {
-			cmd = exec.Command("bash", "--rcfile", "/dev/null", "-i")
+			// bash, zsh, sh, ksh, dash, tcsh, csh 等
+			// 對於 bash/sh，使用 --rcfile /dev/null 避免讀取啟動文件
+			if shellType == "bash" || shellType == "sh" {
+				cmd = exec.Command(shellType, "--rcfile", "/dev/null", "-i")
+			} else if shellType == "zsh" {
+				cmd = exec.Command(shellType, "-f", "-i")
+			} else {
+				cmd = exec.Command(shellType, "-i")
+			}
 		}
 	}
 
@@ -257,24 +265,29 @@ func readSessionOutput(session *Session) {
 	session.mu.Unlock()
 }
 
-// detectDefaultShell 探測默認 shell
+// detectDefaultShell 探測默認 shell，優先選擇 UNIX shell，Windows 下僅作為最後兜底使用 PowerShell/CMD
 func detectDefaultShell() string {
+	// 優先檢查 Unix 相容 shell
+	unixShells := []string{"bash", "zsh", "ksh", "sh", "fish", "dash", "tcsh", "csh"}
+	for _, s := range unixShells {
+		if _, err := exec.LookPath(s); err == nil {
+			return s
+		}
+	}
+
+	// 若在 Windows 且未檢測到 Unix shell，則以 PowerShell / CMD 兜底
 	if runtime.GOOS == "windows" {
-		if _, err := exec.LookPath("pwsh"); err == nil {
-			return "pwsh"
+		for _, psName := range []string{"pwsh", "powershell"} {
+			if _, err := exec.LookPath(psName); err == nil {
+				return psName
+			}
 		}
-		if _, err := exec.LookPath("powershell"); err == nil {
-			return "powershell"
+		if _, err := exec.LookPath("cmd"); err == nil {
+			return "cmd"
 		}
-		return "cmd"
 	}
-	if _, err := exec.LookPath("bash"); err == nil {
-		return "bash"
-	}
-	if _, err := exec.LookPath("sh"); err == nil {
-		return "sh"
-	}
-	return "bash"
+
+	return "bash" // 最終兜底
 }
 
 // PersistentTerminalServiceServer 持久終端服務服務端實現
