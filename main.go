@@ -252,34 +252,11 @@ func main() {
 
 	// 加載 preset 配置文件
 	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
-	cfg, err := loadConfig(presetPath)
+	presetCfg, err := loadConfig(presetPath)
 	if err != nil {
 		// 如果 preset 配置文件不存在或加載失敗，回退到默認 config.yaml
 		logger.Info("preset config not found or invalid, using default config", "presetPath", presetPath, "error", err)
-		cfgPath := os.Getenv("DSC_CONFIG")
-		if cfgPath == "" {
-			cfgPath = "config.yaml"
-		}
-		cfg, err = loadConfig(cfgPath)
-		if err != nil {
-			// 配置文件不存在或加載失敗時，使用默認配置
-			logger.Info("config file not found or invalid, using default config", "path", cfgPath)
-			// 使用默認配置
-			cfg = &plugin.Config{
-				WorkspaceRoot: "",
-				DefaultLLM:    "openai",
-			}
-		} else {
-			// 設置配置中的 workspace root
-			if cfg.WorkspaceRoot != "" {
-				plugin.WorkspaceRoot = cfg.WorkspaceRoot
-			}
-		}
-	} else {
-		// 設置配置中的 workspace root
-		if cfg.WorkspaceRoot != "" {
-			plugin.WorkspaceRoot = cfg.WorkspaceRoot
-		}
+		presetCfg = nil
 	}
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
@@ -290,33 +267,96 @@ func main() {
 	})
 	defer mgr.Shutdown()
 
-	// 如果配置中有插件列表，則從配置加載
-	if len(cfg.Plugins) > 0 {
-		if err := mgr.LoadFromConfig(cfg); err != nil {
-			logger.Error("failed to load plugins from config", "error", err)
+	// 1. 加載 LLM 插件（維持原來的啟動邏輯）
+	llmName := os.Getenv("LLM_PROVIDER")
+	if llmName == "" && presetCfg != nil && presetCfg.DefaultLLM != "" {
+		llmName = presetCfg.DefaultLLM
+	}
+	if llmName == "" {
+		llmName = "openai"
+	}
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
+	llmBinary := map[string]string{
+		"openai":    "./plugins/llm-openai/llm-openai" + ext,
+		"anthropic": "./plugins/llm-anthropic/llm-anthropic" + ext,
+		"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
+	}[llmName]
+	if llmBinary == "" {
+		logger.Error("unknown LLM provider", "name", llmName)
+		os.Exit(1)
+	}
+
+	if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
+		logger.Error("failed to load LLM", "name", llmName, "error", err)
+		os.Exit(1)
+	}
+	logger.Info("llm loaded", "name", llmName)
+
+	// 2. 加載 Agent 插件
+	agentBinary := "./plugins/react-loop/react-loop" + ext
+	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary)
+	if err != nil {
+		logger.Error("failed to load Agent", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("llm service id generated", "serviceID", llmServiceID)
+
+	// 3. 註冊 LLM 服務（在 goroutine 中，避免阻塞）
+	go func() {
+		broker.AcceptAndServe(llmServiceID, func(opts []grpc.ServerOption) *grpc.Server {
+			s := grpc.NewServer(opts...)
+			proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
+			return s
+		})
+	}()
+
+	// 4. 如果 preset 配置中有插件列表（tools 和 policies），則從配置加載
+	if presetCfg != nil && len(presetCfg.Plugins) > 0 {
+		if err := mgr.LoadFromConfig(presetCfg); err != nil {
+			logger.Error("failed to load plugins from preset config", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("plugins loaded from config", "count", len(cfg.Plugins), "mode", mode)
+		logger.Info("plugins loaded from preset config", "count", len(presetCfg.Plugins), "mode", mode)
+	}
 
-		// 啟動管理 API
-		adminAddr := os.Getenv("DSC_ADMIN_ADDR")
-		if adminAddr == "" {
-			adminAddr = ":9999"
-		}
-		mgr.StartAdmin(adminAddr)
-		logger.Info("admin api started", "addr", adminAddr)
+	// 5. 注册 ToolService（在 goroutine 中，避免阻塞）
+	toolServiceID := broker.NextId()
+	go func() {
+		broker.AcceptAndServe(toolServiceID, func(opts []grpc.ServerOption) *grpc.Server {
+			s := grpc.NewServer(opts...)
+			proto.RegisterToolServiceServer(s, plugin.NewToolGRPCServer(mgr))
+			return s
+		})
+	}()
+	logger.Info("tool service id generated", "serviceID", toolServiceID)
 
-		// 获取 Agent 并运行 TUI 聊天界面
-		agentName := mgr.GetMainAgentName()
-		agent, ok := mgr.GetAgent(agentName)
-		if !ok {
-			logger.Error("agent not found after loading", "agentName", agentName)
-			os.Exit(1)
-		}
+	// 6. 啟動管理 API
+	adminAddr := os.Getenv("DSC_ADMIN_ADDR")
+	if adminAddr == "" {
+		adminAddr = ":9999"
+	}
+	mgr.StartAdmin(adminAddr)
+	logger.Info("admin api started", "addr", adminAddr)
 
-		// 从配置中提取 LLM 模型名称
-		llmModelName := "Unknown"
-		for _, entry := range cfg.Plugins {
+	// 7. 获取 Agent 并运行 TUI 聊天界面
+	agentName := mgr.GetMainAgentName()
+	if agentName == "" {
+		agentName = "react-agent"
+	}
+	agent, ok := mgr.GetAgent(agentName)
+	if !ok {
+		logger.Error("agent not found after loading", "agentName", agentName)
+		os.Exit(1)
+	}
+
+	// 从配置中提取 LLM 模型名称
+	llmModelName := "Unknown"
+	// 嘗試從 presetCfg 獲取（雖然 presetCfg 中沒有 llm 配置，但保留邏輯）
+	if presetCfg != nil {
+		for _, entry := range presetCfg.Plugins {
 			if entry.Type == "llm" && entry.Enabled {
 				if v, ok := entry.Env["ANTHROPIC_MODEL"]; ok {
 					llmModelName = v
@@ -328,100 +368,28 @@ func main() {
 				break
 			}
 		}
-
-		ctx := context.Background()
-		if err := tui.Run(agent, ctx, llmModelName); err != nil {
-			logger.Error("tui run failed", "error", err)
-		}
-		logger.Info("tui exited")
-
-		// 完成完整的清理過程再退出
-		logger.Info("shutting down...")
-		mgr.Shutdown()
-		os.Exit(0)
-	} else {
-		// 兼容舊的加載方式
-		llmName := os.Getenv("LLM_PROVIDER")
-		if llmName == "" && cfg.DefaultLLM != "" {
-			llmName = cfg.DefaultLLM
-		}
-		if llmName == "" {
-			llmName = "openai"
-		}
-		ext := ""
-		if runtime.GOOS == "windows" {
-			ext = ".exe"
-		}
-		llmBinary := map[string]string{
-			"openai":    "./plugins/llm-openai/llm-openai" + ext,
-			"anthropic": "./plugins/llm-anthropic/llm-anthropic" + ext,
-			"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
-		}[llmName]
-		if llmBinary == "" {
-			logger.Error("unknown LLM provider", "name", llmName)
-			os.Exit(1)
-		}
-
-		if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
-			logger.Error("failed to load LLM", "name", llmName, "error", err)
-			os.Exit(1)
-		}
-		logger.Info("llm loaded", "name", llmName)
-
-		// 使用 Manager 加載 Agent
-		agentBinary := "./plugins/react-loop/react-loop" + ext
-		broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary)
-		if err != nil {
-			logger.Error("failed to load Agent", "error", err)
-			os.Exit(1)
-		}
-		logger.Info("llm service id generated", "serviceID", llmServiceID)
-
-		// 注册 LLM 服务（在 goroutine 中，避免阻塞）
-		go func() {
-			broker.AcceptAndServe(llmServiceID, func(opts []grpc.ServerOption) *grpc.Server {
-				s := grpc.NewServer(opts...)
-				proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
-				return s
-			})
-		}()
-
-		// 注册 ToolService（在 goroutine 中，避免阻塞）
-		toolServiceID := broker.NextId()
-		go func() {
-			broker.AcceptAndServe(toolServiceID, func(opts []grpc.ServerOption) *grpc.Server {
-				s := grpc.NewServer(opts...)
-				proto.RegisterToolServiceServer(s, plugin.NewToolGRPCServer(mgr))
-				return s
-			})
-		}()
-		logger.Info("tool service id generated", "serviceID", toolServiceID)
-
-		agent, ok := mgr.GetAgent("react-agent")
-		if !ok {
-			logger.Error("agent not found after loading")
-			os.Exit(1)
-		}
-
-		ctx := context.Background()
-		// 设置 Tool Service ID
-		if err := agent.SetToolServiceID(ctx, toolServiceID); err != nil {
-			logger.Error("failed to set tool service ID on agent", "error", err)
-			os.Exit(1)
-		}
-
-		// 舊路徑沒有明確的模型名稱配置，設置為空字符串，TUI會回退到agent.Name()
-		llmModelNameLegacy := ""
-
-		// 启动 TUI 聊天界面（替换原来的硬编码 Agent.Run 调用）
-		if err := tui.Run(agent, ctx, llmModelNameLegacy); err != nil {
-			logger.Error("tui run failed", "error", err)
-		}
-		logger.Info("tui exited")
-
-		// 完成完整的清理過程再退出
-		logger.Info("shutting down...")
-		mgr.Shutdown()
-		os.Exit(0)
 	}
+	if llmModelName == "Unknown" {
+		// 從環境變量獲取
+		if v := os.Getenv("OPENAI_MODEL"); v != "" {
+			llmModelName = v
+		} else if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
+			llmModelName = v
+		} else if v := os.Getenv("OLLAMA_MODEL"); v != "" {
+			llmModelName = v
+		} else {
+			llmModelName = "gpt-4o" // 默認值
+		}
+	}
+
+	ctx := context.Background()
+	if err := tui.Run(agent, ctx, llmModelName); err != nil {
+		logger.Error("tui run failed", "error", err)
+	}
+	logger.Info("tui exited")
+
+	// 完成完整的清理過程再退出
+	logger.Info("shutting down...")
+	mgr.Shutdown()
+	os.Exit(0)
 }

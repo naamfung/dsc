@@ -1,12 +1,6 @@
 name: 标准模式
 description: 包含所有可用工具，支持完整的 Agent 能力。
 plugins:
-  - name: llm-openai
-    type: llm
-    enabled: true
-  - name: react-loop
-    type: agent
-    enabled: true
   - name: tool-str-replace-editor
     type: tool
     enabled: true
