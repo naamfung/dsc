@@ -154,6 +154,7 @@ func main() {
 	// 解析啟動參數
 	logToScreen := false
 	logToFile := ""
+	mode := "standard" // 默認標準模式
 
 	for i, arg := range os.Args {
 		if arg == "-log" {
@@ -167,12 +168,25 @@ func main() {
 			} else {
 				logToScreen = true
 			}
-			break
+		} else if arg == "-mode" {
+			if i+1 < len(os.Args) {
+				nextArg := os.Args[i+1]
+				if nextArg == "minimal" || nextArg == "standard" {
+					mode = nextArg
+				} else {
+					mode = "standard" // 默認 standard
+				}
+			}
 		}
 	}
 
-	// 初始化 logger 和 pluginLogger
-	var logger hclog.Logger
+	logger := hclog.New(&hclog.LoggerOptions{
+		Name:   "dsc-host",
+		Level:  hclog.Info,
+		Output: os.Stderr,
+	})
+
+	// 初始化 logger 和 pluginLogger (根據 logToFile 和 logToScreen 調整)
 	var pluginLogger hclog.Logger
 	var logOutput io.Writer
 
@@ -234,6 +248,8 @@ func main() {
 		})
 	}
 
+	logger.Info("starting dsc", "mode", mode)
+
 	// 加載配置文件
 	cfgPath := os.Getenv("DSC_CONFIG")
 	if cfgPath == "" {
@@ -255,6 +271,27 @@ func main() {
 		}
 	}
 
+	// 根據模式過濾插件
+	filteredPlugins := []plugin.PluginEntry{}
+	if mode == "minimal" {
+		// 極簡模式：僅加載核心工具 (tool-str-replace-editor, tool-filesystem) 和相關依賴 (fs-observation-policy), LLM 和 Agent
+		for _, p := range cfg.Plugins {
+			if p.Type == "llm" || p.Type == "agent" || p.Name == "tool-str-replace-editor" || p.Name == "tool-filesystem" || p.Name == "fs-observation-policy" {
+				filteredPlugins = append(filteredPlugins, p)
+			}
+		}
+	} else {
+		// 標準模式：加載所有插件
+		filteredPlugins = cfg.Plugins
+	}
+
+	// 創建過濾後的 config
+	filteredCfg := &plugin.Config{
+		WorkspaceRoot: cfg.WorkspaceRoot,
+		DefaultLLM:    cfg.DefaultLLM,
+		Plugins:       filteredPlugins,
+	}
+
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
 		PluginDir:    "./plugins/",
 		Handshake:    plugin.Handshake,
@@ -263,13 +300,13 @@ func main() {
 	})
 	defer mgr.Shutdown()
 
-	// 如果配置中有插件列表，則從配置加載
-	if len(cfg.Plugins) > 0 {
-		if err := mgr.LoadFromConfig(cfg); err != nil {
+	// 如果配置中有插件列表（過濾後），則從配置加載
+	if len(filteredCfg.Plugins) > 0 {
+		if err := mgr.LoadFromConfig(filteredCfg); err != nil {
 			logger.Error("failed to load plugins from config", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("plugins loaded from config", "count", len(cfg.Plugins))
+		logger.Info("plugins loaded from config", "count", len(filteredCfg.Plugins), "mode", mode)
 
 		// 啟動管理 API
 		adminAddr := os.Getenv("DSC_ADMIN_ADDR")
