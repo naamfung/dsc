@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,29 +48,60 @@ func safePath(base, reqPath string) (string, error) {
 	return realReq, nil
 }
 
-// ReadFileTool 讀取文件
-type ReadFileTool struct{}
+// StrReplaceEditorTool 文件編輯工具（str_replace_editor）
+type StrReplaceEditorTool struct{}
 
-func (t *ReadFileTool) Name() string { return "read_file" }
+func (t *StrReplaceEditorTool) Name() string { return "str_replace_editor" }
 
-func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file. Returns the file content as a string."
+func (t *StrReplaceEditorTool) Description() string {
+	return "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert."
 }
 
-func (t *ReadFileTool) ParametersSchema() json.RawMessage {
+func (t *StrReplaceEditorTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"path": { "type": "string", "description": "Path to the file (relative to workspace root)" }
+			"command": {
+				"type": "string",
+				"enum": ["view", "create", "str_replace", "insert"],
+				"description": "The commands to run. Allowed options are: view, create, str_replace, insert."
+			},
+			"path": {
+				"type": "string",
+				"description": "Absolute path to the file, e.g. /workspace/file.py."
+			},
+			"file_text": {
+				"type": "string",
+				"description": "Required for 'create' command. The content of the file to be created."
+			},
+			"old_str": {
+				"type": "string",
+				"description": "Required for 'str_replace' command. The string in the file to replace."
+			},
+			"new_str": {
+				"type": "string",
+				"description": "Required for 'str_replace' and 'insert' commands. The new string to replace with or insert."
+			},
+			"insert_line": {
+				"type": "integer",
+				"description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
+			}
 		},
-		"required": ["path"]
+		"required": ["command", "path"]
 	}`)
 }
 
-func (t *ReadFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (string, error) {
-	var args struct {
-		Path string `json:"path"`
-	}
+type strReplaceEditorArgs struct {
+	Command    string `json:"command"`
+	Path       string `json:"path"`
+	FileText   string `json:"file_text"`
+	OldStr     string `json:"old_str"`
+	NewStr     string `json:"new_str"`
+	InsertLine int    `json:"insert_line"`
+}
+
+func (t *StrReplaceEditorTool) Execute(ctx context.Context, argsJSON json.RawMessage) (string, error) {
+	var args strReplaceEditorArgs
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
 		return "", err
 	}
@@ -80,54 +112,78 @@ func (t *ReadFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (s
 		return "", err
 	}
 
-	content, err := os.ReadFile(reqPath)
-	if err != nil {
-		return "", err
+	switch args.Command {
+	case "view":
+		content, err := os.ReadFile(reqPath)
+		if err != nil {
+			return "", err
+		}
+		return string(content), nil
+
+	case "create":
+		if args.FileText == "" {
+			return "", fmt.Errorf("file_text is required for create command")
+		}
+		dir := filepath.Dir(reqPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(reqPath, []byte(args.FileText), 0644); err != nil {
+			return "", err
+		}
+		return "File created successfully.", nil
+
+	case "str_replace":
+		if args.OldStr == "" {
+			return "", fmt.Errorf("old_str is required for str_replace command")
+		}
+		if args.NewStr == "" {
+			return "", fmt.Errorf("new_str is required for str_replace command")
+		}
+		content, err := os.ReadFile(reqPath)
+		if err != nil {
+			return "", err
+		}
+		contentStr := string(content)
+		if !strings.Contains(contentStr, args.OldStr) {
+			return "", fmt.Errorf("str_replace failed: old_str not found in file. File content:\n%s", contentStr)
+		}
+		newContentStr := strings.Replace(contentStr, args.OldStr, args.NewStr, 1)
+		if err := os.WriteFile(reqPath, []byte(newContentStr), 0644); err != nil {
+			return "", err
+		}
+		return "File replaced successfully.", nil
+
+	case "insert":
+		if args.NewStr == "" {
+			return "", fmt.Errorf("new_str is required for insert command")
+		}
+		if args.InsertLine <= 0 {
+			return "", fmt.Errorf("insert_line must be a positive integer for insert command")
+		}
+		content, err := os.ReadFile(reqPath)
+		if err != nil {
+			return "", err
+		}
+		lines := strings.Split(string(content), "\n")
+		// insert_line is 1-based
+		// If insert_line is greater than len(lines), append to the end
+		var newLines []string
+		if args.InsertLine > len(lines) {
+			newLines = append(lines, args.NewStr)
+		} else {
+			// Insert before the line at index args.InsertLine-1
+			before := lines[:args.InsertLine-1]
+			after := lines[args.InsertLine-1:]
+			newLines = append(before, append([]string{args.NewStr}, after...)...)
+		}
+		newContent := strings.Join(newLines, "\n")
+		if err := os.WriteFile(reqPath, []byte(newContent), 0644); err != nil {
+			return "", err
+		}
+		return "File inserted successfully.", nil
+
+	default:
+		return "", fmt.Errorf("unsupported command: %s", args.Command)
 	}
-	return string(content), nil
-}
-
-// WriteFileTool 寫入文件
-type WriteFileTool struct{}
-
-func (t *WriteFileTool) Name() string { return "write_file" }
-
-func (t *WriteFileTool) Description() string {
-	return "Write content to a file. Overwrites existing file."
-}
-
-func (t *WriteFileTool) ParametersSchema() json.RawMessage {
-	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"path": { "type": "string", "description": "Path to the file (relative to workspace root)" },
-			"content": { "type": "string", "description": "Content to write" }
-		},
-		"required": ["path", "content"]
-	}`)
-}
-
-func (t *WriteFileTool) Execute(ctx context.Context, argsJSON json.RawMessage) (string, error) {
-	var args struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(argsJSON, &args); err != nil {
-		return "", err
-	}
-
-	// 使用安全路徑檢查
-	reqPath, err := safePath(WorkspaceRoot, args.Path)
-	if err != nil {
-		return "", err
-	}
-
-	dir := filepath.Dir(reqPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(reqPath, []byte(args.Content), 0644); err != nil {
-		return "", err
-	}
-	return "File written successfully", nil
 }

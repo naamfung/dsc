@@ -87,11 +87,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		pluginLogger:        pluginLogger,
 	}
 	// 註冊內置工具
-	if err := m.toolRegistry.Register(&ReadFileTool{}); err != nil {
-		logger.Warn("failed to register read_file tool", "error", err)
-	}
-	if err := m.toolRegistry.Register(&WriteFileTool{}); err != nil {
-		logger.Warn("failed to register write_file tool", "error", err)
+	if err := m.toolRegistry.Register(&StrReplaceEditorTool{}); err != nil {
+		logger.Warn("failed to register str_replace_editor tool", "error", err)
 	}
 	// 後續可註冊更多工具
 	return m
