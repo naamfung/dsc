@@ -1616,326 +1616,6 @@ func (x *UpdateObservationResponse) GetMessage() string {
 	return ""
 }
 
-type CreateSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Shell         string                 `protobuf:"bytes,1,opt,name=shell,proto3" json:"shell,omitempty"` // e.g., "bash", "pwsh", "cmd"
-	Cwd           string                 `protobuf:"bytes,2,opt,name=cwd,proto3" json:"cwd,omitempty"`     // working directory
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSessionRequest) Reset() {
-	*x = CreateSessionRequest{}
-	mi := &file_dsc_proto_msgTypes[32]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSessionRequest) ProtoMessage() {}
-
-func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[32]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
-func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{32}
-}
-
-func (x *CreateSessionRequest) GetShell() string {
-	if x != nil {
-		return x.Shell
-	}
-	return ""
-}
-
-func (x *CreateSessionRequest) GetCwd() string {
-	if x != nil {
-		return x.Cwd
-	}
-	return ""
-}
-
-type CreateSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSessionResponse) Reset() {
-	*x = CreateSessionResponse{}
-	mi := &file_dsc_proto_msgTypes[33]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSessionResponse) ProtoMessage() {}
-
-func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[33]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
-func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{33}
-}
-
-func (x *CreateSessionResponse) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *CreateSessionResponse) GetStatus() string {
-	if x != nil {
-		return x.Status
-	}
-	return ""
-}
-
-func (x *CreateSessionResponse) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
-
-type ExecSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Command       string                 `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExecSessionRequest) Reset() {
-	*x = ExecSessionRequest{}
-	mi := &file_dsc_proto_msgTypes[34]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExecSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExecSessionRequest) ProtoMessage() {}
-
-func (x *ExecSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[34]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExecSessionRequest.ProtoReflect.Descriptor instead.
-func (*ExecSessionRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{34}
-}
-
-func (x *ExecSessionRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *ExecSessionRequest) GetCommand() string {
-	if x != nil {
-		return x.Command
-	}
-	return ""
-}
-
-type ExecSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Output        string                 `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"`
-	ExitCode      int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExecSessionResponse) Reset() {
-	*x = ExecSessionResponse{}
-	mi := &file_dsc_proto_msgTypes[35]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExecSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExecSessionResponse) ProtoMessage() {}
-
-func (x *ExecSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[35]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExecSessionResponse.ProtoReflect.Descriptor instead.
-func (*ExecSessionResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{35}
-}
-
-func (x *ExecSessionResponse) GetOutput() string {
-	if x != nil {
-		return x.Output
-	}
-	return ""
-}
-
-func (x *ExecSessionResponse) GetExitCode() int32 {
-	if x != nil {
-		return x.ExitCode
-	}
-	return 0
-}
-
-func (x *ExecSessionResponse) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
-type CloseSessionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CloseSessionRequest) Reset() {
-	*x = CloseSessionRequest{}
-	mi := &file_dsc_proto_msgTypes[36]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CloseSessionRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CloseSessionRequest) ProtoMessage() {}
-
-func (x *CloseSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[36]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CloseSessionRequest.ProtoReflect.Descriptor instead.
-func (*CloseSessionRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{36}
-}
-
-func (x *CloseSessionRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-type CloseSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CloseSessionResponse) Reset() {
-	*x = CloseSessionResponse{}
-	mi := &file_dsc_proto_msgTypes[37]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CloseSessionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CloseSessionResponse) ProtoMessage() {}
-
-func (x *CloseSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[37]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CloseSessionResponse.ProtoReflect.Descriptor instead.
-func (*CloseSessionResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{37}
-}
-
-func (x *CloseSessionResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *CloseSessionResponse) GetMessage() string {
-	if x != nil {
-		return x.Message
-	}
-	return ""
-}
-
 var File_dsc_proto protoreflect.FileDescriptor
 
 const file_dsc_proto_rawDesc = "" +
@@ -2038,28 +1718,6 @@ const file_dsc_proto_rawDesc = "" +
 	"\vobservation\x18\x02 \x01(\v2\x12.dsc.FsObservationR\vobservation\"O\n" +
 	"\x19UpdateObservationResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\">\n" +
-	"\x14CreateSessionRequest\x12\x14\n" +
-	"\x05shell\x18\x01 \x01(\tR\x05shell\x12\x10\n" +
-	"\x03cwd\x18\x02 \x01(\tR\x03cwd\"h\n" +
-	"\x15CreateSessionResponse\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"M\n" +
-	"\x12ExecSessionRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x18\n" +
-	"\acommand\x18\x02 \x01(\tR\acommand\"`\n" +
-	"\x13ExecSessionResponse\x12\x16\n" +
-	"\x06output\x18\x01 \x01(\tR\x06output\x12\x1b\n" +
-	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"4\n" +
-	"\x13CloseSessionRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"J\n" +
-	"\x14CloseSessionResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
@@ -2087,11 +1745,7 @@ const file_dsc_proto_rawDesc = "" +
 	"\tListTools\x12\x15.dsc.ListToolsRequest\x1a\x16.dsc.ListToolsResponse2\xbb\x01\n" +
 	"\x1aFsObservationPolicyService\x12I\n" +
 	"\x0eGetObservation\x12\x1a.dsc.GetObservationRequest\x1a\x1b.dsc.GetObservationResponse\x12R\n" +
-	"\x11UpdateObservation\x12\x1d.dsc.UpdateObservationRequest\x1a\x1e.dsc.UpdateObservationResponse2\xea\x01\n" +
-	"\x19PersistentTerminalService\x12F\n" +
-	"\rCreateSession\x12\x19.dsc.CreateSessionRequest\x1a\x1a.dsc.CreateSessionResponse\x12@\n" +
-	"\vExecSession\x12\x17.dsc.ExecSessionRequest\x1a\x18.dsc.ExecSessionResponse\x12C\n" +
-	"\fCloseSession\x12\x18.dsc.CloseSessionRequest\x1a\x19.dsc.CloseSessionResponseB\vZ\tdsc/protob\x06proto3"
+	"\x11UpdateObservation\x12\x1d.dsc.UpdateObservationRequest\x1a\x1e.dsc.UpdateObservationResponseB\vZ\tdsc/protob\x06proto3"
 
 var (
 	file_dsc_proto_rawDescOnce sync.Once
@@ -2105,7 +1759,7 @@ func file_dsc_proto_rawDescGZIP() []byte {
 	return file_dsc_proto_rawDescData
 }
 
-var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
+var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_dsc_proto_goTypes = []any{
 	(*NameRequest)(nil),               // 0: dsc.NameRequest
 	(*NameResponse)(nil),              // 1: dsc.NameResponse
@@ -2139,16 +1793,10 @@ var file_dsc_proto_goTypes = []any{
 	(*GetObservationResponse)(nil),    // 29: dsc.GetObservationResponse
 	(*UpdateObservationRequest)(nil),  // 30: dsc.UpdateObservationRequest
 	(*UpdateObservationResponse)(nil), // 31: dsc.UpdateObservationResponse
-	(*CreateSessionRequest)(nil),      // 32: dsc.CreateSessionRequest
-	(*CreateSessionResponse)(nil),     // 33: dsc.CreateSessionResponse
-	(*ExecSessionRequest)(nil),        // 34: dsc.ExecSessionRequest
-	(*ExecSessionResponse)(nil),       // 35: dsc.ExecSessionResponse
-	(*CloseSessionRequest)(nil),       // 36: dsc.CloseSessionRequest
-	(*CloseSessionResponse)(nil),      // 37: dsc.CloseSessionResponse
-	nil,                               // 38: dsc.ExecuteRequest.ParamsEntry
+	nil,                               // 32: dsc.ExecuteRequest.ParamsEntry
 }
 var file_dsc_proto_depIdxs = []int32{
-	38, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	32, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	12, // 1: dsc.ChatRequest.messages:type_name -> dsc.Message
 	13, // 2: dsc.ChatRequest.tools:type_name -> dsc.Tool
 	16, // 3: dsc.Message.tool_calls:type_name -> dsc.ToolCall
@@ -2177,34 +1825,28 @@ var file_dsc_proto_depIdxs = []int32{
 	25, // 26: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
 	28, // 27: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
 	30, // 28: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
-	32, // 29: dsc.PersistentTerminalService.CreateSession:input_type -> dsc.CreateSessionRequest
-	34, // 30: dsc.PersistentTerminalService.ExecSession:input_type -> dsc.ExecSessionRequest
-	36, // 31: dsc.PersistentTerminalService.CloseSession:input_type -> dsc.CloseSessionRequest
-	1,  // 32: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 33: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 34: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 35: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 36: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	10, // 37: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
-	1,  // 38: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 39: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	18, // 40: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
-	20, // 41: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
-	22, // 42: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	14, // 43: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	15, // 44: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
-	1,  // 45: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 46: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 47: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	24, // 48: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	26, // 49: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	29, // 50: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
-	31, // 51: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
-	33, // 52: dsc.PersistentTerminalService.CreateSession:output_type -> dsc.CreateSessionResponse
-	35, // 53: dsc.PersistentTerminalService.ExecSession:output_type -> dsc.ExecSessionResponse
-	37, // 54: dsc.PersistentTerminalService.CloseSession:output_type -> dsc.CloseSessionResponse
-	32, // [32:55] is the sub-list for method output_type
-	9,  // [9:32] is the sub-list for method input_type
+	1,  // 29: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 30: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 31: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 32: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 33: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	10, // 34: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
+	1,  // 35: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 36: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	18, // 37: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
+	20, // 38: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
+	22, // 39: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	14, // 40: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	15, // 41: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
+	1,  // 42: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 43: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 44: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	24, // 45: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	26, // 46: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	29, // 47: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
+	31, // 48: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
+	29, // [29:49] is the sub-list for method output_type
+	9,  // [9:29] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -2221,9 +1863,9 @@ func file_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dsc_proto_rawDesc), len(file_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   39,
+			NumMessages:   33,
 			NumExtensions: 0,
-			NumServices:   6,
+			NumServices:   5,
 		},
 		GoTypes:           file_dsc_proto_goTypes,
 		DependencyIndexes: file_dsc_proto_depIdxs,

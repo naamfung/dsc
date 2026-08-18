@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"dsc/plugin"
 	"dsc/proto"
@@ -37,6 +41,30 @@ func (f *FileTool) ParametersSchema() json.RawMessage {
 
 func (f *FileTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	return f.handler(ctx, args)
+}
+
+// Session 表示一個持久的 shell 會話
+type Session struct {
+	SessionID string
+	ShellType string
+	Cwd       string
+	Cmd       *exec.Cmd
+	Stdin     io.WriteCloser
+	Stdout    io.ReadCloser
+	Stderr    io.ReadCloser
+	OutputBuf strings.Builder
+	mu        sync.Mutex
+	done      chan struct{}
+}
+
+// SessionManager 管理所有持久的 shell 會話
+type SessionManager struct {
+	sessions map[string]*Session
+	mu       sync.RWMutex
+}
+
+var globalSessionManager = &SessionManager{
+	sessions: make(map[string]*Session),
 }
 
 // ToolServiceServer 工具服務服務端實現
@@ -85,13 +113,10 @@ func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metad
 }
 
 func main() {
-	// 探測系統中所有可用的 shell
-	detectedShells := detectAvailableShells()
-
 	// 定義 shell 工具
 	shellTool := &FileTool{
 		name:        "shell",
-		description: "Execute a shell command or script using an available shell (bash, zsh, ksh, sh, fish, dash, tcsh, csh; on Windows falls back to PowerShell/CMD)",
+		description: "Execute a shell command or script using an available shell (bash, zsh, ksh, sh, fish, dash, tcsh, csh; on Windows falls back to PowerShell/CMD). Supports persistent sessions via session_id.",
 		schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
@@ -106,15 +131,20 @@ func main() {
 				"shell": {
 					"type": "string",
 					"description": "Specific shell to use: bash, zsh, ksh, sh, fish, dash, tcsh, csh, pwsh, powershell, cmd. Defaults to the first detected shell."
+				},
+				"session_id": {
+					"type": "string",
+					"description": "Persistent session ID to maintain state (cwd, environment variables). If not provided or 'new', a new session is created."
 				}
 			},
 			"required": ["command"]
 		}`),
 		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var params struct {
-				Command string `json:"command"`
-				Cwd     string `json:"cwd"`
-				Shell   string `json:"shell"`
+				Command   string `json:"command"`
+				Cwd       string `json:"cwd"`
+				Shell     string `json:"shell"`
+				SessionID string `json:"session_id"`
 			}
 			if err := json.Unmarshal(args, &params); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
@@ -123,11 +153,32 @@ func main() {
 				return "", fmt.Errorf("command is required")
 			}
 
-			sh, err := resolveShell(detectedShells, params.Shell)
-			if err != nil {
-				return "", err
+			// 處理 session
+			sessionID := params.SessionID
+			if sessionID == "" || sessionID == "new" {
+				// 創建新 session
+				sessionID = fmt.Sprintf("session-%d", time.Now().UnixNano())
 			}
-			return runShell(*sh, params.Command, params.Cwd)
+
+			// 獲取或創建 session
+			session, err := getOrCreateSession(sessionID, params.Shell, params.Cwd)
+			if err != nil {
+				return "", fmt.Errorf("failed to create or get session: %w", err)
+			}
+
+			// 執行命令到 session
+			output, exitCode, err := execSessionCommand(session, params.Command)
+			if err != nil {
+				return "", fmt.Errorf("failed to execute command in session: %w", err)
+			}
+
+			result := output
+			if exitCode != 0 {
+				result += fmt.Sprintf("\n[exit_code: %d]\n", exitCode)
+			} else {
+				result += "\n[exit_code: 0]\n"
+			}
+			return result, nil
 		},
 	}
 
@@ -150,6 +201,161 @@ func main() {
 		},
 		GRPCServer: goplugin.DefaultGRPCServer,
 	})
+}
+
+// getOrCreateSession 獲取或創建 session
+func getOrCreateSession(sessionID, shellType, cwd string) (*Session, error) {
+	globalSessionManager.mu.RLock()
+	session, exists := globalSessionManager.sessions[sessionID]
+	globalSessionManager.mu.RUnlock()
+
+	if exists {
+		return session, nil
+	}
+
+	// 創建新 session
+	sh, err := resolveShell(detectAvailableShells(), shellType)
+	if err != nil {
+		return nil, err
+	}
+
+	// 啟動 shell 進程
+	cmd, stdin, stdout, stderr, err := startInteractiveShellProcess(sh.Name, cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	session = &Session{
+		SessionID: sessionID,
+		ShellType: sh.Name,
+		Cwd:       cwd,
+		Cmd:       cmd,
+		Stdin:     stdin,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		done:      make(chan struct{}),
+	}
+
+	globalSessionManager.mu.Lock()
+	globalSessionManager.sessions[sessionID] = session
+	globalSessionManager.mu.Unlock()
+
+	// 啟動讀取輸出的 goroutine
+	go readSessionOutput(session)
+
+	return session, nil
+}
+
+// execSessionCommand 在 session 中執行命令
+func execSessionCommand(session *Session, command string) (string, int32, error) {
+	cmdWithNewline := command + "\n"
+	_, err := session.Stdin.Write([]byte(cmdWithNewline))
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to write to stdin: %w", err)
+	}
+
+	// 等待輸出穩定（短暫休眠）
+	time.Sleep(300 * time.Millisecond)
+
+	session.mu.Lock()
+	output := session.OutputBuf.String()
+	session.mu.Unlock()
+
+	return output, 0, nil
+}
+
+// startInteractiveShellProcess 啟動交互式 shell 進程並返回 stdin, stdout, stderr pipes
+func startInteractiveShellProcess(shellType, cwd string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
+	var cmd *exec.Cmd
+
+	switch strings.ToLower(shellType) {
+	case "pwsh", "powershell":
+		cmd = exec.Command("pwsh", "-NoExit", "-NoLogo", "-Command", "-")
+	case "cmd":
+		cmd = exec.Command("cmd.exe", "/K")
+	default:
+		// UNIX shell (bash, zsh, sh, etc.)
+		// 使用互動式模式 (-i) 以維持狀態
+		if shellType == "fish" {
+			cmd = exec.Command(shellType, "-i")
+		} else {
+			// bash, zsh, sh, ksh, dash, tcsh, csh 等
+			// 對於 bash/sh，使用 --rcfile /dev/null 避免讀取啟動文件
+			if shellType == "bash" || shellType == "sh" {
+				cmd = exec.Command(shellType, "--rcfile", "/dev/null", "-i")
+			} else if shellType == "zsh" {
+				cmd = exec.Command(shellType, "-f", "-i")
+			} else {
+				cmd = exec.Command(shellType, "-i")
+			}
+		}
+	}
+
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+
+	// 設置 SysProcAttr 以隱藏窗口 (僅在 Windows 下)
+	if runtime.GOOS == "windows" {
+		if cmd.SysProcAttr == nil {
+			cmd.SysProcAttr = &syscall.SysProcAttr{}
+		}
+		// CREATE_NO_WINDOW = 0x08000000
+		cmd.SysProcAttr.CreationFlags = 0x08000000
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		stdin.Close()
+		stdout.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	if err := cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		stderr.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	return cmd, stdin, stdout, stderr, nil
+}
+
+// readSessionOutput 讀取 shell 輸出並累積到 Session 的 OutputBuf
+func readSessionOutput(session *Session) {
+	defer close(session.done)
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+
+	// 讀取 stdout
+	go func() {
+		io.Copy(&stdoutBuf, session.Stdout)
+	}()
+
+	// 讀取 stderr
+	go func() {
+		io.Copy(&stderrBuf, session.Stderr)
+	}()
+
+	// 等待進程結束
+	_ = session.Cmd.Wait()
+
+	// 累積輸出
+	session.mu.Lock()
+	session.OutputBuf.WriteString(stdoutBuf.String())
+	session.OutputBuf.WriteString(stderrBuf.String())
+	session.mu.Unlock()
 }
 
 // ShellInfo 描述一個可用 shell 及其調用方式
@@ -222,35 +428,4 @@ func resolveShell(available []ShellInfo, requested string) (*ShellInfo, error) {
 		}
 	}
 	return nil, fmt.Errorf("shell %q is not available; available shells: %s", requested, shellNames(available))
-}
-
-// runShell 在指定 shell 中執行命令，返回合併後的標準輸出/錯誤輸出及退出碼
-func runShell(sh ShellInfo, command, cwd string) (string, error) {
-	args := append(append([]string{}, sh.Args...), command)
-	cmd := exec.Command(sh.Path, args...)
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	var builder strings.Builder
-	builder.WriteString(stdout.String())
-	if stderr.Len() > 0 {
-		builder.WriteString("\n[stderr]\n")
-		builder.WriteString(stderr.String())
-	}
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			builder.WriteString(fmt.Sprintf("\n[exit_code: %d]\n", exitErr.ExitCode()))
-			return builder.String(), nil
-		}
-		return builder.String(), fmt.Errorf("failed to start shell %s: %w", sh.Name, err)
-	}
-	builder.WriteString("\n[exit_code: 0]\n")
-	return builder.String(), nil
 }
