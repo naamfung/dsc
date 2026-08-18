@@ -250,46 +250,36 @@ func main() {
 
 	logger.Info("starting dsc", "mode", mode)
 
-	// 加載配置文件
-	cfgPath := os.Getenv("DSC_CONFIG")
-	if cfgPath == "" {
-		cfgPath = "config.yaml"
-	}
-	cfg, err := loadConfig(cfgPath)
+	// 加載 preset 配置文件
+	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
+	cfg, err := loadConfig(presetPath)
 	if err != nil {
-		// 配置文件不存在或加載失敗時，使用默認配置
-		logger.Info("config file not found or invalid, using default config", "path", cfgPath)
-		// 使用默認配置
-		cfg = &plugin.Config{
-			WorkspaceRoot: "",
-			DefaultLLM:    "openai",
+		// 如果 preset 配置文件不存在或加載失敗，回退到默認 config.yaml
+		logger.Info("preset config not found or invalid, using default config", "presetPath", presetPath, "error", err)
+		cfgPath := os.Getenv("DSC_CONFIG")
+		if cfgPath == "" {
+			cfgPath = "config.yaml"
+		}
+		cfg, err = loadConfig(cfgPath)
+		if err != nil {
+			// 配置文件不存在或加載失敗時，使用默認配置
+			logger.Info("config file not found or invalid, using default config", "path", cfgPath)
+			// 使用默認配置
+			cfg = &plugin.Config{
+				WorkspaceRoot: "",
+				DefaultLLM:    "openai",
+			}
+		} else {
+			// 設置配置中的 workspace root
+			if cfg.WorkspaceRoot != "" {
+				plugin.WorkspaceRoot = cfg.WorkspaceRoot
+			}
 		}
 	} else {
 		// 設置配置中的 workspace root
 		if cfg.WorkspaceRoot != "" {
 			plugin.WorkspaceRoot = cfg.WorkspaceRoot
 		}
-	}
-
-	// 根據模式過濾插件
-	filteredPlugins := []plugin.PluginEntry{}
-	if mode == "minimal" {
-		// 極簡模式：僅加載核心工具 (tool-str-replace-editor, tool-filesystem) 和相關依賴 (fs-observation-policy), LLM 和 Agent
-		for _, p := range cfg.Plugins {
-			if p.Type == "llm" || p.Type == "agent" || p.Name == "tool-str-replace-editor" || p.Name == "tool-filesystem" || p.Name == "fs-observation-policy" {
-				filteredPlugins = append(filteredPlugins, p)
-			}
-		}
-	} else {
-		// 標準模式：加載所有插件
-		filteredPlugins = cfg.Plugins
-	}
-
-	// 創建過濾後的 config
-	filteredCfg := &plugin.Config{
-		WorkspaceRoot: cfg.WorkspaceRoot,
-		DefaultLLM:    cfg.DefaultLLM,
-		Plugins:       filteredPlugins,
 	}
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
@@ -300,13 +290,13 @@ func main() {
 	})
 	defer mgr.Shutdown()
 
-	// 如果配置中有插件列表（過濾後），則從配置加載
-	if len(filteredCfg.Plugins) > 0 {
-		if err := mgr.LoadFromConfig(filteredCfg); err != nil {
+	// 如果配置中有插件列表，則從配置加載
+	if len(cfg.Plugins) > 0 {
+		if err := mgr.LoadFromConfig(cfg); err != nil {
 			logger.Error("failed to load plugins from config", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("plugins loaded from config", "count", len(filteredCfg.Plugins), "mode", mode)
+		logger.Info("plugins loaded from config", "count", len(cfg.Plugins), "mode", mode)
 
 		// 啟動管理 API
 		adminAddr := os.Getenv("DSC_ADMIN_ADDR")
