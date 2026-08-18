@@ -5,9 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -87,93 +85,12 @@ func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metad
 }
 
 func main() {
-	// 定義 read_file 工具
-	readFileTool := &FileTool{
-		name:        "read_file",
-		description: "Read file content from the file system",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Path to the file to read"
-				}
-			},
-			"required": ["path"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				Path string `json:"path"`
-			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-
-			// 獲取絕對路徑
-			absPath, err := filepath.Abs(params.Path)
-			if err != nil {
-				return "", fmt.Errorf("failed to get absolute path: %w", err)
-			}
-
-			// 讀取文件
-			content, err := os.ReadFile(absPath)
-			if err != nil {
-				return "", fmt.Errorf("failed to read file: %w", err)
-			}
-
-			return string(content), nil
-		},
-	}
-
-	// 定義 write_file 工具
-	writeFileTool := &FileTool{
-		name:        "write_file",
-		description: "Write content to a file in the file system",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {
-					"type": "string",
-					"description": "Path to the file to write"
-				},
-				"content": {
-					"type": "string",
-					"description": "Content to write to the file"
-				}
-			},
-			"required": ["path", "content"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				Path    string `json:"path"`
-				Content string `json:"content"`
-			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-
-			// 獲取絕對路徑
-			absPath, err := filepath.Abs(params.Path)
-			if err != nil {
-				return "", fmt.Errorf("failed to get absolute path: %w", err)
-			}
-
-			// 寫入文件
-			err = os.WriteFile(absPath, []byte(params.Content), 0644)
-			if err != nil {
-				return "", fmt.Errorf("failed to write file: %w", err)
-			}
-
-			return fmt.Sprintf("Successfully wrote to %s", absPath), nil
-		},
-	}
-
 	// 探測系統中所有可用的 shell
 	detectedShells := detectAvailableShells()
 
-	// 定義 Shell 工具
+	// 定義 shell 工具
 	shellTool := &FileTool{
-		name:        "Shell",
+		name:        "shell",
 		description: "Execute a shell command or script using an available shell (bash, zsh, ksh, sh, fish, dash, tcsh, csh; on Windows falls back to PowerShell/CMD)",
 		schema: json.RawMessage(`{
 			"type": "object",
@@ -216,7 +133,7 @@ func main() {
 
 	// 創建工具服務服務端
 	toolServer := &ToolServiceServer{
-		tools: []*FileTool{readFileTool, writeFileTool, shellTool},
+		tools: []*FileTool{shellTool},
 	}
 
 	// 創建元數據服務服務端
