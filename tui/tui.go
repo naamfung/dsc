@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -18,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"dsc/plugin"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"gopkg.in/yaml.v3"
 )
@@ -64,7 +66,30 @@ var (
 	compSelSty = lipgloss.NewStyle().
 		Foreground(accent).
 		Bold(true)
+
+	// selStyle 正文拖拽选中的反色高亮样式。
+	selStyle = lipgloss.NewStyle().Reverse(true)
 )
+
+// selPos 表示正文被选中区域中的位置：以「内容行号 + 可视列」定位，
+// 行号是绝对值（与滚动无关），列是可视列。
+type selPos struct{ line, col int }
+
+// selection 是鼠标左键在正文区拖拽产生的文本选区。anchor 为按下起点，
+// head 为当前终点；active 控制是否渲染与复制。坐标是绝对内容行，滚动不会移动它们。
+type selection struct {
+	active       bool
+	anchor, head selPos
+}
+
+func (s selection) ordered() (start, end selPos) {
+	if s.anchor.line > s.head.line || (s.anchor.line == s.head.line && s.anchor.col > s.head.col) {
+		return s.head, s.anchor
+	}
+	return s.anchor, s.head
+}
+
+func (s selection) empty() bool { return s.anchor == s.head }
 
 // submitResult 是一次 agent.Run 完成后的结果消息
 type submitResult struct {
@@ -109,9 +134,18 @@ type Model struct {
 	contextWindow int
 	usedTokens    int
 
-	// mouseCaptureOff 為 true 時釋放滑鼠給終端（MouseModeNone），
-	// 讓終端原生文字選取/複製可用；由 /mouse 命令切換
-	mouseCaptureOff bool
+	// 正文拖拽选区的实时状态与选中后的宽度对齐渲染行缓存
+	sel          selection
+	wrappedLines []string
+
+	// 输入历史：已提交命令 + 当前草稿，用于 ↑/↓ 翻阅
+	history []string
+	histPos int
+	draft   string
+
+	// 复制提示：选区复制成功后短暂显示，由 copyNoticeSeq 防过期竞态
+	copyNotice    string
+	copyNoticeSeq int
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -260,8 +294,72 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetWidth(msg.Width)
 			m.viewport.SetHeight(m.vpHeight())
 		}
-		m.viewport.SetContent(strings.Join(m.lines, "\n"))
+		m.render()
 		m.viewport.GotoBottom()
+
+	case tea.PasteMsg:
+		// 终端括号粘贴（如 Windows Terminal 的 Ctrl+V）插入到输入框。
+		if m.thinking || m.streaming {
+			return m, nil
+		}
+		m.input.InsertString(strings.ReplaceAll(msg.Content, "\r\n", "\n"))
+		m.syncInputHeight()
+		m.updateCompletion()
+		return m, nil
+
+	case tea.MouseClickMsg:
+		if m.thinking || m.streaming {
+			return m, nil
+		}
+		mm := msg.Mouse()
+		if mm.Button == tea.MouseLeft {
+			if m.inBody(mm.X, mm.Y) {
+				at := m.transcriptCaret(mm.X, mm.Y)
+				m.sel = selection{active: true, anchor: at, head: at}
+			} else {
+				// 点按输入框或状态区等非正文区域 → 清除正文选区
+				m.sel = selection{}
+			}
+			m.render()
+		}
+		return m, nil
+
+	case tea.MouseMotionMsg:
+		// CellMotion 下仅按住鼠标才会收到移动事件，即拖拽。
+		if m.sel.active {
+			mm := msg.Mouse()
+			if mm.Button == tea.MouseLeft {
+				m.sel.head = m.transcriptCaret(mm.X, mm.Y)
+				m.render()
+			}
+		}
+		return m, nil
+
+	case tea.MouseReleaseMsg:
+		// 松开左键：根据拖拽选区复制文本，然后清除选区。
+		if m.sel.active {
+			mm := msg.Mouse()
+			if mm.Button == tea.MouseLeft {
+				m.sel.head = m.transcriptCaret(mm.X, mm.Y)
+			}
+			text := m.selectedText()
+			m.sel = selection{}
+			m.render()
+			if text != "" {
+				_ = clipboard.WriteAll(text)
+				m.copyNotice = fmt.Sprintf("已复制 %d 字符", runeCount(text))
+				m.copyNoticeSeq++
+				return m, copyNoticeExpire(m.copyNoticeSeq)
+			}
+		}
+		return m, nil
+
+	case copyNoticeMsg:
+		if m.copyNoticeSeq == msg.seq {
+			m.copyNotice = ""
+			m.render()
+		}
+		return m, nil
 
 	case tea.KeyPressMsg:
 		if m.thinking || m.streaming {
@@ -295,6 +393,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+		case "up", "down":
+			// 输入为单行时 ↑/↓ 翻阅历史命令；多行输入仍交给输入框移动光标。
+			if !strings.Contains(m.input.Value(), "\n") {
+				m.navigateHistory(msg.String() == "up")
+				m.syncInputHeight()
+				m.updateCompletion()
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		case "ctrl+v":
+			// 某些终端不把 Ctrl+V 当成括号粘贴，而是交回应用处理，此时手动读剪贴板。
+			return m, readClipboardPaste()
 		case "enter":
 			text := strings.TrimSpace(m.input.Value())
 			if handled, cmd := m.runSlashCommand(text); handled {
@@ -303,6 +415,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
+			// 记录到历史（仅用户消息，斜杠命令不入历史）
+			m.history = append(m.history, text)
+			m.histPos = len(m.history)
+			m.draft = ""
 			m.appendMessage(renderUserBubble(text, m.width-4))
 			m.input.SetValue("")
 			m.completion = completion{}
@@ -362,8 +478,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
 			} else if msg.frame != nil && msg.frame.Status == "success" {
 				// 更新已用容量（供標題欄顯示「已用/總容量」）
-				if msg.frame.Usage != nil && msg.frame.Usage.PromptTokens > 0 {
-					m.usedTokens = int(msg.frame.Usage.PromptTokens)
+				if msg.frame.Usage != nil && msg.frame.Usage.TotalTokens > 0 {
+					m.usedTokens = int(msg.frame.Usage.TotalTokens)
 				}
 				// 最終渲染：將 streamBuffer 作為正文添加到助手消息中
 				if m.streamMsgIdx < len(m.lines) {
@@ -422,8 +538,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = false
 			m.streamOpen = false
-			if f.Status == "success" && f.Usage != nil && f.Usage.PromptTokens > 0 {
-				m.usedTokens = int(f.Usage.PromptTokens)
+			if f.Status == "success" && f.Usage != nil && f.Usage.TotalTokens > 0 {
+				m.usedTokens = int(f.Usage.TotalTokens)
 			}
 			if f.Status == "error" && f.Error != "" {
 				m.appendMessage(errorSty.Render("错误: ") + f.Error)
@@ -460,9 +576,161 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// render 将历史行渲染到 viewport
+// render 将历史行切分成与被选中区域一致的宽对齐渲染行，并把当前选区反色高亮后交给 viewport。
 func (m *Model) render() {
-	m.viewport.SetContent(strings.Join(m.lines, "\n"))
+	w := m.width
+	if w < 1 {
+		w = 1
+	}
+	rows := m.buildWrappedLines(w)
+	m.wrappedLines = rows
+	if m.sel.active && !m.sel.empty() {
+		start, end := m.sel.ordered()
+		highlighted := make([]string, len(rows))
+		for i, line := range rows {
+			highlighted[i] = line
+			if lo, hi, ok := selSpan(i, start, end, w); ok {
+				highlighted[i] = lipgloss.StyleRanges(line, lipgloss.NewRange(lo, hi, selStyle))
+			}
+		}
+		rows = highlighted
+	}
+	m.viewport.SetContent(strings.Join(rows, "\n"))
+}
+
+// buildWrappedLines 将每条语义行以固定宽度渲染，得到换行后并为宽度对齐的可视行。
+// 每行恰好为宽度 w，故 viewport 对其不再折行，行号与可视列可直接映射。
+func (m *Model) buildWrappedLines(w int) []string {
+	var rows []string
+	for _, line := range m.lines {
+		rendered := lipgloss.NewStyle().Width(w).Render(line)
+		rows = append(rows, strings.Split(rendered, "\n")...)
+	}
+	return rows
+}
+
+// selSpan 返回内容行 idx 上选区覆盖的 [lo, hi) 可视列跨度；不在选区内则返回 false。
+func selSpan(idx int, start, end selPos, w int) (lo, hi int, ok bool) {
+	if idx < start.line || idx > end.line {
+		return 0, 0, false
+	}
+	lo, hi = 0, w
+	if idx == start.line {
+		lo = start.col
+	}
+	if idx == end.line {
+		hi = end.col
+	}
+	if hi > w {
+		hi = w
+	}
+	if lo >= hi {
+		return 0, 0, false
+	}
+	return lo, hi, true
+}
+
+// selectedText 从宽对齐渲染行中按选区坐标提取纯文本副本。
+func (m *Model) selectedText() string {
+	if !m.sel.active || m.sel.empty() {
+		return ""
+	}
+	start, end := m.sel.ordered()
+	var out []string
+	for idx := start.line; idx <= end.line && idx < len(m.wrappedLines); idx++ {
+		lo, hi := 0, ansi.StringWidth(m.wrappedLines[idx])
+		if idx == start.line {
+			lo = start.col
+		}
+		if idx == end.line {
+			hi = end.col
+		}
+		if lo > hi {
+			lo = hi
+		}
+		out = append(out, strings.TrimRight(ansi.Strip(ansi.Cut(m.wrappedLines[idx], lo, hi)), " "))
+	}
+	return strings.Join(out, "\n")
+}
+
+// inBody 报告屏幕坐标 (x, y) 是否位于正文 viewport 区域内（viewport 占据标题行之下的区域）。
+func (m *Model) inBody(x, y int) bool {
+	h := m.viewport.Height()
+	return y >= 1 && y < 1+h && x >= 0 && x < m.viewport.Width()
+}
+
+// transcriptCaret 把屏幕坐标映射到正文内容坐标（绝对行 + 可视列），并做边界钳制。
+func (m *Model) transcriptCaret(x, y int) selPos {
+	h := m.viewport.Height()
+	yv := y - 1 // 正文首行位于屏幕第 1 行（标题占第 0 行）
+	if yv < 0 {
+		yv = 0
+	}
+	if yv > h-1 {
+		yv = h - 1
+	}
+	if x < 0 {
+		x = 0
+	}
+	if cw := m.viewport.Width(); x > cw {
+		x = cw
+	}
+	return selPos{line: m.viewport.YOffset() + yv, col: x}
+}
+
+// navigateHistory 用 ↑/↓ 翻阅已提交命令历史。返回前会恢复用户半途编辑的草稿。
+func (m *Model) navigateHistory(prev bool) {
+	if prev {
+		if m.histPos == len(m.history) {
+			m.draft = m.input.Value()
+		}
+		if m.histPos > 0 {
+			m.histPos--
+			m.setInputFromHistory()
+		}
+		return
+	}
+	if m.histPos < len(m.history) {
+		m.histPos++
+		m.setInputFromHistory()
+	}
+}
+
+// setInputFromHistory 将输入框内容设为 histPos 对应的历史命令；落在末尾则回到草稿。
+func (m *Model) setInputFromHistory() {
+	if m.histPos == len(m.history) {
+		m.input.SetValue(m.draft)
+	} else {
+		m.input.SetValue(m.history[m.histPos])
+	}
+	m.input.CursorEnd()
+}
+
+// runeCount 返回字符串的字符（rune）数，用于复制提示。
+func runeCount(s string) int {
+	return len([]rune(s))
+}
+
+// copyNoticeMsg 是复制提示过期的一条内部消息；seq 用于忽略已经过期的陈年提示。
+type copyNoticeMsg struct{ seq int }
+
+const copyNoticeTTL = 1500 * time.Millisecond
+
+func copyNoticeExpire(seq int) tea.Cmd {
+	return tea.Tick(copyNoticeTTL, func(time.Time) tea.Msg {
+		return copyNoticeMsg{seq: seq}
+	})
+}
+
+// readClipboardPaste 读取系统剪贴板并通过标准的 PasteMsg 路径插入输入框。
+func readClipboardPaste() tea.Cmd {
+	return func() tea.Msg {
+		text, err := clipboard.ReadAll()
+		if err != nil {
+			return nil
+		}
+		return tea.PasteMsg{Content: text}
+	}
 }
 
 // renderUserBubble 把用户消息渲染为左对齐的紫色文本（颜色 + 前缀符号与助手区分，不套气泡框）。
@@ -506,7 +774,6 @@ var slashCommands = []compItem{
 	{label: "/skills", insert: "/skills", hint: "列出所有已安装的技能"},
 	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
-	{label: "/mouse", insert: "/mouse", hint: "切换鼠标捕获（用于复制文字）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -598,9 +865,13 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"快捷键:",
 			"  Enter        发送消息",
 			"  Ctrl+J       换行（终端协议不区分 Ctrl+Enter 与 Enter，故用 LF 键）",
-			"  ↑/↓          选择命令 / 滚动消息",
+			"  ↑/↓          翻阅历史命令（单行输入时）",
+			"  Ctrl+V       粘贴剪贴板内容",
 			"  /            在输入框首字符唤起命令菜单",
 			"  Ctrl+C       退出",
+			"",
+			"鼠标:",
+			"  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
 			"",
 			"斜杠命令:",
 			"  /help        显示本帮助",
@@ -608,7 +879,6 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /skills      列出所有已安装的技能",
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
-			"  /mouse       切换鼠标捕获（关闭后可用终端原生方式复制文字）",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render("◈ DSC · 帮助") + "\n" + help)
@@ -667,19 +937,6 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-		}
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.viewport.GotoBottom()
-		return true, nil
-	case "/mouse":
-		m.mouseCaptureOff = !m.mouseCaptureOff
-		if m.mouseCaptureOff {
-			m.appendMessage(dimSty.Render("已关闭鼠标捕获：现在可用终端原生方式选中/复制文字（滚轮滚动随之禁用）。"))
-		} else {
-			m.appendMessage(dimSty.Render("已开启鼠标捕获：应用内响应鼠标事件。"))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -841,16 +1098,16 @@ func (m *Model) capacityTag() string {
 	return shortTokens(m.usedTokens)
 }
 
-// statusBar 渲染底部状态栏：左侧模型/状态/鼠标状态，右侧快捷键提示。
+// statusBar 渲染底部状态栏：左侧模型/复制提示/思考状态，右侧快捷键提示。
 func (m *Model) statusBar() string {
 	left := "模型: " + m.displayModelName()
-	if m.mouseCaptureOff {
-		left += " · 鼠标捕获关"
+	if m.copyNotice != "" {
+		left += " · " + m.copyNotice
 	}
 	if m.thinking || m.streaming {
 		left = "思考中... · " + left
 	}
-	right := "Enter 发送 · Ctrl+J 换行 · Ctrl+C 退出"
+	right := "Enter 发送 · Ctrl+J 换行 · 拖拽正文可复制 · Ctrl+C 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if pad < 1 {
 		pad = 1
@@ -881,17 +1138,13 @@ func (m *Model) View() tea.View {
 	return m.viewOf(strings.Join(parts, "\n"))
 }
 
-// viewOf 把内容包装成视图并声明终端特性：进入备用屏幕。
-// 鼠标捕获开启时请求单元格级鼠标移动；关闭时（/mouse）释放鼠标给终端，
-// 以便终端原生文字选中/复制可用。
+// viewOf 把内容包装成视图并声明终端特性：进入备用屏幕并始终保持鼠标捕获。
+// 鼠标捕获开启（CellMotion）后，滚轮滚动、正文拖拽选中自动复制都内建工作，
+// 无需 /mouse 命令；输入框区域不参与正文选区。
 func (m *Model) viewOf(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
-	if m.mouseCaptureOff {
-		v.MouseMode = tea.MouseModeNone
-	} else {
-		v.MouseMode = tea.MouseModeCellMotion
-	}
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
