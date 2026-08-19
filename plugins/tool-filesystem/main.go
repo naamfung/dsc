@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,6 +54,7 @@ type Session struct {
 	OutputBuf strings.Builder
 	mu        sync.Mutex
 	done      chan struct{}
+	consumed  int // 已被 execSessionCommand 讀取過的 OutputBuf 長度
 }
 
 // SessionManager 管理所有持久的 shell 會話
@@ -246,7 +246,7 @@ func getOrCreateSession(sessionID, shellType, cwd string) (*Session, error) {
 	return session, nil
 }
 
-// execSessionCommand 在 session 中執行命令
+// execSessionCommand 在 session 中執行命令，返回「本次调用新增」的输出（不含历史输出）
 func execSessionCommand(session *Session, command string) (string, int32, error) {
 	cmdWithNewline := command + "\n"
 	_, err := session.Stdin.Write([]byte(cmdWithNewline))
@@ -254,17 +254,48 @@ func execSessionCommand(session *Session, command string) (string, int32, error)
 		return "", 0, fmt.Errorf("failed to write to stdin: %w", err)
 	}
 
-	// 等待輸出穩定（短暫休眠）
-	time.Sleep(300 * time.Millisecond)
+	// 等待輸出穩定：輸出連續 quiet 時間無新增即認為命令執行完成，
+	// 比固定休眠更可靠（可覆蓋 go build 等慢命令），並有上限避免一直等待
+	waitForOutputStable(session, 30*time.Second, 300*time.Millisecond)
 
 	session.mu.Lock()
 	output := session.OutputBuf.String()
+	newOutput := output[session.consumed:]
+	session.consumed = len(output)
 	session.mu.Unlock()
 
-	return output, 0, nil
+	return newOutput, 0, nil
 }
 
-// startInteractiveShellProcess 啟動交互式 shell 進程並返回 stdin, stdout, stderr pipes
+// waitForOutputStable 輪詢等待 session 輸出穩定：
+// 在 maxWait 內，若輸出連續 quiet 時間無增長則返回；否則等到 maxWait 超時。
+func waitForOutputStable(session *Session, maxWait, quiet time.Duration) {
+	deadline := time.Now().Add(maxWait)
+	lastLen := -1
+	lastGrow := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		session.mu.Lock()
+		cur := session.OutputBuf.Len()
+		session.mu.Unlock()
+		if cur != lastLen {
+			lastLen = cur
+			lastGrow = time.Now()
+		} else if lastLen >= 0 && time.Since(lastGrow) >= quiet {
+			return
+		}
+	}
+}
+
+// shellSupportsNoProfile 探測解析到的 bash/sh 是否支援 GNU 長選項 --noprofile/--norc。
+// busybox 等精簡 shell 不支援這些選項，直接傳參會報 "bash: bad option '--noprofile'"。
+// 用 "exit 0" 作為探測命令：GNU bash 正常退出（0），不支援的 shell 報錯退出（非 0）。
+func shellSupportsNoProfile(shellType string) bool {
+	probe := exec.Command(shellType, "--noprofile", "--norc", "-c", "exit 0")
+	return probe.Run() == nil
+}
+
+// startInteractiveShellProcess 啟動持久 shell 進程並返回 stdin, stdout, stderr pipes
 func startInteractiveShellProcess(shellType, cwd string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
 	var cmd *exec.Cmd
 
@@ -274,20 +305,26 @@ func startInteractiveShellProcess(shellType, cwd string) (*exec.Cmd, io.WriteClo
 	case "cmd":
 		cmd = exec.Command("cmd.exe", "/K")
 	default:
-		// UNIX shell (bash, zsh, sh, etc.)
-		// 使用互動式模式 (-i) 以維持狀態
-		if shellType == "fish" {
-			cmd = exec.Command(shellType, "-i")
-		} else {
-			// bash, zsh, sh, ksh, dash, tcsh, csh 等
-			// 對於 bash/sh，使用 --rcfile /dev/null 避免讀取啟動文件
-			if shellType == "bash" || shellType == "sh" {
-				cmd = exec.Command(shellType, "--rcfile", "/dev/null", "-i")
-			} else if shellType == "zsh" {
-				cmd = exec.Command(shellType, "-f", "-i")
+		// UNIX shell (bash, zsh, sh, fish, etc.)
+		// 不要傳 -i 交互模式：stdout 是管道而非 TTY 時，交互模式會報
+		// "cannot set terminal process group" / "write error: Bad file descriptor"。
+		// 非交互模式同樣會從 stdin 逐行讀取命令，並在同一進程內維持會話狀態（cwd、變量等）。
+		// 同時跳過啟動文件（如 ~/.bashrc），避免其輸出污染工具結果。
+		switch shellType {
+		case "bash", "sh":
+			// 某些環境的 bash 可能是 busybox 等精簡實現，不支援 GNU 長選項
+			// --noprofile/--norc（啟動時會報 "bash: bad option '--noprofile'"）。
+			// 先探測解析到的 shell 是否支援這些選項，不支援則不加選項直接啟動。
+			if shellSupportsNoProfile(shellType) {
+				cmd = exec.Command(shellType, "--noprofile", "--norc")
 			} else {
-				cmd = exec.Command(shellType, "-i")
+				cmd = exec.Command(shellType)
 			}
+		case "zsh":
+			cmd = exec.Command(shellType, "-f")
+		default:
+			// fish, ksh, dash, tcsh, csh 等：非交互模式直接從 stdin 讀取
+			cmd = exec.Command(shellType)
 		}
 	}
 
@@ -332,30 +369,45 @@ func startInteractiveShellProcess(shellType, cwd string) (*exec.Cmd, io.WriteClo
 	return cmd, stdin, stdout, stderr, nil
 }
 
-// readSessionOutput 讀取 shell 輸出並累積到 Session 的 OutputBuf
+// readSessionOutput 持續把 stdout/stderr 讀入 Session 的 OutputBuf（供 execSessionCommand 讀取），
+// 並在進程結束時關閉 done。注意必須「邊讀邊寫」——若等進程結束才寫入，持久會話下永遠讀不到輸出。
 func readSessionOutput(session *Session) {
 	defer close(session.done)
 
-	var stdoutBuf, stderrBuf bytes.Buffer
-
 	// 讀取 stdout
 	go func() {
-		io.Copy(&stdoutBuf, session.Stdout)
+		buf := make([]byte, 4096)
+		for {
+			n, err := session.Stdout.Read(buf)
+			if n > 0 {
+				session.mu.Lock()
+				session.OutputBuf.Write(buf[:n])
+				session.mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 
 	// 讀取 stderr
 	go func() {
-		io.Copy(&stderrBuf, session.Stderr)
+		buf := make([]byte, 4096)
+		for {
+			n, err := session.Stderr.Read(buf)
+			if n > 0 {
+				session.mu.Lock()
+				session.OutputBuf.Write(buf[:n])
+				session.mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 
 	// 等待進程結束
 	_ = session.Cmd.Wait()
-
-	// 累積輸出
-	session.mu.Lock()
-	session.OutputBuf.WriteString(stdoutBuf.String())
-	session.OutputBuf.WriteString(stderrBuf.String())
-	session.mu.Unlock()
 }
 
 // ShellInfo 描述一個可用 shell 及其調用方式
