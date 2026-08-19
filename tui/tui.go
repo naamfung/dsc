@@ -6,6 +6,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -16,6 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"dsc/plugin"
 	"github.com/charmbracelet/x/ansi"
+	"gopkg.in/yaml.v3"
 )
 
 // 布局尺寸常量：标题栏、状态栏各占一行；输入区内部 3 行 + 2 行边框。
@@ -499,10 +503,91 @@ func (m *Model) renderAssistant(body string) string {
 var slashCommands = []compItem{
 	{label: "/help", insert: "/help", hint: "显示帮助与快捷键"},
 	{label: "/clear", insert: "/clear", hint: "清空聊天记录"},
+	{label: "/skills", insert: "/skills", hint: "列出所有已安装的技能"},
 	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
 	{label: "/mouse", insert: "/mouse", hint: "切换鼠标捕获（用于复制文字）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
+}
+
+// readSkillFrontmatter 解析 SKILL.md 可选 frontmatter 的 name/description。
+func readSkillFrontmatter(path, fallback string) (string, string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	content := string(data)
+	name, desc := fallback, ""
+	if strings.HasPrefix(content, "---") {
+		rest := strings.TrimPrefix(content, "---")
+		if strings.HasPrefix(rest, "\n") {
+			rest = rest[1:]
+		}
+		if end := strings.Index(rest, "\n---"); end > 0 {
+			var fm struct {
+				Name        string `yaml:"name"`
+				Description string `yaml:"description"`
+			}
+			if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err == nil {
+				if strings.TrimSpace(fm.Name) != "" {
+					name = strings.TrimSpace(fm.Name)
+				}
+				desc = strings.TrimSpace(fm.Description)
+			}
+		}
+	}
+	if desc == "" {
+		desc = "(no description)"
+	}
+	return name, desc
+}
+
+// listSkills 扫描 skills 目录，按内置（builtin/）与外置（installed/）分组返回展示行。
+func listSkills() []string {
+	dir := os.Getenv("DSC_SKILLS_DIR")
+	if dir == "" {
+		dir = "./skills"
+	}
+	var out []string
+	if builtin := scanSkillSection(filepath.Join(dir, "builtin")); len(builtin) > 0 {
+		out = append(out, "内置技能（"+fmt.Sprint(len(builtin))+"）：")
+		out = append(out, builtin...)
+	}
+	if installed := scanSkillSection(filepath.Join(dir, "installed")); len(installed) > 0 {
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		out = append(out, "外置技能（"+fmt.Sprint(len(installed))+"）：")
+		out = append(out, installed...)
+	}
+	return out
+}
+
+// scanSkillSection 扫描单个技能子目录（builtin/ 或 installed/），返回 "  - name — desc" 行。
+func scanSkillSection(dir string) []string {
+	var out []string
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			// 目录布局：<name>/SKILL.md
+			p := filepath.Join(dir, e.Name(), "SKILL.md")
+			if info, err := os.Stat(p); err == nil && !info.IsDir() {
+				if name, desc := readSkillFrontmatter(p, e.Name()); name != "" {
+					out = append(out, fmt.Sprintf("  - %s — %s", name, desc))
+				}
+			}
+		} else if strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+			name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+			if n, desc := readSkillFrontmatter(filepath.Join(dir, e.Name()), name); n != "" {
+				out = append(out, fmt.Sprintf("  - %s — %s", n, desc))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // runSlashCommand 处理斜杠命令；返回是否已处理以及要执行的命令。
@@ -520,6 +605,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"斜杠命令:",
 			"  /help        显示本帮助",
 			"  /clear       清空聊天记录",
+			"  /skills      列出所有已安装的技能",
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
 			"  /mouse       切换鼠标捕获（关闭后可用终端原生方式复制文字）",
@@ -538,6 +624,19 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
+		return true, nil
+	case "/skills":
+		skills := listSkills()
+		if len(skills) == 0 {
+			m.appendMessage(assistantNameSty.Render("◈ DSC · 技能") + "\n尚未安装任何技能。可让模型调用 install_skill 安装，或将 SKILL.md 放入 ./skills/installed 目录。")
+		} else {
+			m.appendMessage(assistantNameSty.Render("◈ DSC · 技能") + "\n" + strings.Join(skills, "\n"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
 		return true, nil
 	case "/mode minimal":
 		if m.manager != nil {
