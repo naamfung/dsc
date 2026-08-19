@@ -32,6 +32,9 @@ service LLMService {
 service ToolService {
   rpc ExecuteTool(ExecuteToolRequest) returns (ExecuteToolResponse);
   rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  // ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
+  // content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
+  rpc ListContext(ListContextRequest) returns (ListContextResponse);
 }
 
 message NameRequest {}
@@ -161,6 +164,13 @@ message ListToolsRequest {
 
 message ListToolsResponse {
   repeated Tool tools = 1;
+}
+
+message ListContextRequest {
+}
+
+message ListContextResponse {
+  string content = 1; // 插件贡献的上下文片段，可注入 system prompt；空表示无贡献
 }
 
 // FsObservationPolicyService 文件系統觀測策略服務

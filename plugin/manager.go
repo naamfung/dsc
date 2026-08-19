@@ -44,6 +44,7 @@ type Manager struct {
 	toolServiceIDs      map[string]uint32    // tool plugin name -> serviceID
 	pluginToolNames     map[string][]string  // tool plugin name -> list of tool names it provides
 	toolNameToServiceID map[string]uint32    // tool name -> serviceID
+	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
 }
 
 type ManagerConfig struct {
@@ -85,6 +86,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		toolServiceIDs:      make(map[string]uint32),
 		pluginToolNames:     make(map[string][]string),
 		toolNameToServiceID: make(map[string]uint32),
+		toolClients:         make(map[string]proto.ToolServiceClient),
 		pluginLogger:        pluginLogger,
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
@@ -657,6 +659,32 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 	return tool.Execute(ctx, argsJSON)
 }
 
+// ListContext 聚合所有已加載工具插件貢獻的上下文片段（如技能索引），
+// 供 agent 拼接到 system prompt。未實現 ListContext 的舊插件返回 Unimplemented，跳過即可。
+func (m *Manager) ListContext(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	clients := make([]proto.ToolServiceClient, 0, len(m.toolClients))
+	for _, c := range m.toolClients {
+		clients = append(clients, c)
+	}
+	m.mu.Unlock()
+
+	var parts []string
+	for _, c := range clients {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		resp, err := c.ListContext(ctx, &proto.ListContextRequest{})
+		cancel()
+		if err != nil {
+			// 舊插件未實現 ListContext（Unimplemented）或暂时不可用，跳过
+			continue
+		}
+		if content := strings.TrimSpace(resp.GetContent()); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
 // UnloadPlugin 卸載插件
 func (m *Manager) UnloadPlugin(name string) error {
 	m.mu.Lock()
@@ -681,6 +709,7 @@ func (m *Manager) UnloadPlugin(name string) error {
 		// 刪除相關記錄
 		delete(m.toolServiceIDs, name)
 		delete(m.pluginToolNames, name)
+		delete(m.toolClients, name)
 	} else if m.typeMap[name] == "llm" {
 		delete(m.llmServiceIDs, name)
 	}
@@ -822,6 +851,10 @@ func (s *toolProxyServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToo
 
 func (s *toolProxyServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
 	return s.client.ListTools(ctx, req)
+}
+
+func (s *toolProxyServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
+	return s.client.ListContext(ctx, req)
 }
 
 // normalizeBinaryPath 跨平台處理二進制路徑
@@ -1117,6 +1150,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		})
 		m.toolServiceIDs[entry.Name] = serviceID
 		m.pluginToolNames[entry.Name] = toolNames
+		m.toolClients[entry.Name] = toolClient
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "tool"
 		m.pluginMetadata[entry.Name] = info
@@ -1225,6 +1259,7 @@ func (m *Manager) SwitchMode(mode string) error {
 				}
 				delete(m.toolServiceIDs, name)
 				delete(m.pluginToolNames, name)
+				delete(m.toolClients, name)
 			}
 
 			m.logger.Info("plugin unloaded during mode switch", "name", name, "mode", mode)

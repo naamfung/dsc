@@ -829,6 +829,7 @@ var LLMService_ServiceDesc = grpc.ServiceDesc{
 const (
 	ToolService_ExecuteTool_FullMethodName = "/dsc.ToolService/ExecuteTool"
 	ToolService_ListTools_FullMethodName   = "/dsc.ToolService/ListTools"
+	ToolService_ListContext_FullMethodName = "/dsc.ToolService/ListContext"
 )
 
 // ToolServiceClient is the client API for ToolService service.
@@ -837,6 +838,9 @@ const (
 type ToolServiceClient interface {
 	ExecuteTool(ctx context.Context, in *ExecuteToolRequest, opts ...grpc.CallOption) (*ExecuteToolResponse, error)
 	ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error)
+	// ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
+	// content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
+	ListContext(ctx context.Context, in *ListContextRequest, opts ...grpc.CallOption) (*ListContextResponse, error)
 }
 
 type toolServiceClient struct {
@@ -867,12 +871,25 @@ func (c *toolServiceClient) ListTools(ctx context.Context, in *ListToolsRequest,
 	return out, nil
 }
 
+func (c *toolServiceClient) ListContext(ctx context.Context, in *ListContextRequest, opts ...grpc.CallOption) (*ListContextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListContextResponse)
+	err := c.cc.Invoke(ctx, ToolService_ListContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ToolServiceServer is the server API for ToolService service.
 // All implementations must embed UnimplementedToolServiceServer
 // for forward compatibility.
 type ToolServiceServer interface {
 	ExecuteTool(context.Context, *ExecuteToolRequest) (*ExecuteToolResponse, error)
 	ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error)
+	// ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
+	// content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
+	ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error)
 	mustEmbedUnimplementedToolServiceServer()
 }
 
@@ -888,6 +905,9 @@ func (UnimplementedToolServiceServer) ExecuteTool(context.Context, *ExecuteToolR
 }
 func (UnimplementedToolServiceServer) ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTools not implemented")
+}
+func (UnimplementedToolServiceServer) ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListContext not implemented")
 }
 func (UnimplementedToolServiceServer) mustEmbedUnimplementedToolServiceServer() {}
 func (UnimplementedToolServiceServer) testEmbeddedByValue()                     {}
@@ -946,6 +966,24 @@ func _ToolService_ListTools_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ToolService_ListContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListContextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolServiceServer).ListContext(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolService_ListContext_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolServiceServer).ListContext(ctx, req.(*ListContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ToolService_ServiceDesc is the grpc.ServiceDesc for ToolService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -960,6 +998,10 @@ var ToolService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTools",
 			Handler:    _ToolService_ListTools_Handler,
+		},
+		{
+			MethodName: "ListContext",
+			Handler:    _ToolService_ListContext_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

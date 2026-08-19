@@ -42,6 +42,10 @@ type ReactLoopAgent struct {
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
 	contextWindow    int   // 總容量（token 數），0 表示未設置（不做自動壓縮）
 	lastPromptTokens int32 // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
+
+	// 完整 system prompt（基礎指令 + 各工具插件貢獻的上下文片段，如技能索引），
+	// 首次對話時構建一次，上下文壓縮後沿用，避免技能索引丢失
+	sysPrompt string
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
@@ -144,9 +148,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	// 讀取/追加當前用戶輸入到歷史
 	a.historyMu.Lock()
 	if len(a.history) == 0 {
-		// 第一次對話，添加 system prompt
+		// 第一次對話：構建完整 system prompt（基礎指令 + 各插件貢獻的上下文片段，如技能索引）
+		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 		a.history = []*proto.Message{
-			{Role: "system", Content: "You are a helpful assistant with access to tools."},
+			{Role: "system", Content: a.sysPrompt},
 		}
 	}
 	a.history = append(a.history, &proto.Message{Role: "user", Content: input})
@@ -335,6 +340,22 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	}, nil
 }
 
+// buildSystemPrompt 構建完整 system prompt：基礎指令 + 各工具插件貢獻的上下文片段（如技能索引）。
+func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto.ToolServiceClient) string {
+	parts := []string{"You are a helpful assistant with access to tools. 根据任务选择合适的工具，逐步完成用户的请求。"}
+
+	// 聚合各工具插件貢獻的上下文片段（如技能索引），失敗或為空則跳過
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := toolClient.ListContext(ctx, &proto.ListContextRequest{})
+	cancel()
+	if err == nil {
+		if content := strings.TrimSpace(resp.GetContent()); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // saveHistory 將當前的會話上下文寫回 agent 歷史，供下一輪 Run 使用
 func (a *ReactLoopAgent) saveHistory(messages []*proto.Message) {
 	a.historyMu.Lock()
@@ -358,10 +379,16 @@ func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLM
 		remaining = 1024
 	}
 	// 壓縮請求：以 system 指令引導 + 完整歷史作為 user 內容
+	// （跳過歷史中的 system 消息，避免把基礎指令與技能索引壓進摘要）
 	msgs := make([]*proto.Message, 0, len(*history)+2)
 	msgs = append(msgs, &proto.Message{Role: "system", Content: compactSystemPrompt})
 	msgs = append(msgs, &proto.Message{Role: "user", Content: "以下是需要压缩的对话历史："})
-	msgs = append(msgs, *history...)
+	for _, m := range *history {
+		if m.Role == "system" {
+			continue
+		}
+		msgs = append(msgs, m)
+	}
 
 	req := &proto.ChatRequest{
 		Messages:  msgs,
@@ -377,9 +404,13 @@ func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLM
 		return fmt.Errorf("compact history returned empty summary")
 	}
 
-	// 用壓縮後的摘要替換歷史（保留 system prompt，摘要作為 user 消息）
+	// 用壓縮後的摘要替換歷史（保留完整 system prompt 含技能索引，摘要作為 user 消息）
+	sysPrompt := a.sysPrompt
+	if sysPrompt == "" {
+		sysPrompt = "You are a helpful assistant with access to tools."
+	}
 	*history = []*proto.Message{
-		{Role: "system", Content: "You are a helpful assistant with access to tools."},
+		{Role: "system", Content: sysPrompt},
 		{Role: "user", Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary},
 	}
 	// 壓縮後已用容量無法從 Chat 精確獲取，重置為 0，下一輪流式調用會更新為真實值

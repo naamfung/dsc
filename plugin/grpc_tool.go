@@ -40,3 +40,12 @@ func (s *ToolGRPCServer) ListTools(ctx context.Context, req *proto.ListToolsRequ
 	}
 	return &proto.ListToolsResponse{Tools: protoTools}, nil
 }
+
+// ListContext 聚合所有工具插件贡献的上下文片段（如技能索引），供 agent 拼接到 system prompt
+func (s *ToolGRPCServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
+	content, err := s.mgr.ListContext(ctx)
+	if err != nil {
+		return &proto.ListContextResponse{}, err
+	}
+	return &proto.ListContextResponse{Content: content}, nil
+}

@@ -16,3 +16,6 @@ plugins:
   - name: tool-lisp-eval
     type: tool
     enabled: true
+  - name: tool-skill
+    type: tool
+    enabled: true

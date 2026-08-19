@@ -57,4 +57,8 @@ go build -o plugins/tool-browser-use/tool-browser-use.exe ./plugins/tool-browser
 echo "Building tool-lisp-eval plugin..."
 go build -o plugins/tool-lisp-eval/tool-lisp-eval.exe ./plugins/tool-lisp-eval
 
+# 构建 tool-skill 插件
+echo "Building tool-skill plugin..."
+go build -o plugins/tool-skill/tool-skill.exe ./plugins/tool-skill
+
 echo "Build completed successfully."
