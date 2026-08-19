@@ -1,5 +1,5 @@
 workspace_root: ./workspace
-default_llm: openai
+default_llm: anthropic
 # 上下文窗口容量（token 数）。不配置（0）时：若为本地 LLAMACPP 服务则探测其 /v1/models 的 n_ctx，
 # 探测失败则回退默认 128K（按 *1024 计，即 131072）。
 #context_window: 131072

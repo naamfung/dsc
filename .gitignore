@@ -10,3 +10,6 @@ protoc.zip
 protoc_dir/
 
 *.txt
+
+_shtest/
+workspace/
