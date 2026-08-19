@@ -122,8 +122,12 @@ func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
 	return toolCalls
 }
 
-func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
-	resp, err := p.client.Messages.New(ctx, p.buildMessageParams(messages, tools))
+func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
+	params := p.buildMessageParams(messages, tools)
+	if maxTokens > 0 {
+		params.MaxTokens = int64(maxTokens)
+	}
+	resp, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}

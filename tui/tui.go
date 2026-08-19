@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -98,6 +99,15 @@ type Model struct {
 	manager   *plugin.Manager // 插件管理器，用於實時切換模式
 	ctx       context.Context
 	modelName string
+	mode      string // 當前預設模式（minimal / standard），實時反映切換
+
+	// 上下文容量顯示：contextWindow 為總容量（token 數），usedTokens 為已用容量
+	contextWindow int
+	usedTokens    int
+
+	// mouseCaptureOff 為 true 時釋放滑鼠給終端（MouseModeNone），
+	// 讓終端原生文字選取/複製可用；由 /mouse 命令切換
+	mouseCaptureOff bool
 
 	viewport viewport.Model
 	input    textarea.Model
@@ -120,7 +130,7 @@ type Model struct {
 }
 
 // New 创建一个聊天界面模型
-func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName string) *Model {
+func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) *Model {
 	input := textarea.New()
 	input.Placeholder = "输入消息，回车发送，Ctrl+J 换行，Ctrl+C 退出"
 	input.CharLimit = 4096
@@ -146,12 +156,14 @@ func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 	s.Style = lipgloss.NewStyle().Foreground(accent)
 
 	return &Model{
-		agent:     agent,
-		manager:   manager,
-		ctx:       ctx,
-		modelName: modelName,
-		input:     input,
-		spinner:   s,
+		agent:         agent,
+		manager:       manager,
+		ctx:           ctx,
+		modelName:     modelName,
+		mode:          mode,
+		contextWindow: contextWindow,
+		input:         input,
+		spinner:       s,
 	}
 }
 
@@ -345,6 +357,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err != nil {
 				m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
 			} else if msg.frame != nil && msg.frame.Status == "success" {
+				// 更新已用容量（供標題欄顯示「已用/總容量」）
+				if msg.frame.Usage != nil && msg.frame.Usage.PromptTokens > 0 {
+					m.usedTokens = int(msg.frame.Usage.PromptTokens)
+				}
 				// 最終渲染：將 streamBuffer 作為正文添加到助手消息中
 				if m.streamMsgIdx < len(m.lines) {
 					body := renderMarkdown(m.streamBuffer, max(m.width-4, 20))
@@ -402,6 +418,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = false
 			m.streamOpen = false
+			if f.Status == "success" && f.Usage != nil && f.Usage.PromptTokens > 0 {
+				m.usedTokens = int(f.Usage.PromptTokens)
+			}
 			if f.Status == "error" && f.Error != "" {
 				m.appendMessage(errorSty.Render("错误: ") + f.Error)
 			}
@@ -482,6 +501,7 @@ var slashCommands = []compItem{
 	{label: "/clear", insert: "/clear", hint: "清空聊天记录"},
 	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
+	{label: "/mouse", insert: "/mouse", hint: "切换鼠标捕获（用于复制文字）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -502,6 +522,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /clear       清空聊天记录",
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
+			"  /mouse       切换鼠标捕获（关闭后可用终端原生方式复制文字）",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render("◈ DSC · 帮助") + "\n" + help)
@@ -524,6 +545,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			if err != nil {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
+				m.mode = "minimal" // 實時反映標題欄模式
 				m.appendMessage(assistantNameSty.Render("◈ DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
 			}
 		} else {
@@ -541,10 +563,24 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			if err != nil {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
+				m.mode = "standard" // 實時反映標題欄模式
 				m.appendMessage(assistantNameSty.Render("◈ DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/mouse":
+		m.mouseCaptureOff = !m.mouseCaptureOff
+		if m.mouseCaptureOff {
+			m.appendMessage(dimSty.Render("已关闭鼠标捕获：现在可用终端原生方式选中/复制文字（滚轮滚动随之禁用）。"))
+		} else {
+			m.appendMessage(dimSty.Render("已开启鼠标捕获：应用内响应鼠标事件。"))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -675,9 +711,43 @@ func padToWidth(s string, w int) string {
 	return s + strings.Repeat("\u00a0", pad)
 }
 
-// statusBar 渲染底部状态栏：左侧模型/状态，右侧快捷键提示。
+// displayMode 返回展示用预设模式名（首字母大写；未知时返回原值）。
+func (m *Model) displayMode() string {
+	switch m.mode {
+	case "minimal":
+		return "Minimal"
+	case "standard":
+		return "Standard"
+	}
+	return m.mode
+}
+
+// shortTokens 把 token 数格式化为以 1024 为底的短单位（如 128K），小于 1024 显示原数。
+func shortTokens(n int) string {
+	switch {
+	case n >= 999*1024:
+		return fmt.Sprintf("%.1fM", float64(n)/1024/1024)
+	case n >= 1024:
+		return fmt.Sprintf("%dK", n/1024)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+// capacityTag 渲染「已用/总容量」，如 12K/128K；容量未设置时只显示已用。
+func (m *Model) capacityTag() string {
+	if m.contextWindow > 0 {
+		return fmt.Sprintf("%s/%s", shortTokens(m.usedTokens), shortTokens(m.contextWindow))
+	}
+	return shortTokens(m.usedTokens)
+}
+
+// statusBar 渲染底部状态栏：左侧模型/状态/鼠标状态，右侧快捷键提示。
 func (m *Model) statusBar() string {
 	left := "模型: " + m.displayModelName()
+	if m.mouseCaptureOff {
+		left += " · 鼠标捕获关"
+	}
 	if m.thinking || m.streaming {
 		left = "思考中... · " + left
 	}
@@ -695,7 +765,7 @@ func (m *Model) View() tea.View {
 		return m.viewOf("加载中...")
 	}
 
-	title := titleSty.Render(" ◆ DSC  |  模型: " + m.displayModelName() + " ")
+	title := titleSty.Render(" ◆ DSC  |  " + m.displayMode() + "  |  " + m.capacityTag() + " ")
 	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
 
 	var parts []string
@@ -712,17 +782,23 @@ func (m *Model) View() tea.View {
 	return m.viewOf(strings.Join(parts, "\n"))
 }
 
-// viewOf 把内容包装成视图并声明终端特性：进入备用屏幕、开启单元格级鼠标移动。
+// viewOf 把内容包装成视图并声明终端特性：进入备用屏幕。
+// 鼠标捕获开启时请求单元格级鼠标移动；关闭时（/mouse）释放鼠标给终端，
+// 以便终端原生文字选中/复制可用。
 func (m *Model) viewOf(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	if m.mouseCaptureOff {
+		v.MouseMode = tea.MouseModeNone
+	} else {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 
 // Run 运行聊天界面，阻塞直到退出
-func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName string) error {
-	m := New(agent, manager, ctx, modelName)
+func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) error {
+	m := New(agent, manager, ctx, modelName, mode, contextWindow)
 	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err

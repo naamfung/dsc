@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +38,10 @@ type ReactLoopAgent struct {
 	// 多輪對話記憶：跨 Run 保留會話歷史
 	historyMu sync.Mutex
 	history   []*proto.Message
+
+	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
+	contextWindow    int   // 總容量（token 數），0 表示未設置（不做自動壓縮）
+	lastPromptTokens int32 // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
@@ -163,6 +170,26 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		default:
 		}
 
+		// 上下文自動壓縮：已用容量（最近一次請求的 prompt token 數）超過 80% 時，
+		// 先讓模型把歷史壓縮成摘要，再繼續後續請求（保持簡單的 80% 觸發邏輯）
+		if a.contextWindow > 0 && a.lastPromptTokens > 0 &&
+			int(a.lastPromptTokens) >= a.contextWindow*8/10 {
+			if emit != nil {
+				emit(&plugin.RunStreamResponse{
+					Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
+						a.lastPromptTokens*100/int32(a.contextWindow)),
+					Status: "tool",
+				})
+			}
+			if err := a.compactHistory(ctx, llmClient, &currentHistory, availableTools); err != nil {
+				if emit != nil {
+					emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+				}
+				return nil, err
+			}
+			// 壓縮後重新取得工具列表可能無變化，直接繼續下一輪
+		}
+
 		// 上下文管理與截斷
 		const maxMessages = 20
 		if len(currentHistory) > maxMessages {
@@ -209,6 +236,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					emit(&plugin.RunStreamResponse{Status: "error", Error: cr.Error})
 					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
 				}
+				// 記錄 prompt 用量（≈ 當前上下文已用容量）；該值在 finish 分片由服務端返回
+				if cr.Usage != nil && cr.Usage.PromptTokens > 0 {
+					a.lastPromptTokens = cr.Usage.PromptTokens
+				}
 				content += cr.Content
 				if cr.Content != "" {
 					emit(&plugin.RunStreamResponse{Output: cr.Content, Status: "streaming"})
@@ -233,7 +264,14 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		if len(toolCalls) == 0 {
 			a.saveHistory(currentHistory)
 			if emit != nil {
-				emit(&plugin.RunStreamResponse{Status: "success"})
+				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
+				emit(&plugin.RunStreamResponse{
+					Status: "success",
+					Usage: &plugin.Usage{
+						PromptTokens: a.lastPromptTokens,
+						TotalTokens:  a.lastPromptTokens,
+					},
+				})
 			}
 			return &plugin.AgentResult{
 				Output: content,
@@ -302,6 +340,51 @@ func (a *ReactLoopAgent) saveHistory(messages []*proto.Message) {
 	a.historyMu.Lock()
 	defer a.historyMu.Unlock()
 	a.history = messages
+}
+
+// compactSystemPrompt 上下文壓縮指令：要求模型只輸出精簡摘要，不添加額外解釋。
+const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史压缩成一段精简但信息完整的摘要，" +
+	"保留用户意图、已执行的工具调用及其结果、以及所有关键的中间结论，以便在后续对话中无需原始记录也能继续。" +
+	"只输出压缩后的摘要，不要输出任何解释、前言或结尾。"
+
+// compactHistory 當上下文已用容量超過 80% 時觸發：讓模型把 history 壓縮成摘要。
+// max_tokens 設為淨餘（contextWindow - lastPromptTokens）的真實值，保證壓縮結果能放入剩餘空間。
+func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLMServiceClient, history *[]*proto.Message, tools []*proto.Tool) error {
+	if a.contextWindow <= 0 || a.lastPromptTokens <= 0 {
+		return nil
+	}
+	remaining := a.contextWindow - int(a.lastPromptTokens)
+	if remaining < 1024 {
+		remaining = 1024
+	}
+	// 壓縮請求：以 system 指令引導 + 完整歷史作為 user 內容
+	msgs := make([]*proto.Message, 0, len(*history)+2)
+	msgs = append(msgs, &proto.Message{Role: "system", Content: compactSystemPrompt})
+	msgs = append(msgs, &proto.Message{Role: "user", Content: "以下是需要压缩的对话历史："})
+	msgs = append(msgs, *history...)
+
+	req := &proto.ChatRequest{
+		Messages:  msgs,
+		Tools:     tools,
+		MaxTokens: int32(remaining),
+	}
+	resp, err := llmClient.Chat(ctx, req)
+	if err != nil {
+		return fmt.Errorf("compact history failed: %w", err)
+	}
+	summary := strings.TrimSpace(resp.Content)
+	if summary == "" {
+		return fmt.Errorf("compact history returned empty summary")
+	}
+
+	// 用壓縮後的摘要替換歷史（保留 system prompt，摘要作為 user 消息）
+	*history = []*proto.Message{
+		{Role: "system", Content: "You are a helpful assistant with access to tools."},
+		{Role: "user", Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary},
+	}
+	// 壓縮後已用容量無法從 Chat 精確獲取，重置為 0，下一輪流式調用會更新為真實值
+	a.lastPromptTokens = 0
+	return nil
 }
 
 // ensureConnected 建立並快取 LLM/Tool 服務連接。
@@ -394,6 +477,12 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	agent := &ReactLoopAgent{
 		broker: broker,
 	}
+	// 讀取宿主傳入的上下文窗口容量（DSC_CONTEXT_WINDOW，token 數）
+	if v := os.Getenv("DSC_CONTEXT_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			agent.contextWindow = n
+		}
+	}
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
 	return nil
 }
@@ -454,6 +543,7 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 			Output: item.Output,
 			Status: item.Status,
 			Error:  item.Error,
+			Usage:  plugin.UsageToProto(item.Usage),
 		}); err != nil {
 			return err
 		}

@@ -54,6 +54,7 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 			Output: item.Output,
 			Status: item.Status,
 			Error:  item.Error,
+			Usage:  UsageToProto(item.Usage),
 		}); err != nil {
 			return err
 		}
@@ -111,7 +112,7 @@ func (c *agentGRPCClient) RunStream(ctx context.Context, input string) (<-chan *
 				ch <- &RunStreamResponse{Status: "error", Error: err.Error()}
 				return
 			}
-			ch <- &RunStreamResponse{Output: resp.Output, Status: resp.Status, Error: resp.Error}
+			ch <- &RunStreamResponse{Output: resp.Output, Status: resp.Status, Error: resp.Error, Usage: UsageFromProto(resp.Usage)}
 		}
 	}()
 	return ch, nil

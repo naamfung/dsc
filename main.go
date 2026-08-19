@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"dsc/plugin"
 	"dsc/proto"
@@ -16,6 +19,51 @@ import (
 	"gopkg.in/yaml.v3"
 	"google.golang.org/grpc"
 )
+
+// defaultContextWindow 未配置且探测失败时使用的默认上下文窗口大小：128K（按 1024 计）
+const defaultContextWindow = 128 * 1024
+
+// probeContextWindow 探测 LLAMACPP（或兼容 OpenAI 的服务）的上下文窗口大小。
+// 通过 GET {baseURL}/models 读取首条模型的 meta.n_ctx（LLAMACPP 提供），
+// 失败或未提供时返回 0，由调用方回退到配置值或默认 128K。
+func probeContextWindow(baseURL string) int {
+	u := strings.TrimRight(baseURL, "/") + "/models"
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	var payload struct {
+		Data []struct {
+			Meta struct {
+				Nctx int `json:"n_ctx"`
+			} `json:"meta"`
+			MaxModelLen int `json:"max_model_len"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return 0
+	}
+	if len(payload.Data) == 0 {
+		return 0
+	}
+	if payload.Data[0].Meta.Nctx > 0 {
+		return payload.Data[0].Meta.Nctx
+	}
+	if payload.Data[0].MaxModelLen > 0 {
+		return payload.Data[0].MaxModelLen
+	}
+	return 0
+}
 
 // LLMProxyServer 实现 LLMService，转发到 LLMProvider
 type LLMProxyServer struct {
@@ -38,7 +86,7 @@ func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*pro
 		return nil, fmt.Errorf("LLM not available")
 	}
 	messages, tools := convertChatRequest(req)
-	resp, err := llm.Chat(ctx, messages, tools)
+	resp, err := llm.Chat(ctx, messages, tools, int(req.MaxTokens))
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +126,7 @@ func (s *LLMProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServ
 			Content:      item.Content,
 			FinishReason: item.FinishReason,
 			ToolCalls:    toolCalls,
+			Usage:        plugin.UsageToProto(item.Usage),
 		}); err != nil {
 			return err
 		}
@@ -319,9 +368,31 @@ func main() {
 	}
 	logger.Info("llm loaded", "name", llmName)
 
-	// 2. 加載 Agent 插件
+	// 計算上下文窗口容量（token 數）：
+	// 優先取配置值 → 探測 LLAMACPP /v1/models 的 n_ctx → 默認 128K×1024
+	contextWindow := 0
+	if mainCfg, err := loadConfig("config.yaml"); err == nil && mainCfg.ContextWindow > 0 {
+		contextWindow = mainCfg.ContextWindow
+	}
+	if contextWindow == 0 {
+		if baseURL := llmEnv["OPENAI_BASE_URL"]; baseURL != "" {
+			contextWindow = probeContextWindow(baseURL)
+			if contextWindow > 0 {
+				logger.Info("context window probed from llm server", "window", contextWindow)
+			}
+		}
+	}
+	if contextWindow == 0 {
+		contextWindow = defaultContextWindow
+	}
+	logger.Info("context window", "window", contextWindow)
+
+	// 2. 加載 Agent 插件（把上下文窗口容量傳給 react-loop，供其做 80% 自動壓縮）
 	agentBinary := "./plugins/react-loop/react-loop" + ext
-	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary)
+	agentEnv := map[string]string{
+		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
+	}
+	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary, agentEnv)
 	if err != nil {
 		fail("failed to load Agent: %v", err)
 	}
@@ -409,7 +480,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	if err := tui.Run(agent, mgr, ctx, llmModelName); err != nil {
+	if err := tui.Run(agent, mgr, ctx, llmModelName, mode, contextWindow); err != nil {
 		logger.Error("tui run failed", "error", err)
 	}
 	logger.Info("tui exited")

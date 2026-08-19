@@ -21,7 +21,7 @@ type OllamaProvider struct {
 	model  string
 }
 
-func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
+func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
 	// 转换消息
 	ollamaMessages := make([]api.Message, len(messages))
 	for i, m := range messages {

@@ -59,6 +59,15 @@ type RunStreamResponse struct {
 	Output string `json:"output"` // 增量输出（文本增量或工具调用提示）
 	Status string `json:"status"` // "streaming" | "tool" | "success" | "error"
 	Error  string `json:"error,omitempty"`
+	// Usage 是本轮（一次 RunStream）累计的 token 用量，仅在 success 帧上携带
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage 是一次 LLM 调用的 token 用量统计
+type Usage struct {
+	PromptTokens     int32 `json:"prompt_tokens"`
+	CompletionTokens int32 `json:"completion_tokens"`
+	TotalTokens      int32 `json:"total_tokens"`
 }
 
 // Handshake 是宿主和插件间的握手配置

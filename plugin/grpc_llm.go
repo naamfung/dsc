@@ -17,7 +17,8 @@ import (
 
 // LLMProvider 是插件必须实现的业务接口
 type LLMProvider interface {
-	Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error)
+	// Chat 以非流式方式调用 LLM；maxTokens <= 0 表示使用服务端默认
+	Chat(ctx context.Context, messages []Message, tools []Tool, maxTokens int) (*ChatResponse, error)
 	// ChatStream 以流式方式调用 LLM，返回增量内容通道；通道关闭表示该轮结束
 	ChatStream(ctx context.Context, messages []Message, tools []Tool) (<-chan *ChatStreamResponse, error)
 	Name(ctx context.Context) string
@@ -53,6 +54,7 @@ type ChatStreamResponse struct {
 	FinishReason string     `json:"finish_reason"` // 非空表示该轮结束
 	ToolCalls    []ToolCall `json:"tool_calls"`
 	Error        string     `json:"error,omitempty"`
+	Usage        *Usage     `json:"usage,omitempty"` // 本轮 token 用量（finish_reason 帧携带）
 }
 
 // ToolCall 工具调用结构体
@@ -133,10 +135,34 @@ func convertToolCallsToProto(toolCalls []ToolCall) []*proto.ToolCall {
 	return out
 }
 
+// UsageToProto 将内部 Usage 转换为 proto 形式（nil 返回 nil）
+func UsageToProto(u *Usage) *proto.Usage {
+	if u == nil {
+		return nil
+	}
+	return &proto.Usage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+}
+
+// UsageFromProto 将 proto Usage 转换为内部形式（nil 返回 nil）
+func UsageFromProto(u *proto.Usage) *Usage {
+	if u == nil {
+		return nil
+	}
+	return &Usage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+}
+
 func (s *llmGRPCServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
 	messages, tools := convertLLMChatRequest(req)
 
-	resp, err := s.impl.Chat(ctx, messages, tools)
+	resp, err := s.impl.Chat(ctx, messages, tools, int(req.MaxTokens))
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +189,7 @@ func (s *llmGRPCServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServi
 			Content:      item.Content,
 			FinishReason: item.FinishReason,
 			ToolCalls:    convertToolCallsToProto(item.ToolCalls),
+			Usage:        UsageToProto(item.Usage),
 		}); err != nil {
 			return err
 		}
@@ -220,10 +247,11 @@ func convertToProtoTools(tools []Tool) []*proto.Tool {
 	return protoTools
 }
 
-func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []Tool) (*ChatResponse, error) {
+func (c *llmGRPCClient) Chat(ctx context.Context, messages []Message, tools []Tool, maxTokens int) (*ChatResponse, error) {
 	req := &proto.ChatRequest{
-		Messages: convertToProtoMessages(messages),
-		Tools:    convertToProtoTools(tools),
+		Messages:  convertToProtoMessages(messages),
+		Tools:     convertToProtoTools(tools),
+		MaxTokens: int32(maxTokens),
 	}
 
 	var resp *proto.ChatResponse
@@ -294,6 +322,7 @@ func (c *llmGRPCClient) ChatStream(ctx context.Context, messages []Message, tool
 				Content:      resp.Content,
 				FinishReason: resp.FinishReason,
 				ToolCalls:    toolCalls,
+				Usage:        UsageFromProto(resp.Usage),
 			}
 		}
 	}()

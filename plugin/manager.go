@@ -271,8 +271,9 @@ func (m *Manager) GetAgent(name string) (Agent, bool) {
 }
 
 // LoadAgentAndGetBroker 加載 Agent 插件，並返回其 GRPCBroker 和 serviceID 以供宿主註冊服務。
+// env 為傳遞給 Agent 插件子進程的自定義環境變量（與宿主環境合併，插件值優先）。
 // 該方法會將 Agent 納入 Manager 管理，支持後續熱重載。
-func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*goplugin.GRPCBroker, uint32, error) {
+func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]string) (*goplugin.GRPCBroker, uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -283,6 +284,9 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*goplugin.GRPC
 
 	// 創建插件客戶端（先不傳遞 serviceID，稍後通過 broker 生成）
 	cmd := exec.Command(binaryPath)
+	if len(env) > 0 {
+		cmd.Env = buildEnv(env)
+	}
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{

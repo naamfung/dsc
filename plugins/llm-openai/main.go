@@ -24,7 +24,19 @@ type toolCallDeltaAccumulator struct {
 	ArgumentsStr string
 }
 
-func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (*plugin.ChatResponse, error) {
+// usageFromOpenAI 將 OpenAI usage 轉換為 plugin.Usage（nil 返回 nil）
+func usageFromOpenAI(u *openai.Usage) *plugin.Usage {
+	if u == nil {
+		return nil
+	}
+	return &plugin.Usage{
+		PromptTokens:     int32(u.PromptTokens),
+		CompletionTokens: int32(u.CompletionTokens),
+		TotalTokens:      int32(u.TotalTokens),
+	}
+}
+
+func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
 	// 转换消息格式
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, m := range messages {
@@ -67,6 +79,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, to
 		Model:    p.model,
 		Messages: openaiMessages,
 		Tools:    openaiTools,
+	}
+	if maxTokens > 0 {
+		req.MaxTokens = maxTokens
 	}
 
 	resp, err := p.client.CreateChatCompletion(ctx, req)
@@ -150,6 +165,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		Messages: openaiMessages,
 		Tools:    openaiTools,
 		Stream:   true,
+		// 请求流式 usage：服务端（含 llama.cpp）会在最后一个分片返回整轮 token 统计
+		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
 
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
@@ -233,10 +250,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 					finishReason = "stop"
 				}
 
+				// 把 usage 一并转发（llama.cpp 等会在该分片携带 usage）
 				ch <- &plugin.ChatStreamResponse{
 					Content:      "",
 					FinishReason: finishReason,
 					ToolCalls:    toolCalls,
+					Usage:        usageFromOpenAI(resp.Usage),
 				}
 				return
 			}

@@ -5,6 +5,9 @@ type Config struct {
 	Plugins       []PluginEntry `json:"plugins" yaml:"plugins"`
 	// 可保留舊的 LLM 字段便於過渡，但推薦統一使用 Plugins
 	DefaultLLM    string        `json:"default_llm" yaml:"default_llm"`
+	// ContextWindow 上下文窗口大小（token 数）；0 表示未配置，
+	// 由宿主探测 LLAMACPP 的 /v1/models 獲取 n_ctx，仍失敗則用默認 128K×1024
+	ContextWindow int `json:"context_window" yaml:"context_window"`
 }
 
 type PluginEntry struct {

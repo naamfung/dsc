@@ -71,12 +71,21 @@ message RunStreamResponse {
   string output = 1; // 增量输出（文本增量或工具调用提示）
   string status = 2; // "streaming" | "tool" | "success" | "error"
   string error = 3;
+  Usage usage = 4; // 本轮累计 token 用量（success 帧携带）
+}
+
+// token 用量统计（与 OpenAI usage 字段对应）
+message Usage {
+  int32 prompt_tokens = 1;     // 请求中提示（含历史）token 数
+  int32 completion_tokens = 2; // 本轮生成的 token 数
+  int32 total_tokens = 3;      // 合计
 }
 
 // --- LLM Service 消息定義 ---
 message ChatRequest {
   repeated Message messages = 1;
   repeated Tool tools = 2;
+  int32 max_tokens = 3; // 生成 token 上限（0 = 使用服务端默认；压缩等场景设置真实净余值）
 }
 
 message Message {
@@ -104,6 +113,7 @@ message ChatStreamResponse {
   string finish_reason = 2;   // 非空表示该轮结束
   repeated ToolCall tool_calls = 3;
   string error = 4;           // 错误信息
+  Usage usage = 5;            // 本轮的 token 用量（finish_reason 帧携带，需 stream_options.include_usage）
 }
 
 message ToolCall {
