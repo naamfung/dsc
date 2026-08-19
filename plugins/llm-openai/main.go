@@ -180,6 +180,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 
 		var textAccumulator strings.Builder
 		var toolCallAccums map[int]*toolCallDeltaAccumulator
+		streamFinished := false
 
 		for {
 			resp, err := stream.Recv()
@@ -191,7 +192,19 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				return
 			}
 
+			// 處理 usage 數據（llama.cpp 等會在流式響應中攜帶 usage）
+			if resp.Usage != nil {
+				ch <- &plugin.ChatStreamResponse{
+					Usage: usageFromOpenAI(resp.Usage),
+				}
+			}
+
 			if len(resp.Choices) == 0 {
+				// llama.cpp 在正文結束後會追加一個空 choices、僅含 usage 的結尾分片；
+				// 該分片送達即代表流已結束，處理完 usage 即可退出。
+				if streamFinished {
+					return
+				}
 				continue
 			}
 
@@ -233,6 +246,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 
 			// 處理完成原因
 			if choice.FinishReason != "" && choice.FinishReason != "null" {
+				if streamFinished {
+					continue
+				}
+				streamFinished = true
+
 				// 轉換工具調用為 plugin.ToolCall
 				var toolCalls []plugin.ToolCall
 				for _, acc := range toolCallAccums {
@@ -250,14 +268,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 					finishReason = "stop"
 				}
 
-				// 把 usage 一并转发（llama.cpp 等会在该分片携带 usage）
+				// 把 usage 一并转发（部分服務會在 finish 分片攜帶 usage）
 				ch <- &plugin.ChatStreamResponse{
 					Content:      "",
 					FinishReason: finishReason,
 					ToolCalls:    toolCalls,
 					Usage:        usageFromOpenAI(resp.Usage),
 				}
-				return
+				// 不在這裡返回：llama.cpp 等會緊接著發送僅含 usage 的空 choices 結尾分片，
+				// 稍後由上方空 choices 分支收尾退出。
 			}
 		}
 	}()

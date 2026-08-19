@@ -165,10 +165,19 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 			return
 		}
 		// 流结束：发送最终帧（工具调用与结束原因；文本已增量发送，不再重复）
-		ch <- &plugin.ChatStreamResponse{
+		resp := &plugin.ChatStreamResponse{
 			FinishReason: string(msg.StopReason),
 			ToolCalls:    extractToolCalls(msg.Content),
 		}
+		// 處理 usage 信息（Anthropic 格式：input_tokens -> prompt_tokens, output_tokens -> completion_tokens）
+		if msg.Usage.InputTokens > 0 || msg.Usage.OutputTokens > 0 {
+			resp.Usage = &plugin.Usage{
+				PromptTokens:     int32(msg.Usage.InputTokens),
+				CompletionTokens: int32(msg.Usage.OutputTokens),
+				TotalTokens:      int32(msg.Usage.InputTokens + msg.Usage.OutputTokens),
+			}
+		}
+		ch <- resp
 	}()
 	return ch, nil
 }
