@@ -199,6 +199,40 @@ func loadConfig(path string) (*plugin.Config, error) {
 	return &cfg, nil
 }
 
+// runInputMode 以一次性模式运行 agent（-input 启动时使用）：
+// 与 TUI 内部一致地走 RunStream（保持数据交互环节一致），但不渲染 TUI，
+// 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
+// 代理循环仅运行一次（一个输入），方便完成自动化测试后程序自然退出。
+func runInputMode(agent plugin.Agent, ctx context.Context, input string) int {
+	ch, err := agent.RunStream(ctx, input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+		return 1
+	}
+	exitCode := 0
+	for frame := range ch {
+		switch frame.Status {
+		case "streaming":
+			// 模型文本增量，直接输出
+			fmt.Print(frame.Output)
+		case "tool":
+			// 工具调用提示（如 [调用工具: shell]），原样输出
+			fmt.Print(frame.Output)
+		case "success":
+			// 一轮完成；usage 仅提示到 stderr，不污染 stdout 结果
+			if frame.Usage != nil && frame.Usage.TotalTokens > 0 {
+				fmt.Fprintf(os.Stderr, "\n[已用 %d tokens]\n", frame.Usage.TotalTokens)
+			}
+		case "error":
+			if frame.Error != "" {
+				fmt.Fprintf(os.Stderr, "\n错误: %s\n", frame.Error)
+			}
+			exitCode = 1
+		}
+	}
+	return exitCode
+}
+
 func main() {
 	// 捕獲 panic 並輸出到 stderr，以便在日誌靜默時能調試啟動失敗原因
 	defer func() {
@@ -211,6 +245,7 @@ func main() {
 	logToScreen := false
 	logToFile := ""
 	mode := "standard" // 默認標準模式
+	inputText := ""    // -input：一次性提示文本（自動化測試入口，不經 TUI）
 
 	for i, arg := range os.Args {
 		if arg == "-log" {
@@ -232,6 +267,11 @@ func main() {
 				} else {
 					mode = "standard" // 默認 standard
 				}
+			}
+		} else if arg == "-input" {
+			// -input 後跟提示文本作為參數值（以 - 開頭的視為缺失，避免吞掉後續選項）
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				inputText = os.Args[i+1]
 			}
 		}
 	}
@@ -387,10 +427,14 @@ func main() {
 	}
 	logger.Info("context window", "window", contextWindow)
 
-	// 2. 加載 Agent 插件（把上下文窗口容量傳給 react-loop，供其做 80% 自動壓縮）
+	// 2. 加載 Agent 插件（把上下文窗口容量傳給 react-loop，供其做 80% 自動壓縮；
+	//    -input 模式下同時傳入單輪模式標記，讓代理循環僅執行一次）
 	agentBinary := "./plugins/react-loop/react-loop" + ext
 	agentEnv := map[string]string{
 		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
+	}
+	if inputText != "" {
+		agentEnv["DSC_SINGLE_TURN"] = "1"
 	}
 	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary, agentEnv)
 	if err != nil {
@@ -480,13 +524,23 @@ func main() {
 	}
 
 	ctx := context.Background()
-	if err := tui.Run(agent, mgr, ctx, llmModelName, mode, contextWindow); err != nil {
-		logger.Error("tui run failed", "error", err)
+
+	exitCode := 0
+	if inputText != "" {
+		// -input：一次性模式，不显示 TUI，完成后自然退出
+		logger.Info("running in input mode", "input", inputText)
+		exitCode = runInputMode(agent, ctx, inputText)
+		logger.Info("input mode finished", "exitCode", exitCode)
+	} else {
+		if err := tui.Run(agent, mgr, ctx, llmModelName, mode, contextWindow); err != nil {
+			logger.Error("tui run failed", "error", err)
+			exitCode = 1
+		}
+		logger.Info("tui exited")
 	}
-	logger.Info("tui exited")
 
 	// 完成完整的清理過程再退出
 	logger.Info("shutting down...")
 	mgr.Shutdown()
-	os.Exit(0)
+	os.Exit(exitCode)
 }

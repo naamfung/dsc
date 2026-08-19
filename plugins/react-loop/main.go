@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,12 +41,22 @@ type ReactLoopAgent struct {
 	history   []*proto.Message
 
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
-	contextWindow    int   // 總容量（token 數），0 表示未設置（不做自動壓縮）
-	lastPromptTokens int32 // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
+	contextWindow    int        // 總容量（token 數），0 表示未設置（不做自動壓縮）
+	lastPromptTokens int32      // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
+	lastUsage        *plugin.Usage // 最近一次 LLM 請求的完整 usage 信息
+
+	// 記錄上次的工具名稱列表，用於檢測模式是否切換
+	lastToolNames []string
+	// 標記是否需要重置 system prompt（例如模式切換導致工具上下線時）
+	sysPromptNeedsUpdate bool
 
 	// 完整 system prompt（基礎指令 + 各工具插件貢獻的上下文片段，如技能索引），
 	// 首次對話時構建一次，上下文壓縮後沿用，避免技能索引丢失
 	sysPrompt string
+
+	// 單輪模式（-input 自動化測試入口使用）：代理循環僅執行一次，
+	// 完成一輪（含工具調用）後自然結束，方便測試後程序自動退出
+	singleTurn bool
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
@@ -145,6 +156,37 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	}
 	availableTools := listToolsResp.Tools
 
+	// 提取當前工具名稱列表
+	currentToolNames := make([]string, len(availableTools))
+	for i, t := range availableTools {
+		currentToolNames[i] = t.Name
+	}
+	// 對工具名稱進行排序，確保比較時不因順序差異而誤判
+	sort.Strings(currentToolNames)
+
+	// 檢測工具列表是否變化
+	sysPromptChanged := false
+	if len(a.lastToolNames) == 0 {
+		// 首次初始化
+		a.lastToolNames = currentToolNames
+	} else {
+		// 比較工具列表是否變化（長度不同或內容不同）
+		if len(a.lastToolNames) != len(currentToolNames) {
+			sysPromptChanged = true
+		} else {
+			for i, name := range currentToolNames {
+				if i >= len(a.lastToolNames) || a.lastToolNames[i] != name {
+					sysPromptChanged = true
+					break
+				}
+			}
+		}
+
+		if sysPromptChanged {
+			a.lastToolNames = currentToolNames
+		}
+	}
+
 	// 讀取/追加當前用戶輸入到歷史
 	a.historyMu.Lock()
 	if len(a.history) == 0 {
@@ -152,6 +194,15 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 		a.history = []*proto.Message{
 			{Role: "system", Content: a.sysPrompt},
+		}
+	} else {
+		// 如果不是第一次對話，且工具列表發生變化（例如模式切換導致工具上下線），則重置 system prompt 並更新歷史中的 system 消息
+		if sysPromptChanged {
+			a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
+			// 更新歷史中的 system 消息為最新的 sysPrompt
+			if len(a.history) > 0 && a.history[0].Role == "system" {
+				a.history[0] = &proto.Message{Role: "system", Content: a.sysPrompt}
+			}
 		}
 	}
 	a.history = append(a.history, &proto.Message{Role: "user", Content: input})
@@ -166,7 +217,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}, ctx.Err()
 	}
 
+	// 默認最多 5 輪；單輪模式（-input）下僅執行一輪，方便測試後自然退出
 	maxIterations := 5
+	if a.singleTurn {
+		maxIterations = 1
+	}
+	executedTools := false     // 記錄本輪是否執行了工具（單輪模式下視為正常完成）
+	executedToolsErr := false  // 記錄本輪執行的工具是否出現錯誤（單輪模式下據此判定退出碼）
 	for i := 0; i < maxIterations; i++ {
 		// 检查 ctx.Done()
 		select {
@@ -242,8 +299,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
 				}
 				// 記錄 prompt 用量（≈ 當前上下文已用容量）；該值在 finish 分片由服務端返回
-				if cr.Usage != nil && cr.Usage.PromptTokens > 0 {
+				if cr.Usage != nil {
 					a.lastPromptTokens = cr.Usage.PromptTokens
+					a.lastUsage = plugin.UsageFromProto(cr.Usage)
 				}
 				content += cr.Content
 				if cr.Content != "" {
@@ -270,12 +328,18 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			a.saveHistory(currentHistory)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
+				usage := &plugin.Usage{
+					PromptTokens: a.lastPromptTokens,
+				}
+				if a.lastUsage != nil {
+					usage.CompletionTokens = a.lastUsage.CompletionTokens
+					usage.TotalTokens = a.lastUsage.TotalTokens
+				} else {
+					usage.TotalTokens = a.lastPromptTokens
+				}
 				emit(&plugin.RunStreamResponse{
 					Status: "success",
-					Usage: &plugin.Usage{
-						PromptTokens: a.lastPromptTokens,
-						TotalTokens:  a.lastPromptTokens,
-					},
+					Usage:  usage,
 				})
 			}
 			return &plugin.AgentResult{
@@ -292,6 +356,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				return cancelResult()
 			default:
 			}
+
+			// 标记本轮执行了工具（单轮模式下据此判定为正常完成）
+			executedTools = true
 
 			// 向客户端提示正在调用工具
 			if emit != nil {
@@ -320,17 +387,51 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					Content:    fmt.Sprintf("Tool error: %s", toolResp.Error),
 					ToolCallId: tc.Id,
 				})
+				// 單輪模式下，工具報錯也要讓測試端看到，並視為失敗退出
+				if a.singleTurn {
+					executedToolsErr = true
+					if emit != nil {
+						emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool"})
+					}
+				}
 			} else {
 				currentHistory = append(currentHistory, &proto.Message{
 					Role:       "tool",
 					Content:    toolResp.Content,
 					ToolCallId: tc.Id,
 				})
+				// 單輪模式下，把工具執行結果輸出到流，供自動化測試核驗
+				if a.singleTurn {
+					if emit != nil {
+						emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool"})
+					}
+				}
 			}
 		}
 	}
 	// 超过最大迭代次数（持久化歷史）
 	a.saveHistory(currentHistory)
+	// 單輪模式（-input）下，工具已在本輪執行完畢，視為正常完成（而非“達迭代上限”錯誤），
+	// 這樣一次工具調用測試成功後程序能以退出碼 0 自然結束；若工具報錯則以退出碼 1 結束
+	if a.singleTurn && executedTools {
+		if executedToolsErr {
+			// 工具執行出錯：發 error 幀，使 -input 以退出碼 1 結束，測試方能據此判斷失敗
+			if emit != nil {
+				emit(&plugin.RunStreamResponse{Output: "Single turn completed with tool errors", Status: "error"})
+			}
+			return &plugin.AgentResult{
+				Output: "Single turn completed with tool errors",
+				Status: "error",
+			}, nil
+		}
+		if emit != nil {
+			emit(&plugin.RunStreamResponse{Status: "success"})
+		}
+		return &plugin.AgentResult{
+			Output: "Single turn completed with tools executed",
+			Status: "success",
+		}, nil
+	}
 	if emit != nil {
 		emit(&plugin.RunStreamResponse{Output: "Max iterations reached", Status: "error"})
 	}
@@ -513,6 +614,10 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			agent.contextWindow = n
 		}
+	}
+	// 讀取宿主傳入的單輪模式標記（DSC_SINGLE_TURN=1，-input 自動化測試入口使用）
+	if v := os.Getenv("DSC_SINGLE_TURN"); v == "1" || strings.EqualFold(v, "true") {
+		agent.singleTurn = true
 	}
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
 	return nil
