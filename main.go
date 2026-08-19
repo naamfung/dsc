@@ -302,7 +302,19 @@ func main() {
 		fail("unknown LLM provider %q", llmName)
 	}
 
-	if err := mgr.LoadLLM(llmName, llmBinary); err != nil {
+	// 從主配置 config.yaml 讀取 LLM 插件的環境變量（BASE_URL / API_KEY / MODEL 等），
+	// 否則 llm-openai 等插件會使用內置默認值（如 DeepSeek 地址），導致請求發往錯誤服務
+	llmEnv := map[string]string{}
+	if mainCfg, err := loadConfig("config.yaml"); err == nil {
+		for _, entry := range mainCfg.Plugins {
+			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
+				llmEnv = entry.Env
+				break
+			}
+		}
+	}
+
+	if err := mgr.LoadLLM(llmName, llmBinary, llmEnv); err != nil {
 		fail("failed to load LLM %s: %v", llmName, err)
 	}
 	logger.Info("llm loaded", "name", llmName)
@@ -359,6 +371,11 @@ func main() {
 	agent, ok := mgr.GetAgent(agentName)
 	if !ok {
 		fail("agent %s not found after loading", agentName)
+	}
+	// 告訴 Agent 主進程 ToolService 代理的 serviceID；否則 react-loop 的 toolServiceID 為 0，
+	// 首條消息會直接返回 "service IDs not set" 錯誤（並被靜默吞掉，表現為無響應）
+	if err := agent.SetToolServiceID(context.Background(), toolServiceID); err != nil {
+		fail("failed to set tool service ID on agent: %v", err)
 	}
 
 	// 从配置中提取 LLM 模型名称

@@ -74,9 +74,18 @@ func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *p
 	ch := make(chan *plugin.RunStreamResponse)
 	go func() {
 		defer close(ch)
-		a.runLoop(ctx, input, func(item *plugin.RunStreamResponse) {
+		var emittedErr bool
+		_, err := a.runLoop(ctx, input, func(item *plugin.RunStreamResponse) {
+			if item.Status == "error" {
+				emittedErr = true
+			}
 			ch <- item
 		})
+		// runLoop 在早期失败（serviceID 未设置 / 连接失败等）时不会 emit 錯誤幀，
+		// 這裡補發一幀，避免錯誤被吞掉導致 TUI 靜默無響應
+		if err != nil && !emittedErr {
+			ch <- &plugin.RunStreamResponse{Status: "error", Error: err.Error()}
+		}
 	}()
 	return ch, nil
 }

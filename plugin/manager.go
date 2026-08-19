@@ -339,8 +339,8 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string) (*goplugin.GRPC
 	return broker, serviceID, nil
 }
 
-// LoadLLM 加載 LLM 插件
-func (m *Manager) LoadLLM(name string, binaryPath string) error {
+// LoadLLM 加載 LLM 插件；env 為傳遞給插件子進程的自定義環境變量（與宿主環境合併，插件值優先）
+func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -350,12 +350,16 @@ func (m *Manager) LoadLLM(name string, binaryPath string) error {
 	}
 
 	// 創建插件客戶端
+	cmd := exec.Command(binaryPath)
+	if len(env) > 0 {
+		cmd.Env = buildEnv(env)
+	}
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"llm": &LLMGRPCPlugin{},
 		},
-		Cmd:              exec.Command(binaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           m.pluginLogger,
 	})

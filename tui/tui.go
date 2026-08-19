@@ -189,7 +189,7 @@ func (m *Model) pumpStream(input string, ch <-chan *plugin.RunStreamResponse) te
 // 输入区高度随内容行数变化（1~composerMin 行），这里以当前实际高度为准。
 func (m *Model) vpHeight() int {
 	h := m.high - titleRows - statusRows - boxBorder - m.input.Height()
-	if m.thinking {
+	if m.thinking || m.streaming {
 		h -= thinkingRow
 	}
 	if m.completion.active && len(m.completion.items) > 0 {
@@ -307,7 +307,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case spinner.TickMsg:
-		if m.thinking {
+		if m.thinking || m.streaming {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
@@ -388,7 +388,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoBottom()
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "tool":
-			m.streaming = false
 			m.streamOpen = false
 			toolLine := dimSty.Render(f.Output)
 			if len(m.lines) > 0 && m.lines[len(m.lines)-1] == "\n"+toolLine {
@@ -679,7 +678,7 @@ func padToWidth(s string, w int) string {
 // statusBar 渲染底部状态栏：左侧模型/状态，右侧快捷键提示。
 func (m *Model) statusBar() string {
 	left := "模型: " + m.displayModelName()
-	if m.thinking {
+	if m.thinking || m.streaming {
 		left = "思考中... · " + left
 	}
 	right := "Enter 发送 · Ctrl+J 换行 · Ctrl+C 退出"
@@ -702,7 +701,7 @@ func (m *Model) View() tea.View {
 	var parts []string
 	parts = append(parts, title)
 	parts = append(parts, m.viewport.View())
-	if m.thinking {
+	if m.thinking || m.streaming {
 		parts = append(parts, dimSty.Render("  "+m.spinner.View()+" 思考中..."))
 	}
 	if c := m.completionView(); c != "" {

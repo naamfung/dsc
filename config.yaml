@@ -8,6 +8,7 @@ plugins:
     env:
       ANTHROPIC_BASE_URL: "http://192.168.124.197:8008/"
       ANTHROPIC_MODEL: "Agentic-Turbo-Coder"
+      ANTHROPIC_API_KEY: "sk-your-real-key"
   - name: openai
     type: llm
     binary_path: ./plugins/llm-openai/llm-openai.exe
@@ -15,6 +16,7 @@ plugins:
     env:
       OPENAI_BASE_URL: "http://192.168.124.197:8008/v1"
       OPENAI_MODEL: "Agentic-Turbo-Coder"
+      OPENAI_API_KEY: "sk-your-real-key"
   - name: filesystem
     type: tool
     binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
