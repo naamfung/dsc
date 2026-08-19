@@ -312,6 +312,15 @@ func candidateFromFile(path string) (SkillCandidate, bool) {
 // 其余可达的 <name>.md 视为扁平技能。
 func scanSkillDir(root string) []SkillCandidate {
 	var out []SkillCandidate
+
+	// 若根目录本身就是技能包（含 SKILL.md），直接作为单一技能包返回。
+	// 否則 WalkDir 會跳過根節點、且頂層 SKILL.md 文件也被扁平分支跳過，導致識別不到。
+	if info, statErr := os.Stat(filepath.Join(root, "SKILL.md")); statErr == nil && !info.IsDir() {
+		if sk, ok := parseSkillFile(filepath.Join(root, "SKILL.md"), filepath.Base(root)); ok && strings.TrimSpace(sk.Description) != "" {
+			return []SkillCandidate{{Name: sk.Name, SourceDir: root, DirLayout: true}}
+		}
+	}
+
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // 忽略无法访问的条目

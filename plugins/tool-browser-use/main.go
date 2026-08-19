@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/launcher"
 	rodproto "github.com/go-rod/rod/lib/proto"
 )
 
@@ -63,8 +65,16 @@ func GetBrowserSessionManager() *BrowserSessionManager {
 
 // launchBrowserRod 啟動瀏覽器實例
 func launchBrowserRod() (*rod.Browser, error) {
+	// 使用項目目錄內的用戶數據目錄（而非 rod 默認的 %APPDATA%\rod），
+	// 避免受沙箱「受限目錄不可寫」限制，同時保證多次啟動共用同一配置
+	userDataDir := filepath.Join(plugin.WorkspaceRoot, "browser-data")
+	if err := os.MkdirAll(userDataDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create browser data directory: %w", err)
+	}
+
+	l := launcher.New().UserDataDir(userDataDir)
 	browser := rod.New().
-		ControlURL("").
+		ControlURL(l.MustLaunch()).
 		MustConnect()
 
 	return browser, nil
@@ -406,7 +416,8 @@ type SearchResultItem struct {
 }
 
 func webSearchImpl(sessionID, query string) (string, error) {
-	searchURL := fmt.Sprintf("https://www.google.com/search?q=%s", query)
+	// 先嘗試 DuckDuckGo（HTML 版對自動化友好、無需 JS 渲染；Google 對 headless 會返回 reCAPTCHA）
+	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
 	page, _, err := getOrCreatePage(sessionID, "default", searchURL)
 	if err != nil {
 		return fmt.Sprintf(`{"success":false,"query":"%s","error":"%s"}`, query, err.Error()), nil
@@ -417,16 +428,26 @@ func webSearchImpl(sessionID, query string) (string, error) {
 		log.Printf("頁面加載警告: %v", err)
 	}
 
-	// 提取搜索結果
+	// 等待搜索結果渲染（DDG 的結果容器為 .result；最多等 10 秒）
+	waitCtx := page.Timeout(10 * time.Second)
+	_, err = waitCtx.Element(`.result, .results, form[action*="search"]`)
+	if err != nil {
+		// 結果容器未出現：返回當前標題與 URL，便於調試
+		info, _ := page.Info()
+		return fmt.Sprintf(`{"success":false,"query":"%s","error":"results not rendered","pageTitle":"%s","pageUrl":"%s"}`, query, info.Title, info.URL), nil
+	}
+	// 等待至少一個結果元素
+	_ = waitCtx.WaitElementsMoreThan(`.result`, 0)
+
+	// 提取搜索結果：DDG HTML 版每個結果塊為 .result，含 .result__a 標題鏈接與 .result__snippet 摘要
 	linksJSON := page.MustEval(`() => {
-		return JSON.stringify(Array.from(document.querySelectorAll('div.g')).map(g => {
-			const titleEl = g.querySelector('h3');
-			const descEl = g.querySelector('span');
-			const linkEl = g.querySelector('a');
+		return JSON.stringify(Array.from(document.querySelectorAll('.result')).map(r => {
+			const a = r.querySelector('a.result__a');
+			const snippet = r.querySelector('.result__snippet, .result__snippet_no_offset');
 			return {
-				title: titleEl ? titleEl.innerText : '',
-				url: linkEl ? linkEl.href : '',
-				description: descEl ? descEl.innerText : ''
+				title: a ? a.innerText.trim() : '',
+				url: a ? a.href : '',
+				description: snippet ? snippet.innerText.trim() : ''
 			};
 		}).filter(r => r.url && r.url.startsWith('http')));
 	}`).Str()
@@ -535,8 +556,8 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 		screenshot = page.MustScreenshot()
 	}
 
-	// 保存截圖到下載目錄
-	downloadDir := filepath.Join(os.TempDir(), "browser_screenshots")
+	// 保存截圖到工作區目錄（沙箱限制寫入系統臨時目錄，如 %TEMP%，故存到 workspace 內）
+	downloadDir := filepath.Join(plugin.WorkspaceRoot, "screenshots")
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"創建下載目錄失敗: %s"}`, err.Error()), nil
 	}

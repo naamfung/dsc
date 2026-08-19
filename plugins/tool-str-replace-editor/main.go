@@ -110,41 +110,89 @@ func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metad
 	}, nil
 }
 
-// safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接繞過）
+// withinBase 判斷 real 路徑是否在 base 目錄（含 base 自身）之內
+func withinBase(real, realBase string) bool {
+	return strings.HasPrefix(real, realBase+string(os.PathSeparator)) || real == realBase
+}
+
+// resolveExistingAncestor 從 dir 開始向上逐級查找第一個存在的路徑並解析符號鏈接；
+// 返回其真實路徑。所有層級都不存在時返回 false。
+func resolveExistingAncestor(dir string) (string, bool) {
+	for {
+		real, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return real, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+// safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接繞過）。
+// base 若不存在會先創建；目標路徑或其父目錄不存在時也能正常解析（中間目錄可由調用方自行創建）。
 func safePath(base, reqPath string) (string, error) {
 	absBase, err := filepath.Abs(base)
 	if err != nil {
+		return "", err
+	}
+	// 工作目錄（base）可能尚未創建（首次使用時），先確保它存在，
+	// 否則 EvalSymlinks 會報 “The system cannot find the file specified”
+	if err := os.MkdirAll(absBase, 0755); err != nil {
 		return "", err
 	}
 	realBase, err := filepath.EvalSymlinks(absBase)
 	if err != nil {
 		return "", err
 	}
-	// 構建絕對路徑
+
+	// 構建絕對路徑並清理（去除 . .. 等）
 	absReq, err := filepath.Abs(filepath.Join(realBase, reqPath))
 	if err != nil {
 		return "", err
 	}
-	// 嘗試解析，若失敗則檢查父目錄
-	realReq, err := filepath.EvalSymlinks(absReq)
-	if err != nil {
-		// 解析失敗，可能文件不存在，則檢查父目錄
-		parent := filepath.Dir(absReq)
-		realParent, err := filepath.EvalSymlinks(parent)
+	absReq = filepath.Clean(absReq)
+
+	// 詞法前綴檢查：確保在 base 目錄內
+	if !withinBase(absReq, realBase) {
+		return "", os.ErrPermission
+	}
+
+	// 目標本身若已存在，解析其真實路徑並檢查仍在 base 內（防符號鏈接逃逸）
+	if _, statErr := os.Lstat(absReq); statErr == nil {
+		realReq, err := filepath.EvalSymlinks(absReq)
 		if err != nil {
 			return "", err
 		}
-		if !strings.HasPrefix(realParent, realBase+string(os.PathSeparator)) && realParent != realBase {
+		if !withinBase(realReq, realBase) {
 			return "", os.ErrPermission
 		}
-		// 父目錄安全，則返回 absReq（未解析的路徑，但已在安全目錄下）
-		return absReq, nil
+		return realReq, nil
 	}
-	// 解析成功，檢查前綴
-	if !strings.HasPrefix(realReq, realBase+string(os.PathSeparator)) && realReq != realBase {
+
+	// 目標不存在：解析其最深的已存在祖先，確保真實路徑仍在 base 內
+	realAncestor, ok := resolveExistingAncestor(filepath.Dir(absReq))
+	if !ok {
 		return "", os.ErrPermission
 	}
-	return realReq, nil
+	if !withinBase(realAncestor, realBase) {
+		return "", os.ErrPermission
+	}
+	return absReq, nil
+}
+
+// normalizeWorkspacePath 剝離模型按工具描述傳入的 /workspace 前綴，
+// 使 /workspace/test/fib.go 映射到 workspace 根目錄下的 test/fib.go
+func normalizeWorkspacePath(p string) string {
+	p = strings.TrimSpace(p)
+	for _, prefix := range []string{"/workspace", `\workspace`} {
+		if strings.HasPrefix(p, prefix) {
+			return strings.TrimLeft(strings.TrimPrefix(p, prefix), `/\`)
+		}
+	}
+	return p
 }
 
 type strReplaceEditorArgs struct {
@@ -170,7 +218,10 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 
 	// 使用安全路徑檢查，默認 workspace root 為當前目錄
 	workspaceRoot := "./workspace"
-	reqPath, err := safePath(workspaceRoot, args.Path)
+
+	// 模型按工具描述會傳入形如 /workspace/test/fib.go 的絕對路徑，
+	// 需剝離 /workspace 前綴後再與 workspaceRoot 拼接，避免變成 workspace/workspace/...
+	reqPath, err := safePath(workspaceRoot, normalizeWorkspacePath(args.Path))
 	if err != nil {
 		return "", err
 	}
