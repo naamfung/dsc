@@ -1249,18 +1249,17 @@ func (m *Manager) SwitchMode(mode string) error {
 			delete(m.typeMap, name)
 			delete(m.pluginMetadata, name)
 
-			// 清理 tool 相關的映射
-			if _, ok := m.toolServiceIDs[name]; ok {
-				// 移除 toolNameToServiceID 中的條目
-				if toolNames, exists := m.pluginToolNames[name]; exists {
-					for _, tname := range toolNames {
-						delete(m.toolNameToServiceID, tname)
-					}
+			// 從工具註冊表中移除該插件註冊的所有工具，
+			// 否則 ListTools 仍會返回已下線插件的工具，模型會誤報多餘的工具
+			if toolNames, exists := m.pluginToolNames[name]; exists {
+				for _, tname := range toolNames {
+					delete(m.toolNameToServiceID, tname)
+					m.toolRegistry.Unregister(tname)
 				}
-				delete(m.toolServiceIDs, name)
-				delete(m.pluginToolNames, name)
-				delete(m.toolClients, name)
 			}
+			delete(m.toolServiceIDs, name)
+			delete(m.pluginToolNames, name)
+			delete(m.toolClients, name)
 
 			m.logger.Info("plugin unloaded during mode switch", "name", name, "mode", mode)
 		}
