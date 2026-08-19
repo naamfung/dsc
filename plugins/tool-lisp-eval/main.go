@@ -387,13 +387,13 @@ func main() {
 	// 定義 lisp_eval 工具
 	lispEvalTool := &LispEvalTool{
 		name:        "lisp_eval",
-		description: "Evaluate a Lisp/Scheme expression with precise numerical capabilities (supports rationals, bigints, and precise arithmetic)",
+		description: "Evaluate a Lisp/Scheme expression with exact integer arithmetic (Clojure-dialect interpreter). Supported: integer + - * /, float f+ f- f* f/, math functions sqrt abs floor ceil round log exp sin cos tan asin acos atan pow min max mod, and list helpers filter range sum product reverse last. NOT supported: rationals (e.g. 3/4) and big integers (e.g. biginteger) — use plain integers or floats instead. Do NOT quote the expression: pass (+ 1 2), not '(+ 1 2).",
 		schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"expression": {
 					"type": "string",
-					"description": "Lisp/Scheme expression to evaluate (e.g., '(+ 1 2), '(* 3/4 2/3), '(biginteger 12345678901234567890))"
+					"description": "Lisp/Scheme expression to evaluate, e.g. (+ 1 2), (* 3 4), (/ 10 3), (sqrt 2), (sum (range 100))"
 				}
 			},
 			"required": ["expression"]
@@ -411,10 +411,9 @@ func main() {
 
 			result, err := schemeEval(ctx, params.Expression)
 			if err != nil {
-				return fmt.Sprintf(`{"error":"%s"}`, err.Error()), nil
+				return "", err
 			}
-
-			return fmt.Sprintf(`{"success":true,"result":"%s"}`, result), nil
+			return result, nil
 		},
 	}
 
