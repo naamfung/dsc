@@ -391,10 +391,10 @@ func main() {
 		fail("unknown LLM provider %q", llmName)
 	}
 
-	// 從主配置 config.yaml 讀取 LLM 插件的環境變量（BASE_URL / API_KEY / MODEL 等），
+	// 從主配置 config/config.yaml 讀取 LLM 插件的環境變量（BASE_URL / API_KEY / MODEL 等），
 	// 否則 llm-openai 等插件會使用內置默認值（如 DeepSeek 地址），導致請求發往錯誤服務
 	llmEnv := map[string]string{}
-	if mainCfg, err := loadConfig("config.yaml"); err == nil {
+	if mainCfg, err := loadConfig("config/config.yaml"); err == nil {
 		for _, entry := range mainCfg.Plugins {
 			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
 				llmEnv = entry.Env
@@ -411,7 +411,7 @@ func main() {
 	// 計算上下文窗口容量（token 數）：
 	// 優先取配置值 → 探測 LLAMACPP /v1/models 的 n_ctx → 默認 128K×1024
 	contextWindow := 0
-	if mainCfg, err := loadConfig("config.yaml"); err == nil && mainCfg.ContextWindow > 0 {
+	if mainCfg, err := loadConfig("config/config.yaml"); err == nil && mainCfg.ContextWindow > 0 {
 		contextWindow = mainCfg.ContextWindow
 	}
 	if contextWindow == 0 {
@@ -432,6 +432,10 @@ func main() {
 	agentBinary := "./plugins/react-loop/react-loop" + ext
 	agentEnv := map[string]string{
 		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
+	}
+	// 把预设 persona（"你是一個…助手" 身份句）傳給 react-loop；無則為空、走官方默認
+	if presetCfg != nil && presetCfg.Persona != "" {
+		agentEnv["DSC_PRESET_PERSONA"] = presetCfg.Persona
 	}
 	if inputText != "" {
 		agentEnv["DSC_SINGLE_TURN"] = "1"
