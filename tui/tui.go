@@ -5,10 +5,12 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,14 +26,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 布局尺寸常量：标题栏、状态栏各占一行；输入区内部 3 行 + 2 行边框。
+// 布局尺寸常量：标题栏一行；状态栏两行（含分隔线）；指标行一行；输入区内部 3 行 + 上下边框 2 行。
 const (
 	titleRows   = 1
-	statusRows  = 1
+	statusRows  = 2
+	infoRows    = 1
 	composerMin = 3
 	boxBorder   = 2
 	thinkingRow = 1
 )
+
+// assistantGutter 助手/用户正文的统一左缩进（2 格），参考 REX 的 transcript gutter，
+// 为一式的消息块留出稳定的左边距。
+const assistantGutter = "  "
+
+// assistantMark 助手身份头的标记符号：REX 用菱形 ◈/◆，观感偏硬，改用星号「✦」更轻盈。
+const assistantMark = "✦"
 
 // 主题样式
 var (
@@ -54,19 +64,25 @@ var (
 	dimSty = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888"))
 
-	// reasonSty 思考过程中的暗色斜体样式（参照 REX 的 thinking 块）
-	reasonSty = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B6B6B")).
-			Italic(true)
+	// dividerSty 状态栏分隔线：U+2500 轻线已是最细的框线字符，改用更暗的灰色
+	// 使其在视觉上更纤细、不抢注意力。
+	dividerSty = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#4A4A4A"))
+
+	// reasonReapply 思考块的暗色 SGR 前缀：「前景 #6B6B6B(107,107,107)」。
+	// 思考块先按 markdown 渲染，行内样式会以 \x1b[m 复位；本前缀用于整体着色，
+	// 并在每次复位后重新套用，保证加粗/强调等行内样式不会清掉整块的弱化效果。
+	// 仅用灰色、不加斜体，避免斜体影响长段思考内容的阅读。
+	reasonReapply = "\x1b[38;2;107;107;107m"
 
 	errorSty = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF5F87")).
 			Bold(true)
 
 	composerBoxSty = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Border(lipgloss.NormalBorder(), true, false, true, false).
 			BorderForeground(accent).
-			Padding(0, 1)
+			PaddingLeft(1)
 
 	compSelSty = lipgloss.NewStyle().
 			Foreground(accent).
@@ -75,6 +91,33 @@ var (
 	// selStyle 正文拖拽选中的反色高亮样式。
 	selStyle = lipgloss.NewStyle().Reverse(true)
 )
+
+// indentBlock 为块中的每个非空行加上缩进，空行保持空白，供消息块统一做左边距。
+func indentBlock(block, indent string) string {
+	if indent == "" || block == "" {
+		return block
+	}
+	lines := strings.Split(block, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = indent + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// joinReasoningAnswer 拼装思考块与答案正文：两者都存在时中间留一个空行，
+// 使思考块与正文之间有呼吸间距（REX 式版面），避免两段文本紧贴。
+func joinReasoningAnswer(reasoning, answer string) string {
+	reasoning = strings.TrimRight(reasoning, "\n")
+	if reasoning == "" {
+		return answer
+	}
+	if strings.TrimSpace(answer) == "" {
+		return reasoning
+	}
+	return reasoning + "\n\n" + answer
+}
 
 // selPos 表示正文被选中区域中的位置：以「内容行号 + 可视列」定位，
 // 行号是绝对值（与滚动无关），列是可视列。
@@ -181,6 +224,10 @@ type Model struct {
 	// 当前一轮的取消句柄：Ctrl+C 在响应/流式输出期间中断本轮（终止当前操作）
 	turnCancel      context.CancelFunc
 	streamCancelled bool // 中断标记：置位后丢弃后续 streamFrame，停止本轮泵取
+
+	// 会话运行指标：turnCount 累计用户提交轮次；stepCount 累计工具调用步数（tool 帧）。
+	turnCount int
+	stepCount int
 }
 
 // New 创建一个聊天界面模型
@@ -291,7 +338,7 @@ func (m *Model) interruptTurn() (tea.Model, tea.Cmd) {
 // vpHeight 计算消息区高度：总高度减去标题、状态栏、输入区（含边框），思考时再减去指示行，补全菜单时再减去补全菜单行。
 // 输入区高度随内容行数变化（1~composerMin 行），这里以当前实际高度为准。
 func (m *Model) vpHeight() int {
-	h := m.high - titleRows - statusRows - boxBorder - m.input.Height()
+	h := m.high - titleRows - statusRows - infoRows - boxBorder - m.input.Height()
 	if m.thinking || m.streaming {
 		h -= thinkingRow
 	}
@@ -484,6 +531,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.completion = completion{}
 			m.thinking = true
+			m.turnCount++
 			m.syncInputHeight() // 输入清空回落单行 + 思考行占位 → 重算消息区高度
 			m.render()
 			m.viewport.GotoBottom()
@@ -563,7 +611,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		f := msg.frame
 		switch f.Status {
 		case "reasoning":
-			// 思考过程增量：新建/追加助手块，以暗色斜体渲染思考文本
+			// 思考过程增量：新建/追加助手块，以暗色渲染思考文本
 			m.streaming = true
 			m.thinking = false
 			if !m.streamOpen {
@@ -580,7 +628,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 若正文已先行输出，不要把思考块覆盖到正文上，而是作为前缀拼接到正文内容之前。
 			var body string
 			if m.streamBuffer != "" {
-				body = reasoning + renderMarkdown(m.streamBuffer, w)
+				body = joinReasoningAnswer(reasoning, renderMarkdown(m.streamBuffer, w))
 			} else {
 				body = reasoning
 			}
@@ -601,15 +649,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reasoningBuffer = ""
 			}
 			m.streamBuffer += f.Output
-			body := m.reasoningCommitted + renderMarkdown(m.streamBuffer, max(m.width-4, 20))
-			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
-			m.lines[m.streamMsgIdx] = header + "\n" + body
+			body := joinReasoningAnswer(m.reasoningCommitted, renderMarkdown(m.streamBuffer, max(m.width-4, 20)))
+			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
 			m.render()
 			m.viewport.GotoBottom()
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "tool":
 			m.streamOpen = false
-			toolLine := dimSty.Render(f.Output)
+			m.stepCount++
+			// 工具结果帧（ToolResult 非空）以「└」gutter 缩进展示，错误时用错误色；
+			// 调用帧（ToolName 非空）以「● Verb(arg)」卡片展示；均无结构化信息时回退原文。
+			toolLine := ""
+			if f.ToolResult != "" {
+				toolLine = renderToolResult(f.ToolResult, f.Error != "")
+			} else {
+				toolLine = renderToolCall(f.ToolName, f.ToolArgs)
+			}
+			if toolLine == "" {
+				toolLine = dimSty.Render(strings.TrimSpace(f.Output))
+			}
 			if len(m.lines) > 0 && m.lines[len(m.lines)-1] == "\n"+toolLine {
 				// 避免重複追加
 			} else {
@@ -820,7 +878,7 @@ func readClipboardPaste() tea.Cmd {
 	}
 }
 
-// renderUserBubble 把用户消息渲染为左对齐的紫色文本（颜色 + 前缀符号与助手区分，不套气泡框）。
+// renderUserBubble 把用户消息渲染为左对齐的紫色文本（统一缩进 + 前缀符号，不套气泡框）。
 func renderUserBubble(text string, width int) string {
 	maxW := width
 	if maxW < 20 {
@@ -831,9 +889,11 @@ func renderUserBubble(text string, width int) string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
 		if i == 0 {
-			out[i] = userTextSty.Render("› " + l)
+			// 首行：统一左边距 assistantGutter + 「› 」前缀
+			out[i] = userTextSty.Render(assistantGutter + "› " + l)
 		} else {
-			out[i] = userTextSty.Render(strings.Repeat(" ", 2) + l)
+			// 续行缩进对齐到「› 」文本之后
+			out[i] = userTextSty.Render(assistantGutter + "  " + l)
 		}
 	}
 	return strings.Join(out, "\n")
@@ -848,10 +908,14 @@ func (m *Model) appendMessage(rendered string) {
 	m.lines = append(m.lines, rendered)
 }
 
-// renderAssistant 组装助手回复：身份头（◈ DSC · 模型名）+ markdown 正文。
+// renderAssistant 组装助手回复：缩进身份头（✦ DSC · 模型名）+ markdown 正文。
+// 头部与正文之间留一个空行，正文整体缩进 assistantGutter，营造 REX 式的呼吸版面。
 func (m *Model) renderAssistant(body string) string {
-	header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
-	return header + "\n" + body
+	header := assistantGutter + assistantNameSty.Render(assistantMark+" DSC · "+m.displayModelName())
+	if strings.TrimSpace(body) == "" {
+		return header
+	}
+	return header + "\n\n" + indentBlock(body, assistantGutter)
 }
 
 // finalizeAssistant 根据已累积的思考/正文状态渲染助手块的最终内容，供流式收尾（success/error/done）时调用。
@@ -872,7 +936,7 @@ func (m *Model) finalizeAssistant() {
 		body += reasoning
 	}
 	if m.streamBuffer != "" {
-		body += renderMarkdown(m.streamBuffer, w)
+		body = joinReasoningAnswer(body, renderMarkdown(m.streamBuffer, w))
 	}
 	m.lines[m.streamMsgIdx] = m.renderAssistant(body)
 }
@@ -884,12 +948,12 @@ func (m *Model) openAssistantBlock() {
 	m.reasoningOpen = false
 	m.reasoningCommitted = ""
 	m.streamOpen = true
-	header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+	header := assistantGutter + assistantNameSty.Render(assistantMark+" DSC · "+m.displayModelName())
 	m.appendMessage(header + "\n")
 	m.streamMsgIdx = len(m.lines) - 1
 }
 
-// renderReasoning 将思考过程原始文本渲染为暗色斜体块：先按 markdown 渲染（加粗/列表/代码等），
+// renderReasoning 将思考过程原始文本渲染为暗色块：先按 markdown 渲染（加粗/列表/代码等），
 // 再以「▎」标记与续行缩进区分普通答案。空思考返回空串。
 func renderReasoning(raw string, width int) string {
 	if strings.TrimSpace(raw) == "" {
@@ -911,8 +975,138 @@ func renderReasoning(raw string, width int) string {
 			b.WriteString("  " + line)
 		}
 	}
-	b.WriteByte('\n')
-	return reasonSty.Render(b.String())
+	// 整体设为暗色；markdown 行内样式会以 \x1b[m 复位，须在其后重新套用弱化前缀，
+	// 否则加粗/强调等样式会连带清掉整块的暗色。
+	out := reasonReapply + strings.ReplaceAll(b.String(), "\x1b[m", "\x1b[m"+reasonReapply)
+	// 末尾必须复位，否则开着的暗色会泄漏到紧随其后的正文，造成正文也被弱化。
+	return out + "\x1b[m\n"
+}
+
+// toolVerb 把工具名映射为卡片动词（REX 式）：shell → Shell、str_replace_editor → Edit 等。
+var toolVerb = map[string]string{
+	"shell":              "Shell",
+	"str_replace_editor": "Edit",
+	"lisp_eval":          "Lisp",
+	"fetch_url":          "Fetch",
+	"web_search":         "Search",
+	"browser_click":      "Click",
+	"browser_type":       "Type",
+	"browser_screenshot": "Shot",
+	"read_skill":         "Read",
+	"install_skill":      "Install",
+	"uninstall_skill":    "Uninstall",
+}
+
+// toolArgKey 是各工具在卡片括号中展示的主参键；未收录的工具不显示括号参数。
+var toolArgKey = map[string]string{
+	"shell":              "command",
+	"str_replace_editor": "path",
+	"lisp_eval":          "expression",
+	"fetch_url":          "url",
+	"web_search":         "query",
+	"browser_click":      "selector",
+	"browser_type":       "selector",
+	"browser_screenshot": "url",
+	"read_skill":         "name",
+	"install_skill":      "name",
+	"uninstall_skill":    "name",
+}
+
+// toolDisplayName 返回工具卡片动词：已收录映射则用之，否则回退到原始工具名。
+func toolDisplayName(name string) string {
+	if v, ok := toolVerb[name]; ok {
+		return v
+	}
+	return name
+}
+
+// toolArgValue 从参数 JSON 中提取工具卡片括号内展示的主参；无法解析或缺失时返回空串。
+func toolArgValue(name, argsJSON string) string {
+	key := toolArgKey[name]
+	if key == "" || strings.TrimSpace(argsJSON) == "" {
+		return ""
+	}
+	var m map[string]interface{}
+	if json.Unmarshal([]byte(argsJSON), &m) != nil {
+		return ""
+	}
+	v, ok := m[key]
+	if !ok {
+		return ""
+	}
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x)
+	case float64:
+		return strconv.Itoa(int(x))
+	case bool:
+		return strconv.FormatBool(x)
+	}
+	return ""
+}
+
+// clampToolArg 把工具主参截断到最大宽度，避免超长命令占满整行。
+func clampToolArg(arg string, max int) string {
+	if r := []rune(arg); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return arg
+}
+
+// renderToolCall 以 REX 式卡片渲染工具调用：● Verb(arg)。
+// 动词加粗、括号与参数用暗色，主参截断到 60 列；无法结构化时返回空串。
+func renderToolCall(name, argsJSON string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	verb := toolDisplayName(name)
+	dot := lipgloss.NewStyle().Foreground(accent).Render("●")
+	head := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#05A5A5")).Render(verb)
+	if arg := toolArgValue(name, argsJSON); arg != "" {
+		// 参数本身已是带括号的表达式（如 Lisp 的 (+ 1 2)）时不再叠加括号，
+		// 避免出现 ● Lisp((+ 1 2)) 的双括号；否则按 ● Verb(arg) 包裹展示。
+		if strings.HasPrefix(arg, "(") && strings.HasSuffix(arg, ")") {
+			head += dimSty.Render(clampToolArg(arg, 60))
+		} else {
+			head += dimSty.Render("(" + clampToolArg(arg, 60) + ")")
+		}
+	}
+	return "  " + dot + " " + head
+}
+
+// connector 结果块首行的 gutter：2 空格 + └ + 1 空格 = 4 列，
+// 与调用卡片正文同列（卡片正文从第 4 列起），保证上下对齐。
+// 不用 REX 的 ⎿（U+23BF 在多数终端字形不规整、视觉上对不齐），改用标准框线 └。
+const connector = "  └ "
+
+// renderToolResult 以 REX 式 gutter 渲染工具结果：首行「└ 首行」，后续行缩进对齐下方。
+// isErr 时整块用错误色强调。空结果返回空串。
+func renderToolResult(result string, isErr bool) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return ""
+	}
+	lines := strings.Split(result, "\n")
+	indent := strings.Repeat(" ", len(connector))
+	var b strings.Builder
+	b.WriteString(dimSty.Render(connector))
+	if isErr {
+		b.WriteString(errorSty.Render(lines[0]))
+	} else {
+		b.WriteString(lines[0])
+	}
+	for _, ln := range lines[1:] {
+		b.WriteString("\n" + indent)
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		if isErr {
+			b.WriteString(errorSty.Render(ln))
+		} else {
+			b.WriteString(ln)
+		}
+	}
+	return b.String()
 }
 
 // 内置斜杠命令列表（当前为宿主可直接执行的命令）。
@@ -1030,7 +1224,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /mode standard  切换至标准模式",
 			"  /exit        退出聊天",
 		}, "\n")
-		m.appendMessage(assistantNameSty.Render("◈ DSC · 帮助") + "\n" + help)
+		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 帮助") + "\n" + help)
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
@@ -1047,9 +1241,9 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	case "/skills":
 		skills := listSkills()
 		if len(skills) == 0 {
-			m.appendMessage(assistantNameSty.Render("◈ DSC · 技能") + "\n尚未安装任何技能。可让模型调用 install_skill 安装，或将 SKILL.md 放入 ./skills/installed 目录。")
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 技能") + "\n尚未安装任何技能。可让模型调用 install_skill 安装，或将 SKILL.md 放入 ./skills/installed 目录。")
 		} else {
-			m.appendMessage(assistantNameSty.Render("◈ DSC · 技能") + "\n" + strings.Join(skills, "\n"))
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 技能") + "\n" + strings.Join(skills, "\n"))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -1064,7 +1258,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "minimal" // 實時反映標題欄模式
-				m.appendMessage(assistantNameSty.Render("◈ DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
@@ -1082,7 +1276,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "standard" // 實時反映標題欄模式
-				m.appendMessage(assistantNameSty.Render("◈ DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
@@ -1247,18 +1441,58 @@ func (m *Model) capacityTag() string {
 	return shortTokens(m.usedTokens)
 }
 
-// statusBar 渲染底部状态栏：左侧模型/复制提示，右侧快捷键提示。
+// composerView 渲染输入区：每行正文 pad 到「宽度-1」（输入框左侧 1 格内边距），
+// 使上下边框线延伸到终端全宽，避免右侧净余空白。
+func (m *Model) composerView() string {
+	inner := strings.TrimRight(m.input.View(), "\n")
+	w := max(m.width-1, 10) // padding-left 占 1 列
+	var b strings.Builder
+	for i, line := range strings.Split(inner, "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+		if pad := w - ansi.StringWidth(line); pad > 0 {
+			b.WriteString(strings.Repeat(" ", pad))
+		}
+	}
+	return composerBoxSty.Render(b.String())
+}
+
+// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次 + 工具调用步数 + 已用容量。
+// 填在两条平行线（输入框下边框与状态栏分隔线）之间，避免双线紧贴，参考 REX 的指标带布局。
+func (m *Model) runInfoLine() string {
+	info := fmt.Sprintf("轮次 %d · 工具调用 %d", m.turnCount, m.stepCount)
+	if m.usedTokens > 0 {
+		if m.contextWindow > 0 {
+			// 已知总容量时显示已用百分比；小于 1% 也至少显示 1，避免 0% 误导
+			pct := m.usedTokens * 100 / m.contextWindow
+			if pct < 1 {
+				pct = 1
+			}
+			info += fmt.Sprintf(" · 已用 %d%%", pct)
+		} else {
+			info += " · 已用 " + shortTokens(m.usedTokens)
+		}
+	}
+	return "  " + dimSty.Render(info)
+}
+
+// statusBar 渲染底部状态栏（两行）：首行一条通栏分隔线，次行容纳模型/复制提示与快捷键。
+// 采用 REX 风格的缩进 + 分隔线布局，把交互信息与模型信息区分开，营造呼吸感。
 func (m *Model) statusBar() string {
+	divider := dividerSty.Render(strings.Repeat("─", m.width))
 	left := "模型: " + m.displayModelName()
 	if m.copyNotice != "" {
 		left += " · " + m.copyNotice
 	}
+	left = "  " + left
 	right := "Enter 发送 · Ctrl+J 换行 · 选中复制 · Ctrl+Q 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if pad < 1 {
 		pad = 1
 	}
-	return dimSty.Render(left + strings.Repeat(" ", pad) + right)
+	return divider + "\n" + dimSty.Render(left + strings.Repeat(" ", pad) + right)
 }
 
 // View 渲染视图
@@ -1279,7 +1513,8 @@ func (m *Model) View() tea.View {
 	if c := m.completionView(); c != "" {
 		parts = append(parts, c)
 	}
-	parts = append(parts, composerBoxSty.Render(strings.TrimRight(m.input.View(), "\n")))
+	parts = append(parts, m.composerView())
+	parts = append(parts, m.runInfoLine())
 	parts = append(parts, m.statusBar())
 	return m.viewOf(strings.Join(parts, "\n"))
 }

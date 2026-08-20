@@ -40,7 +40,23 @@ func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools 
 		case "user":
 			userMessages = append(userMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
 		case "assistant":
-			userMessages = append(userMessages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(m.Content)))
+			// Anthropic 要求：若后续跟随 tool_result（tool 消息），本 assistant 消息必须
+			// 回带对应的 tool_use 块，否则 API 无法把工具结果关联到之前的调用
+			//（REX 同样回显 tool_use）。无文本且无工具调用时跳过，避免空内容消息。
+			var blocks []anthropic.ContentBlockParamUnion
+			if m.Content != "" {
+				blocks = append(blocks, anthropic.NewTextBlock(m.Content))
+			}
+			for _, tc := range m.ToolCalls {
+				input, err := json.Marshal(tc.Arguments)
+				if err != nil || len(input) == 0 {
+					input = []byte("{}")
+				}
+				blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, json.RawMessage(input), tc.Name))
+			}
+			if len(blocks) > 0 {
+				userMessages = append(userMessages, anthropic.NewAssistantMessage(blocks...))
+			}
 		case "tool":
 			// Anthropic 要求 tool 结果以 user 消息发送，并附上对应的 tool_use_id
 			// 如果 m.ToolCallID 为空，降级为纯文本（兼容旧逻辑）

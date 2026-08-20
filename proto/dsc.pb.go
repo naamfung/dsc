@@ -483,8 +483,11 @@ type RunStreamResponse struct {
 	Output        string                 `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"` // 增量输出（文本增量或工具调用提示）
 	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "streaming" | "reasoning" | "tool" | "success" | "error"
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	Usage         *Usage                 `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`         // 本轮累计 token 用量（success 帧携带）
-	Reasoning     string                 `protobuf:"bytes,5,opt,name=reasoning,proto3" json:"reasoning,omitempty"` // 思考过程增量文本（status="reasoning" 帧携带）
+	Usage         *Usage                 `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`                             // 本轮累计 token 用量（success 帧携带）
+	Reasoning     string                 `protobuf:"bytes,5,opt,name=reasoning,proto3" json:"reasoning,omitempty"`                     // 思考过程增量文本（status="reasoning" 帧携带）
+	ToolName      string                 `protobuf:"bytes,6,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`       // 工具调用帧（status="tool"）携带的工具名
+	ToolArgs      string                 `protobuf:"bytes,7,opt,name=tool_args,json=toolArgs,proto3" json:"tool_args,omitempty"`       // 工具调用帧携带的参数 JSON，供 TUI 渲染「● Verb(arg)」卡片
+	ToolResult    string                 `protobuf:"bytes,8,opt,name=tool_result,json=toolResult,proto3" json:"tool_result,omitempty"` // 工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -550,6 +553,27 @@ func (x *RunStreamResponse) GetUsage() *Usage {
 func (x *RunStreamResponse) GetReasoning() string {
 	if x != nil {
 		return x.Reasoning
+	}
+	return ""
+}
+
+func (x *RunStreamResponse) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *RunStreamResponse) GetToolArgs() string {
+	if x != nil {
+		return x.ToolArgs
+	}
+	return ""
+}
+
+func (x *RunStreamResponse) GetToolResult() string {
+	if x != nil {
+		return x.ToolResult
 	}
 	return ""
 }
@@ -1827,14 +1851,18 @@ const file_dsc_proto_rawDesc = "" +
 	"\x05input\x18\x01 \x01(\tR\x05input\"=\n" +
 	"\vRunResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\"\x99\x01\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\xf4\x01\n" +
 	"\x11RunStreamResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12 \n" +
 	"\x05usage\x18\x04 \x01(\v2\n" +
 	".dsc.UsageR\x05usage\x12\x1c\n" +
-	"\treasoning\x18\x05 \x01(\tR\treasoning\"|\n" +
+	"\treasoning\x18\x05 \x01(\tR\treasoning\x12\x1b\n" +
+	"\ttool_name\x18\x06 \x01(\tR\btoolName\x12\x1b\n" +
+	"\ttool_args\x18\a \x01(\tR\btoolArgs\x12\x1f\n" +
+	"\vtool_result\x18\b \x01(\tR\n" +
+	"toolResult\"|\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\x12!\n" +
