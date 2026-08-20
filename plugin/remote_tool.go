@@ -37,7 +37,7 @@ func (r *RemoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 		return "", err
 	}
 	if resp.Error != "" {
-		return "", fmt.Errorf(resp.Error)
+		return "", fmt.Errorf("%s", resp.Error)
 	}
 	return resp.Content, nil
 }

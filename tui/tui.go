@@ -1203,14 +1203,11 @@ func (m *Model) capacityTag() string {
 	return shortTokens(m.usedTokens)
 }
 
-// statusBar 渲染底部状态栏：左侧模型/复制提示/思考状态，右侧快捷键提示。
+// statusBar 渲染底部状态栏：左侧模型/复制提示，右侧快捷键提示。
 func (m *Model) statusBar() string {
 	left := "模型: " + m.displayModelName()
 	if m.copyNotice != "" {
 		left += " · " + m.copyNotice
-	}
-	if m.thinking || m.streaming {
-		left = "思考中... · " + left
 	}
 	right := "Enter 发送 · Ctrl+J 换行 · 选中复制 · Ctrl+Q 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)

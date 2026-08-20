@@ -407,13 +407,13 @@ func main() {
 	}
 
 	// 從主配置 config/config.yaml 讀取 LLM 插件的配置（binary_path 和 env）
-	llmBinary := ""
+	llmBinaryCfg := ""
 	llmEnv := map[string]string{}
 
 	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
 		for _, entry := range mainCfg.Plugins {
 			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
-				llmBinary = entry.BinaryPath
+				llmBinaryCfg = entry.BinaryPath
 				llmEnv = entry.Env
 				break
 			}
@@ -421,21 +421,28 @@ func main() {
 	}
 
 	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
-	if llmBinary == "" {
-		llmBinary = filepath.Join(execDir, "plugins", "llm-"+llmName, "llm-"+llmName+ext)
-	}
-
-	// 確保 llmBinary 是絕對路徑
-	if !filepath.IsAbs(llmBinary) {
-		llmBinary = filepath.Join(execDir, llmBinary)
+	llmBinaryForStat := ""
+	if llmBinaryCfg == "" {
+		llmBinaryForStat = filepath.Join(execDir, "plugins", "llm-"+llmName, "llm-"+llmName+ext)
+	} else {
+		llmBinaryForStat = llmBinaryCfg
+		if !filepath.IsAbs(llmBinaryForStat) {
+			llmBinaryForStat = filepath.Join(execDir, llmBinaryForStat)
+		}
 	}
 
 	// 檢查 LLM 二進制文件是否存在
-	if _, err := os.Stat(llmBinary); os.IsNotExist(err) {
-		fail("LLM binary not found for provider %q at %q", llmName, llmBinary)
+	if _, err := os.Stat(llmBinaryForStat); os.IsNotExist(err) {
+		fail("LLM binary not found for provider %q at %q", llmName, llmBinaryForStat)
 	}
 
-	if err := mgr.LoadLLM(llmName, llmBinary, llmEnv); err != nil {
+	// 傳遞配置中的相對路徑給插件管理器以維持日誌風格
+	llmBinaryToLoad := llmBinaryCfg
+	if llmBinaryToLoad == "" {
+		llmBinaryToLoad = "./plugins/llm-" + llmName + "/llm-" + llmName + ext
+	}
+
+	if err := mgr.LoadLLM(llmName, llmBinaryToLoad, llmEnv); err != nil {
 		fail("failed to load LLM %s: %v", llmName, err)
 	}
 	logger.Info("llm loaded", "name", llmName)
@@ -584,7 +591,7 @@ func main() {
 		} else if v := os.Getenv("OLLAMA_MODEL"); v != "" {
 			llmModelName = v
 		} else {
-			llmModelName = "gpt-4o" // 默認值
+			llmModelName = "Agentic-Model" // 默認值
 		}
 	}
 
