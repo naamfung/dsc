@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -199,6 +200,15 @@ func loadConfig(path string) (*plugin.Config, error) {
 	return &cfg, nil
 }
 
+// getExecutableDir 獲取可執行文件所在目錄的絕對路徑
+func getExecutableDir() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(exePath), nil
+}
+
 // runInputMode 以一次性模式运行 agent（-input 启动时使用）：
 // 与 TUI 内部一致地走 RunStream（保持数据交互环节一致），但不渲染 TUI，
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
@@ -228,6 +238,8 @@ func runInputMode(agent plugin.Agent, ctx context.Context, input string) int {
 				fmt.Fprintf(os.Stderr, "\n错误: %s\n", frame.Error)
 			}
 			exitCode = 1
+		case "reasoning":
+			fmt.Fprintf(os.Stderr, "\\n[REASONING]>%s", frame.Reasoning)
 		}
 	}
 	return exitCode
@@ -240,6 +252,13 @@ func main() {
 			fmt.Fprintf(os.Stderr, "panic recovered: %v\n", r)
 		}
 	}()
+
+	// 獲取可執行文件所在目錄的絕對路徑
+	execDir, err := getExecutableDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get executable directory: %v\n", err)
+		os.Exit(1)
+	}
 
 	// 解析啟動參數
 	logToScreen := false
@@ -347,7 +366,7 @@ func main() {
 	logger.Info("starting dsc", "mode", mode)
 
 	// 加載 preset 配置文件
-	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
+	presetPath := filepath.Join(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
 	presetCfg, err := loadConfig(presetPath)
 	if err != nil {
 		// 如果 preset 配置文件不存在或加載失敗，回退到默認 config.yaml
@@ -356,7 +375,8 @@ func main() {
 	}
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
-		PluginDir:    "./plugins/",
+		PluginDir:    filepath.Join(execDir, "plugins"),
+		ExecDir:      execDir,
 		Handshake:    plugin.Handshake,
 		Logger:       logger,
 		PluginLogger: pluginLogger,
@@ -383,9 +403,9 @@ func main() {
 		ext = ".exe"
 	}
 	llmBinary := map[string]string{
-		"openai":    "./plugins/llm-openai/llm-openai" + ext,
-		"anthropic": "./plugins/llm-anthropic/llm-anthropic" + ext,
-		"ollama":    "./plugins/llm-ollama/llm-ollama" + ext,
+		"openai":    filepath.Join(execDir, "plugins", "llm-openai", "llm-openai"+ext),
+		"anthropic": filepath.Join(execDir, "plugins", "llm-anthropic", "llm-anthropic"+ext),
+		"ollama":    filepath.Join(execDir, "plugins", "llm-ollama", "llm-ollama"+ext),
 	}[llmName]
 	if llmBinary == "" {
 		fail("unknown LLM provider %q", llmName)
@@ -394,7 +414,7 @@ func main() {
 	// 從主配置 config/config.yaml 讀取 LLM 插件的環境變量（BASE_URL / API_KEY / MODEL 等），
 	// 否則 llm-openai 等插件會使用內置默認值（如 DeepSeek 地址），導致請求發往錯誤服務
 	llmEnv := map[string]string{}
-	if mainCfg, err := loadConfig("config/config.yaml"); err == nil {
+	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
 		for _, entry := range mainCfg.Plugins {
 			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
 				llmEnv = entry.Env
@@ -411,7 +431,7 @@ func main() {
 	// 計算上下文窗口容量（token 數）：
 	// 優先取配置值 → 探測 LLAMACPP /v1/models 的 n_ctx → 默認 128K×1024
 	contextWindow := 0
-	if mainCfg, err := loadConfig("config/config.yaml"); err == nil && mainCfg.ContextWindow > 0 {
+	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil && mainCfg.ContextWindow > 0 {
 		contextWindow = mainCfg.ContextWindow
 	}
 	if contextWindow == 0 {
@@ -429,7 +449,7 @@ func main() {
 
 	// 2. 加載 Agent 插件（把上下文窗口容量傳給 react-loop，供其做 80% 自動壓縮；
 	//    -input 模式下同時傳入單輪模式標記，讓代理循環僅執行一次）
-	agentBinary := "./plugins/react-loop/react-loop" + ext
+	agentBinary := filepath.Join(execDir, "plugins", "react-loop", "react-loop"+ext)
 	agentEnv := map[string]string{
 		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
 	}

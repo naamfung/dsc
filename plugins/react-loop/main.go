@@ -302,6 +302,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					emit(&plugin.RunStreamResponse{Status: "error", Error: cr.Error})
 					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
 				}
+				// [DEBUG] 打印接收到的 ChatStreamResponse
+				fmt.Fprintf(os.Stderr, "[REACT-LOOP-DEBUG] Frame: Content=%q, Reasoning=%q, FinishReason=%q, Error=%q\n", cr.Content, cr.Reasoning, cr.FinishReason, cr.Error)
 				// 記錄 prompt 用量（≈ 當前上下文已用容量）；該值在 finish 分片由服務端返回
 				if cr.Usage != nil {
 					a.lastPromptTokens = cr.Usage.PromptTokens

@@ -112,8 +112,9 @@ func concatText(blocks []anthropic.ContentBlockUnion) string {
 func concatReasoning(blocks []anthropic.ContentBlockUnion) string {
 	var b strings.Builder
 	for _, block := range blocks {
-		if block.Type == "thinking" {
-			b.WriteString(block.Thinking)
+		// 嘗試作為 thinking 塊訪問
+		if thinkingBlock := block.AsThinking(); thinkingBlock.Thinking != "" {
+			b.WriteString(thinkingBlock.Thinking)
 		}
 	}
 	return b.String()
@@ -184,6 +185,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 			// 思考过程增量（thinking 块）
 			reason := concatReasoning(msg.Content)
 			if len(reason) > prevReasonLen {
+				// [DEBUG] 打印 reasoning 帧
+				fmt.Fprintf(os.Stderr, "[LLM-ANTHROPIC-REASONING] %s\n", reason[prevReasonLen:])
 				ch <- &plugin.ChatStreamResponse{Reasoning: reason[prevReasonLen:]}
 				prevReasonLen = len(reason)
 			}

@@ -49,6 +49,7 @@ type Manager struct {
 
 type ManagerConfig struct {
 	PluginDir    string
+	ExecDir      string // 可執行文件所在目錄，用作插件子進程的工作目錄
 	Handshake    goplugin.HandshakeConfig
 	Logger       hclog.Logger
 	PluginLogger hclog.Logger // logger for go-plugin internal logs (e.g., plugin process exited)
@@ -108,12 +109,16 @@ func (m *Manager) Load(name string, binaryPath string) error {
 	}
 
 	// 創建插件客戶端
+	cmd := exec.Command(binaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"dsc_plugin": &DSCPluginGRPC{},
 		},
-		Cmd:              exec.Command(binaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           m.pluginLogger,
 	})
@@ -204,6 +209,9 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	// 構建命令，加入 -llm-service-id 參數
 	cmdArgs := []string{"-llm-service-id", strconv.FormatUint(uint64(serviceID), 10)}
 	cmd := exec.Command(binaryPath, cmdArgs...)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 
 	// 創建插件客戶端
 	client := goplugin.NewClient(&goplugin.ClientConfig{
@@ -286,6 +294,9 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 
 	// 創建插件客戶端（先不傳遞 serviceID，稍後通過 broker 生成）
 	cmd := exec.Command(binaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	if len(env) > 0 {
 		cmd.Env = buildEnv(env)
 	}
@@ -357,6 +368,9 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 
 	// 創建插件客戶端
 	cmd := exec.Command(binaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	if len(env) > 0 {
 		cmd.Env = buildEnv(env)
 	}
@@ -450,12 +464,16 @@ func (m *Manager) HotReload(name string, newBinaryPath string) error {
 // hotReloadPluginLocked 內部重載 DSCPlugin（需已持有鎖）
 func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 	// 1. 建立新 client 並驗證
+	cmd := exec.Command(newBinaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	newClient := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"dsc_plugin": &DSCPluginGRPC{},
 		},
-		Cmd:              exec.Command(newBinaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           m.pluginLogger,
 	})
@@ -499,12 +517,16 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	}
 
 	// 1. 建立新 client 並驗證
+	cmd := exec.Command(newBinaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	newClient := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
 		},
-		Cmd:              exec.Command(newBinaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           m.pluginLogger,
 	})
@@ -564,12 +586,16 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 // hotReloadLLMLocked 內部重載 LLM（需已持有鎖）
 func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 	// 1. 建立新 client 並驗證
+	cmd := exec.Command(newBinaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	newClient := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"llm": &LLMGRPCPlugin{},
 		},
-		Cmd:              exec.Command(newBinaryPath),
+		Cmd:              cmd,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		Logger:           m.pluginLogger,
 	})
@@ -821,6 +847,10 @@ func (s *llmProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServ
 		if err != nil {
 			return err
 		}
+		// [DEBUG] 打印轉發的 ChatStreamResponse
+		if msg.Reasoning != "" || msg.Content != "" {
+			fmt.Fprintf(os.Stderr, "[LLM-PROXY-DEBUG] Send: Content=%q, Reasoning=%q, FinishReason=%q\n", msg.Content, msg.Reasoning, msg.FinishReason)
+		}
 		if err := stream.Send(msg); err != nil {
 			return err
 		}
@@ -974,6 +1004,9 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	// 跨平台處理二進制路徑
 	binaryPath := normalizeBinaryPath(entry.BinaryPath)
 	cmd := exec.Command(binaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	cmd.Env = buildEnv(entry.Env)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
@@ -1037,6 +1070,9 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 
 	// 創建客戶端
 	cmd := exec.Command(binaryPath)
+	if m.config.ExecDir != "" {
+		cmd.Dir = m.config.ExecDir
+	}
 	cmd.Env = buildEnv(entry.Env)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
