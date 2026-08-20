@@ -409,7 +409,7 @@ func main() {
 	// 從主配置 config/config.yaml 讀取 LLM 插件的配置（binary_path 和 env）
 	llmBinary := ""
 	llmEnv := map[string]string{}
-	
+
 	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
 		for _, entry := range mainCfg.Plugins {
 			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
@@ -423,6 +423,11 @@ func main() {
 	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
 	if llmBinary == "" {
 		llmBinary = filepath.Join(execDir, "plugins", "llm-"+llmName, "llm-"+llmName+ext)
+	}
+
+	// 確保 llmBinary 是絕對路徑
+	if !filepath.IsAbs(llmBinary) {
+		llmBinary = filepath.Join(execDir, llmBinary)
 	}
 
 	// 檢查 LLM 二進制文件是否存在
@@ -489,6 +494,11 @@ func main() {
 	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
 	if agentBinary == "" {
 		agentBinary = filepath.Join(execDir, "plugins", "agent-react-loop", "agent-react-loop"+ext)
+	}
+
+	// 確保 agentBinary 是絕對路徑
+	if !filepath.IsAbs(agentBinary) {
+		agentBinary = filepath.Join(execDir, agentBinary)
 	}
 
 	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker(agentName, agentBinary, agentEnv)
