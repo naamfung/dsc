@@ -456,7 +456,7 @@ func main() {
 
 	// 2. 加載 Agent 插件（把上下文窗口容量傳給 agent，供其做 80% 自動壓縮；
 	//    -input 模式下同時傳入單輪模式標記，讓代理循環僅執行一次）
-	agentName := "react-agent" // 默認 Agent 名稱
+	agentName := "agent-react-loop" // 默認 Agent 名稱
 	agentBinary := ""
 	agentEnv := map[string]string{
 		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
@@ -488,7 +488,7 @@ func main() {
 
 	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
 	if agentBinary == "" {
-		agentBinary = filepath.Join(execDir, "plugins", "react-loop", "react-loop"+ext)
+		agentBinary = filepath.Join(execDir, "plugins", "agent-react-loop", "agent-react-loop"+ext)
 	}
 
 	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker(agentName, agentBinary, agentEnv)
@@ -536,13 +536,13 @@ func main() {
 	// 7. 获取 Agent 并运行 TUI 聊天界面
 	agentName = mgr.GetMainAgentName()
 	if agentName == "" {
-		agentName = "react-agent"
+		agentName = "agent-react-loop"
 	}
 	agent, ok := mgr.GetAgent(agentName)
 	if !ok {
 		fail("agent %s not found after loading", agentName)
 	}
-	// 告訴 Agent 主進程 ToolService 代理的 serviceID；否則 react-loop 的 toolServiceID 為 0，
+	// 告訴 Agent 主進程 ToolService 代理的 serviceID；否則 agent-react-loop 的 toolServiceID 為 0，
 	// 首條消息會直接返回 "service IDs not set" 錯誤（並被靜默吞掉，表現為無響應）
 	if err := agent.SetToolServiceID(context.Background(), toolServiceID); err != nil {
 		fail("failed to set tool service ID on agent: %v", err)

@@ -1,10 +1,10 @@
 workspace_root: ./workspace
-default_llm: anthropic
+default_llm: llm-anthropic
 # 上下文窗口容量（token 数）。不配置（0）时：若为本地 LLAMACPP 服务则探测其 /v1/models 的 n_ctx，
 # 探测失败则回退默认 128K（按 *1024 计，即 131072）。
 #context_window: 131072
 plugins:
-  - name: anthropic
+  - name: llm-anthropic
     type: llm
     binary_path: ./plugins/llm-anthropic/llm-anthropic.exe
     enabled: true
@@ -12,7 +12,7 @@ plugins:
       ANTHROPIC_BASE_URL: "http://192.168.124.197:8008/"
       ANTHROPIC_MODEL: "Agentic-Turbo-Coder"
       ANTHROPIC_API_KEY: "sk-your-real-key"
-  - name: openai
+  - name: llm-openai
     type: llm
     binary_path: ./plugins/llm-openai/llm-openai.exe
     enabled: true
@@ -20,15 +20,15 @@ plugins:
       OPENAI_BASE_URL: "http://192.168.124.197:8008/v1"
       OPENAI_MODEL: "Agentic-Turbo-Coder"
       OPENAI_API_KEY: "sk-your-real-key"
-  - name: filesystem
+  - name: tool-filesystem
     type: tool
     binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
     enabled: true
 
-  - name: react-agent
+  - name: agent-react-loop
     type: agent
-    binary_path: ./plugins/react-loop/react-loop.exe
+    binary_path: ./plugins/agent-react-loop/agent-react-loop.exe
     enabled: true
     depends_on:
-      llm: anthropic
-      tools: [filesystem]
+      llm: llm-anthropic
+      tools: [tool-filesystem]

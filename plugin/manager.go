@@ -930,10 +930,9 @@ func getPluginDirectoryName(binaryPath string) string {
 	baseDir := filepath.Base(dir)
 	if baseDir == "plugins" || baseDir == "plugin" {
 		// 如果 dir 是 .../plugins，說明 binaryPath 是 ./plugins/<binaryName>.exe 或 plugins/<binaryName>.exe
+		// 非 Windows 系統下 binaryPath 已無後綴，Windows 系統下為 .exe 後綴
 		basename := filepath.Base(binaryPath)
 		basename = strings.TrimSuffix(basename, ".exe")
-		basename = strings.TrimSuffix(basename, ".dll")
-		basename = strings.TrimSuffix(basename, ".so")
 		return basename
 	}
 	return baseDir
