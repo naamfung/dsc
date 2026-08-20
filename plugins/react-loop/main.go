@@ -57,6 +57,10 @@ type ReactLoopAgent struct {
 	// 單輪模式（-input 自動化測試入口使用）：代理循環僅執行一次，
 	// 完成一輪（含工具調用）後自然結束，方便測試後程序自動退出
 	singleTurn bool
+
+	// persona "你是一個…助手" 身份句，由宿主透過 DSC_PRESET_PERSONA 傳入（預設可配）；
+	// 空則回退 DeepSeek 官方默認
+	persona string
 }
 
 func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
@@ -441,9 +445,22 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	}, nil
 }
 
-// buildSystemPrompt 構建完整 system prompt：基礎指令 + 各工具插件貢獻的上下文片段（如技能索引）。
+// buildSystemPrompt 構建完整 system prompt，采用 DSH 的分层结构：
+// 身份首行 + persona（預設可配）+ 工具指引 + 各工具插件貢獻的上下文片段（如技能索引）。
+// 各層按 DSH 约定以空行 "\n\n" 拼接，空內容直接跳過。
 func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto.ToolServiceClient) string {
-	parts := []string{"You are a helpful assistant with access to tools. 根据任务选择合适的工具，逐步完成用户的请求。"}
+	parts := []string{
+		// 身份首行（DSH 风格总开关，品牌名适配为 DSC）
+		"You are an AI agent powered by DSC.",
+	}
+	// persona "你是一個…助手" 身份句：预设可配，空則回退 DeepSeek 官方默認
+	if p := strings.TrimSpace(a.persona); p != "" {
+		parts = append(parts, p)
+	} else {
+		parts = append(parts, "You are a helpful software engineer assistant.")
+	}
+	// 工具指引（DSC 是工具型 agent，需提示模型按任务选用工具）
+	parts = append(parts, "根据任务选择合适的工具，逐步完成用户的请求。")
 
 	// 聚合各工具插件貢獻的上下文片段（如技能索引），失敗或為空則跳過
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -619,6 +636,8 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	if v := os.Getenv("DSC_SINGLE_TURN"); v == "1" || strings.EqualFold(v, "true") {
 		agent.singleTurn = true
 	}
+	// 讀取宿主傳入的 preset persona（DSC_PRESET_PERSONA，「你是一個…助手」身份句）
+	agent.persona = os.Getenv("DSC_PRESET_PERSONA")
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
 	return nil
 }

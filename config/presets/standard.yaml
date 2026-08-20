@@ -1,5 +1,6 @@
 name: 标准模式
 description: 包含所有可用工具，支持完整的 Agent 能力。
+persona: "You are a helpful software engineer assistant."
 plugins:
   - name: fs-observation-policy
     type: policy

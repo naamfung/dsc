@@ -8,6 +8,8 @@ type Config struct {
 	// ContextWindow 上下文窗口大小（token 数）；0 表示未配置，
 	// 由宿主探测 LLAMACPP 的 /v1/models 獲取 n_ctx，仍失敗則用默認 128K×1024
 	ContextWindow int `json:"context_window" yaml:"context_window"`
+	// Persona "你是一個…助手" 身份句（預設可配，同 DSH 的 deployment persona）；空則用 DeepSeek 官方默認
+	Persona string `json:"persona" yaml:"persona"`
 }
 
 type PluginEntry struct {
