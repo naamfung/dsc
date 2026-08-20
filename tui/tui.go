@@ -165,12 +165,16 @@ type Model struct {
 	streamBuffer string
 	streamOpen   bool
 	streamMsgIdx int
+
+	// 当前一轮的取消句柄：Ctrl+C 在响应/流式输出期间中断本轮（终止当前操作）
+	turnCancel     context.CancelFunc
+	streamCancelled bool // 中断标记：置位后丢弃后续 streamFrame，停止本轮泵取
 }
 
 // New 创建一个聊天界面模型
 func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) *Model {
 	input := textarea.New()
-	input.Placeholder = "输入消息，回车发送，Ctrl+J 换行，Ctrl+C 退出"
+	input.Placeholder = "输入消息，回车发送，Ctrl+J 换行，Ctrl+Q 退出"
 	input.CharLimit = 4096
 	input.ShowLineNumbers = false
 	input.SetHeight(1)
@@ -216,10 +220,15 @@ func (m *Model) Init() tea.Cmd {
 // submitCmd 发起一次 agent.RunStream，结果通过 streamFrame 消息返回
 func (m *Model) submitCmd(input string) tea.Cmd {
 	return func() tea.Msg {
-		ch, err := m.agent.RunStream(m.ctx, input)
+		// 为本轮单独建一个可取消的上下文，供 Ctrl+C 中断当前操作
+		cctx, cancel := context.WithCancel(m.ctx)
+		ch, err := m.agent.RunStream(cctx, input)
 		if err != nil {
+			cancel()
 			return streamFrame{input: input, err: err, done: true}
 		}
+		m.turnCancel = cancel
+		m.streamCancelled = false
 		return streamFrame{input: input, ch: ch, first: true}
 	}
 }
@@ -233,6 +242,38 @@ func (m *Model) pumpStream(input string, ch <-chan *plugin.RunStreamResponse) te
 		}
 		return streamFrame{input: input, frame: frame, ch: ch}
 	}
+}
+
+// copySelected 复制当前选区文本到剪贴板并弹出来回提示；无选区或空文本则不处理。
+func (m *Model) copySelected() tea.Cmd {
+	text := m.selectedText()
+	m.sel = selection{}
+	m.render()
+	if text == "" {
+		return nil
+	}
+	_ = clipboard.WriteAll(text)
+	m.copyNotice = fmt.Sprintf("已复制 %d 字符", runeCount(text))
+	m.copyNoticeSeq++
+	return copyNoticeExpire(m.copyNoticeSeq)
+}
+
+// interruptTurn 中断当前一轮（走 cancelable ctx，参考 rex）：调用按轮取消并置位中断标记，
+// 丢弃后续 streamFrame，复位流式状态回到就绪。
+func (m *Model) interruptTurn() (tea.Model, tea.Cmd) {
+	if m.turnCancel != nil {
+		m.turnCancel()
+		m.turnCancel = nil
+	}
+	m.streamCancelled = true
+	m.thinking = false
+	m.streaming = false
+	m.streamOpen = false
+	m.viewport.SetHeight(m.vpHeight())
+	m.render()
+	m.input.Focus()
+	m.viewport.GotoBottom()
+	return m, nil
 }
 
 // vpHeight 计算消息区高度：总高度减去标题、状态栏、输入区（含边框），思考时再减去指示行，补全菜单时再减去补全菜单行。
@@ -342,15 +383,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if mm.Button == tea.MouseLeft {
 				m.sel.head = m.transcriptCaret(mm.X, mm.Y)
 			}
-			text := m.selectedText()
-			m.sel = selection{}
+			cmd := m.copySelected()
 			m.render()
-			if text != "" {
-				_ = clipboard.WriteAll(text)
-				m.copyNotice = fmt.Sprintf("已复制 %d 字符", runeCount(text))
-				m.copyNoticeSeq++
-				return m, copyNoticeExpire(m.copyNoticeSeq)
-			}
+			return m, cmd
 		}
 		return m, nil
 
@@ -363,9 +398,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		if m.thinking || m.streaming {
-			// 响应/流式输出期间不处理输入，但允许 Ctrl+C 退出
-			if msg.String() == "ctrl+c" {
+			// 响应/流式输出期间不处理输入：Ctrl+Q 退出；Ctrl+C 中断当前操作（参考 rex）
+			switch msg.String() {
+			case "ctrl+q":
 				return m, tea.Quit
+			case "ctrl+c":
+				return m.interruptTurn()
 			}
 			return m, nil
 		}
@@ -391,8 +429,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
-		case "ctrl+c":
+		case "ctrl+q":
 			return m, tea.Quit
+		case "ctrl+c":
+			// 恢复复制语义（参考 rex）：有选区则复制；否则清空输入；都无则忽略（退出已移交给 Ctrl+Q）
+			if m.sel.active {
+				return m, m.copySelected()
+			}
+			if strings.TrimSpace(m.input.Value()) != "" {
+				m.input.SetValue("")
+				m.syncInputHeight()
+				m.updateCompletion()
+			}
+			return m, nil
 		case "up", "down":
 			// 输入为单行时 ↑/↓ 翻阅历史命令；多行输入仍交给输入框移动光标。
 			if !strings.Contains(m.input.Value(), "\n") {
@@ -447,6 +496,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case streamFrame:
+		// 已被 Ctrl+C 中断本轮的残留帧直接丢弃，停止泵取
+		if m.streamCancelled {
+			return m, nil
+		}
 		if msg.first {
 			m.thinking = false
 			m.streaming = true
@@ -868,7 +921,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  ↑/↓          翻阅历史命令（单行输入时）",
 			"  Ctrl+V       粘贴剪贴板内容",
 			"  /            在输入框首字符唤起命令菜单",
-			"  Ctrl+C       退出",
+			"  Ctrl+C       有选区复制 / 运行中中断 / 否则清空输入",
+			"  Ctrl+Q       退出",
 			"",
 			"鼠标:",
 			"  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
@@ -1107,7 +1161,7 @@ func (m *Model) statusBar() string {
 	if m.thinking || m.streaming {
 		left = "思考中... · " + left
 	}
-	right := "Enter 发送 · Ctrl+J 换行 · 拖拽正文可复制 · Ctrl+C 退出"
+	right := "Enter 发送 · Ctrl+J 换行 · 选中复制 · Ctrl+Q 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if pad < 1 {
 		pad = 1
