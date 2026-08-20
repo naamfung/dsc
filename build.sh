@@ -21,9 +21,9 @@ fi
 echo "Building main program..."
 go build
 
-# 构建 react-loop 插件
-echo "Building react-loop plugin..."
-go build -o plugins/react-loop/react-loop.exe ./plugins/react-loop
+# 构建 agent-react-loop 插件
+echo "Building agent-react-loop plugin..."
+go build -o plugins/agent-react-loop/agent-react-loop.exe ./plugins/agent-react-loop
 
 # 构建 llm-openai 插件
 echo "Building llm-openai plugin..."
@@ -45,9 +45,9 @@ go build -o plugins/tool-filesystem/tool-filesystem.exe ./plugins/tool-filesyste
 echo "Building tool-str-replace-editor plugin..."
 go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugins/tool-str-replace-editor
 
-# 构建 fs-observation-policy 插件
-echo "Building fs-observation-policy plugin..."
-go build -o plugins/fs-observation-policy/fs-observation-policy.exe ./plugins/fs-observation-policy
+# 构建 policy-fs-observation 插件
+echo "Building policy-fs-observation plugin..."
+go build -o plugins/policy-fs-observation/policy-fs-observation.exe ./plugins/policy-fs-observation
 
 # 构建 tool-browser-use 插件
 echo "Building tool-browser-use plugin..."
