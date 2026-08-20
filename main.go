@@ -209,6 +209,27 @@ func getExecutableDir() (string, error) {
 	return filepath.Dir(exePath), nil
 }
 
+// statBinaryPath 根據 execDir 和可能的相對/絕對 binaryPath，返回用於 os.Stat 檢查的絕對路徑
+func statBinaryPath(execDir, cfgPath string, defaultRel string) string {
+	p := cfgPath
+	if p == "" {
+		p = filepath.Join(execDir, defaultRel)
+	} else {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(execDir, p)
+		}
+	}
+	return p
+}
+
+// loadBinaryPath 返回用於傳遞給插件管理器的路徑（通常是配置文件中的相對路徑或默認相對路徑）
+func loadBinaryPath(cfgPath string, defaultRel string) string {
+	if cfgPath != "" {
+		return cfgPath
+	}
+	return defaultRel
+}
+
 // runInputMode 以一次性模式运行 agent（-input 启动时使用）：
 // 与 TUI 内部一致地走 RunStream（保持数据交互环节一致），但不渲染 TUI，
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
@@ -420,27 +441,15 @@ func main() {
 		}
 	}
 
-	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
-	llmBinaryForStat := ""
-	if llmBinaryCfg == "" {
-		llmBinaryForStat = filepath.Join(execDir, "plugins", "llm-"+llmName, "llm-"+llmName+ext)
-	} else {
-		llmBinaryForStat = llmBinaryCfg
-		if !filepath.IsAbs(llmBinaryForStat) {
-			llmBinaryForStat = filepath.Join(execDir, llmBinaryForStat)
-		}
-	}
+	defaultLLmRel := filepath.Join("plugins", "llm-"+llmName, "llm-"+llmName+ext)
+	llmBinaryForStat := statBinaryPath(execDir, llmBinaryCfg, defaultLLmRel)
 
 	// 檢查 LLM 二進制文件是否存在
 	if _, err := os.Stat(llmBinaryForStat); os.IsNotExist(err) {
 		fail("LLM binary not found for provider %q at %q", llmName, llmBinaryForStat)
 	}
 
-	// 傳遞配置中的相對路徑給插件管理器以維持日誌風格
-	llmBinaryToLoad := llmBinaryCfg
-	if llmBinaryToLoad == "" {
-		llmBinaryToLoad = "./plugins/llm-" + llmName + "/llm-" + llmName + ext
-	}
+	llmBinaryToLoad := loadBinaryPath(llmBinaryCfg, "./plugins/llm-"+llmName+"/llm-"+llmName+ext)
 
 	if err := mgr.LoadLLM(llmName, llmBinaryToLoad, llmEnv); err != nil {
 		fail("failed to load LLM %s: %v", llmName, err)
@@ -469,7 +478,7 @@ func main() {
 	// 2. 加載 Agent 插件（把上下文窗口容量傳給 agent，供其做 80% 自動壓縮；
 	//    -input 模式下同時傳入單輪模式標記，讓代理循環僅執行一次）
 	agentName := "agent-react-loop" // 默認 Agent 名稱
-	agentBinary := ""
+	agentBinaryCfg := ""
 	agentEnv := map[string]string{
 		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
 	}
@@ -486,8 +495,8 @@ func main() {
 		for _, entry := range mainCfg.Plugins {
 			if entry.Type == "agent" && entry.Enabled {
 				agentName = entry.Name
-				if agentBinary == "" {
-					agentBinary = entry.BinaryPath
+				if agentBinaryCfg == "" {
+					agentBinaryCfg = entry.BinaryPath
 				}
 				// 合併 env（如果有）
 				for k, v := range entry.Env {
@@ -498,17 +507,17 @@ func main() {
 		}
 	}
 
-	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
-	if agentBinary == "" {
-		agentBinary = filepath.Join(execDir, "plugins", "agent-react-loop", "agent-react-loop"+ext)
+	defaultAgentRel := filepath.Join("plugins", "agent-react-loop", "agent-react-loop"+ext)
+	agentBinaryForStat := statBinaryPath(execDir, agentBinaryCfg, defaultAgentRel)
+
+	// 檢查 Agent 二進制文件是否存在
+	if _, err := os.Stat(agentBinaryForStat); os.IsNotExist(err) {
+		fail("Agent binary not found for agent %q at %q", agentName, agentBinaryForStat)
 	}
 
-	// 確保 agentBinary 是絕對路徑
-	if !filepath.IsAbs(agentBinary) {
-		agentBinary = filepath.Join(execDir, agentBinary)
-	}
+	agentBinaryToLoad := loadBinaryPath(agentBinaryCfg, "./plugins/agent-react-loop/agent-react-loop"+ext)
 
-	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker(agentName, agentBinary, agentEnv)
+	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker(agentName, agentBinaryToLoad, agentEnv)
 	if err != nil {
 		fail("failed to load Agent: %v", err)
 	}
