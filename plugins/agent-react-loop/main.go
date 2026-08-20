@@ -58,6 +58,11 @@ type ReactLoopAgent struct {
 	// 完成一輪（含工具調用）後自然結束，方便測試後程序自動退出
 	singleTurn bool
 
+	// 正常模式下 agent 循環的輪數上限；0 = 不設限（默認，面向長程任務）。
+	// 僅當宿主通過 DSC_MAX_ITERATIONS 顯式設置大於 0 的值時才作為上限；
+	// 模型不調用工具時循環自然結束，設限僅用於需要控制失控場景。
+	maxIterations int
+
 	// persona "你是一個…助手" 身份句，由宿主透過 DSC_PRESET_PERSONA 傳入（預設可配）；
 	// 空則回退 DeepSeek 官方默認
 	persona string
@@ -221,14 +226,15 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}, ctx.Err()
 	}
 
-	// 默認最多 5 輪；單輪模式（-input）下僅執行一輪，方便測試後自然退出
-	maxIterations := 5
+	// 正常模式沿用 maxIterations（默認 0 = 不設限）；單輪模式（-input）下僅執行一輪，方便測試後自然退出
+	maxIterations := a.maxIterations
 	if a.singleTurn {
 		maxIterations = 1
 	}
 	executedTools := false     // 記錄本輪是否執行了工具（單輪模式下視為正常完成）
 	executedToolsErr := false  // 記錄本輪執行的工具是否出現錯誤（單輪模式下據此判定退出碼）
-	for i := 0; i < maxIterations; i++ {
+	// maxIterations == 0 表示不設上限，僅靠 ctx 取消（用戶 Ctrl+C / Shutdown）與模型自然收尾結束
+	for i := 0; maxIterations == 0 || i < maxIterations; i++ {
 		// 检查 ctx.Done()
 		select {
 		case <-ctx.Done():
@@ -369,9 +375,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			// 标记本轮执行了工具（单轮模式下据此判定为正常完成）
 			executedTools = true
 
-			// 向客户端提示正在调用工具
+			// 向客户端提示正在调用工具（携带工具名与参数 JSON，供 TUI 渲染 REX 式卡片）
 			if emit != nil {
-				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool"})
+				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson})
 			}
 
 			// 执行工具
@@ -396,12 +402,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					Content:    fmt.Sprintf("Tool error: %s", toolResp.Error),
 					ToolCallId: tc.Id,
 				})
-				// 單輪模式下，工具報錯也要讓測試端看到，並視為失敗退出
+				// 單輪模式下，工具報錯要視為失敗退出（影響退出碼）
 				if a.singleTurn {
 					executedToolsErr = true
-					if emit != nil {
-						emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool"})
-					}
+				}
+				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
+				if emit != nil {
+					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error})
 				}
 			} else {
 				currentHistory = append(currentHistory, &proto.Message{
@@ -409,11 +416,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					Content:    toolResp.Content,
 					ToolCallId: tc.Id,
 				})
-				// 單輪模式下，把工具執行結果輸出到流，供自動化測試核驗
-				if a.singleTurn {
-					if emit != nil {
-						emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool"})
-					}
+				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
+				if emit != nil {
+					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Content})
 				}
 			}
 		}
@@ -442,7 +447,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}, nil
 	}
 	if emit != nil {
-		emit(&plugin.RunStreamResponse{Output: "Max iterations reached", Status: "error"})
+		// Error 字段必須帶上，否則 TUI 只按 Status 判斷、看不到任何提示，造成「莫名停止」
+		emit(&plugin.RunStreamResponse{Output: "Max iterations reached", Status: "error", Error: "达到最大轮次上限，自动停止"})
 	}
 	return &plugin.AgentResult{
 		Output: "Max iterations reached",
@@ -641,6 +647,14 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	if v := os.Getenv("DSC_SINGLE_TURN"); v == "1" || strings.EqualFold(v, "true") {
 		agent.singleTurn = true
 	}
+	// 讀取宿主傳入的循環輪數上限（DSC_MAX_ITERATIONS）。默認 0 = 不設限（面向長程任務），
+	// 僅當顯式設置大於 0 的值時才作為循環上限。
+	agent.maxIterations = 0
+	if v := os.Getenv("DSC_MAX_ITERATIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			agent.maxIterations = n
+		}
+	}
 	// 讀取宿主傳入的 preset persona（DSC_PRESET_PERSONA，「你是一個…助手」身份句）
 	agent.persona = os.Getenv("DSC_PRESET_PERSONA")
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
@@ -700,11 +714,14 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 	}
 	for item := range ch {
 		if err := stream.Send(&proto.RunStreamResponse{
-			Output:    item.Output,
-			Status:    item.Status,
-			Error:     item.Error,
-			Usage:     plugin.UsageToProto(item.Usage),
-			Reasoning: item.Reasoning,
+			Output:     item.Output,
+			Status:     item.Status,
+			Error:      item.Error,
+			Usage:      plugin.UsageToProto(item.Usage),
+			Reasoning:  item.Reasoning,
+			ToolName:   item.ToolName,
+			ToolArgs:   item.ToolArgs,
+			ToolResult: item.ToolResult,
 		}); err != nil {
 			return err
 		}

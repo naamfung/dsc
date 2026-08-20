@@ -63,6 +63,12 @@ type RunStreamResponse struct {
 	Usage *Usage `json:"usage,omitempty"`
 	// Reasoning 是思考过程增量文本（status="reasoning" 帧携带）
 	Reasoning string `json:"reasoning,omitempty"`
+	// ToolName/ToolArgs 是工具调用帧（status="tool"）携带的工具名与参数 JSON，
+	// 供 TUI 以「● Verb(arg)」卡片形式渲染，替代简陋的 [调用工具: xxx] 提示。
+	ToolName string `json:"tool_name,omitempty"`
+	ToolArgs string `json:"tool_args,omitempty"`
+	// ToolResult 是工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示。
+	ToolResult string `json:"tool_result,omitempty"`
 }
 
 // Usage 是一次 LLM 调用的 token 用量统计

@@ -91,4 +91,49 @@ func TestRenderReasoningMarkdown(t *testing.T) {
 	if !strings.ContainsRune(out, '\x1b') {
 		t.Fatalf("思考块应含 ANSI 样式（markdown 渲染）: %q", out)
 	}
+	// 暗色应在每次行内样式复位后重新套用，确保弱化不被加粗等样式清掉
+	reapply := "\x1b[m" + reasonReapply
+	if !strings.Contains(out, reapply) {
+		t.Fatalf("行内样式复位后未重新套用暗色: %q", out)
+	}
+	if !strings.HasPrefix(out, reasonReapply) {
+		t.Fatalf("思考块整体应带暗色前缀: %q", out)
+	}
+	// 末尾必须复位，避免开着的暗色泄漏到随后的正文
+	if !strings.HasSuffix(out, "\x1b[m\n") {
+		t.Fatalf("思考块末尾应复位，防止弱化泄漏到正文: %q", out)
+	}
+}
+
+// 思考块弱化不应泄漏到紧随其后的正文。
+func TestPumpLoopReasoningDimDoesNotLeakToBody(t *testing.T) {
+	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+		{Status: "streaming", Output: "正文示例"},
+		{Status: "reasoning", Reasoning: "思考：**重点**分析"},
+		{Status: "success"},
+	}}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
+
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	var model tea.Model = m
+	var cmd tea.Cmd
+	cmd = model.(*Model).submitCmd("你好")
+	firstMsg := cmd()
+	model, cmd = model.Update(firstMsg)
+	for i := 0; i < 20 && cmd != nil; i++ {
+		msg := cmd()
+		model, cmd = model.Update(msg)
+	}
+	m2 := model.(*Model)
+	full := strings.Join(m2.lines, "\n")
+	// 正文应保持普通样式：其位置不应紧随一个“开着的”暗色前缀
+	bodyIdx := strings.Index(full, "正文示例")
+	if bodyIdx < 0 {
+		t.Fatalf("正文缺失: %q", full)
+	}
+	// 正文前应已复位：上一个 \x1b[m 复位应在暗色前缀之后，且正文前没有挂起的 reasonReapply
+	pre := full[:bodyIdx]
+	if strings.HasSuffix(pre, reasonReapply) {
+		t.Fatalf("正文前残留开着的暗色，正文被弱化: %q", pre)
+	}
 }
