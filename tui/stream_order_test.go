@@ -71,3 +71,24 @@ func TestPumpLoopOrderedReasoningThenContent(t *testing.T) {
 		t.Fatalf("思考块应位于正文前: %q", full)
 	}
 }
+
+// 思考块内容应当经过 markdown 渲染（如加粗），而不是原样纯文本。
+func TestRenderReasoningMarkdown(t *testing.T) {
+	out := renderReasoning("关键决策：**必须**重试，代码 `go run`。", 60)
+	if !strings.Contains(out, "关键决策") {
+		t.Fatalf("思考文本缺失: %q", out)
+	}
+	if !strings.Contains(out, "必须") {
+		t.Fatalf("加粗文本缺失: %q", out)
+	}
+	if !strings.Contains(out, "▎ ") {
+		t.Fatalf("思考块应带 ▎ 标记: %q", out)
+	}
+	// 加粗应被渲染为 ANSI 粗体（含转义序列），而非原样输出 ** 双星号
+	if strings.Contains(out, "**必须**") {
+		t.Fatalf("加粗未被 markdown 渲染，仍为字面量: %q", out)
+	}
+	if !strings.ContainsRune(out, '\x1b') {
+		t.Fatalf("思考块应含 ANSI 样式（markdown 渲染）: %q", out)
+	}
+}

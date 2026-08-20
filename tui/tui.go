@@ -889,14 +889,30 @@ func (m *Model) openAssistantBlock() {
 	m.streamMsgIdx = len(m.lines) - 1
 }
 
-// renderReasoning 将思考过程原始文本渲染为暗色斜体块：行首加分隔符与普通答案区分。
-// 空思考返回空串；长行交由 buildWrappedLines 按宽度折行。
-func renderReasoning(raw string, _ int) string {
+// renderReasoning 将思考过程原始文本渲染为暗色斜体块：先按 markdown 渲染（加粗/列表/代码等），
+// 再以「▎」标记与续行缩进区分普通答案。空思考返回空串。
+func renderReasoning(raw string, width int) string {
 	if strings.TrimSpace(raw) == "" {
 		return ""
 	}
-	body := reasonSty.Render("▎ " + strings.ReplaceAll(strings.TrimSuffix(raw, "\n"), "\n", "\n  "))
-	return body + "\n"
+	if width < 8 {
+		width = 8
+	}
+	rendered := renderMarkdown(raw, width)
+	lines := strings.Split(rendered, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if i == 0 {
+			b.WriteString("▎ " + line)
+		} else if line != "" {
+			b.WriteString("  " + line)
+		}
+	}
+	b.WriteByte('\n')
+	return reasonSty.Render(b.String())
 }
 
 // 内置斜杠命令列表（当前为宿主可直接执行的命令）。
