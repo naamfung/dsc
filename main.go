@@ -454,24 +454,48 @@ func main() {
 	}
 	logger.Info("context window", "window", contextWindow)
 
-	// 2. 加載 Agent 插件（把上下文窗口容量傳給 react-loop，供其做 80% 自動壓縮；
+	// 2. 加載 Agent 插件（把上下文窗口容量傳給 agent，供其做 80% 自動壓縮；
 	//    -input 模式下同時傳入單輪模式標記，讓代理循環僅執行一次）
-	agentBinary := filepath.Join(execDir, "plugins", "react-loop", "react-loop"+ext)
+	agentName := "react-agent" // 默認 Agent 名稱
+	agentBinary := ""
 	agentEnv := map[string]string{
 		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
 	}
-	// 把预设 persona（"你是一個…助手" 身份句）傳給 react-loop；無則為空、走官方默認
+	// 把预设 persona（"你是一個…助手" 身份句）傳給 agent；無則為空、走官方默認
 	if presetCfg != nil && presetCfg.Persona != "" {
 		agentEnv["DSC_PRESET_PERSONA"] = presetCfg.Persona
 	}
 	if inputText != "" {
 		agentEnv["DSC_SINGLE_TURN"] = "1"
 	}
-	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker("react-agent", agentBinary, agentEnv)
+
+	// 從主配置 config/config.yaml 讀取 Agent 插件的配置
+	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
+		for _, entry := range mainCfg.Plugins {
+			if entry.Type == "agent" && entry.Enabled {
+				agentName = entry.Name
+				if agentBinary == "" {
+					agentBinary = entry.BinaryPath
+				}
+				// 合併 env（如果有）
+				for k, v := range entry.Env {
+					agentEnv[k] = v
+				}
+				break
+			}
+		}
+	}
+
+	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
+	if agentBinary == "" {
+		agentBinary = filepath.Join(execDir, "plugins", "react-loop", "react-loop"+ext)
+	}
+
+	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker(agentName, agentBinary, agentEnv)
 	if err != nil {
 		fail("failed to load Agent: %v", err)
 	}
-	logger.Info("llm service id generated", "serviceID", llmServiceID)
+	logger.Info("agent loaded", "name", agentName, "serviceID", llmServiceID)
 
 	// 3. 註冊 LLM 服務（在 goroutine 中，避免阻塞）
 	go func() {
@@ -510,7 +534,7 @@ func main() {
 	logger.Info("admin api started", "addr", adminAddr)
 
 	// 7. 获取 Agent 并运行 TUI 聊天界面
-	agentName := mgr.GetMainAgentName()
+	agentName = mgr.GetMainAgentName()
 	if agentName == "" {
 		agentName = "react-agent"
 	}
