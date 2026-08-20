@@ -978,10 +978,92 @@ func validatePluginDirectoryName(pluginType, dirName string) error {
 	return nil
 }
 
+// CheckCircularDependencies 檢查插件配置中是否存在環形依賴關係
+func CheckCircularDependencies(entries []PluginEntry) error {
+	// 構建插件地圖和依賴圖
+	pluginNodes := make(map[string]bool)
+	dependencies := make(map[string][]string)
+
+	for _, entry := range entries {
+		if !entry.Enabled {
+			continue
+		}
+		pluginNodes[entry.Name] = true
+		dependencies[entry.Name] = []string{}
+
+		if entry.DependsOn != nil {
+			if entry.DependsOn.LLM != "" {
+				dependencies[entry.Name] = append(dependencies[entry.Name], entry.DependsOn.LLM)
+			}
+			for _, tool := range entry.DependsOn.Tools {
+				dependencies[entry.Name] = append(dependencies[entry.Name], tool)
+			}
+		}
+	}
+
+	// DFS 狀態：0 = unvisited, 1 = visiting, 2 = visited
+	state := make(map[string]int)
+	var cyclePlugins []string
+
+	var dfs func(node string, path []string) bool
+	dfs = func(node string, path []string) bool {
+		if state[node] == 1 {
+			// 發現環形依賴，找出環中的插件
+			cycleStart := -1
+			for i := len(path) - 1; i >= 0; i-- {
+				if path[i] == node {
+					cycleStart = i
+					break
+				}
+			}
+			if cycleStart != -1 {
+				cyclePlugins = path[cycleStart:]
+			}
+			return true
+		}
+		if state[node] == 2 {
+			return false
+		}
+		state[node] = 1
+		path = append(path, node)
+
+		for _, dep := range dependencies[node] {
+			// 只檢查存在的插件節點
+			if pluginNodes[dep] {
+				if dfs(dep, path) {
+					return true
+				}
+			}
+		}
+
+		state[node] = 2
+		path = path[:len(path)-1]
+		return false
+	}
+
+	for pluginName := range pluginNodes {
+		if state[pluginName] == 0 {
+			if dfs(pluginName, nil) {
+				if len(cyclePlugins) > 0 {
+					return fmt.Errorf("circular dependency detected among plugins: %v", cyclePlugins)
+				}
+				return fmt.Errorf("circular dependency detected among plugins")
+			}
+		}
+	}
+
+	return nil
+}
+
 // LoadFromConfig 從配置加載所有插件（重新設計版：先加載 Agent 獲取 Broker，再加載 LLM/Tool）
 func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 檢查環形依賴關係
+	if err := CheckCircularDependencies(cfg.Plugins); err != nil {
+		return fmt.Errorf("circular dependency detected in plugin configuration: %w", err)
+	}
 
 	// 第一步：找到 Agent 插件（假設第一個類型為 agent 的）
 	var agentEntry *PluginEntry
