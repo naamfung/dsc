@@ -402,25 +402,47 @@ func main() {
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
 	}
-	llmBinary := map[string]string{
-		"openai":    filepath.Join(execDir, "plugins", "llm-openai", "llm-openai"+ext),
-		"anthropic": filepath.Join(execDir, "plugins", "llm-anthropic", "llm-anthropic"+ext),
-		"ollama":    filepath.Join(execDir, "plugins", "llm-ollama", "llm-ollama"+ext),
-	}[llmName]
-	if llmBinary == "" {
-		fail("unknown LLM provider %q", llmName)
-	}
 
-	// 從主配置 config/config.yaml 讀取 LLM 插件的環境變量（BASE_URL / API_KEY / MODEL 等），
-	// 否則 llm-openai 等插件會使用內置默認值（如 DeepSeek 地址），導致請求發往錯誤服務
+	// 從配置中獲取 LLM 插件的 binary_path 和 env
+	llmBinary := ""
 	llmEnv := map[string]string{}
-	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
-		for _, entry := range mainCfg.Plugins {
+
+	// 嘗試從 presetCfg 中獲取 LLM 配置
+	var llmEntry *plugin.PluginEntry
+	if presetCfg != nil {
+		for _, entry := range presetCfg.Plugins {
 			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
-				llmEnv = entry.Env
+				llmEntry = &entry
 				break
 			}
 		}
+	}
+
+	// 如果 presetCfg 中沒有找到，嘗試從 mainCfg 中獲取
+	if llmEntry == nil {
+		if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
+			for _, entry := range mainCfg.Plugins {
+				if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
+					llmEntry = &entry
+					break
+				}
+			}
+		}
+	}
+
+	if llmEntry != nil {
+		llmBinary = llmEntry.BinaryPath
+		llmEnv = llmEntry.Env
+	}
+
+	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
+	if llmBinary == "" {
+		llmBinary = filepath.Join(execDir, "plugins", "llm-"+llmName, "llm-"+llmName+ext)
+	}
+
+	// 檢查 LLM 二進制文件是否存在
+	if _, err := os.Stat(llmBinary); os.IsNotExist(err) {
+		fail("LLM binary not found for provider %q at %q", llmName, llmBinary)
 	}
 
 	if err := mgr.LoadLLM(llmName, llmBinary, llmEnv); err != nil {
