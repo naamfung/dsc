@@ -120,6 +120,16 @@ func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools 
 	return msgParams
 }
 
+// accumulateTolerant 累加流式事件，但对上游（如 DeepSeek anthropic 兼容接口）偶发的
+// 重复 content_block_start 做容错：该事件仅用于在 Content 末尾追加新块，若对应 index
+// 已存在则直接忽略，避免 SDK 严格校验（expected index N）中断整条流、导致对话报错。
+func accumulateTolerant(msg *anthropic.Message, event anthropic.MessageStreamEventUnion) error {
+	if event.Type == "content_block_start" && event.Index < int64(len(msg.Content)) {
+		return nil
+	}
+	return msg.Accumulate(event)
+}
+
 // concatText 拼接消息中所有 text 块的内容
 func concatText(blocks []anthropic.ContentBlockUnion) string {
 	var b strings.Builder
@@ -192,7 +202,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 		prevReasonLen := 0
 		for stream.Next() {
 			event := stream.Current()
-			if err := msg.Accumulate(event); err != nil {
+			if err := accumulateTolerant(&msg, event); err != nil {
 				ch <- &plugin.ChatStreamResponse{Error: fmt.Sprintf("stream accumulate error: %v", err)}
 				return
 			}

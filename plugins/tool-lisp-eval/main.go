@@ -269,10 +269,13 @@ func registerMathFuncs(e types.EnvType) {
 	// ---- 雙參數數學函數 ----
 	_ = e.Set(types.Symbol{Val: "pow"}, types.Func{Fn: makeMathFunc2(math.Pow)})
 	_ = e.Set(types.Symbol{Val: "atan2"}, types.Func{Fn: makeMathFunc2(math.Atan2)})
-	_ = e.Set(types.Symbol{Val: "min"}, types.Func{Fn: makeMathFunc2(math.Min)})
-	_ = e.Set(types.Symbol{Val: "max"}, types.Func{Fn: makeMathFunc2(math.Max)})
 	_ = e.Set(types.Symbol{Val: "mod"}, types.Func{Fn: makeMathFunc2(math.Mod)})
 	_ = e.Set(types.Symbol{Val: "remainder"}, types.Func{Fn: makeMathFunc2(math.Remainder)})
+
+	// ---- 可變參數數學函數（至少 1 個參數）----
+	// Clojure 語義：min/max 接受任意數量參數，如 (max 1 5 3) -> 5
+	_ = e.Set(types.Symbol{Val: "min"}, types.Func{Fn: makeMathNaryFunc("min", math.Min)})
+	_ = e.Set(types.Symbol{Val: "max"}, types.Func{Fn: makeMathNaryFunc("max", math.Max)})
 }
 
 // makeMathFunc1 創建單參數數學函數的 types.Func 包裝（float64 輸入輸出）
@@ -292,6 +295,21 @@ func makeMathFunc2(fn func(float64, float64) float64) types.ExternalCall {
 			return nil, fmt.Errorf("expected 2 arguments, got %d", len(args))
 		}
 		return fn(toFloat64(args[0]), toFloat64(args[1])), nil
+	}
+}
+
+// makeMathNaryFunc 創建可變參數數學函數的 types.Func 包裝（至少 1 個參數，float64 輸入輸出）
+// 用於 Clojure 語義下可接收任意數量參數的 min/max 等函數，如 (max 1 5 3) -> 5
+func makeMathNaryFunc(name string, fn func(float64, float64) float64) types.ExternalCall {
+	return func(_ context.Context, args []types.MalType) (types.MalType, error) {
+		if len(args) < 1 {
+			return nil, fmt.Errorf("%s expects at least 1 argument, got %d", name, len(args))
+		}
+		result := toFloat64(args[0])
+		for _, a := range args[1:] {
+			result = fn(result, toFloat64(a))
+		}
+		return result, nil
 	}
 }
 
