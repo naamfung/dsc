@@ -54,6 +54,11 @@ var (
 	dimSty = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888"))
 
+	// reasonSty 思考过程中的暗色斜体样式（参照 REX 的 thinking 块）
+	reasonSty = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6B6B6B")).
+		Italic(true)
+
 	errorSty = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FF5F87")).
 		Bold(true)
@@ -165,6 +170,13 @@ type Model struct {
 	streamBuffer string
 	streamOpen   bool
 	streamMsgIdx int
+
+	// 思考过程（reasoning）渲染状态：reasoningBuffer 累积增量，
+	// reasoningOpen 标记当前正文块是否处于思考状态；transition 到答案时
+	// 把已渲染的思考块并入 reasoningCommitted，随后与答案正文一起显示。
+	reasoningBuffer    string
+	reasoningOpen      bool
+	reasoningCommitted string
 
 	// 当前一轮的取消句柄：Ctrl+C 在响应/流式输出期间中断本轮（终止当前操作）
 	turnCancel     context.CancelFunc
@@ -504,11 +516,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = true
 			m.streamBuffer = ""
-			m.streamOpen = true
-			// 創建助手消息佔位符（僅身份頭）
-			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
-			m.appendMessage(header + "\n")
-			m.streamMsgIdx = len(m.lines) - 1
+			// 創建助手消息佔位符（僅身份頭）；新建块时重置思考/答案状态
+			m.openAssistantBlock()
 			m.render()
 			m.viewport.GotoBottom()
 			if msg.ch == nil {
@@ -534,9 +543,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if msg.frame.Usage != nil && msg.frame.Usage.TotalTokens > 0 {
 					m.usedTokens = int(msg.frame.Usage.TotalTokens)
 				}
-				// 最終渲染：將 streamBuffer 作為正文添加到助手消息中
+				// 最終渲染：將 streamBuffer 作為正文添加到助手消息中（前接已提交的思考块）
 				if m.streamMsgIdx < len(m.lines) {
-					body := renderMarkdown(m.streamBuffer, max(m.width-4, 20))
+					body := m.reasoningCommitted + renderMarkdown(m.streamBuffer, max(m.width-4, 20))
 					header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
 					m.lines[m.streamMsgIdx] = header + "\n" + body
 				}
@@ -560,17 +569,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		f := msg.frame
 		switch f.Status {
+		case "reasoning":
+			// 思考过程增量：新建/追加助手块，以暗色斜体渲染思考文本
+			m.streaming = true
+			m.thinking = false
+			if !m.streamOpen {
+				m.openAssistantBlock()
+			}
+			if !m.reasoningOpen {
+				m.reasoningOpen = true
+				m.reasoningBuffer = ""
+			}
+			m.reasoningBuffer += f.Reasoning
+			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+			m.lines[m.streamMsgIdx] = header + "\n" + renderReasoning(m.reasoningBuffer, max(m.width-4, 20))
+			m.render()
+			m.viewport.GotoBottom()
+			return m, m.pumpStream(msg.input, msg.ch)
 		case "streaming":
 			m.streaming = true
+			m.thinking = false
 			if !m.streamOpen {
-				// 開始新的助手消息塊
-				header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
-				m.appendMessage(header + "\n")
-				m.streamMsgIdx = len(m.lines) - 1
-				m.streamOpen = true
+				m.openAssistantBlock()
+			}
+			// 从思考过渡到答案：把已渲染的思考块并入 committed，作为答案正文的前缀
+			if m.reasoningOpen {
+				m.reasoningOpen = false
+				m.reasoningCommitted = renderReasoning(m.reasoningBuffer, max(m.width-4, 20))
+				m.reasoningBuffer = ""
 			}
 			m.streamBuffer += f.Output
-			body := renderMarkdown(m.streamBuffer, max(m.width-4, 20))
+			body := m.reasoningCommitted + renderMarkdown(m.streamBuffer, max(m.width-4, 20))
 			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
 			m.lines[m.streamMsgIdx] = header + "\n" + body
 			m.render()
@@ -818,6 +847,28 @@ func (m *Model) appendMessage(rendered string) {
 func (m *Model) renderAssistant(body string) string {
 	header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
 	return header + "\n" + body
+}
+
+// openAssistantBlock 新建一个助手正文块：重置思考/答案累积状态并追加身份头占位。
+func (m *Model) openAssistantBlock() {
+	m.streamBuffer = ""
+	m.reasoningBuffer = ""
+	m.reasoningOpen = false
+	m.reasoningCommitted = ""
+	m.streamOpen = true
+	header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
+	m.appendMessage(header + "\n")
+	m.streamMsgIdx = len(m.lines) - 1
+}
+
+// renderReasoning 将思考过程原始文本渲染为暗色斜体块：行首加分隔符与普通答案区分。
+// 空思考返回空串；长行交由 buildWrappedLines 按宽度折行。
+func renderReasoning(raw string, _ int) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	body := reasonSty.Render("▎ " + strings.ReplaceAll(strings.TrimSuffix(raw, "\n"), "\n", "\n  "))
+	return body + "\n"
 }
 
 // 内置斜杠命令列表（当前为宿主可直接执行的命令）。

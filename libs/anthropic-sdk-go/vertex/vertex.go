@@ -1,0 +1,189 @@
+package vertex
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
+	"google.golang.org/api/transport"
+
+	"github.com/anthropics/anthropic-sdk-go/internal/requestconfig"
+	sdkoption "github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+)
+
+const DefaultVersion = "vertex-2023-10-16"
+
+// cloudPlatformScope is the OAuth2 scope used when the caller provides none.
+// External-account (workload identity federation) credentials fail to mint
+// tokens without an explicit scope.
+const cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+
+// WithGoogleAuth returns a request option which loads the [Application Default Credentials] for Google Vertex AI and registers
+// middleware that intercepts requests to the Messages API.
+//
+// When no scopes are given, the https://www.googleapis.com/auth/cloud-platform
+// scope is used.
+//
+// If you already have a [*google.Credentials], it is recommended that you instead call [WithCredentials] directly.
+//
+// Register any [sdkoption.WithMiddleware] before this option so your
+// middleware observes Anthropic-shaped requests; see [WithCredentials].
+//
+// Like [WithCredentials], the returned option includes
+// [sdkoption.WithoutEnvironmentDefaults], so first-party credential sources
+// never apply to a client constructed with it.
+//
+// [Application Default Credentials]: https://cloud.google.com/docs/authentication/application-default-credentials
+func WithGoogleAuth(ctx context.Context, region string, projectID string, scopes ...string) sdkoption.RequestOption {
+	if region == "" {
+		panic("region must be provided")
+	}
+	if len(scopes) == 0 {
+		scopes = []string{cloudPlatformScope}
+	}
+	creds, err := google.FindDefaultCredentials(ctx, scopes...)
+	if err != nil {
+		panic(fmt.Errorf("failed to find default credentials: %v", err))
+	}
+	return WithCredentials(ctx, region, projectID, creds)
+}
+
+// WithCredentials returns a request option which uses the provided credentials for Google Vertex AI and registers middleware that
+// intercepts request to the Messages API.
+//
+// External-account (workload identity federation) credentials must be
+// constructed with a scope — typically
+// https://www.googleapis.com/auth/cloud-platform — or token minting fails.
+//
+// The Vertex adaptation (URL and body rewriting, OAuth authorization) should
+// run closest to the wire. Middleware runs in registration order, so register
+// [sdkoption.WithMiddleware] before this option:
+//
+//	client := anthropic.NewClient(
+//		option.WithMiddleware(loggingMiddleware),
+//		vertex.WithCredentials(ctx, region, projectID, creds),
+//	)
+//
+// Ordered this way, your middleware observes Anthropic-shaped requests
+// (POST /v1/messages with the model in the body) — identical to the
+// first-party API.
+//
+// A custom [sdkoption.WithHTTPClient] is honored when it is passed before this
+// option: its transport is wrapped with OAuth authorization and its other
+// settings (Timeout, CheckRedirect, Jar) are preserved. Passed after this
+// option, it replaces the Vertex-configured client entirely.
+//
+// The returned option is an [sdkoption.Join] of
+// [sdkoption.WithoutEnvironmentDefaults] and the Vertex configuration, so a
+// client constructed with it skips the SDK's first-party credential autoload
+// entirely: environment credentials and profiles from the shared config
+// store (ANTHROPIC_API_KEY, ANTHROPIC_PROFILE, ANTHROPIC_CONFIG_DIR) never
+// apply to Vertex requests.
+func WithCredentials(ctx context.Context, region string, projectID string, creds *google.Credentials) sdkoption.RequestOption {
+	defaultClient, _, err := transport.NewHTTPClient(ctx, option.WithTokenSource(creds.TokenSource))
+	if err != nil {
+		panic(fmt.Errorf("failed to create HTTP client: %v", err))
+	}
+	middleware := vertexMiddleware(region, projectID)
+
+	var baseURL string
+	switch region {
+	case "global":
+		baseURL = "https://aiplatform.googleapis.com/"
+	case "us":
+		baseURL = "https://aiplatform.us.rep.googleapis.com/"
+	case "eu":
+		baseURL = "https://aiplatform.eu.rep.googleapis.com/"
+	default:
+		baseURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/", region)
+	}
+
+	return sdkoption.Join(sdkoption.WithoutEnvironmentDefaults(), requestconfig.RequestOptionFunc(func(rc *requestconfig.RequestConfig) error {
+		client := defaultClient
+		if rc.HTTPClient != nil && rc.HTTPClient != http.DefaultClient {
+			client = authorizeClient(rc.HTTPClient, creds)
+		}
+		return rc.Apply(
+			sdkoption.WithBaseURL(baseURL),
+			sdkoption.WithMiddleware(middleware),
+			sdkoption.WithHTTPClient(client),
+		)
+	}))
+}
+
+// authorizeClient returns a shallow copy of client whose transport attaches
+// OAuth authorization from creds; the caller's client is not mutated. Only
+// authorization is layered on — a user-supplied transport is otherwise used
+// as-is.
+func authorizeClient(client *http.Client, creds *google.Credentials) *http.Client {
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if authed, ok := base.(*oauth2.Transport); ok && authed.Source == creds.TokenSource {
+		// Already wrapped by an earlier apply of this option.
+		return client
+	}
+	wrapped := *client
+	wrapped.Transport = &oauth2.Transport{Base: base, Source: creds.TokenSource}
+	return &wrapped
+}
+
+func vertexMiddleware(region, projectID string) sdkoption.Middleware {
+	return func(r *http.Request, next sdkoption.MiddlewareNext) (*http.Response, error) {
+		if r.Body != nil {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			r.Body.Close()
+
+			if !gjson.GetBytes(body, "anthropic_version").Exists() {
+				body, _ = sjson.SetBytes(body, "anthropic_version", DefaultVersion)
+			}
+
+			if r.URL.Path == "/v1/messages" && r.Method == http.MethodPost {
+				if projectID == "" {
+					return nil, fmt.Errorf("no projectId was given and it could not be resolved from credentials")
+				}
+
+				model := gjson.GetBytes(body, "model").String()
+				stream := gjson.GetBytes(body, "stream").Bool()
+
+				body, _ = sjson.DeleteBytes(body, "model")
+
+				specifier := "rawPredict"
+				if stream {
+					specifier = "streamRawPredict"
+				}
+
+				r.URL.Path = fmt.Sprintf("/v1/projects/%s/locations/%s/publishers/anthropic/models/%s:%s", projectID, region, model, specifier)
+			}
+
+			if r.URL.Path == "/v1/messages/count_tokens" && r.Method == http.MethodPost {
+				if projectID == "" {
+					return nil, fmt.Errorf("no projectId was given and it could not be resolved from credentials")
+				}
+
+				r.URL.Path = fmt.Sprintf("/v1/projects/%s/locations/%s/publishers/anthropic/models/count-tokens:rawPredict", projectID, region)
+			}
+
+			reader := bytes.NewReader(body)
+			r.Body = io.NopCloser(reader)
+			r.GetBody = func() (io.ReadCloser, error) {
+				_, err := reader.Seek(0, 0)
+				return io.NopCloser(reader), err
+			}
+			r.ContentLength = int64(len(body))
+		}
+
+		return next(r)
+	}
+}

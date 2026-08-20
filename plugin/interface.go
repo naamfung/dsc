@@ -57,10 +57,12 @@ type AgentResult struct {
 // RunStreamResponse 是 Agent 流式运行过程中的一帧增量输出
 type RunStreamResponse struct {
 	Output string `json:"output"` // 增量输出（文本增量或工具调用提示）
-	Status string `json:"status"` // "streaming" | "tool" | "success" | "error"
+	Status string `json:"status"` // "streaming" | "reasoning" | "tool" | "success" | "error"
 	Error  string `json:"error,omitempty"`
 	// Usage 是本轮（一次 RunStream）累计的 token 用量，仅在 success 帧上携带
 	Usage *Usage `json:"usage,omitempty"`
+	// Reasoning 是思考过程增量文本（status="reasoning" 帧携带）
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // Usage 是一次 LLM 调用的 token 用量统计

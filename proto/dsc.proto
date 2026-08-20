@@ -72,9 +72,10 @@ message RunResponse {
 // 流式运行响应：每帧携带一段增量输出，status 标记流的状态
 message RunStreamResponse {
   string output = 1; // 增量输出（文本增量或工具调用提示）
-  string status = 2; // "streaming" | "tool" | "success" | "error"
+  string status = 2; // "streaming" | "reasoning" | "tool" | "success" | "error"
   string error = 3;
   Usage usage = 4; // 本轮累计 token 用量（success 帧携带）
+  string reasoning = 5; // 思考过程增量文本（status="reasoning" 帧携带）
 }
 
 // token 用量统计（与 OpenAI usage 字段对应）
@@ -117,6 +118,7 @@ message ChatStreamResponse {
   repeated ToolCall tool_calls = 3;
   string error = 4;           // 错误信息
   Usage usage = 5;            // 本轮的 token 用量（finish_reason 帧携带，需 stream_options.include_usage）
+  string reasoning = 6;       // 思考过程增量文本（DeepSeek reasoning_content / Anthropic thinking 等）
 }
 
 message ToolCall {

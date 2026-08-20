@@ -311,6 +311,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				if cr.Content != "" {
 					emit(&plugin.RunStreamResponse{Output: cr.Content, Status: "streaming"})
 				}
+				if cr.Reasoning != "" {
+					emit(&plugin.RunStreamResponse{Reasoning: cr.Reasoning, Status: "reasoning"})
+				}
 				if len(cr.ToolCalls) > 0 {
 					toolCalls = cr.ToolCalls
 				}
@@ -695,10 +698,11 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 	}
 	for item := range ch {
 		if err := stream.Send(&proto.RunStreamResponse{
-			Output: item.Output,
-			Status: item.Status,
-			Error:  item.Error,
-			Usage:  plugin.UsageToProto(item.Usage),
+			Output:    item.Output,
+			Status:    item.Status,
+			Error:     item.Error,
+			Usage:     plugin.UsageToProto(item.Usage),
+			Reasoning: item.Reasoning,
 		}); err != nil {
 			return err
 		}

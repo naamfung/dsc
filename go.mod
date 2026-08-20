@@ -103,3 +103,7 @@ require (
 )
 
 replace github.com/hashicorp/go-plugin => ./libs/go-plugin-1.8.0
+
+// LLM SDK 改用本地版本（libs/），避免外部破坏性修改影响稳定性
+replace github.com/anthropics/anthropic-sdk-go => ./libs/anthropic-sdk-go
+replace github.com/sashabaranov/go-openai => ./libs/go-openai

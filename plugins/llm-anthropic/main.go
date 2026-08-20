@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"dsc/plugin"
@@ -16,6 +17,10 @@ import (
 type AnthropicProvider struct {
 	client anthropic.Client
 	model  string
+	// thinking 是否启用扩展思考（extended thinking）。默认开启（DeepSeek anthropic 接口
+	// 支持并返回 thinking 块）；ANTHROPIC_THINKING=0 可关闭。
+	thinking      bool
+	thinkingBudget int64
 }
 
 // buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）
@@ -84,6 +89,11 @@ func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools 
 	if len(toolParams) > 0 {
 		msgParams.Tools = toolParams
 	}
+	// 4. 扩展思考（extended thinking）：启用后模型会返回 thinking 块，
+	//    其内容经 chat 流式增量转发为 reasoning 帧最终渲染到 TUI。
+	if p.thinking {
+		msgParams.Thinking = anthropic.ThinkingConfigParamOfEnabled(p.thinkingBudget)
+	}
 	return msgParams
 }
 
@@ -93,6 +103,17 @@ func concatText(blocks []anthropic.ContentBlockUnion) string {
 	for _, block := range blocks {
 		if block.Type == "text" {
 			b.WriteString(block.Text)
+		}
+	}
+	return b.String()
+}
+
+// concatReasoning 拼接消息中所有 thinking 块的内容（思考过程）
+func concatReasoning(blocks []anthropic.ContentBlockUnion) string {
+	var b strings.Builder
+	for _, block := range blocks {
+		if block.Type == "thinking" {
+			b.WriteString(block.Thinking)
 		}
 	}
 	return b.String()
@@ -147,6 +168,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 		defer close(ch)
 		var msg anthropic.Message
 		prevLen := 0
+		prevReasonLen := 0
 		for stream.Next() {
 			event := stream.Current()
 			if err := msg.Accumulate(event); err != nil {
@@ -158,6 +180,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 			if len(text) > prevLen {
 				ch <- &plugin.ChatStreamResponse{Content: text[prevLen:]}
 				prevLen = len(text)
+			}
+			// 思考过程增量（thinking 块）
+			reason := concatReasoning(msg.Content)
+			if len(reason) > prevReasonLen {
+				ch <- &plugin.ChatStreamResponse{Reasoning: reason[prevReasonLen:]}
+				prevReasonLen = len(reason)
 			}
 		}
 		if err := stream.Err(); err != nil {
@@ -216,9 +244,23 @@ func main() {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
 
+	// 扩展思考默认开启：DeepSeek 的 anthropic 接口支持 thinking 参数并返回 thinking 块，
+	// 其内容经 chat 流式增量转发为 reasoning 帧渲染到 TUI。
+	// ANTHROPIC_THINKING=0 可显式关闭（用于不返回 thinking 的普通模型）；
+	// ANTHROPIC_THINKING_BUDGET 设定思考 token 预算（默认 4096；DeepSeek 忽略 budget 值）。
+	thinking := os.Getenv("ANTHROPIC_THINKING") != "0"
+	thinkingBudget := int64(4096)
+	if v := os.Getenv("ANTHROPIC_THINKING_BUDGET"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			thinkingBudget = n
+		}
+	}
+
 	provider := &AnthropicProvider{
-		client: anthropic.NewClient(opts...),
-		model:  model,
+		client:         anthropic.NewClient(opts...),
+		model:          model,
+		thinking:       thinking,
+		thinkingBudget: thinkingBudget,
 	}
 
 	gp.Serve(&gp.ServeConfig{

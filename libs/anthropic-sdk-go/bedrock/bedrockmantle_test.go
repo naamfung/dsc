@@ -1,0 +1,533 @@
+package bedrock
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/internal/awsauth"
+	"github.com/anthropics/anthropic-sdk-go/option"
+)
+
+func makeStaticAWSConfig(region string) awssdk.Config {
+	return awssdk.Config{
+		Region: region,
+		Credentials: credentials.StaticCredentialsProvider{
+			Value: awssdk.Credentials{
+				AccessKeyID:     "test-access-key",
+				SecretAccessKey: "test-secret-key",
+			},
+		},
+	}
+}
+
+// writeMessagesResponse writes a canned successful Messages API response.
+func writeMessagesResponse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":            "msg_test",
+		"type":          "message",
+		"role":          "assistant",
+		"content":       []map[string]any{{"type": "text", "text": "hi"}},
+		"model":         "claude-sonnet-4-6-20250514",
+		"stop_reason":   "end_turn",
+		"stop_sequence": nil,
+		"usage":         map[string]any{"input_tokens": 1, "output_tokens": 1},
+	})
+}
+
+type mantleCapturedRequest struct {
+	Headers http.Header
+	URL     string
+}
+
+func mantleMessagesHandler(captured *mantleCapturedRequest) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		captured.Headers = r.Header.Clone()
+		captured.URL = r.URL.String()
+		writeMessagesResponse(w)
+	}
+}
+
+// newTestMantleClient creates a MantleClient pointed at a test server and returns
+// the client and a struct that captures the request headers/URL.
+func newTestMantleClient(t *testing.T, cfg MantleClientConfig, opts ...option.RequestOption) (*MantleClient, *mantleCapturedRequest) {
+	t.Helper()
+	var captured mantleCapturedRequest
+	server := httptest.NewServer(mantleMessagesHandler(&captured))
+	t.Cleanup(server.Close)
+
+	cfg.BaseURL = server.URL
+	client, err := NewMantleClient(context.Background(), cfg, opts...)
+	if err != nil {
+		t.Fatalf("NewMantleClient failed: %v", err)
+	}
+	return client, &captured
+}
+
+func sendTestMantleRequest(t *testing.T, client *MantleClient) {
+	t.Helper()
+	_, err := client.Messages.New(context.Background(), anthropic.MessageNewParams{
+		Model:     "claude-sonnet-4-6-20250514",
+		MaxTokens: 1,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("hi")),
+		},
+	})
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+}
+
+// --- Validation tests ---
+
+func TestMantleRequiresBaseURLOrRegion(t *testing.T) {
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "")
+
+	_, err := NewMantleClient(context.Background(), MantleClientConfig{
+		APIKey: "my-key",
+	})
+	if err == nil {
+		t.Fatal("expected error when neither base URL nor region is available")
+	}
+}
+
+func TestMantleRegionRequiredForSigV4(t *testing.T) {
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	_, err := NewMantleClient(context.Background(), MantleClientConfig{
+		AWSAccessKey:       "key",
+		AWSSecretAccessKey: "secret",
+	})
+	if err == nil {
+		t.Fatal("expected error when region is missing and SigV4 is used")
+	}
+}
+
+// --- API key mode tests ---
+
+func TestMantleAPIKeyModeHeaders(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		APIKey:    "my-api-key",
+		AWSRegion: "us-east-1",
+	})
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("Authorization"); got != "Bearer my-api-key" {
+		t.Errorf("expected Authorization %q, got %q", "Bearer my-api-key", got)
+	}
+	if captured.Headers.Get("X-Api-Key") != "" {
+		t.Error("expected no X-Api-Key header in bearer auth mode")
+	}
+}
+
+// --- SigV4 mode tests ---
+
+func TestMantleSigV4ModeHeaders(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		AWSRegion:          "us-east-1",
+		AWSAccessKey:       "test-access-key",
+		AWSSecretAccessKey: "test-secret-key",
+	})
+	sendTestMantleRequest(t, client)
+
+	auth := captured.Headers.Get("Authorization")
+	if auth == "" {
+		t.Fatal("expected Authorization header in SigV4 mode")
+	}
+	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256") {
+		t.Errorf("expected AWS4 signature, got: %s", auth)
+	}
+	if !strings.Contains(auth, mantleServiceName) {
+		t.Errorf("expected service name %q in Authorization, got: %s", mantleServiceName, auth)
+	}
+	if captured.Headers.Get("X-Amz-Date") == "" {
+		t.Error("expected X-Amz-Date header in SigV4 mode")
+	}
+}
+
+// --- SigV4 middleware service name test ---
+
+func TestMantleSigV4ServiceName(t *testing.T) {
+	cfg := makeStaticAWSConfig("us-east-1")
+	signer := v4.NewSigner()
+	middleware := awsauth.SigV4Middleware(signer, cfg, mantleServiceName)
+
+	req, err := http.NewRequest("POST", "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	var gotAuth string
+	_, err = middleware(req, func(r *http.Request) (*http.Response, error) {
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	})
+	if err != nil {
+		t.Fatalf("middleware failed: %v", err)
+	}
+
+	if gotAuth == "" {
+		t.Fatal("expected non-empty Authorization header")
+	}
+	expectedServiceFragment := "/" + mantleServiceName + "/"
+	if !bytes.Contains([]byte(gotAuth), []byte(expectedServiceFragment)) {
+		t.Errorf("expected Authorization to contain service %q, got: %s", mantleServiceName, gotAuth)
+	}
+}
+
+// --- Env var fallback tests ---
+
+func TestMantleAPIKeyFallbackToAWSEnv(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "aws-fallback-key")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{})
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("Authorization"); got != "Bearer aws-fallback-key" {
+		t.Errorf("expected Authorization %q (AWS fallback), got %q", "Bearer aws-fallback-key", got)
+	}
+}
+
+func TestMantleAPIKeyMantleEnvOverridesAWSEnv(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "mantle-key")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "aws-key")
+	t.Setenv("AWS_REGION", "us-east-1")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{})
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("Authorization"); got != "Bearer mantle-key" {
+		t.Errorf("expected Authorization %q (mantle-specific), got %q", "Bearer mantle-key", got)
+	}
+}
+
+// --- Base URL tests ---
+
+func TestMantleBaseURLDerivedFromRegion(t *testing.T) {
+	t.Setenv("ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	resolved, err := awsauth.ResolveConfig(mantleToInternalConfig(MantleClientConfig{
+		AWSRegion: "us-west-2",
+		APIKey:    "my-key",
+	}), mantleResolveParams())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := "https://bedrock-mantle.us-west-2.api.aws/anthropic"
+	if resolved.BaseURL != expected {
+		t.Errorf("expected base URL %q, got %q", expected, resolved.BaseURL)
+	}
+}
+
+func TestMantleBaseURLFromEnv(t *testing.T) {
+	t.Setenv("ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "https://custom.mantle.example.com")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "my-key")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	resolved, err := awsauth.ResolveConfig(mantleToInternalConfig(MantleClientConfig{}), mantleResolveParams())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.BaseURL != "https://custom.mantle.example.com" {
+		t.Errorf("expected base URL from env, got %q", resolved.BaseURL)
+	}
+}
+
+func TestMantleBaseURLExplicitOverridesRegion(t *testing.T) {
+	t.Setenv("ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	resolved, err := awsauth.ResolveConfig(mantleToInternalConfig(MantleClientConfig{
+		BaseURL:   "https://explicit.example.com",
+		AWSRegion: "us-east-1",
+		APIKey:    "my-key",
+	}), mantleResolveParams())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.BaseURL != "https://explicit.example.com" {
+		t.Errorf("expected explicit base URL, got %q", resolved.BaseURL)
+	}
+}
+
+// --- skipAuth tests ---
+
+func TestMantleSkipAuthNoAuthRequired(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	_, err := NewMantleClient(context.Background(), MantleClientConfig{
+		BaseURL:  "https://proxy.example.com",
+		SkipAuth: true,
+	})
+	if err != nil {
+		t.Fatalf("expected no error with skipAuth, got: %v", err)
+	}
+}
+
+func TestMantleSkipAuthNoAuthHeaders(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		SkipAuth: true,
+	})
+	sendTestMantleRequest(t, client)
+
+	if captured.Headers.Get("Authorization") != "" {
+		t.Error("expected no Authorization header with skipAuth")
+	}
+	if captured.Headers.Get("X-Amz-Date") != "" {
+		t.Error("expected no X-Amz-Date header with skipAuth")
+	}
+}
+
+// --- NewMantleClient tests ---
+
+func TestNewMantleClientMessages(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		APIKey:    "test-key",
+		AWSRegion: "us-east-1",
+	})
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("Authorization"); got != "Bearer test-key" {
+		t.Errorf("expected Authorization %q, got %q", "Bearer test-key", got)
+	}
+}
+
+func TestNewMantleClientBetaMessages(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	var captured mantleCapturedRequest
+	server := httptest.NewServer(mantleMessagesHandler(&captured))
+	t.Cleanup(server.Close)
+
+	client, err := NewMantleClient(context.Background(), MantleClientConfig{
+		APIKey:    "test-key",
+		AWSRegion: "us-east-1",
+		BaseURL:   server.URL,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = client.Beta.Messages.New(context.Background(), anthropic.BetaMessageNewParams{
+		Model:     "claude-sonnet-4-6-20250514",
+		MaxTokens: 1,
+		Messages: []anthropic.BetaMessageParam{
+			anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("hi")),
+		},
+	})
+	if err != nil {
+		t.Fatalf("beta messages request failed: %v", err)
+	}
+}
+
+// --- RequestOption tests ---
+
+func TestMantleClientRequestOptionsCustomHeader(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		APIKey:    "test-key",
+		AWSRegion: "us-east-1",
+	}, option.WithHeader("X-Custom-Header", "custom-value"))
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("X-Custom-Header"); got != "custom-value" {
+		t.Errorf("expected X-Custom-Header %q, got %q", "custom-value", got)
+	}
+}
+
+func TestMantleClientRequestOptionsOverrideInternal(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	// User-provided opts should override internal opts (e.g. override the Authorization header)
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		APIKey:    "internal-key",
+		AWSRegion: "us-east-1",
+	}, option.WithHeader("Authorization", "Bearer override-key"))
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("Authorization"); got != "Bearer override-key" {
+		t.Errorf("expected Authorization %q (from RequestOption override), got %q", "Bearer override-key", got)
+	}
+}
+
+func TestMantleClientPerRequestOptionsOverrideClientOptions(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		APIKey:    "test-key",
+		AWSRegion: "us-east-1",
+	}, option.WithHeader("X-Custom-Header", "client-level"))
+
+	// Send request with per-request option that overrides the client-level header
+	_, err := client.Messages.New(context.Background(), anthropic.MessageNewParams{
+		Model:     "claude-sonnet-4-6-20250514",
+		MaxTokens: 1,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock("hi")),
+		},
+	}, option.WithHeader("X-Custom-Header", "request-level"))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+
+	if got := captured.Headers.Get("X-Custom-Header"); got != "request-level" {
+		t.Errorf("expected X-Custom-Header %q (per-request override), got %q", "request-level", got)
+	}
+}
+
+// TestMantleUserMiddlewareRunsBeforeSigV4Signing verifies that SigV4 signing
+// runs after (inside) middleware registered through client options, so the
+// signature covers the middleware's request mutations.
+func TestMantleUserMiddlewareRunsBeforeSigV4Signing(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	var observedAuth, observedAmzDate string
+	mutator := func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		observedAuth = r.Header.Get("Authorization")
+		observedAmzDate = r.Header.Get("X-Amz-Date")
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return nil, err
+		}
+		parsed["metadata"] = map[string]any{"user_id": "injected-by-middleware"}
+		mutated, err := json.Marshal(parsed)
+		if err != nil {
+			return nil, err
+		}
+		r.Body = io.NopCloser(bytes.NewReader(mutated))
+		r.ContentLength = int64(len(mutated))
+		return next(r)
+	}
+
+	var wireBody map[string]any
+	var wireAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wireAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&wireBody); err != nil {
+			t.Errorf("failed to decode wire body: %v", err)
+		}
+		writeMessagesResponse(w)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewMantleClient(context.Background(), MantleClientConfig{
+		BaseURL:            server.URL,
+		AWSRegion:          "us-east-1",
+		AWSAccessKey:       "test-access-key",
+		AWSSecretAccessKey: "test-secret-key",
+	}, option.WithMiddleware(mutator))
+	if err != nil {
+		t.Fatalf("NewMantleClient failed: %v", err)
+	}
+	sendTestMantleRequest(t, client)
+
+	// The user middleware runs before signing, so no signature exists yet.
+	if observedAuth != "" {
+		t.Errorf("expected user middleware to run before signing, but saw Authorization %q", observedAuth)
+	}
+	if observedAmzDate != "" {
+		t.Errorf("expected user middleware to run before signing, but saw X-Amz-Date %q", observedAmzDate)
+	}
+
+	// The wire request is signed and carries the middleware's mutation.
+	if !strings.HasPrefix(wireAuth, "AWS4-HMAC-SHA256") {
+		t.Errorf("expected SigV4 Authorization on the wire, got %q", wireAuth)
+	}
+	metadata, _ := wireBody["metadata"].(map[string]any)
+	if metadata["user_id"] != "injected-by-middleware" {
+		t.Errorf("expected middleware mutation in the signed wire body, got metadata %v", wireBody["metadata"])
+	}
+}
+
+func TestMantleClientRequestOptionsMiddleware(t *testing.T) {
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	middlewareCalled := false
+	mw := func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		middlewareCalled = true
+		r.Header.Set("X-From-Middleware", "true")
+		return next(r)
+	}
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		APIKey:    "test-key",
+		AWSRegion: "us-east-1",
+	}, option.WithMiddleware(mw))
+	sendTestMantleRequest(t, client)
+
+	if !middlewareCalled {
+		t.Error("expected middleware to be called")
+	}
+	if got := captured.Headers.Get("X-From-Middleware"); got != "true" {
+		t.Errorf("expected X-From-Middleware %q, got %q", "true", got)
+	}
+}
+
+// --- ANTHROPIC_API_KEY isolation test ---
+
+func TestMantleDoesNotLeakAnthropicAPIKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "should-not-appear")
+	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "")
+	t.Setenv("ANTHROPIC_AWS_API_KEY", "")
+
+	client, captured := newTestMantleClient(t, MantleClientConfig{
+		AWSRegion:          "us-east-1",
+		AWSAccessKey:       "test-access-key",
+		AWSSecretAccessKey: "test-secret-key",
+	})
+	sendTestMantleRequest(t, client)
+
+	if got := captured.Headers.Get("X-Api-Key"); got != "" {
+		t.Errorf("expected no X-Api-Key header when using SigV4, got %q", got)
+	}
+	// Authorization header should be SigV4, not Bearer
+	if auth := captured.Headers.Get("Authorization"); !strings.HasPrefix(auth, "AWS4-HMAC-SHA256") {
+		t.Errorf("expected SigV4 Authorization header, got %q", auth)
+	}
+}

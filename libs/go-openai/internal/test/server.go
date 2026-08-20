@@ -1,0 +1,69 @@
+package test
+
+import (
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+)
+
+const testAPI = "this-is-my-secure-token-do-not-steal!!"
+
+func GetTestToken() string {
+	return testAPI
+}
+
+type ServerTest struct {
+	handlers map[string]handler
+}
+type handler func(w http.ResponseWriter, r *http.Request)
+
+func NewTestServer() *ServerTest {
+	return &ServerTest{handlers: make(map[string]handler)}
+}
+
+// HandlerCount returns the number of registered handlers.
+func (ts *ServerTest) HandlerCount() int {
+	return len(ts.handlers)
+}
+
+// HasHandler checks if a handler was registered for the given path.
+func (ts *ServerTest) HasHandler(path string) bool {
+	path = strings.ReplaceAll(path, "*", ".*")
+	_, ok := ts.handlers[path]
+	return ok
+}
+
+func (ts *ServerTest) RegisterHandler(path string, handler handler) {
+	// to make the registered paths friendlier to a regex match in the route handler
+	// in OpenAITestServer
+	path = strings.ReplaceAll(path, "*", ".*")
+	ts.handlers[path] = handler
+}
+
+// OpenAITestServer Creates a mocked OpenAI server which can pretend to handle requests during testing.
+func (ts *ServerTest) OpenAITestServer() *httptest.Server {
+	return httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// #nosec G706 -- %q safely escapes the untrusted request path in this test log.
+		log.Printf("received a %s request at path %q\n", r.Method, r.URL.Path)
+
+		// check auth
+		if r.Header.Get("Authorization") != "Bearer "+GetTestToken() && r.Header.Get("api-key") != GetTestToken() {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		// Handle /path/* routes.
+		// Note: the * is converted to a .* in register handler for proper regex handling
+		for route, handler := range ts.handlers {
+			// Adding ^ and $ to make path matching deterministic since go map iteration isn't ordered
+			pattern, _ := regexp.Compile("^" + route + "$")
+			if pattern.MatchString(r.URL.Path) {
+				handler(w, r)
+				return
+			}
+		}
+		http.Error(w, "the resource path doesn't exist", http.StatusNotFound)
+	}))
+}

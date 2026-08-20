@@ -481,9 +481,10 @@ func (x *RunResponse) GetStatus() string {
 type RunStreamResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Output        string                 `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"` // 增量输出（文本增量或工具调用提示）
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "streaming" | "tool" | "success" | "error"
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "streaming" | "reasoning" | "tool" | "success" | "error"
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
-	Usage         *Usage                 `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"` // 本轮累计 token 用量（success 帧携带）
+	Usage         *Usage                 `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`         // 本轮累计 token 用量（success 帧携带）
+	Reasoning     string                 `protobuf:"bytes,5,opt,name=reasoning,proto3" json:"reasoning,omitempty"` // 思考过程增量文本（status="reasoning" 帧携带）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -544,6 +545,13 @@ func (x *RunStreamResponse) GetUsage() *Usage {
 		return x.Usage
 	}
 	return nil
+}
+
+func (x *RunStreamResponse) GetReasoning() string {
+	if x != nil {
+		return x.Reasoning
+	}
+	return ""
 }
 
 // token 用量统计（与 OpenAI usage 字段对应）
@@ -862,8 +870,9 @@ type ChatStreamResponse struct {
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`                               // 增量文本
 	FinishReason  string                 `protobuf:"bytes,2,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"` // 非空表示该轮结束
 	ToolCalls     []*ToolCall            `protobuf:"bytes,3,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"` // 错误信息
-	Usage         *Usage                 `protobuf:"bytes,5,opt,name=usage,proto3" json:"usage,omitempty"` // 本轮的 token 用量（finish_reason 帧携带，需 stream_options.include_usage）
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`         // 错误信息
+	Usage         *Usage                 `protobuf:"bytes,5,opt,name=usage,proto3" json:"usage,omitempty"`         // 本轮的 token 用量（finish_reason 帧携带，需 stream_options.include_usage）
+	Reasoning     string                 `protobuf:"bytes,6,opt,name=reasoning,proto3" json:"reasoning,omitempty"` // 思考过程增量文本（DeepSeek reasoning_content / Anthropic thinking 等）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -931,6 +940,13 @@ func (x *ChatStreamResponse) GetUsage() *Usage {
 		return x.Usage
 	}
 	return nil
+}
+
+func (x *ChatStreamResponse) GetReasoning() string {
+	if x != nil {
+		return x.Reasoning
+	}
+	return ""
 }
 
 type ToolCall struct {
@@ -1811,13 +1827,14 @@ const file_dsc_proto_rawDesc = "" +
 	"\x05input\x18\x01 \x01(\tR\x05input\"=\n" +
 	"\vRunResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\"{\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\x99\x01\n" +
 	"\x11RunStreamResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12 \n" +
 	"\x05usage\x18\x04 \x01(\v2\n" +
-	".dsc.UsageR\x05usage\"|\n" +
+	".dsc.UsageR\x05usage\x12\x1c\n" +
+	"\treasoning\x18\x05 \x01(\tR\treasoning\"|\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\x12!\n" +
@@ -1842,7 +1859,7 @@ const file_dsc_proto_rawDesc = "" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12#\n" +
 	"\rfinish_reason\x18\x02 \x01(\tR\ffinishReason\x12,\n" +
 	"\n" +
-	"tool_calls\x18\x03 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"\xb9\x01\n" +
+	"tool_calls\x18\x03 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"\xd7\x01\n" +
 	"\x12ChatStreamResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12#\n" +
 	"\rfinish_reason\x18\x02 \x01(\tR\ffinishReason\x12,\n" +
@@ -1850,7 +1867,8 @@ const file_dsc_proto_rawDesc = "" +
 	"tool_calls\x18\x03 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12 \n" +
 	"\x05usage\x18\x05 \x01(\v2\n" +
-	".dsc.UsageR\x05usage\"U\n" +
+	".dsc.UsageR\x05usage\x12\x1c\n" +
+	"\treasoning\x18\x06 \x01(\tR\treasoning\"U\n" +
 	"\bToolCall\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +

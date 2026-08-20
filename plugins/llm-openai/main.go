@@ -219,6 +219,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				}
 			}
 
+			// 處理思考過程增量（DeepSeek reasoning_content 等）
+			if delta.ReasoningContent != "" {
+				ch <- &plugin.ChatStreamResponse{
+					Reasoning: delta.ReasoningContent,
+				}
+			}
+
 			// 處理工具調用增量
 			if len(delta.ToolCalls) > 0 {
 				if toolCallAccums == nil {

@@ -55,6 +55,7 @@ type ChatStreamResponse struct {
 	ToolCalls    []ToolCall `json:"tool_calls"`
 	Error        string     `json:"error,omitempty"`
 	Usage        *Usage     `json:"usage,omitempty"` // 本轮 token 用量（finish_reason 帧携带）
+	Reasoning    string     `json:"reasoning,omitempty"` // 思考过程增量文本（DeepSeek reasoning_content / Anthropic thinking 等）
 }
 
 // ToolCall 工具调用结构体
@@ -190,6 +191,7 @@ func (s *llmGRPCServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServi
 			FinishReason: item.FinishReason,
 			ToolCalls:    convertToolCallsToProto(item.ToolCalls),
 			Usage:        UsageToProto(item.Usage),
+			Reasoning:    item.Reasoning,
 		}); err != nil {
 			return err
 		}
@@ -323,6 +325,7 @@ func (c *llmGRPCClient) ChatStream(ctx context.Context, messages []Message, tool
 				FinishReason: resp.FinishReason,
 				ToolCalls:    toolCalls,
 				Usage:        UsageFromProto(resp.Usage),
+				Reasoning:    resp.Reasoning,
 			}
 		}
 	}()
