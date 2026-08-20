@@ -38,39 +38,39 @@ var (
 	accent = lipgloss.Color("#7D56F4")
 
 	titleSty = lipgloss.NewStyle().
-		Background(accent).
-		Foreground(lipgloss.Color("#FFFFFF")).
-		Bold(true).
-		Padding(0, 1)
+			Background(accent).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Bold(true).
+			Padding(0, 1)
 
 	userTextSty = lipgloss.NewStyle().
-		Foreground(accent).
-		Bold(true)
+			Foreground(accent).
+			Bold(true)
 
 	assistantNameSty = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#05A5A5")).
-		Bold(true)
+				Foreground(lipgloss.Color("#05A5A5")).
+				Bold(true)
 
 	dimSty = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888"))
 
 	// reasonSty 思考过程中的暗色斜体样式（参照 REX 的 thinking 块）
 	reasonSty = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6B6B6B")).
-		Italic(true)
+			Foreground(lipgloss.Color("#6B6B6B")).
+			Italic(true)
 
 	errorSty = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FF5F87")).
-		Bold(true)
+			Foreground(lipgloss.Color("#FF5F87")).
+			Bold(true)
 
 	composerBoxSty = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(accent).
-		Padding(0, 1)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(accent).
+			Padding(0, 1)
 
 	compSelSty = lipgloss.NewStyle().
-		Foreground(accent).
-		Bold(true)
+			Foreground(accent).
+			Bold(true)
 
 	// selStyle 正文拖拽选中的反色高亮样式。
 	selStyle = lipgloss.NewStyle().Reverse(true)
@@ -156,8 +156,8 @@ type Model struct {
 	input    textarea.Model
 	spinner  spinner.Model
 
-	ready    bool // viewport 在收到首个窗口尺寸后初始化
-	thinking bool // 正在等待 agent 响应
+	ready     bool // viewport 在收到首个窗口尺寸后初始化
+	thinking  bool // 正在等待 agent 响应
 	streaming bool // 正在流式输出
 
 	completion completion // 斜杠命令补全菜单
@@ -179,7 +179,7 @@ type Model struct {
 	reasoningCommitted string
 
 	// 当前一轮的取消句柄：Ctrl+C 在响应/流式输出期间中断本轮（终止当前操作）
-	turnCancel     context.CancelFunc
+	turnCancel      context.CancelFunc
 	streamCancelled bool // 中断标记：置位后丢弃后续 streamFrame，停止本轮泵取
 }
 
@@ -538,17 +538,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamOpen = false
 			if msg.err != nil {
 				m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
-			} else if msg.frame != nil && msg.frame.Status == "success" {
-				// 更新已用容量（供標題欄顯示「已用/總容量」）
-				if msg.frame.Usage != nil && msg.frame.Usage.TotalTokens > 0 {
-					m.usedTokens = int(msg.frame.Usage.TotalTokens)
-				}
-				// 最終渲染：將 streamBuffer 作為正文添加到助手消息中（前接已提交的思考块）
-				if m.streamMsgIdx < len(m.lines) {
-					body := m.reasoningCommitted + renderMarkdown(m.streamBuffer, max(m.width-4, 20))
-					header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
-					m.lines[m.streamMsgIdx] = header + "\n" + body
-				}
+			} else {
+				// 通道关闭收尾：frame 为 nil，此前 success/error 帧可能只设置了 usedTokens，
+				// 这里必须用累积缓冲重渲染最终助手块，确保正文与思考块都完整落屏。
+				m.finalizeAssistant()
 			}
 			m.viewport.SetHeight(m.vpHeight())
 			m.render()
@@ -581,8 +574,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reasoningBuffer = ""
 			}
 			m.reasoningBuffer += f.Reasoning
-			header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
-			m.lines[m.streamMsgIdx] = header + "\n" + renderReasoning(m.reasoningBuffer, max(m.width-4, 20))
+			w := max(m.width-4, 20)
+			reasoning := renderReasoning(m.reasoningBuffer, w)
+			// 思考块一般先于正文到达；但部分服务端会先发 text、后发 thinking。
+			// 若正文已先行输出，不要把思考块覆盖到正文上，而是作为前缀拼接到正文内容之前。
+			var body string
+			if m.streamBuffer != "" {
+				body = reasoning + renderMarkdown(m.streamBuffer, w)
+			} else {
+				body = reasoning
+			}
+			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
 			m.render()
 			m.viewport.GotoBottom()
 			return m, m.pumpStream(msg.input, msg.ch)
@@ -626,6 +628,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if f.Status == "error" && f.Error != "" {
 				m.appendMessage(errorSty.Render("错误: ") + f.Error)
 			}
+			// 流式收尾：无论思考/正文到达顺序如何，都以累积缓冲重渲染最终助手块，
+			// 确保迟到的思考块不会覆盖掉已输出的正文。
+			m.finalizeAssistant()
 			m.viewport.SetHeight(m.vpHeight())
 			m.render()
 			m.input.Focus()
@@ -847,6 +852,29 @@ func (m *Model) appendMessage(rendered string) {
 func (m *Model) renderAssistant(body string) string {
 	header := assistantNameSty.Render("◈ DSC · " + m.displayModelName())
 	return header + "\n" + body
+}
+
+// finalizeAssistant 根据已累积的思考/正文状态渲染助手块的最终内容，供流式收尾（success/error/done）时调用。
+// 思考块可能先于正文、也可能迟于正文到达（部分服务端先发 text 后发 thinking），
+// 因此这里统一用累积缓冲重新拼装，避免仅保留思考块导致正文丢失。
+func (m *Model) finalizeAssistant() {
+	if m.streamMsgIdx < 0 || m.streamMsgIdx >= len(m.lines) {
+		return
+	}
+	w := max(m.width-4, 20)
+	var body string
+	// 思考块：已随流式过渡提交则用 committed；否则（纯思考或迟到的思考）用缓冲区渲染。
+	reasoning := m.reasoningCommitted
+	if reasoning == "" && m.reasoningBuffer != "" {
+		reasoning = renderReasoning(m.reasoningBuffer, w)
+	}
+	if reasoning != "" {
+		body += reasoning
+	}
+	if m.streamBuffer != "" {
+		body += renderMarkdown(m.streamBuffer, w)
+	}
+	m.lines[m.streamMsgIdx] = m.renderAssistant(body)
 }
 
 // openAssistantBlock 新建一个助手正文块：重置思考/答案累积状态并追加身份头占位。
