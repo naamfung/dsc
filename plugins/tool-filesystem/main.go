@@ -116,7 +116,7 @@ func main() {
 	// 定義 shell 工具
 	shellTool := &FileTool{
 		name:        "shell",
-		description: "Execute a shell command or script using an available shell (bash, zsh, ksh, sh, fish, dash, tcsh, csh; on Windows falls back to PowerShell/CMD). Supports persistent sessions via session_id.",
+		description: "Execute a shell command or script using an available shell on the host (only one shell is in use at a time: Unix uses bash, zsh, ksh, sh, fish, dash, tcsh, or csh whichever is available; Windows uses PowerShell/CMD). Supports persistent sessions via session_id.",
 		schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
