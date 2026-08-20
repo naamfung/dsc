@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -19,6 +20,9 @@ func boolPtr(b bool) *bool {
 type OllamaProvider struct {
 	client *api.Client
 	model  string
+	// thinking 是否启用思考（thinking/reasoning 模型）。默认开启（与 llm-anthropic 一致）；
+	// OLLAMA_THINKING=0 可关闭。开启后从响应 Message.Thinking 提取 reasoning 帧渲染到 TUI。
+	thinking bool
 }
 
 func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
@@ -97,6 +101,9 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, to
 		Model:    p.model,
 		Messages: ollamaMessages,
 		Tools:    ollamaTools,
+	}
+	if p.thinking {
+		req.Think = &api.ThinkValue{Value: true}
 	}
 
 	var resp api.ChatResponse
@@ -210,6 +217,9 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		Tools:    ollamaTools,
 		Stream:   boolPtr(true),
 	}
+	if p.thinking {
+		req.Think = &api.ThinkValue{Value: true}
+	}
 
 	ch := make(chan *plugin.ChatStreamResponse)
 	go func() {
@@ -219,6 +229,15 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		var toolCallAccums map[int]*toolCallDeltaAccumulatorOllama
 
 		streamErr := p.client.Chat(ctx, &req, func(resp api.ChatResponse) error {
+			// 處理思考過程增量（Message.Thinking；OLLAMA_THINKING=0 時不會出現，
+			// 与 llm-anthropic/openai 一致：思考作为 reasoning 帧单独发送）
+			if resp.Message.Thinking != "" {
+				fmt.Fprintf(os.Stderr, "[LLM-OLLAMA-REASONING] %s\n", resp.Message.Thinking)
+				ch <- &plugin.ChatStreamResponse{
+					Reasoning: resp.Message.Thinking,
+				}
+			}
+
 			// 處理文本增量
 			if resp.Message.Content != "" {
 				textAccumulator.WriteString(resp.Message.Content)
@@ -307,9 +326,13 @@ func main() {
 	}
 	hostURL, _ := url.Parse(hostStr)
 
+	// 思考默认开启（与 llm-anthropic 的 ANTHROPIC_THINKING 一致）；OLLAMA_THINKING=0 关闭
+	thinking := os.Getenv("OLLAMA_THINKING") != "0"
+
 	provider := &OllamaProvider{
-		client: api.NewClient(hostURL, nil),
-		model:  model,
+		client:   api.NewClient(hostURL, nil),
+		model:    model,
+		thinking: thinking,
 	}
 
 	gp.Serve(&gp.ServeConfig{

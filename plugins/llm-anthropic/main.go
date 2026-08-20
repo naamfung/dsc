@@ -21,10 +21,14 @@ type AnthropicProvider struct {
 	// 支持并返回 thinking 块）；ANTHROPIC_THINKING=0 可关闭。
 	thinking      bool
 	thinkingBudget int64
+	// maxTokens 单轮输出上限。为「不应人为限制」起见默认取较大值，仅当显式配置时才收紧；
+	// 流式路径（TUI / -input）以该值为准，非流式 Chat 则在其 >0 时覆盖。
+	maxTokens int64
 }
 
-// buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）
-func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools []plugin.Tool) anthropic.MessageNewParams {
+// buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）。
+// maxTokens <= 0 表示使用服务端默认（不再人为限制）；>0 时才显式携带。
+func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools []plugin.Tool, maxTokens int64) anthropic.MessageNewParams {
 	// 1. 构建 Anthropic 消息
 	var systemMsg string
 	userMessages := make([]anthropic.MessageParam, 0, len(messages))
@@ -77,9 +81,12 @@ func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools 
 
 	// 3. 构建请求参数
 	msgParams := anthropic.MessageNewParams{
-		MaxTokens: 1024,
-		Model:     anthropic.Model(p.model),
-		Messages:  userMessages,
+		Model:    anthropic.Model(p.model),
+		Messages: userMessages,
+	}
+	// max_tokens：仅当显式给定 >0 时设置；否则交给服务端默认（不再有写死 1024 的人为截断）
+	if maxTokens > 0 {
+		msgParams.MaxTokens = maxTokens
 	}
 	if systemMsg != "" {
 		msgParams.System = []anthropic.TextBlockParam{
@@ -145,10 +152,7 @@ func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
-	params := p.buildMessageParams(messages, tools)
-	if maxTokens > 0 {
-		params.MaxTokens = int64(maxTokens)
-	}
+	params := p.buildMessageParams(messages, tools, int64(maxTokens))
 	resp, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
@@ -162,7 +166,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message,
 }
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (<-chan *plugin.ChatStreamResponse, error) {
-	stream := p.client.Messages.NewStreaming(ctx, p.buildMessageParams(messages, tools))
+	stream := p.client.Messages.NewStreaming(ctx, p.buildMessageParams(messages, tools, p.maxTokens))
 
 	ch := make(chan *plugin.ChatStreamResponse)
 	go func() {
@@ -258,12 +262,21 @@ func main() {
 			thinkingBudget = n
 		}
 	}
+	// 单轮输出上限：默认取较大值（32768）视为「不人为限制」；可用 ANTHROPIC_MAX_OUTPUT_TOKENS 收紧。
+	// 且不低于 thinking budget，避免扩展思考下 max_tokens 被预算吞掉导致生成过早停止。
+	maxTokens := int64(32768)
+	if v := os.Getenv("ANTHROPIC_MAX_OUTPUT_TOKENS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > thinkingBudget {
+			maxTokens = n
+		}
+	}
 
 	provider := &AnthropicProvider{
 		client:         anthropic.NewClient(opts...),
 		model:          model,
 		thinking:       thinking,
 		thinkingBudget: thinkingBudget,
+		maxTokens:      maxTokens,
 	}
 
 	gp.Serve(&gp.ServeConfig{

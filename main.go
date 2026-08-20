@@ -128,6 +128,7 @@ func (s *LLMProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServ
 			FinishReason: item.FinishReason,
 			ToolCalls:    toolCalls,
 			Usage:        plugin.UsageToProto(item.Usage),
+			Reasoning:    item.Reasoning,
 		}); err != nil {
 			return err
 		}
