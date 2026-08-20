@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -287,6 +289,12 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 校驗插件目錄命名規範
+	dirName := getPluginDirectoryName(binaryPath)
+	if err := validatePluginDirectoryName("agent", dirName); err != nil {
+		return nil, 0, fmt.Errorf("invalid Agent plugin directory name '%s': %w", dirName, err)
+	}
+
 	// 如果已加載，先卸載
 	if _, exists := m.agents[name]; exists {
 		m.unloadAgentLocked(name)
@@ -360,6 +368,12 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// 校驗插件目錄命名規範
+	dirName := getPluginDirectoryName(binaryPath)
+	if err := validatePluginDirectoryName("llm", dirName); err != nil {
+		return fmt.Errorf("invalid LLM plugin directory name '%s': %w", dirName, err)
+	}
 
 	// 如果已加載，先卸載
 	if _, exists := m.llms[name]; exists {
@@ -910,6 +924,61 @@ func normalizeBinaryPath(path string) string {
 	return path
 }
 
+// getPluginDirectoryName 從二進制路徑中提取插件目錄名
+func getPluginDirectoryName(binaryPath string) string {
+	dir := filepath.Dir(binaryPath)
+	baseDir := filepath.Base(dir)
+	if baseDir == "plugins" || baseDir == "plugin" {
+		// 如果 dir 是 .../plugins，說明 binaryPath 是 ./plugins/<binaryName>.exe 或 plugins/<binaryName>.exe
+		basename := filepath.Base(binaryPath)
+		basename = strings.TrimSuffix(basename, ".exe")
+		basename = strings.TrimSuffix(basename, ".dll")
+		basename = strings.TrimSuffix(basename, ".so")
+		return basename
+	}
+	return baseDir
+}
+
+// validatePluginDirectoryName 校驗插件目錄名是否符合規範：<類別>-<名稱>
+func validatePluginDirectoryName(pluginType, dirName string) error {
+	prefix := ""
+	switch pluginType {
+	case "llm":
+		prefix = "llm-"
+	case "agent":
+		prefix = "agent-"
+	case "tool":
+		prefix = "tool-"
+	case "policy":
+		prefix = "policy-"
+	case "dsc":
+		prefix = "dsc-"
+	default:
+		return fmt.Errorf("unknown plugin type '%s', cannot validate directory name '%s'", pluginType, dirName)
+	}
+
+	// 檢查 dirName 是否以 prefix 開頭，並且後續部分只包含字母、數字、連字號和下劃線
+	if !strings.HasPrefix(dirName, prefix) {
+		return fmt.Errorf("plugin directory name '%s' does not match expected prefix '%s' for type '%s'", dirName, prefix, pluginType)
+	}
+
+	suffix := strings.TrimPrefix(dirName, prefix)
+	if suffix == "" {
+		return fmt.Errorf("plugin directory name '%s' is incomplete for type '%s'", dirName, pluginType)
+	}
+
+	// 檢查 suffix 是否只包含字母、數字、連字號和下劃線
+	matched, err := regexp.MatchString(`^[a-zA-Z0-9_-]+$`, suffix)
+	if err != nil {
+		return fmt.Errorf("error validating plugin directory name '%s': %v", dirName, err)
+	}
+	if !matched {
+		return fmt.Errorf("plugin directory name '%s' contains invalid characters for type '%s'", dirName, pluginType)
+	}
+
+	return nil
+}
+
 // LoadFromConfig 從配置加載所有插件（重新設計版：先加載 Agent 獲取 Broker，再加載 LLM/Tool）
 func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.mu.Lock()
@@ -1003,6 +1072,13 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 
 	// 跨平台處理二進制路徑
 	binaryPath := normalizeBinaryPath(entry.BinaryPath)
+	
+	// 校驗插件目錄命名規範
+	dirName := getPluginDirectoryName(binaryPath)
+	if err := validatePluginDirectoryName("agent", dirName); err != nil {
+		return nil, nil, fmt.Errorf("invalid Agent plugin directory name '%s': %w", dirName, err)
+	}
+
 	cmd := exec.Command(binaryPath)
 	if m.config.ExecDir != "" {
 		cmd.Dir = m.config.ExecDir
@@ -1067,6 +1143,12 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		binaryPath = fmt.Sprintf("./plugins/%s/%s%s", entry.Name, entry.Name, ext)
 	}
 	binaryPath = normalizeBinaryPath(binaryPath)
+
+	// 校驗插件目錄命名規範
+	dirName := getPluginDirectoryName(binaryPath)
+	if err := validatePluginDirectoryName(entry.Type, dirName); err != nil {
+		return fmt.Errorf("invalid plugin directory name '%s' for type '%s': %w", dirName, entry.Type, err)
+	}
 
 	// 創建客戶端
 	cmd := exec.Command(binaryPath)
