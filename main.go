@@ -392,8 +392,11 @@ func main() {
 
 	// 1. 加載 LLM 插件（維持原來的啟動邏輯）
 	llmName := os.Getenv("LLM_PROVIDER")
-	if llmName == "" && presetCfg != nil && presetCfg.DefaultLLM != "" {
-		llmName = presetCfg.DefaultLLM
+	// 從主配置 config/config.yaml 讀取默認 LLM
+	if llmName == "" {
+		if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil && mainCfg.DefaultLLM != "" {
+			llmName = mainCfg.DefaultLLM
+		}
 	}
 	if llmName == "" {
 		llmName = "openai"
@@ -403,36 +406,18 @@ func main() {
 		ext = ".exe"
 	}
 
-	// 從配置中獲取 LLM 插件的 binary_path 和 env
+	// 從主配置 config/config.yaml 讀取 LLM 插件的配置（binary_path 和 env）
 	llmBinary := ""
 	llmEnv := map[string]string{}
-
-	// 嘗試從 presetCfg 中獲取 LLM 配置
-	var llmEntry *plugin.PluginEntry
-	if presetCfg != nil {
-		for _, entry := range presetCfg.Plugins {
+	
+	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
+		for _, entry := range mainCfg.Plugins {
 			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
-				llmEntry = &entry
+				llmBinary = entry.BinaryPath
+				llmEnv = entry.Env
 				break
 			}
 		}
-	}
-
-	// 如果 presetCfg 中沒有找到，嘗試從 mainCfg 中獲取
-	if llmEntry == nil {
-		if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
-			for _, entry := range mainCfg.Plugins {
-				if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
-					llmEntry = &entry
-					break
-				}
-			}
-		}
-	}
-
-	if llmEntry != nil {
-		llmBinary = llmEntry.BinaryPath
-		llmEnv = llmEntry.Env
 	}
 
 	// 如果配置中沒有指定 binary_path，則使用默認路徑規則
