@@ -17,6 +17,9 @@ import (
 type PluginState string
 
 const (
+	// StatePending 配置已声明但依赖未满足（如 DependsOn 的 LLM/Tool 尚未就绪），
+	// 尚不拉起子进程（对应 DSH PENDING）。
+	StatePending PluginState = "pending"
 	// StateSpawned 进程已创建，尚未握手（无 DSH 直译）。
 	StateSpawned PluginState = "spawned"
 	// StateConnecting go-plugin 握手/建链中（DSH LOADING 的前半段）。
@@ -36,6 +39,11 @@ const (
 // pluginStateTransitions 定义合法的状态迁移表：from -> {to: true}。
 // 非法迁移会被记录告警，便于尽早暴露流程漏步。
 var pluginStateTransitions = map[PluginState]map[PluginState]bool{
+	StatePending: {
+		StateSpawned:  true, // 依赖就绪，重新拉起
+		StateFailed:   true,
+		StateDisposed: true,
+	},
 	StateSpawned: {
 		StateConnecting: true,
 		StateFailed:     true,
@@ -48,6 +56,7 @@ var pluginStateTransitions = map[PluginState]map[PluginState]bool{
 	},
 	StateReady: {
 		StateActive:    true,
+		StatePending:   true, // 已加载/已拉起进程，但依赖不足（如 LLM 未就绪），退回待办等待注入
 		StateUnloading: true,
 		StateFailed:    true,
 		StateDisposed:  true,
