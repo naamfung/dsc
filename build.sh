@@ -45,10 +45,6 @@ go build -o plugins/tool-filesystem/tool-filesystem.exe ./plugins/tool-filesyste
 echo "Building tool-str-replace-editor plugin..."
 go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugins/tool-str-replace-editor
 
-# 构建 policy-fs-observation 插件
-echo "Building policy-fs-observation plugin..."
-go build -o plugins/policy-fs-observation/policy-fs-observation.exe ./plugins/policy-fs-observation
-
 # 构建 tool-browser-use 插件
 echo "Building tool-browser-use plugin..."
 go build -o plugins/tool-browser-use/tool-browser-use.exe ./plugins/tool-browser-use
@@ -60,5 +56,9 @@ go build -o plugins/tool-lisp-eval/tool-lisp-eval.exe ./plugins/tool-lisp-eval
 # 构建 tool-skill 插件
 echo "Building tool-skill plugin..."
 go build -o plugins/tool-skill/tool-skill.exe ./plugins/tool-skill
+
+# 构建 policy-fs-observation 插件
+echo "Building policy-fs-observation plugin..."
+go build -o plugins/policy-fs-observation/policy-fs-observation.exe ./plugins/policy-fs-observation
 
 echo "Build completed successfully."
