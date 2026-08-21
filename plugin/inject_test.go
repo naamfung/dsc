@@ -222,9 +222,11 @@ func TestAgentReactivate(t *testing.T) {
 		t.Fatalf("agentServiceID should stay 0 before reactivation")
 	}
 
-	// LLM 就绪 → 注入 RegisterServices(41, 0) 并激活
+	// LLM 就绪 → 注入 RegisterServices(41, 0) 并激活。
+	// 聚合 LLM 服务已预挂载（agentLLMServiceID=41），primary provider 就绪（llms["llm-p"]）
 	m.mu.Lock()
-	m.llmServiceIDs["llm-p"] = 41
+	m.llms["llm-p"] = &mockLLMProvider{}
+	m.agentLLMServiceID = 41
 	m.reactivateAgentLocked("agent-x")
 	m.mu.Unlock()
 
@@ -278,10 +280,10 @@ func TestRepairPendingReactivateLoadedAgent(t *testing.T) {
 	}
 
 	m.mu.Lock()
-	m.agents["agent-x"] = ag            // 已拉起（与真实启动一致）
-	m.agentEntries["agent-x"] = agentEntry   // 记录含 DependsOn 的声明
+	m.agents["agent-x"] = ag               // 已拉起（与真实启动一致）
+	m.agentEntries["agent-x"] = agentEntry // 记录含 DependsOn 的声明
 	m.states["agent-x"] = &RuntimeState{Type: "agent", State: StatePending}
-	m.pendingEntries["agent-x"] = agentEntry  // 依赖缺失，待再激活
+	m.pendingEntries["agent-x"] = agentEntry // 依赖缺失，待再激活
 	m.mu.Unlock()
 
 	// LLM 尚未就绪：repair 不应误激活（reactivate 幂等空操作），也不应清除待办
@@ -298,10 +300,11 @@ func TestRepairPendingReactivateLoadedAgent(t *testing.T) {
 		t.Fatalf("agent pending entry should remain while LLM dep is missing")
 	}
 
-	// 注入 LLM（其 llmServiceID 就绪）后再次 repair：
+	// 注入 LLM（primary provider 就绪、聚合服务已挂载）后再次 repair：
 	// agent 必须被注入 RegisterServices 并置为 Active，且移出待办
 	m.mu.Lock()
-	m.llmServiceIDs["anthropic"] = 55
+	m.llms["anthropic"] = &mockLLMProvider{}
+	m.agentLLMServiceID = 55
 	m.mu.Unlock()
 	if err := m.repairPendingLocked(); err != nil {
 		t.Fatalf("repairPendingLocked errored: %v", err)

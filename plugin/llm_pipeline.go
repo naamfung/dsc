@@ -61,7 +61,7 @@ type llmProviderServer struct {
 func (s *llmProviderServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
 	call := &LLMCall{Provider: s.provider.Name(ctx), Request: req}
 	if err := s.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
-		resp, err := s.doChat(ctx, req)
+		resp, err := chatWithProvider(s.provider, ctx, req)
 		call.Response, call.Err = resp, err
 		return err
 	}); err != nil && call.Err == nil {
@@ -70,63 +70,13 @@ func (s *llmProviderServer) Chat(ctx context.Context, req *proto.ChatRequest) (*
 	return call.Response, call.Err
 }
 
-func (s *llmProviderServer) doChat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
-	messages, tools := protoMessagesToPlugin(req)
-	resp, err := s.provider.Chat(ctx, messages, tools, int(req.MaxTokens))
-	if err != nil {
-		return nil, err
-	}
-	toolCalls := make([]*proto.ToolCall, len(resp.ToolCalls))
-	for i, tc := range resp.ToolCalls {
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
-	}
-	return &proto.ChatResponse{
-		Content:      resp.Content,
-		FinishReason: resp.FinishReason,
-		ToolCalls:    toolCalls,
-	}, nil
-}
-
 // ChatStream 把 LLMProvider 的流式增量逐帧转发给下游 agent；
 // 经 EventLLMRequest 瀑布（建立阶段失败可重试，已发帧后失败不重试）。
 func (s *llmProviderServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
 	call := &LLMCall{Provider: s.provider.Name(stream.Context()), Request: req}
 	return s.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
-		return s.doChatStream(req, stream, call)
+		return chatStreamWithProvider(s.provider, req, stream, call)
 	})
-}
-
-func (s *llmProviderServer) doChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer, call *LLMCall) error {
-	messages, tools := protoMessagesToPlugin(req)
-	ch, err := s.provider.ChatStream(stream.Context(), messages, tools)
-	if err != nil {
-		call.Err = err
-		return err
-	}
-	for item := range ch {
-		call.StreamStarted = true // 首个帧即标记：此后失败不再重试
-		if item.Error != "" {
-			call.Err = fmt.Errorf("LLM stream error: %s", item.Error)
-			return call.Err
-		}
-		toolCalls := make([]*proto.ToolCall, len(item.ToolCalls))
-		for i, tc := range item.ToolCalls {
-			argsJSON, _ := json.Marshal(tc.Arguments)
-			toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
-		}
-		if err := stream.Send(&proto.ChatStreamResponse{
-			Content:      item.Content,
-			FinishReason: item.FinishReason,
-			ToolCalls:    toolCalls,
-			Usage:        UsageToProto(item.Usage),
-			Reasoning:    item.Reasoning,
-		}); err != nil {
-			call.Err = err
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *llmProviderServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {

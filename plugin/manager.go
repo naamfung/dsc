@@ -46,6 +46,9 @@ type Manager struct {
 	// 一次性注入给 Agent（RegisterServices.ToolServiceId），热重载时沿用同一 ID。
 	agentToolServiceID  uint32
 	llmServiceIDs       map[string]uint32                  // llm name -> serviceID
+	llmOrder            []string                           // LLM provider 加载顺序（多 provider 路由的 fallback 序）
+	agentLLMServiceID   uint32                             // 聚合 LLM 服务 ID（多 provider 路由，agent 一次性注入）
+	agentLLMName        string                             // agent 声明的 primary LLM（路由优先）
 	toolServiceIDs      map[string]uint32                  // tool plugin name -> serviceID
 	pluginToolNames     map[string][]string                // tool plugin name -> list of tool names it provides
 	toolNameToServiceID map[string]uint32                  // tool name -> serviceID
@@ -621,6 +624,7 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 
 	m.clients[name] = client
 	m.llms[name] = impl
+	m.llmOrder = append(m.llmOrder, name) // 记录加载顺序（去重由加载前 unload 保证）
 	m.typeMap[name] = "llm"
 	m.transitionLocked(name, StateReady, "")
 	go m.monitorExit(name, client)
@@ -773,9 +777,9 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new agent plugin is not a gRPC client")
 	}
 
-	// 透過 RPC 重新注冊 LLM serviceID（tool serviceID 沿用已有聚合 Tool 服务）
+	// 透過 RPC 重新注冊服务ID（tool 沿用聚合 Tool 服务；LLM 走聚合多 provider 路由）
 	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: oldServiceID, ToolServiceId: m.agentToolServiceID})
+	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: m.agentLLMServiceID, ToolServiceId: m.agentToolServiceID})
 	if err != nil {
 		newClient.Kill()
 		m.transitionLocked(name, StateFailed, err.Error())
@@ -1395,13 +1399,19 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		}
 	}
 
-	// 依 agent 的 DependsOn 解析 LLM 与聚合 Tool 服务，一次性注入
+	// 依 agent 的 DependsOn 解析 LLM 与聚合 Tool 服务，一次性注入。
+	// LLM 走多 provider 路由：agent 连接聚合 LLM 服务，primary 为声明的 provider。
 	hasLLM := false
+	llmID := uint32(0)
 	toolID := uint32(0)
 	if agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
-		if id, ok := m.llmServiceIDs[agentEntry.DependsOn.LLM]; ok {
-			hasLLM = true
-			m.agentServiceIDs[agentEntry.Name] = id // 记录注入的 LLM serviceID，热重载时沿用
+		if id, err := m.serveAggregateLLMLocked(agentEntry.DependsOn.LLM); err == nil {
+			llmID = id
+			if _, ok := m.llms[agentEntry.DependsOn.LLM]; ok {
+				hasLLM = true
+			}
+		} else {
+			m.logger.Warn("aggregate llm service unavailable", "error", err)
 		}
 	}
 	// 有工具插件加载或 agent 声明了工具依赖时，才提供聚合 Tool 服务
@@ -1418,11 +1428,12 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		if !ok {
 			return fmt.Errorf("agent %s not loaded", agentEntry.Name)
 		}
-		if err := agent.RegisterServices(context.Background(), m.agentServiceIDs[agentEntry.Name], toolID); err != nil {
+		if err := agent.RegisterServices(context.Background(), llmID, toolID); err != nil {
 			return fmt.Errorf("failed to register agent services: %w", err)
 		}
+		m.agentServiceIDs[agentEntry.Name] = llmID // 记录注入的 LLM serviceID，热重载时沿用
 		m.transitionLocked(agentEntry.Name, StateActive, "")
-		m.logger.Info("agent activated declaratively", "name", agentEntry.Name, "llmID", m.agentServiceIDs[agentEntry.Name], "toolID", toolID)
+		m.logger.Info("agent activated declaratively", "name", agentEntry.Name, "llmID", llmID, "toolID", toolID)
 	} else {
 		m.markPendingLocked(agentEntry.Name, "agent", "dependent LLM not loaded")
 		m.pendingEntries[agentEntry.Name] = *agentEntry // 记录待再激活的 agent 条目
