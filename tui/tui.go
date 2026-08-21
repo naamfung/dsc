@@ -1195,16 +1195,25 @@ func readSkillFrontmatter(path, fallback string) (string, string) {
 	return name, desc
 }
 
+// getExecutableDir 獲取可執行文件所在目錄的絕對路徑
+func getExecutableDir() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(exePath), nil
+}
+
 // listSkills 扫描 skills 目录，按内置（builtin/）与外置（installed/）分组返回展示行。
 func listSkills() []string {
 	dir := os.Getenv("DSC_SKILLS_DIR")
 	if dir == "" {
-		// 使用 os.Getwd() 獲取當前工作目錄的絕對路徑，然後拼接 skills 目錄
-		cwd, err := os.Getwd()
+		// 使用程序所在的目录，而不是当前工作目录
+		exeDir, err := getExecutableDir()
 		if err != nil {
-			cwd = "."
+			exeDir = "."
 		}
-		dir = filepath.Join(cwd, "skills")
+		dir = filepath.Join(exeDir, "skills")
 	}
 	var out []string
 	if builtin := scanSkillSection(filepath.Join(dir, "builtin")); len(builtin) > 0 {
