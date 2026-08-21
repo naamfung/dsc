@@ -150,6 +150,9 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	} else {
 		logger.Warn("spill store unavailable", "error", err)
 	}
+	// sandbox：进程效应策略层（DSC_SANDBOX: full/workspace/readonly，缺省 workspace），
+	// pre-execute fail-closed 拦截写操作
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(ParseSandboxPolicy(os.Getenv("DSC_SANDBOX"))))
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))
 	return m

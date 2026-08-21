@@ -60,7 +60,7 @@ func (c *mockPolicyClient) observed(path string) bool {
 
 func newPipelineManager(t *testing.T) *Manager {
 	t.Helper()
-	m := NewManager(&ManagerConfig{})
+	m := newRouterManager() // 无默认 retry/sandbox/spill 监听器，测试控制流水线
 	if err := m.toolRegistry.Register(&mockTool{name: "str_replace_editor"}); err != nil {
 		t.Fatalf("register tool: %v", err)
 	}
