@@ -41,6 +41,8 @@ const (
 var pluginStateTransitions = map[PluginState]map[PluginState]bool{
 	StatePending: {
 		StateSpawned:  true, // 依赖就绪，重新拉起
+		StateConnecting: true, // 动态注入后依赖就绪，provider 直接进入握手（第 4 步）
+		StateActive:   true, // 已拉起的 PENDING agent，依赖就绪后直接激活（第 4 步）
 		StateFailed:   true,
 		StateDisposed: true,
 	},
