@@ -138,6 +138,18 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// 後續可註冊更多工具
 	// 内建 subagent 工具（宿主侧子代理，委派任务给独立小循环）
 	_ = m.toolRegistry.Register(&subagentTool{m: m})
+	// spill：超长工具结果外置（阈值 4000 字符，目录可经 DSC_SPILL_DIR 配置）；
+	// post-execute 策略 + read_spill 取回工具
+	spillDir := os.Getenv("DSC_SPILL_DIR")
+	if spillDir == "" {
+		spillDir = "./spill"
+	}
+	if store, err := NewSpillStore(spillDir); err == nil {
+		_ = m.toolRegistry.Register(&readSpillTool{store: store})
+		m.events.OnWaterfall(EventToolPostExecute, spillLargeResult(store, 4000))
+	} else {
+		logger.Warn("spill store unavailable", "error", err)
+	}
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))
 	return m

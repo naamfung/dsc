@@ -17,3 +17,4 @@ workspace/
 # Agent session event log
 session.jsonl
 sessions/
+spill/
