@@ -1986,6 +1986,17 @@ func (m *Manager) SwitchMode(mode string) error {
 	defer m.mu.Unlock()
 
 	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
+	// 使用基於 ExecDir 或可執行文件所在目錄的絕對路徑
+	if m.config.ExecDir != "" {
+		presetPath = filepath.Join(m.config.ExecDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
+	} else {
+		// 嘗試獲取可執行文件所在目錄
+		if execPath, err := os.Executable(); err == nil {
+			execDir := filepath.Dir(execPath)
+			presetPath = filepath.Join(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
+		}
+	}
+
 	data, err := os.ReadFile(presetPath)
 	if err != nil {
 		return fmt.Errorf("failed to read preset config: %w", err)
