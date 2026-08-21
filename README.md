@@ -25,10 +25,12 @@
 ### Tool 插件
 - `tool-filesystem`
 - `tool-str-replace-editor`
-- `policy-fs-observation`
 - `tool-browser-use`
 - `tool-lisp-eval`
 - `tool-skill`
+
+### Policy 插件
+- `policy-fs-observation`
 
 ## 構建與運行
 
