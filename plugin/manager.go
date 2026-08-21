@@ -1797,23 +1797,17 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.logger.Info("Tool service registered", "name", entry.Name, "serviceID", serviceID)
 
 	case "policy":
-		serviceID := broker.NextId()
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "policy"
 		m.pluginMetadata[entry.Name] = info
-		// 桥接：dial 策略插件的观测服务并注册为工具流水线监听器（替代旁路）
-		conn, err := broker.Dial(serviceID)
-		if err != nil {
-			client.Kill()
-			m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("dial policy service: %v", err))
-			return fmt.Errorf("failed to dial policy service for %s: %w", entry.Name, err)
-		}
-		pc := proto.NewFsObservationPolicyServiceClient(conn)
+		// 桥接：策略观测服务挂在插件主 gRPC server 上，经主连接取 client
+		// 并注册为工具流水线监听器（替代旁路）
+		pc := proto.NewFsObservationPolicyServiceClient(grpcClient.Conn)
 		m.policyClients[entry.Name] = pc
 		m.policyOff[entry.Name] = m.bridgePolicyToPipeline(entry.Name, pc)
 		m.transitionLocked(entry.Name, StateActive, "")
 		go m.monitorExit(entry.Name, client)
-		m.logger.Info("Policy plugin loaded and bridged to tool pipeline", "name", entry.Name, "serviceID", serviceID)
+		m.logger.Info("Policy plugin loaded and bridged to tool pipeline", "name", entry.Name)
 
 	default:
 		client.Kill()
