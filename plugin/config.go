@@ -7,7 +7,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var ConfigPath = "./config/config.yaml" // 默認配置文件路徑
+// ConfigPath 默認配置文件路徑，基於程序可執行文件所在目錄
+var ConfigPath string
+
+func init() {
+	exePath, err := os.Executable()
+	if err != nil {
+		// 若無法獲取可執行文件路徑，則回退到相對路徑
+		ConfigPath = "./config/config.yaml"
+	} else {
+		execDir := filepath.Dir(exePath)
+		ConfigPath = filepath.Join(execDir, "config", "config.yaml")
+	}
+}
 
 type Config struct {
 	WorkspaceRoot            string        `json:"workspace_root" yaml:"workspace_root"`
