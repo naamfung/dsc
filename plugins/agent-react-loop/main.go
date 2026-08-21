@@ -570,6 +570,25 @@ func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLM
 	return summary, nil
 }
 
+// SwitchSession 切换当前会话：从 store 按 id 加载并接管（事件溯源日志）。
+// 下一次 Run 将基于目标会话继续；当前轮次若在进行中由调用方负责确保已结束。
+func (a *ReactLoopAgent) SwitchSession(ctx context.Context, sessionID string) error {
+	if a.store == nil {
+		return fmt.Errorf("session store not initialized")
+	}
+	sess, err := a.store.Ensure(sessionID)
+	if err != nil {
+		return fmt.Errorf("switch session: %w", err)
+	}
+	a.sessMu.Lock()
+	a.sess = sess
+	a.turnCounter = sess.LastTurn()
+	a.sessMu.Unlock()
+	fmt.Printf("[Agent Loop] switched to session %s (%d events, last turn %d)\n",
+		sessionID, sess.Len(), a.turnCounter)
+	return nil
+}
+
 // ensureConnected 建立並快取 LLM/Tool 服務連接。
 // broker.Dial 對同一 serviceID 是一次性握手，連接信息只會發送一次，
 // 因此必須跨 Run 重用連接，否則第二次 Dial 會因收不到連接信息而超時。
@@ -725,6 +744,13 @@ func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest
 func (s *agentGRPCServer) RegisterServices(ctx context.Context, req *proto.RegisterServicesRequest) (*proto.RegisterServicesResponse, error) {
 	err := s.impl.RegisterServices(ctx, req.LlmServiceId, req.ToolServiceId)
 	return &proto.RegisterServicesResponse{}, err
+}
+
+func (s *agentGRPCServer) SwitchSession(ctx context.Context, req *proto.SwitchSessionRequest) (*proto.SwitchSessionResponse, error) {
+	if err := s.impl.SwitchSession(ctx, req.SessionId); err != nil {
+		return &proto.SwitchSessionResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SwitchSessionResponse{Success: true}, nil
 }
 
 func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {

@@ -17,6 +17,7 @@ service AgentService {
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc RegisterServices(RegisterServicesRequest) returns (RegisterServicesResponse);
+  rpc SwitchSession(SwitchSessionRequest) returns (SwitchSessionResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -135,6 +136,15 @@ message RegisterServicesRequest {
 }
 
 message RegisterServicesResponse {
+}
+
+message SwitchSessionRequest {
+  string session_id = 1; // 目标会话 id（如 "default"、"session-3"）
+}
+
+message SwitchSessionResponse {
+  bool success = 1;
+  string message = 2; // 错误信息（切换失败时）
 }
 
 message ShutdownRequest {

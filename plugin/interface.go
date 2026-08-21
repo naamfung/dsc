@@ -43,6 +43,9 @@ type Agent interface {
 	// RegisterServices 一次性注入 Agent 运行所需的依赖 serviceID（LLM 与 Tool）。
 	// 取代原先的 SetLLMServiceID/SetToolServiceID 两段式握手，保证一次性原子下发。
 	RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error
+	// SwitchSession 切换当前会话（事件溯源 store 中按 id 加载并接管）。
+	// 用于 TUI 多会话切换；目标会话不存在时返回错误。
+	SwitchSession(ctx context.Context, sessionID string) error
 	// Shutdown 优雅关闭 Agent（用于热加载前）
 	Shutdown(ctx context.Context, force bool) error
 }
