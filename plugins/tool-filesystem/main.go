@@ -111,7 +111,7 @@ func main() {
 	// 定義 shell 工具
 	shellTool := &FileTool{
 		name:        "shell",
-		description: "Execute a shell command or script using mvdan/sh interpreter internally. Supports persistent sessions via session_id.",
+		description: "Execute a shell command or script using mvdan/sh interpreter internally (POSIX shell standard). Supports persistent sessions via session_id. When working with paths, it is recommended to first use the 'pwd' command to get the current directory path format, and always wrap paths in quotes to ensure safe usage. Use standard Unix/Linux shell commands (e.g., ls, find, cd, grep) instead of PowerShell-specific cmdlets.",
 		schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
