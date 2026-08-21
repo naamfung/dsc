@@ -89,6 +89,8 @@ type Event struct {
 // 派生历史由 surface 节点按事件顺序投影得出。
 type Session struct {
 	mu sync.Mutex
+	// id 会话标识（由 Store 分配/设置；直接 New 创建的会话为空，需 Store 管理才可落盘）。
+	id string
 	// events 日志本体；seq 恒等于其在切片中的下标。
 	events []*Event
 	// surfaceNodes 当前派生历史中的 surface 事件 seq，按事件顺序。
