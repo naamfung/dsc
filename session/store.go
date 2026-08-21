@@ -81,6 +81,19 @@ func (s *Store) Load(id string) (*Session, error) {
 	return sess, nil
 }
 
+// Ensure 加载指定会话，不存在则新建并绑定该 id（供固定会话 id 的场景复用）。
+func (s *Store) Ensure(id string) (*Session, error) {
+	sess, err := s.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		sess = New()
+		sess.id = id
+	}
+	return sess, nil
+}
+
 // Save 原子落盘指定会话（按会话 ID）。
 func (s *Store) Save(sess *Session) error {
 	if sess.id == "" {
