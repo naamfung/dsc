@@ -2,7 +2,9 @@ package plugin
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -65,6 +67,67 @@ func TestPersistInjectionUpsertAndRemoval(t *testing.T) {
 		if e.Name == entry.Name {
 			t.Fatalf("entry %s should be removed from config", entry.Name)
 		}
+	}
+}
+
+// TestPersistInjectionPreservesFile 校验 yaml.Node 保留法：
+// 注入写回只增改 plugins 序列——原文件的注释与未声明字段的缺省语义保留，
+// 不再把 WorkspaceProtectionEnabled 等零值字段补齐进 config.yaml（第 5 步推敲发现）。
+func TestPersistInjectionPreservesFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	original := "# 顶部注释\nworkspace_root: ./workspace\n" +
+		"# context 窗口注释\n" +
+		"plugins:\n" +
+		"  - name: agent-a\n    type: agent\n" +
+		"    depends_on:\n      llm: llm-x\n      tools: [tool-x]\n"
+	if err := os.WriteFile(cfgPath, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(&ManagerConfig{})
+	m.SetConfigPath(cfgPath)
+	m.mu.Lock()
+	if err := m.persistInjectionLocked(PluginEntry{Name: "tool-new", Type: "tool", BinaryPath: "./x"}); err != nil {
+		t.Fatalf("persist injection: %v", err)
+	}
+	m.mu.Unlock()
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, keep := range []string{"顶部注释", "# context 窗口注释", "workspace_root: ./workspace", "llm: llm-x", "agent-a"} {
+		if !strings.Contains(content, keep) {
+			t.Errorf("original content %q lost after persist:\n%s", keep, content)
+		}
+	}
+	if strings.Contains(content, "workspace_protection_enabled") {
+		t.Errorf("persist injected zero-value field not present in original file:\n%s", content)
+	}
+	if !strings.Contains(content, "tool-new") {
+		t.Errorf("injected entry missing after persist:\n%s", content)
+	}
+	if strings.Contains(content, "depends_on: null") {
+		t.Errorf("injected entry should not contain empty depends_on:\n%s", content)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load config after persist: %v", err)
+	}
+	if len(cfg.Plugins) != 2 {
+		t.Fatalf("plugins = %d, want 2 (agent-a + tool-new)", len(cfg.Plugins))
+	}
+	var newEntry *PluginEntry
+	for i := range cfg.Plugins {
+		if cfg.Plugins[i].Name == "tool-new" {
+			newEntry = &cfg.Plugins[i]
+		}
+	}
+	if newEntry == nil || !newEntry.Enabled {
+		t.Fatalf("injected entry should persist as enabled, got %+v", newEntry)
 	}
 }
 

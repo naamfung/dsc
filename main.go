@@ -272,10 +272,11 @@ func main() {
 	}
 
 	// 從主配置 config/config.yaml 讀取工作空間保護狀態
-	// 默認啟用工作區保護，防止路徑遍歷攻擊
+	// 默認啟用工作區保護，防止路徑遍歷攻擊；僅當配置顯式聲明 -1（關閉）時禁用。
+	// 字段三值：0=缺省（默認啟用）、-1=顯式關閉、+1=顯式啟用。
 	plugin.WorkspaceProtectionEnabled = true
 	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
-	if err == nil && mainCfg != nil && !mainCfg.WorkspaceProtectionEnabled {
+	if err == nil && mainCfg != nil && mainCfg.WorkspaceProtectionEnabled == -1 {
 		plugin.WorkspaceProtectionEnabled = false
 	}
 	logger.Info("workspace protection enabled", "enabled", plugin.WorkspaceProtectionEnabled)

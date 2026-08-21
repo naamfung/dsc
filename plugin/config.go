@@ -22,17 +22,19 @@ func init() {
 }
 
 type Config struct {
-	WorkspaceRoot            string        `json:"workspace_root" yaml:"workspace_root"`
-	WorkspaceProtectionEnabled bool          `json:"workspace_protection_enabled" yaml:"workspace_protection_enabled"`
-	Mode                     string        `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
-	Plugins                  []PluginEntry `json:"plugins" yaml:"plugins"`
+	WorkspaceRoot string `json:"workspace_root" yaml:"workspace_root"`
+	// WorkspaceProtectionEnabled 工作空間保護開關，三值：0=缺省（默認啟用）、-1=顯式關閉、+1=顯式啟用。
+	// 缺省值置 0，因此無需指針即可區分「未聲明」與「顯式聲明」。
+	WorkspaceProtectionEnabled int            `json:"workspace_protection_enabled" yaml:"workspace_protection_enabled"`
+	Mode                       string         `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
+	Plugins                    []PluginEntry  `json:"plugins" yaml:"plugins"`
 	// 可保留舊的 LLM 字段便於過渡，但推薦統一使用 Plugins
-	DefaultLLM               string        `json:"default_llm" yaml:"default_llm"`
+	DefaultLLM string `json:"default_llm" yaml:"default_llm"`
 	// ContextWindow 上下文窗口大小（token 数）；0 表示未配置，
 	// 由宿主探测 LLAMACPP 的 /v1/models 獲取 n_ctx，仍失敗則用默認 128K×1024
-	ContextWindow            int           `json:"context_window" yaml:"context_window"`
+	ContextWindow int `json:"context_window" yaml:"context_window"`
 	// Persona "你是一個…助手" 身份句（預設可配，同 DSH 的 deployment persona）；空則用 DeepSeek 官方默認
-	Persona                  string        `json:"persona" yaml:"persona"`
+	Persona string `json:"persona" yaml:"persona"`
 }
 
 type PluginEntry struct {
@@ -80,20 +82,24 @@ func SaveConfig(path string, cfg *Config) error {
 
 // UpdateWorkspaceProtectionEnabled 更新工作空間保護狀態並保存到配置文件
 func UpdateWorkspaceProtectionEnabled(enabled bool, configPath string) error {
+	v := -1
+	if enabled {
+		v = 1
+	}
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		// 如果配置文件不存在或加載失敗，創建一個新的配置
 		cfg = &Config{
-			WorkspaceRoot:            "./workspace",
-			WorkspaceProtectionEnabled: enabled,
-			Mode:                     "standard",
-			Plugins:                  nil,
-			DefaultLLM:               "",
-			ContextWindow:            0,
-			Persona:                  "",
+			WorkspaceRoot:              "./workspace",
+			WorkspaceProtectionEnabled: v,
+			Mode:                       "standard",
+			Plugins:                    nil,
+			DefaultLLM:                 "",
+			ContextWindow:              0,
+			Persona:                    "",
 		}
 	} else {
-		cfg.WorkspaceProtectionEnabled = enabled
+		cfg.WorkspaceProtectionEnabled = v
 	}
 	return SaveConfig(configPath, cfg)
 }
@@ -104,13 +110,13 @@ func UpdateMode(mode string, configPath string) error {
 	if err != nil {
 		// 如果配置文件不存在或加載失敗，創建一個新的配置
 		cfg = &Config{
-			WorkspaceRoot:            "./workspace",
-			WorkspaceProtectionEnabled: true,
-			Mode:                     mode,
-			Plugins:                  nil,
-			DefaultLLM:               "",
-			ContextWindow:            0,
-			Persona:                  "",
+			WorkspaceRoot:              "./workspace",
+			WorkspaceProtectionEnabled: 0, // 缺省：默認啟用
+			Mode:                       mode,
+			Plugins:                    nil,
+			DefaultLLM:                 "",
+			ContextWindow:              0,
+			Persona:                    "",
 		}
 	} else {
 		cfg.Mode = mode
