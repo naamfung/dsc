@@ -52,6 +52,14 @@ type Manager struct {
 	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
 	states              map[string]*RuntimeState            // 插件名 -> 运行时状态快照
 
+	// 第 4 步「动态注入插件」新增字段：
+	// configPath 动态注入/卸载写回的 config.yaml 路径（config 始终为运行态唯一事实来源）。
+	// agentEntries  记录已声明的 agent 条目（含 DependsOn），供 PENDING agent 再激活时解析依赖。
+	// pendingEntries 记录依赖未满足、等待后续注入的插件条目（provider 未拉起，agent 已拉起）。
+	configPath     string
+	agentEntries   map[string]PluginEntry
+	pendingEntries map[string]PluginEntry
+
 	// 事件总线：插件生命周期状态迁移事件的订阅者表（第 3 步）。
 	// eventsMu 独立于 m.mu，避免状态机持锁发布事件时与订阅操作死锁。
 	eventsMu    sync.RWMutex
@@ -107,6 +115,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		pluginLogger:        pluginLogger,
 		subscribers:         make(map[int]chan PluginEvent),
 		stopHooks:           make(map[string][]func() error),
+		agentEntries:        make(map[string]PluginEntry),
+		pendingEntries:      make(map[string]PluginEntry),
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
@@ -874,6 +884,8 @@ func (m *Manager) Shutdown() {
 	m.pluginMetadata = make(map[string]*metadata.PluginInfo)
 	m.states = make(map[string]*RuntimeState)
 	m.stopHooks = make(map[string][]func() error)
+	m.agentEntries = make(map[string]PluginEntry)
+	m.pendingEntries = make(map[string]PluginEntry)
 }
 
 // ListAgents 列出所有已加載的 Agent 插件
@@ -934,6 +946,14 @@ func (m *Manager) UnloadPlugin(name string) error {
 
 	client, exists := m.clients[name]
 	if !exists {
+		// 未加载的插件：若只是 PENDING 待办，同样从待办/配置中清除
+		if _, pending := m.pendingEntries[name]; pending {
+			delete(m.pendingEntries, name)
+			if err := m.persistRemovalLocked(name); err != nil {
+				m.logger.Warn("persist removal failed", "name", name, "error", err)
+			}
+			return nil
+		}
 		return fmt.Errorf("plugin '%s' not found", name)
 	}
 
@@ -952,7 +972,14 @@ func (m *Manager) UnloadPlugin(name string) error {
 	delete(m.llms, name)
 	delete(m.typeMap, name)
 	delete(m.pluginMetadata, name)
+	delete(m.pendingEntries, name)
+	delete(m.agentEntries, name)
 	m.markDisposedLocked(name)
+
+	// 持久化：从 config.yaml 移除该插件声明，使运行态与重启态一致
+	if err := m.persistRemovalLocked(name); err != nil {
+		m.logger.Warn("persist removal failed", "name", name, "error", err)
+	}
 
 	m.logger.Info("plugin unloaded", "name", name)
 	return nil
@@ -1046,23 +1073,20 @@ func (m *Manager) GetMainAgentName() string {
 	return m.mainAgentName
 }
 
-// LoadPlugin 動態加載插件（供 Admin API 使用）
+// LoadPlugin 动态加载/注入插件（供 Admin /plugins/load 使用）。
+// 第 4 步起委托给 inject.go 的 injectionEntryLocked，做完整的端到端注入：
+// 依赖判定（未满足→PENDING）、声明持久化（写回 config.yaml）、等待中的 PENDING 提升与 agent 再激活。
 func (m *Manager) LoadPlugin(entry PluginEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.injectionEntryLocked(entry)
+}
 
-	// 如果是 agent 插件
-	if entry.Type == "agent" {
-		_, _, err := m.loadAgentAndGetBroker(entry)
-		return err
-	}
-
-	// 對於 llm/tool 插件，需要 broker
-	if m.broker == nil {
-		return fmt.Errorf("broker not available, cannot load plugin type %s", entry.Type)
-	}
-
-	return m.loadPluginWithBroker(entry, m.broker)
+// SetConfigPath 设置动态注入/卸载要写回的 config.yaml 路径。
+func (m *Manager) SetConfigPath(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.configPath = path
 }
 
 // llmProxyServer 實現 LLMService，轉發到 LLMProvider
@@ -1344,6 +1368,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	sorted, pending := topoSortPlugins(providerEntries, declared)
 	for _, e := range pending {
 		m.markPendingLocked(e.Name, e.Type, "dependency not satisfied")
+		m.pendingEntries[e.Name] = e // 记录待办条目，供动态注入补足依赖后提升（第 4 步）
 	}
 	for _, entry := range sorted {
 		if err := m.loadProviderDeclarativeLocked(entry); err != nil {
@@ -1382,6 +1407,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		m.logger.Info("agent activated declaratively", "name", agentEntry.Name, "llmID", m.agentServiceIDs[agentEntry.Name], "toolID", toolID)
 	} else {
 		m.markPendingLocked(agentEntry.Name, "agent", "dependent LLM not loaded")
+		m.pendingEntries[agentEntry.Name] = *agentEntry // 记录待再激活的 agent 条目（第 4 步）
 		m.logger.Warn("agent deferred to pending (missing LLM dependency)", "name", agentEntry.Name)
 	}
 
@@ -1577,6 +1603,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	m.agents[entry.Name] = agent
 	m.typeMap[entry.Name] = "agent"
 	m.agentServiceIDs[entry.Name] = 0 // 占位
+	m.agentEntries[entry.Name] = entry // 记录声明条目（含 DependsOn），供 PENDING 再激活时解析依赖
 	// 注册对称清理 hook：卸载/热重载时先优雅关闭 agent（进程内清理），再终止进程
 	a := agent
 	m.addStopHookLocked(entry.Name, func() error {

@@ -288,6 +288,9 @@ func main() {
 		PluginLogger: pluginLogger,
 	})
 	defer mgr.Shutdown()
+	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
+	// 使运行期增删的插件在进程重启后依旧保留（第 4 步）
+	mgr.SetConfigPath(filepath.Join(execDir, "config", "config.yaml"))
 
 	// fail 記錄錯誤後先清理已加載的插件子進程再退出，避免 os.Exit 跳過 defer 導致殘留孤兒進程
 	fail := func(format string, args ...interface{}) {
