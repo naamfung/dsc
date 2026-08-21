@@ -17,6 +17,7 @@ import (
 
 	"dsc/proto"
 	"dsc/proto/metadata"
+	"dsc/session"
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/go-version"
@@ -944,6 +945,31 @@ func (m *Manager) ListAgents() []string {
 // GetToolRegistry 暴露工具註冊表
 func (m *Manager) GetToolRegistry() *ToolRegistry {
 	return m.toolRegistry
+}
+
+// SessionSummary 会话列表的宿主侧摘要（TUI 展示用）。
+type SessionSummary struct {
+	ID      string `json:"id"`
+	Events  int    `json:"events"`
+	Preview string `json:"preview"`
+}
+
+// ListSessions 列出多会话 store 中的会话（读 ExecDir/sessions 目录）。
+func (m *Manager) ListSessions() ([]SessionSummary, error) {
+	dir := filepath.Join(m.config.ExecDir, "sessions")
+	st, err := session.NewStore(dir)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	infos, err := st.List()
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	out := make([]SessionSummary, len(infos))
+	for i, info := range infos {
+		out[i] = SessionSummary{ID: info.ID, Events: info.Events, Preview: info.Preview}
+	}
+	return out, nil
 }
 
 // ListContext 聚合所有已加載工具插件貢獻的上下文片段（如技能索引），
