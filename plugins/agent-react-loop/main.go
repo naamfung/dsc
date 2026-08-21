@@ -68,24 +68,16 @@ type ReactLoopAgent struct {
 	persona string
 }
 
-func (a *ReactLoopAgent) SetLLMServiceID(ctx context.Context, id uint32) error {
+func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.llmServiceID = id
-	return nil
-}
-
-func (a *ReactLoopAgent) SetToolServiceID(ctx context.Context, id uint32) error {
-	a.mu.Lock()
-	a.toolServiceID = id
-	llmID := a.llmServiceID
-	toolID := a.toolServiceID
+	a.llmServiceID = llmServiceID
+	a.toolServiceID = toolServiceID
 	a.mu.Unlock()
 
-	// 當兩個 serviceID 都設好後，立即建立連接（在 broker 的 5 秒超時前）
-	if llmID != 0 && toolID != 0 {
+	// 兩個 serviceID 一次性就緒後，立即建立連接（在 broker 的 5 秒超時前）
+	if llmServiceID != 0 && toolServiceID != 0 {
 		go func() {
-			_, _, err := a.ensureConnected(llmID, toolID)
+			_, _, err := a.ensureConnected(llmServiceID, toolServiceID)
 			if err != nil {
 				fmt.Printf("[Agent Loop] eager connect failed: %v\n", err)
 			} else {
@@ -149,7 +141,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	a.mu.Unlock()
 
 	if llmID == 0 || toolID == 0 {
-		return nil, fmt.Errorf("service IDs not set, call SetLLMServiceID and SetToolServiceID first")
+		return nil, fmt.Errorf("service IDs not set, call RegisterServices first")
 	}
 
 	// 獲取（或首次建立）LLM 與 Tool 服務連接
@@ -689,14 +681,9 @@ func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest
 	return &proto.VersionResponse{Version: s.impl.Version(ctx)}, nil
 }
 
-func (s *agentGRPCServer) SetLLMServiceID(ctx context.Context, req *proto.SetLLMServiceIDRequest) (*proto.SetLLMServiceIDResponse, error) {
-	err := s.impl.SetLLMServiceID(ctx, req.ServiceId)
-	return &proto.SetLLMServiceIDResponse{}, err
-}
-
-func (s *agentGRPCServer) SetToolServiceID(ctx context.Context, req *proto.SetToolServiceIDRequest) (*proto.SetToolServiceIDResponse, error) {
-	err := s.impl.SetToolServiceID(ctx, req.ServiceId)
-	return &proto.SetToolServiceIDResponse{}, err
+func (s *agentGRPCServer) RegisterServices(ctx context.Context, req *proto.RegisterServicesRequest) (*proto.RegisterServicesResponse, error) {
+	err := s.impl.RegisterServices(ctx, req.LlmServiceId, req.ToolServiceId)
+	return &proto.RegisterServicesResponse{}, err
 }
 
 func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {

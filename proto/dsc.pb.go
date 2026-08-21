@@ -1033,27 +1033,28 @@ func (x *ToolCall) GetArgumentsJson() string {
 	return ""
 }
 
-type SetLLMServiceIDRequest struct {
+type RegisterServicesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ServiceId     uint32                 `protobuf:"varint,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	LlmServiceId  uint32                 `protobuf:"varint,1,opt,name=llm_service_id,json=llmServiceId,proto3" json:"llm_service_id,omitempty"`
+	ToolServiceId uint32                 `protobuf:"varint,2,opt,name=tool_service_id,json=toolServiceId,proto3" json:"tool_service_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SetLLMServiceIDRequest) Reset() {
-	*x = SetLLMServiceIDRequest{}
+func (x *RegisterServicesRequest) Reset() {
+	*x = RegisterServicesRequest{}
 	mi := &file_dsc_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SetLLMServiceIDRequest) String() string {
+func (x *RegisterServicesRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SetLLMServiceIDRequest) ProtoMessage() {}
+func (*RegisterServicesRequest) ProtoMessage() {}
 
-func (x *SetLLMServiceIDRequest) ProtoReflect() protoreflect.Message {
+func (x *RegisterServicesRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_dsc_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1065,38 +1066,45 @@ func (x *SetLLMServiceIDRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SetLLMServiceIDRequest.ProtoReflect.Descriptor instead.
-func (*SetLLMServiceIDRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegisterServicesRequest.ProtoReflect.Descriptor instead.
+func (*RegisterServicesRequest) Descriptor() ([]byte, []int) {
 	return file_dsc_proto_rawDescGZIP(), []int{18}
 }
 
-func (x *SetLLMServiceIDRequest) GetServiceId() uint32 {
+func (x *RegisterServicesRequest) GetLlmServiceId() uint32 {
 	if x != nil {
-		return x.ServiceId
+		return x.LlmServiceId
 	}
 	return 0
 }
 
-type SetLLMServiceIDResponse struct {
+func (x *RegisterServicesRequest) GetToolServiceId() uint32 {
+	if x != nil {
+		return x.ToolServiceId
+	}
+	return 0
+}
+
+type RegisterServicesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SetLLMServiceIDResponse) Reset() {
-	*x = SetLLMServiceIDResponse{}
+func (x *RegisterServicesResponse) Reset() {
+	*x = RegisterServicesResponse{}
 	mi := &file_dsc_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SetLLMServiceIDResponse) String() string {
+func (x *RegisterServicesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SetLLMServiceIDResponse) ProtoMessage() {}
+func (*RegisterServicesResponse) ProtoMessage() {}
 
-func (x *SetLLMServiceIDResponse) ProtoReflect() protoreflect.Message {
+func (x *RegisterServicesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_dsc_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1108,89 +1116,9 @@ func (x *SetLLMServiceIDResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SetLLMServiceIDResponse.ProtoReflect.Descriptor instead.
-func (*SetLLMServiceIDResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegisterServicesResponse.ProtoReflect.Descriptor instead.
+func (*RegisterServicesResponse) Descriptor() ([]byte, []int) {
 	return file_dsc_proto_rawDescGZIP(), []int{19}
-}
-
-type SetToolServiceIDRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ServiceId     uint32                 `protobuf:"varint,1,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetToolServiceIDRequest) Reset() {
-	*x = SetToolServiceIDRequest{}
-	mi := &file_dsc_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetToolServiceIDRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetToolServiceIDRequest) ProtoMessage() {}
-
-func (x *SetToolServiceIDRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetToolServiceIDRequest.ProtoReflect.Descriptor instead.
-func (*SetToolServiceIDRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *SetToolServiceIDRequest) GetServiceId() uint32 {
-	if x != nil {
-		return x.ServiceId
-	}
-	return 0
-}
-
-type SetToolServiceIDResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetToolServiceIDResponse) Reset() {
-	*x = SetToolServiceIDResponse{}
-	mi := &file_dsc_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetToolServiceIDResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetToolServiceIDResponse) ProtoMessage() {}
-
-func (x *SetToolServiceIDResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetToolServiceIDResponse.ProtoReflect.Descriptor instead.
-func (*SetToolServiceIDResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{21}
 }
 
 type ShutdownRequest struct {
@@ -1202,7 +1130,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_dsc_proto_msgTypes[22]
+	mi := &file_dsc_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1214,7 +1142,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[22]
+	mi := &file_dsc_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1227,7 +1155,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{22}
+	return file_dsc_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ShutdownRequest) GetForce() bool {
@@ -1247,7 +1175,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_dsc_proto_msgTypes[23]
+	mi := &file_dsc_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1187,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[23]
+	mi := &file_dsc_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1200,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{23}
+	return file_dsc_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ShutdownResponse) GetSuccess() bool {
@@ -1300,7 +1228,7 @@ type ExecuteToolRequest struct {
 
 func (x *ExecuteToolRequest) Reset() {
 	*x = ExecuteToolRequest{}
-	mi := &file_dsc_proto_msgTypes[24]
+	mi := &file_dsc_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1312,7 +1240,7 @@ func (x *ExecuteToolRequest) String() string {
 func (*ExecuteToolRequest) ProtoMessage() {}
 
 func (x *ExecuteToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[24]
+	mi := &file_dsc_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1325,7 +1253,7 @@ func (x *ExecuteToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteToolRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteToolRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{24}
+	return file_dsc_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ExecuteToolRequest) GetToolName() string {
@@ -1359,7 +1287,7 @@ type ExecuteToolResponse struct {
 
 func (x *ExecuteToolResponse) Reset() {
 	*x = ExecuteToolResponse{}
-	mi := &file_dsc_proto_msgTypes[25]
+	mi := &file_dsc_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1371,7 +1299,7 @@ func (x *ExecuteToolResponse) String() string {
 func (*ExecuteToolResponse) ProtoMessage() {}
 
 func (x *ExecuteToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[25]
+	mi := &file_dsc_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1384,7 +1312,7 @@ func (x *ExecuteToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteToolResponse.ProtoReflect.Descriptor instead.
 func (*ExecuteToolResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{25}
+	return file_dsc_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ExecuteToolResponse) GetContent() string {
@@ -1409,7 +1337,7 @@ type ListToolsRequest struct {
 
 func (x *ListToolsRequest) Reset() {
 	*x = ListToolsRequest{}
-	mi := &file_dsc_proto_msgTypes[26]
+	mi := &file_dsc_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1421,7 +1349,7 @@ func (x *ListToolsRequest) String() string {
 func (*ListToolsRequest) ProtoMessage() {}
 
 func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[26]
+	mi := &file_dsc_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1434,7 +1362,7 @@ func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListToolsRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{26}
+	return file_dsc_proto_rawDescGZIP(), []int{24}
 }
 
 type ListToolsResponse struct {
@@ -1446,7 +1374,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_dsc_proto_msgTypes[27]
+	mi := &file_dsc_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1386,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[27]
+	mi := &file_dsc_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +1399,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{27}
+	return file_dsc_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListToolsResponse) GetTools() []*Tool {
@@ -1489,7 +1417,7 @@ type ListContextRequest struct {
 
 func (x *ListContextRequest) Reset() {
 	*x = ListContextRequest{}
-	mi := &file_dsc_proto_msgTypes[28]
+	mi := &file_dsc_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1501,7 +1429,7 @@ func (x *ListContextRequest) String() string {
 func (*ListContextRequest) ProtoMessage() {}
 
 func (x *ListContextRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[28]
+	mi := &file_dsc_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1514,7 +1442,7 @@ func (x *ListContextRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListContextRequest.ProtoReflect.Descriptor instead.
 func (*ListContextRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{28}
+	return file_dsc_proto_rawDescGZIP(), []int{26}
 }
 
 type ListContextResponse struct {
@@ -1526,7 +1454,7 @@ type ListContextResponse struct {
 
 func (x *ListContextResponse) Reset() {
 	*x = ListContextResponse{}
-	mi := &file_dsc_proto_msgTypes[29]
+	mi := &file_dsc_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1538,7 +1466,7 @@ func (x *ListContextResponse) String() string {
 func (*ListContextResponse) ProtoMessage() {}
 
 func (x *ListContextResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[29]
+	mi := &file_dsc_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1551,7 +1479,7 @@ func (x *ListContextResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListContextResponse.ProtoReflect.Descriptor instead.
 func (*ListContextResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{29}
+	return file_dsc_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListContextResponse) GetContent() string {
@@ -1572,7 +1500,7 @@ type FsObservation struct {
 
 func (x *FsObservation) Reset() {
 	*x = FsObservation{}
-	mi := &file_dsc_proto_msgTypes[30]
+	mi := &file_dsc_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1584,7 +1512,7 @@ func (x *FsObservation) String() string {
 func (*FsObservation) ProtoMessage() {}
 
 func (x *FsObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[30]
+	mi := &file_dsc_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1597,7 +1525,7 @@ func (x *FsObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FsObservation.ProtoReflect.Descriptor instead.
 func (*FsObservation) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{30}
+	return file_dsc_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *FsObservation) GetState() string {
@@ -1630,7 +1558,7 @@ type GetObservationRequest struct {
 
 func (x *GetObservationRequest) Reset() {
 	*x = GetObservationRequest{}
-	mi := &file_dsc_proto_msgTypes[31]
+	mi := &file_dsc_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1642,7 +1570,7 @@ func (x *GetObservationRequest) String() string {
 func (*GetObservationRequest) ProtoMessage() {}
 
 func (x *GetObservationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[31]
+	mi := &file_dsc_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1655,7 +1583,7 @@ func (x *GetObservationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetObservationRequest.ProtoReflect.Descriptor instead.
 func (*GetObservationRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{31}
+	return file_dsc_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetObservationRequest) GetFilePath() string {
@@ -1675,7 +1603,7 @@ type GetObservationResponse struct {
 
 func (x *GetObservationResponse) Reset() {
 	*x = GetObservationResponse{}
-	mi := &file_dsc_proto_msgTypes[32]
+	mi := &file_dsc_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1687,7 +1615,7 @@ func (x *GetObservationResponse) String() string {
 func (*GetObservationResponse) ProtoMessage() {}
 
 func (x *GetObservationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[32]
+	mi := &file_dsc_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1700,7 +1628,7 @@ func (x *GetObservationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetObservationResponse.ProtoReflect.Descriptor instead.
 func (*GetObservationResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{32}
+	return file_dsc_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetObservationResponse) GetObservation() *FsObservation {
@@ -1727,7 +1655,7 @@ type UpdateObservationRequest struct {
 
 func (x *UpdateObservationRequest) Reset() {
 	*x = UpdateObservationRequest{}
-	mi := &file_dsc_proto_msgTypes[33]
+	mi := &file_dsc_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1739,7 +1667,7 @@ func (x *UpdateObservationRequest) String() string {
 func (*UpdateObservationRequest) ProtoMessage() {}
 
 func (x *UpdateObservationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[33]
+	mi := &file_dsc_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1752,7 +1680,7 @@ func (x *UpdateObservationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateObservationRequest.ProtoReflect.Descriptor instead.
 func (*UpdateObservationRequest) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{33}
+	return file_dsc_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *UpdateObservationRequest) GetFilePath() string {
@@ -1779,7 +1707,7 @@ type UpdateObservationResponse struct {
 
 func (x *UpdateObservationResponse) Reset() {
 	*x = UpdateObservationResponse{}
-	mi := &file_dsc_proto_msgTypes[34]
+	mi := &file_dsc_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1791,7 +1719,7 @@ func (x *UpdateObservationResponse) String() string {
 func (*UpdateObservationResponse) ProtoMessage() {}
 
 func (x *UpdateObservationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dsc_proto_msgTypes[34]
+	mi := &file_dsc_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1804,7 +1732,7 @@ func (x *UpdateObservationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateObservationResponse.ProtoReflect.Descriptor instead.
 func (*UpdateObservationResponse) Descriptor() ([]byte, []int) {
-	return file_dsc_proto_rawDescGZIP(), []int{34}
+	return file_dsc_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *UpdateObservationResponse) GetSuccess() bool {
@@ -1900,15 +1828,11 @@ const file_dsc_proto_rawDesc = "" +
 	"\bToolCall\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
-	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\"7\n" +
-	"\x16SetLLMServiceIDRequest\x12\x1d\n" +
-	"\n" +
-	"service_id\x18\x01 \x01(\rR\tserviceId\"\x19\n" +
-	"\x17SetLLMServiceIDResponse\"8\n" +
-	"\x17SetToolServiceIDRequest\x12\x1d\n" +
-	"\n" +
-	"service_id\x18\x01 \x01(\rR\tserviceId\"\x1a\n" +
-	"\x18SetToolServiceIDResponse\"'\n" +
+	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\"g\n" +
+	"\x17RegisterServicesRequest\x12$\n" +
+	"\x0ellm_service_id\x18\x01 \x01(\rR\fllmServiceId\x12&\n" +
+	"\x0ftool_service_id\x18\x02 \x01(\rR\rtoolServiceId\"\x1a\n" +
+	"\x18RegisterServicesResponse\"'\n" +
 	"\x0fShutdownRequest\x12\x14\n" +
 	"\x05force\x18\x01 \x01(\bR\x05force\"F\n" +
 	"\x10ShutdownResponse\x12\x18\n" +
@@ -1947,14 +1871,13 @@ const file_dsc_proto_rawDesc = "" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +
 	"\aExecute\x12\x13.dsc.ExecuteRequest\x1a\x14.dsc.ExecuteResponse\x12@\n" +
-	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\xab\x03\n" +
+	"\vHealthCheck\x12\x17.dsc.HealthCheckRequest\x1a\x18.dsc.HealthCheckResponse2\xdd\x02\n" +
 	"\fAgentService\x12(\n" +
 	"\x03Run\x12\x0f.dsc.RunRequest\x1a\x10.dsc.RunResponse\x126\n" +
 	"\tRunStream\x12\x0f.dsc.RunRequest\x1a\x16.dsc.RunStreamResponse0\x01\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
-	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x12L\n" +
-	"\x0fSetLLMServiceID\x12\x1b.dsc.SetLLMServiceIDRequest\x1a\x1c.dsc.SetLLMServiceIDResponse\x12O\n" +
-	"\x10SetToolServiceID\x12\x1c.dsc.SetToolServiceIDRequest\x1a\x1d.dsc.SetToolServiceIDResponse\x127\n" +
+	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x12O\n" +
+	"\x10RegisterServices\x12\x1c.dsc.RegisterServicesRequest\x1a\x1d.dsc.RegisterServicesResponse\x127\n" +
 	"\bShutdown\x12\x14.dsc.ShutdownRequest\x1a\x15.dsc.ShutdownResponse2\x99\x02\n" +
 	"\n" +
 	"LLMService\x12+\n" +
@@ -1984,7 +1907,7 @@ func file_dsc_proto_rawDescGZIP() []byte {
 	return file_dsc_proto_rawDescData
 }
 
-var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_dsc_proto_goTypes = []any{
 	(*NameRequest)(nil),               // 0: dsc.NameRequest
 	(*NameResponse)(nil),              // 1: dsc.NameResponse
@@ -2004,27 +1927,25 @@ var file_dsc_proto_goTypes = []any{
 	(*ChatResponse)(nil),              // 15: dsc.ChatResponse
 	(*ChatStreamResponse)(nil),        // 16: dsc.ChatStreamResponse
 	(*ToolCall)(nil),                  // 17: dsc.ToolCall
-	(*SetLLMServiceIDRequest)(nil),    // 18: dsc.SetLLMServiceIDRequest
-	(*SetLLMServiceIDResponse)(nil),   // 19: dsc.SetLLMServiceIDResponse
-	(*SetToolServiceIDRequest)(nil),   // 20: dsc.SetToolServiceIDRequest
-	(*SetToolServiceIDResponse)(nil),  // 21: dsc.SetToolServiceIDResponse
-	(*ShutdownRequest)(nil),           // 22: dsc.ShutdownRequest
-	(*ShutdownResponse)(nil),          // 23: dsc.ShutdownResponse
-	(*ExecuteToolRequest)(nil),        // 24: dsc.ExecuteToolRequest
-	(*ExecuteToolResponse)(nil),       // 25: dsc.ExecuteToolResponse
-	(*ListToolsRequest)(nil),          // 26: dsc.ListToolsRequest
-	(*ListToolsResponse)(nil),         // 27: dsc.ListToolsResponse
-	(*ListContextRequest)(nil),        // 28: dsc.ListContextRequest
-	(*ListContextResponse)(nil),       // 29: dsc.ListContextResponse
-	(*FsObservation)(nil),             // 30: dsc.FsObservation
-	(*GetObservationRequest)(nil),     // 31: dsc.GetObservationRequest
-	(*GetObservationResponse)(nil),    // 32: dsc.GetObservationResponse
-	(*UpdateObservationRequest)(nil),  // 33: dsc.UpdateObservationRequest
-	(*UpdateObservationResponse)(nil), // 34: dsc.UpdateObservationResponse
-	nil,                               // 35: dsc.ExecuteRequest.ParamsEntry
+	(*RegisterServicesRequest)(nil),   // 18: dsc.RegisterServicesRequest
+	(*RegisterServicesResponse)(nil),  // 19: dsc.RegisterServicesResponse
+	(*ShutdownRequest)(nil),           // 20: dsc.ShutdownRequest
+	(*ShutdownResponse)(nil),          // 21: dsc.ShutdownResponse
+	(*ExecuteToolRequest)(nil),        // 22: dsc.ExecuteToolRequest
+	(*ExecuteToolResponse)(nil),       // 23: dsc.ExecuteToolResponse
+	(*ListToolsRequest)(nil),          // 24: dsc.ListToolsRequest
+	(*ListToolsResponse)(nil),         // 25: dsc.ListToolsResponse
+	(*ListContextRequest)(nil),        // 26: dsc.ListContextRequest
+	(*ListContextResponse)(nil),       // 27: dsc.ListContextResponse
+	(*FsObservation)(nil),             // 28: dsc.FsObservation
+	(*GetObservationRequest)(nil),     // 29: dsc.GetObservationRequest
+	(*GetObservationResponse)(nil),    // 30: dsc.GetObservationResponse
+	(*UpdateObservationRequest)(nil),  // 31: dsc.UpdateObservationRequest
+	(*UpdateObservationResponse)(nil), // 32: dsc.UpdateObservationResponse
+	nil,                               // 33: dsc.ExecuteRequest.ParamsEntry
 }
 var file_dsc_proto_depIdxs = []int32{
-	35, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	33, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	11, // 1: dsc.RunStreamResponse.usage:type_name -> dsc.Usage
 	13, // 2: dsc.ChatRequest.messages:type_name -> dsc.Message
 	14, // 3: dsc.ChatRequest.tools:type_name -> dsc.Tool
@@ -2033,8 +1954,8 @@ var file_dsc_proto_depIdxs = []int32{
 	17, // 6: dsc.ChatStreamResponse.tool_calls:type_name -> dsc.ToolCall
 	11, // 7: dsc.ChatStreamResponse.usage:type_name -> dsc.Usage
 	14, // 8: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
-	30, // 9: dsc.GetObservationResponse.observation:type_name -> dsc.FsObservation
-	30, // 10: dsc.UpdateObservationRequest.observation:type_name -> dsc.FsObservation
+	28, // 9: dsc.GetObservationResponse.observation:type_name -> dsc.FsObservation
+	28, // 10: dsc.UpdateObservationRequest.observation:type_name -> dsc.FsObservation
 	0,  // 11: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
 	2,  // 12: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
 	4,  // 13: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
@@ -2043,42 +1964,40 @@ var file_dsc_proto_depIdxs = []int32{
 	8,  // 16: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
 	0,  // 17: dsc.AgentService.Name:input_type -> dsc.NameRequest
 	2,  // 18: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	18, // 19: dsc.AgentService.SetLLMServiceID:input_type -> dsc.SetLLMServiceIDRequest
-	20, // 20: dsc.AgentService.SetToolServiceID:input_type -> dsc.SetToolServiceIDRequest
-	22, // 21: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
-	12, // 22: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	12, // 23: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
-	0,  // 24: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	2,  // 25: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	6,  // 26: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	24, // 27: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
-	26, // 28: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
-	28, // 29: dsc.ToolService.ListContext:input_type -> dsc.ListContextRequest
-	31, // 30: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
-	33, // 31: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
-	1,  // 32: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	3,  // 33: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	5,  // 34: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	7,  // 35: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	9,  // 36: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	10, // 37: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
-	1,  // 38: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	3,  // 39: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	19, // 40: dsc.AgentService.SetLLMServiceID:output_type -> dsc.SetLLMServiceIDResponse
-	21, // 41: dsc.AgentService.SetToolServiceID:output_type -> dsc.SetToolServiceIDResponse
-	23, // 42: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	15, // 43: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	16, // 44: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
-	1,  // 45: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	3,  // 46: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	7,  // 47: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	25, // 48: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	27, // 49: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	29, // 50: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
-	32, // 51: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
-	34, // 52: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
-	32, // [32:53] is the sub-list for method output_type
-	11, // [11:32] is the sub-list for method input_type
+	18, // 19: dsc.AgentService.RegisterServices:input_type -> dsc.RegisterServicesRequest
+	20, // 20: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
+	12, // 21: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	12, // 22: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
+	0,  // 23: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	2,  // 24: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	6,  // 25: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	22, // 26: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	24, // 27: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	26, // 28: dsc.ToolService.ListContext:input_type -> dsc.ListContextRequest
+	29, // 29: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
+	31, // 30: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
+	1,  // 31: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	3,  // 32: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	5,  // 33: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	7,  // 34: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	9,  // 35: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	10, // 36: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
+	1,  // 37: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	3,  // 38: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	19, // 39: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
+	21, // 40: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	15, // 41: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	16, // 42: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
+	1,  // 43: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	3,  // 44: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	7,  // 45: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	23, // 46: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	25, // 47: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	27, // 48: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
+	30, // 49: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
+	32, // 50: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
+	31, // [31:51] is the sub-list for method output_type
+	11, // [11:31] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
 	11, // [11:11] is the sub-list for extension extendee
 	0,  // [0:11] is the sub-list for field type_name
@@ -2095,7 +2014,7 @@ func file_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dsc_proto_rawDesc), len(file_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   36,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   5,
 		},
