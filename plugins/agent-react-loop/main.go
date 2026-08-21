@@ -37,12 +37,12 @@ type ReactLoopAgent struct {
 	shutdownMu sync.Mutex         // 保護關閉狀態
 	isShutdown bool
 
-	// 多輪對話記憶：跨 Run 保留會話歷史（事件溯源日志，第 6 步）
-	sessMu      sync.Mutex
-	sess        *session.Session
+	// 多輪對話記憶：跨 Run 保留會話歷史（事件溯源日志）
+	sessMu sync.Mutex
+	sess   *session.Session
 	turnCounter int // 轮次编号（跨 Run 递增，对齐 DSH 的 turn 概念）
 
-	// 第 7 步：会话事件日志落盘路径（DSC_SESSION_FILE，缺省 ./session.jsonl）
+	// 会话事件日志落盘路径（DSC_SESSION_FILE，缺省 ./session.jsonl）
 	sessionPath string
 
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
@@ -193,7 +193,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 	}
 
-	// 事件溯源会话：首轮从磁盘恢复（第 7 步）或新建，并构建完整 system prompt；
+	// 事件溯源会话：首轮从磁盘恢复或新建，并构建完整 system prompt；
 	// 工具列表变化时重建 system prompt。
 	// 历史以事件追加进 session（对齐 DSH：模型可见即已记录），不再维护独立消息数组。
 	a.sessMu.Lock()
@@ -220,7 +220,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	sess := a.sess
 	a.sessMu.Unlock()
 
-	// 每次 Run 结束（含错误路径）将事件日志落盘（第 7 步）
+	// 每次 Run 结束（含错误路径）将事件日志落盘
 	defer func() {
 		if err := sess.Save(a.sessionPath); err != nil {
 			fmt.Printf("[Agent Loop] failed to save session: %v\n", err)
@@ -280,7 +280,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			}
 			// 压缩落地（surface replace）：追加 CompactionSummary 事件遮蔽全部旧 surface
 			// 节点，派生历史退化为 [system, 摘要]，但原事件保留在日志（append-only 无损，
-			// 可回放/恢复）。替代提交 2 的「重建会话」临时方案。
+			// 可回放/恢复）。
 			nodes := sess.SurfaceNodes()
 			if len(nodes) > 0 {
 				sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
@@ -534,7 +534,7 @@ const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史
 
 // compactHistory 當上下文已用容量超過 80% 時觸發：讓模型把派生歷史壓縮成摘要。
 // 返回摘要文本（不含 system 消息，避免把基礎指令與技能索引壓進摘要），
-// 由調用方決定落點（第 6 步·提交 2 為重建會話，提交 3 改為 surface replace）。
+// 由調用方決定落點（重建會話或 surface replace 遮蔽）。
 // max_tokens 設為淨餘（contextWindow - lastPromptTokens）的真實值，保證壓縮結果能放入剩餘空間。
 func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLMServiceClient, msgs []*proto.Message, tools []*proto.Tool) (string, error) {
 	if a.contextWindow <= 0 || a.lastPromptTokens <= 0 {
@@ -682,7 +682,7 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	}
 	// 讀取宿主傳入的 preset persona（DSC_PRESET_PERSONA，「你是一個…助手」身份句）
 	agent.persona = os.Getenv("DSC_PRESET_PERSONA")
-	// 第 7 步：会话事件日志落盘路径（DSC_SESSION_FILE，缺省落在插件工作目录）
+	// 会话事件日志落盘路径（DSC_SESSION_FILE，缺省落在插件工作目录）
 	agent.sessionPath = os.Getenv("DSC_SESSION_FILE")
 	if agent.sessionPath == "" {
 		agent.sessionPath = "session.jsonl"

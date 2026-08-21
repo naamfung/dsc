@@ -2,7 +2,7 @@ package session
 
 import "fmt"
 
-// 第 7 步「fork」：从稳定前缀创建子会话（对齐 DSH SessionStore.fork）。
+// 从稳定前缀创建子会话（对齐 DSH SessionStore.fork）。
 // 子会话深拷贝事件日志到 boundary（含）并重建 surface；前缀不得结束于
 // 开放轮次/步骤内（拒绝静默截断）。
 

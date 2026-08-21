@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// 第 7 步「事件日志持久化」：JSONL 落盘与恢复。
+// 事件日志的 JSONL 持久化与恢复。
 //
 // 每行一个事件（JSON 编码），seq 连续，可直接按行回放重建 Session
 // （含 surface 投影与 replaceGeneration）。持久化后端的存储编码是自身的

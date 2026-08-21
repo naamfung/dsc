@@ -2,7 +2,7 @@
 //
 // 对齐 DSH core/session 的设计：仅追加的事件日志 + surface 投影 + 派生模型历史。
 // 模型消息历史由 DeriveMessages 从 surface 派生，从不单独存储。
-// 第 6 步为内存实现；持久化与恢复在后续步骤引入。
+// 当前为内存实现；JSONL 持久化与回放恢复见 persist.go。
 package session
 
 import (
