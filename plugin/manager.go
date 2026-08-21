@@ -147,7 +147,17 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// post-execute 策略 + read_spill 取回工具
 	spillDir := os.Getenv("DSC_SPILL_DIR")
 	if spillDir == "" {
-		spillDir = "./spill"
+		if cfg.ExecDir != "" {
+			spillDir = filepath.Join(cfg.ExecDir, "spill")
+		} else {
+			// 嘗試獲取可執行文件所在目錄
+			if execPath, err := os.Executable(); err == nil {
+				spillDir = filepath.Join(filepath.Dir(execPath), "spill")
+			} else {
+				logger.Warn("spill store: cannot determine executable dir, using default 'spill' dir", "error", err)
+				spillDir = "spill"
+			}
+		}
 	}
 	if store, err := NewSpillStore(spillDir); err == nil {
 		_ = m.toolRegistry.Register(&readSpillTool{store: store})
