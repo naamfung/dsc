@@ -13,3 +13,6 @@ protoc_dir/
 
 _shtest/
 workspace/
+
+# Agent session event log (第 7 步：会话事件日志落盘)
+session.jsonl
