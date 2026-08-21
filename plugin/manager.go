@@ -961,8 +961,7 @@ type SessionSummary struct {
 
 // ListSessions 列出多会话 store 中的会话（读 ExecDir/sessions 目录）。
 func (m *Manager) ListSessions() ([]SessionSummary, error) {
-	dir := filepath.Join(m.config.ExecDir, "sessions")
-	st, err := session.NewStore(dir)
+	st, err := m.sessionStore()
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
@@ -975,6 +974,38 @@ func (m *Manager) ListSessions() ([]SessionSummary, error) {
 		out[i] = SessionSummary{ID: info.ID, Events: info.Events, Preview: info.Preview}
 	}
 	return out, nil
+}
+
+// CreateSession 在多会话 store 中新建会话并返回其 id（TUI /session new 用）。
+func (m *Manager) CreateSession() (string, error) {
+	st, err := m.sessionStore()
+	if err != nil {
+		return "", fmt.Errorf("create session: %w", err)
+	}
+	sess, err := st.Create()
+	if err != nil {
+		return "", fmt.Errorf("create session: %w", err)
+	}
+	return sess.ID(), nil
+}
+
+// DeleteSession 删除指定会话（按文件删除；删除后 agent 侧需切走当前会话，
+// 由调用方保证不删除正在使用的会话）。
+func (m *Manager) DeleteSession(id string) error {
+	st, err := m.sessionStore()
+	if err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	if err := st.Delete(id); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	return nil
+}
+
+// sessionStore 打开/创建多会话 store（ExecDir/sessions）。
+func (m *Manager) sessionStore() (*session.Store, error) {
+	dir := filepath.Join(m.config.ExecDir, "sessions")
+	return session.NewStore(dir)
 }
 
 // ListContext 聚合所有已加載工具插件貢獻的上下文片段（如技能索引），
