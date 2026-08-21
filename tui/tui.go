@@ -228,6 +228,9 @@ type Model struct {
 	// 会话运行指标：turnCount 累计用户提交轮次；stepCount 累计工具调用步数（tool 帧）。
 	turnCount int
 	stepCount int
+
+	// 当前会话 id（初始 default；/session 切换或新建时更新，供 /export 使用）
+	currentSessionID string
 }
 
 // New 创建一个聊天界面模型
@@ -257,14 +260,15 @@ func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 	s.Style = lipgloss.NewStyle().Foreground(accent)
 
 	return &Model{
-		agent:         agent,
-		manager:       manager,
-		ctx:           ctx,
-		modelName:     modelName,
-		mode:          mode,
-		contextWindow: contextWindow,
-		input:         input,
-		spinner:       s,
+		agent:            agent,
+		manager:          manager,
+		ctx:              ctx,
+		modelName:        modelName,
+		mode:             mode,
+		contextWindow:    contextWindow,
+		input:            input,
+		spinner:          s,
+		currentSessionID: "default",
 	}
 }
 
@@ -1166,6 +1170,7 @@ var slashCommands = []compItem{
 	{label: "/session new", insert: "/session new", hint: "新建会话并切换"},
 	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
 	{label: "/session delete", insert: "/session delete ", hint: "删除指定会话（如 /session delete session-3）"},
+	{label: "/export", insert: "/export", hint: "导出当前会话为 Markdown 文件"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -1294,6 +1299,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /session <id>  切换到指定会话（如 /session session-3）",
 			"  /session new  新建会话并切换",
 			"  /session delete <id>  删除指定会话",
+			"  /export    导出当前会话为 Markdown 文件",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 帮助") + "\n" + help)
@@ -1460,6 +1466,23 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.render()
 		m.viewport.GotoBottom()
 		return true, nil
+	case "/export":
+		if m.manager == nil {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		} else {
+			path, err := m.manager.ExportSession(m.currentSessionID)
+			if err != nil {
+				m.appendMessage(errorSty.Render("导出会话失败: ") + err.Error())
+			} else {
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 导出") + fmt.Sprintf("\n已导出会话 %s 到 %s", m.currentSessionID, path))
+			}
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
 	case "/quit", "/exit":
 		return true, tea.Quit
 	}
@@ -1477,6 +1500,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				} else if err := m.agent.SwitchSession(m.ctx, id); err != nil {
 					m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
 				} else {
+					m.currentSessionID = id
 					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已新建并切换到会话 %s。", id))
 				}
 			}
@@ -1497,6 +1521,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			} else if err := m.agent.SwitchSession(m.ctx, rest); err != nil {
 				m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
 			} else {
+				m.currentSessionID = rest
 				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已切换到会话 %s。", rest))
 			}
 		}

@@ -1008,6 +1008,31 @@ func (m *Manager) sessionStore() (*session.Store, error) {
 	return session.NewStore(dir)
 }
 
+// ExportSession 导出指定会话为 Markdown transcript（ExecDir/exports/<id>.md），
+// 返回导出文件路径。
+func (m *Manager) ExportSession(id string) (string, error) {
+	st, err := m.sessionStore()
+	if err != nil {
+		return "", fmt.Errorf("export session: %w", err)
+	}
+	sess, err := st.Load(id)
+	if err != nil {
+		return "", fmt.Errorf("export session: %w", err)
+	}
+	if sess == nil {
+		return "", fmt.Errorf("export session: session %q not found", id)
+	}
+	dir := filepath.Join(m.config.ExecDir, "exports")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("export session: %w", err)
+	}
+	path := filepath.Join(dir, id+".md")
+	if err := os.WriteFile(path, []byte(sess.ExportTranscript()), 0644); err != nil {
+		return "", fmt.Errorf("export session: %w", err)
+	}
+	return path, nil
+}
+
 // ListContext 聚合所有已加載工具插件貢獻的上下文片段（如技能索引），
 // 供 agent 拼接到 system prompt。未實現 ListContext 的舊插件返回 Unimplemented，跳過即可。
 func (m *Manager) ListContext(ctx context.Context) (string, error) {
