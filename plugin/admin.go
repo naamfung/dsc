@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -37,6 +38,7 @@ func (m *Manager) StartAdmin(addr string) {
 	admin.Post("/unload", m.handleUnload)
 	admin.Post("/reload", m.handleReload)
 	admin.Get("/list", m.handleList)
+	admin.Get("/events", m.handleEvents)
 	admin.Post("/metadata", m.handleMetadata)
 
 	go func() {
@@ -105,6 +107,48 @@ func (m *Manager) handleList(c *vodka.Context) error {
 		"status":  "success",
 		"plugins": plugins,
 	})
+}
+
+// handleEvents 以 Server-Sent Events 流推送插件的生命周期状态迁移事件。
+// 订阅者连接后持续收到 "event: state" 帧，数据为 PluginEvent 的 JSON 编码。
+// 用于观测插件状态机的实时迁移，替代轮询 /plugins/list。
+func (m *Manager) handleEvents(c *vodka.Context) error {
+	c.Response.Header().Set("Content-Type", "text/event-stream")
+	c.Response.Header().Set("Cache-Control", "no-cache")
+	c.Response.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := c.Response.Writer.(http.Flusher)
+	if !ok {
+		return vodka.NewHTTPError(http.StatusInternalServerError, "streaming unsupported")
+	}
+
+	ch, cancel := m.Subscribe()
+	defer cancel()
+
+	// 建立连接的握手注释帧，便于客户端确认流已就绪
+	if _, err := fmt.Fprint(c.Response.Writer, ": connected\n\n"); err != nil {
+		return nil
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			b, err := json.Marshal(ev)
+			if err != nil {
+				continue // 序列化失败的事件跳过，不影响连接
+			}
+			if _, err := fmt.Fprintf(c.Response.Writer, "event: state\ndata: %s\n\n", b); err != nil {
+				return nil // 客户端断开
+			}
+			flusher.Flush()
+		case <-c.Request.Context().Done():
+			return nil // 客户端断开，结束订阅
+		}
+	}
 }
 
 // handleMetadata 處理獲取插件元數據請求

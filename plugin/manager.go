@@ -51,6 +51,15 @@ type Manager struct {
 	toolNameToServiceID map[string]uint32    // tool name -> serviceID
 	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
 	states              map[string]*RuntimeState            // 插件名 -> 运行时状态快照
+
+	// 事件总线：插件生命周期状态迁移事件的订阅者表（第 3 步）。
+	// eventsMu 独立于 m.mu，避免状态机持锁发布事件时与订阅操作死锁。
+	eventsMu    sync.RWMutex
+	subscribers map[int]chan PluginEvent
+	nextSubID   int
+
+	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列（第 3 步）。
+	stopHooks map[string][]func() error
 }
 
 type ManagerConfig struct {
@@ -96,6 +105,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		toolClients:         make(map[string]proto.ToolServiceClient),
 		states:              make(map[string]*RuntimeState),
 		pluginLogger:        pluginLogger,
+		subscribers:         make(map[int]chan PluginEvent),
+		stopHooks:           make(map[string][]func() error),
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
@@ -142,6 +153,14 @@ func (m *Manager) transitionLocked(name string, to PluginState, lastErr string) 
 	} else if old != "" {
 		m.logger.Warn("invalid plugin state transition", "name", name, "from", old, "to", to)
 	}
+	m.publishEventLocked(PluginEvent{
+		Name:  name,
+		Type:  st.Type,
+		From:  old,
+		To:    to,
+		Error: st.LastError,
+		Time:  time.Now(),
+	})
 }
 
 // markPendingLocked 把插件置为待办（PENDING）：依赖未满足，暂不对外服务（需已持有 m.mu）。
@@ -152,6 +171,13 @@ func (m *Manager) markPendingLocked(name, typ string, reason string) {
 	if !ok {
 		m.states[name] = &RuntimeState{Type: typ, State: StatePending, UpdatedAt: time.Now(), LastError: reason}
 		m.logger.Info("plugin marked pending", "name", name, "reason", reason)
+		m.publishEventLocked(PluginEvent{
+			Name:  name,
+			Type:  typ,
+			To:    StatePending,
+			Error: reason,
+			Time:  time.Now(),
+		})
 		return
 	}
 	st.Type = typ
@@ -262,6 +288,7 @@ func (m *Manager) Unload(name string) error {
 func (m *Manager) unloadLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
 		m.transitionLocked(name, StateUnloading, "")
+		m.runStopHooksLocked(name) // 对称清理：先撤销工具/优雅关闭，再终止进程
 		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
 		client.Kill()           // 殺死插件子進程
 		delete(m.plugins, name)
@@ -372,6 +399,7 @@ func (m *Manager) UnloadAgent(name string) error {
 func (m *Manager) unloadAgentLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
 		m.transitionLocked(name, StateUnloading, "")
+		m.runStopHooksLocked(name) // 对称清理：先优雅关闭 agent，再终止进程
 		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
 		client.Kill()           // 殺死插件子進程
 		delete(m.agents, name)
@@ -467,6 +495,11 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	m.agents[name] = impl
 	m.typeMap[name] = "agent"
 	m.agentServiceIDs[name] = serviceID
+	// 注册对称清理 hook：卸载/热重载时先优雅关闭 agent，再终止进程
+	ai := impl
+	m.addStopHookLocked(name, func() error {
+		return ai.Shutdown(context.Background(), false)
+	})
 	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, client)
 
@@ -583,6 +616,7 @@ func (m *Manager) UnloadLLM(name string) error {
 func (m *Manager) unloadLLMLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
 		m.transitionLocked(name, StateUnloading, "")
+		m.runStopHooksLocked(name) // 统一对称清理入口（LLM 暂未注册 hook，保持空跑幂等）
 		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
 		client.Kill()           // 殺死插件子進程
 		delete(m.llms, name)
@@ -655,7 +689,8 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new plugin does not implement DSCPlugin interface")
 	}
 
-	// 3. 先更新映射，再杀旧进程（令旧进程的退出监控不再生效）
+	// 3. 先对称清理旧实例，再更新映射（令旧进程的退出监控不再生效）
+	m.runStopHooksLocked(name)
 	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.plugins[name] = newImpl
@@ -730,21 +765,20 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new agent plugin does not implement Agent interface")
 	}
 
-	// 3. 先更新映射，再关旧 agent（旧进程退出监控随之失效）
-	oldAgent := m.agents[name]
+	// 3. 先对称清理旧 agent，再更新映射（旧进程退出监控随之失效）
+	m.runStopHooksLocked(name) // 优雅关闭旧实例
 	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.agents[name] = newImpl
 	m.typeMap[name] = "agent"
-	if oldAgent != nil {
-		// 嘗試優雅關閉，不強制
-		if err := oldAgent.Shutdown(context.Background(), false); err != nil {
-			m.logger.Warn("agent shutdown failed, falling back to kill", "name", name, "error", err)
-		}
-	}
 	if oldClient != nil {
 		oldClient.Kill()
 	}
+	// 为新实例注册对称清理 hook
+	ni := newImpl
+	m.addStopHookLocked(name, func() error {
+		return ni.Shutdown(context.Background(), false)
+	})
 	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, newClient)
 
@@ -791,7 +825,8 @@ func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new LLM plugin does not implement LLMProvider interface")
 	}
 
-	// 3. 先更新映射，再杀旧进程（旧进程退出监控随之失效）
+	// 3. 先对称清理旧实例，再更新映射（旧进程退出监控随之失效）
+	m.runStopHooksLocked(name)
 	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.llms[name] = newImpl
@@ -824,6 +859,7 @@ func (m *Manager) Shutdown() {
 	for name, client := range m.clients {
 		m.transitionLocked(name, StateUnloading, "")
 		delete(m.clients, name) // 先摘除，令退出监控忽略
+		m.runStopHooksLocked(name) // 对称清理后再终止进程
 		client.Kill()
 		m.markDisposedLocked(name)
 		m.logger.Info("plugin killed", "name", name)
@@ -837,6 +873,7 @@ func (m *Manager) Shutdown() {
 	m.toolNameToServiceID = make(map[string]uint32)
 	m.pluginMetadata = make(map[string]*metadata.PluginInfo)
 	m.states = make(map[string]*RuntimeState)
+	m.stopHooks = make(map[string][]func() error)
 }
 
 // ListAgents 列出所有已加載的 Agent 插件
@@ -900,24 +937,13 @@ func (m *Manager) UnloadPlugin(name string) error {
 		return fmt.Errorf("plugin '%s' not found", name)
 	}
 
-	// 從註冊表中移除工具
-	if m.typeMap[name] == "tool" {
-		// 獲取該工具插件註冊的工具名稱列表
-		toolNames, hasToolNames := m.pluginToolNames[name]
-		if hasToolNames {
-			for _, toolName := range toolNames {
-				m.toolRegistry.Unregister(toolName)
-				delete(m.toolNameToServiceID, toolName)
-				m.logger.Info("unregistered tool", "tool", toolName, "plugin", name)
-			}
-		}
-		// 刪除相關記錄
-		delete(m.toolServiceIDs, name)
-		delete(m.pluginToolNames, name)
-		delete(m.toolClients, name)
-	} else if m.typeMap[name] == "llm" {
+	// 对称清理：执行已注册的 stopHook（tool 插件撤销其工具、agent 优雅关闭）；
+	// llm 的 serviceID 映射不依赖 hook，此处保留
+	if m.typeMap[name] == "llm" {
 		delete(m.llmServiceIDs, name)
 	}
+	m.transitionLocked(name, StateUnloading, "")
+	m.runStopHooksLocked(name)
 
 	client.Kill() // 殺死插件子進程
 	delete(m.clients, name)
@@ -926,6 +952,7 @@ func (m *Manager) UnloadPlugin(name string) error {
 	delete(m.llms, name)
 	delete(m.typeMap, name)
 	delete(m.pluginMetadata, name)
+	m.markDisposedLocked(name)
 
 	m.logger.Info("plugin unloaded", "name", name)
 	return nil
@@ -1550,6 +1577,11 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	m.agents[entry.Name] = agent
 	m.typeMap[entry.Name] = "agent"
 	m.agentServiceIDs[entry.Name] = 0 // 占位
+	// 注册对称清理 hook：卸载/热重载时先优雅关闭 agent（进程内清理），再终止进程
+	a := agent
+	m.addStopHookLocked(entry.Name, func() error {
+		return a.Shutdown(context.Background(), false)
+	})
 	m.transitionLocked(entry.Name, StateReady, "")
 	go m.monitorExit(entry.Name, client)
 
@@ -1712,6 +1744,11 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "tool"
 		m.pluginMetadata[entry.Name] = info
+		// 注册对称清理 hook：卸载/热重载时先撤销该插件的全部工具，再终止进程
+		m.addStopHookLocked(entry.Name, func() error {
+			m.unregisterPluginToolsLocked(entry.Name)
+			return nil
+		})
 		m.transitionLocked(entry.Name, StateActive, "")
 		go m.monitorExit(entry.Name, client)
 		m.logger.Info("Tool service registered", "name", entry.Name, "serviceID", serviceID)
