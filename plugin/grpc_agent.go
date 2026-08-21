@@ -143,6 +143,11 @@ func (c *agentGRPCClient) RegisterServices(ctx context.Context, llmServiceID, to
 	return err
 }
 
+func (c *agentGRPCClient) SwitchSession(ctx context.Context, sessionID string) error {
+	_, err := c.client.SwitchSession(ctx, &proto.SwitchSessionRequest{SessionId: sessionID})
+	return err
+}
+
 func (c *agentGRPCClient) Shutdown(ctx context.Context, force bool) error {
 	_, err := c.client.Shutdown(ctx, &proto.ShutdownRequest{Force: force})
 	return err
