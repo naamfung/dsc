@@ -137,6 +137,41 @@ func TestStoreDelete(t *testing.T) {
 	}
 }
 
+// TestStoreListReflectsDeletion 校验删除后列表实时更新（同一 Store 实例，
+// 无缓存：List 每次扫描目录，Delete 立即移除文件）。
+func TestStoreListReflectsDeletion(t *testing.T) {
+	st, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	a, _ := st.Create()
+	appendSurface(t, a, UserMessage, &UserMessageData{Content: "a", Source: "user"})
+	_ = st.Save(a)
+	b, _ := st.Create()
+	appendSurface(t, b, UserMessage, &UserMessageData{Content: "b", Source: "user"})
+	_ = st.Save(b)
+
+	infos, err := st.List()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("listed %d sessions, want 2", len(infos))
+	}
+
+	// 删除 a 后立即 List：同一实例应实时反映只剩 b
+	if err := st.Delete(a.id); err != nil {
+		t.Fatalf("delete %s: %v", a.id, err)
+	}
+	infos, err = st.List()
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != b.id {
+		t.Fatalf("after delete, list = %+v, want only %s", infos, b.id)
+	}
+}
+
 func TestStoreLoadMissing(t *testing.T) {
 	st, err := NewStore(t.TempDir())
 	if err != nil {
