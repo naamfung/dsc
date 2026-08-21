@@ -111,14 +111,21 @@ func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metad
 func main() {
 	// 定義 shell 工具描述
 	baseDescription := "Execute a shell command or script using mvdan/sh interpreter internally (POSIX shell standard). Supports persistent sessions via session_id."
-	pathAdvice := "When working with paths, it is recommended to first use the 'pwd' command to get the current directory path format, and always wrap paths in quotes to ensure safe usage."
 	
+	var pathAdvice string
 	var extraAdvice string
+	
 	if runtime.GOOS == "windows" {
+		pathAdvice = "CRITICAL: In Windows environments, terminal path styles vary (e.g., Git Bash uses '/mnt/d/...', while this terminal supports 'D:/...'). You MUST first run the 'pwd' command to obtain the current directory path format before performing any path operations. Always wrap paths in quotes to ensure safe usage."
 		extraAdvice = "Note: This interpreter does not support PowerShell (PWSH), CMD, or other Windows-specific shell command interpreters. Please use standard Unix/Linux POSIX shell commands only (e.g., ls, find, cd, grep)."
+	} else {
+		pathAdvice = "When working with paths, it is mandatory to first use the 'pwd' command to get the current directory path format, and always wrap paths in quotes to ensure safe usage."
 	}
 
-	description := baseDescription + " " + pathAdvice
+	description := baseDescription
+	if pathAdvice != "" {
+		description += " " + pathAdvice
+	}
 	if extraAdvice != "" {
 		description += " " + extraAdvice
 	}
