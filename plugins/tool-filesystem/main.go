@@ -186,9 +186,15 @@ func main() {
 
 			result := output
 			if exitCode != 0 {
+				// 出錯或有非零退出碼時，無論是否有輸出，都追加 [exit_code: ***]
 				result += fmt.Sprintf("\n[exit_code: %d]\n", exitCode)
 			} else {
-				result += "\n[exit_code: 0]\n"
+				// 成功（exitCode == 0）時
+				if strings.TrimSpace(output) == "" {
+					// 無內容輸出時，輸出 [exit_code: 0]
+					result = "\n[exit_code: 0]\n"
+				}
+				// 有內容輸出時，不輸出 [exit_code: 0]，result 已經是 output
 			}
 			return result, nil
 		},
