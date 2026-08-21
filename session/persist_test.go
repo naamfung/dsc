@@ -1,0 +1,171 @@
+package session
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"dsc/proto"
+)
+
+// buildSample 构造一个包含全部事件类型、且结束于完整轮次的会话。
+func buildSample(t *testing.T) *Session {
+	t.Helper()
+	s := New()
+	s.Append(TurnStart, &TurnData{Turn: 1}, nil)
+	appendSurface(t, s, UserMessage, &UserMessageData{Content: "u1", Source: "user"})
+	s.Append(StepStart, &StepData{Turn: 1, Step: 1}, nil)
+	s.Append(AssistantChunk, &AssistantChunkData{Turn: 1, Step: 1, Content: "hi "}, nil)
+	appendSurface(t, s, AssistantMessage, &AssistantMessageData{
+		Turn: 1, Step: 1, Content: "hi",
+		ToolCalls: []*proto.ToolCall{{Id: "t1", Name: "tool-a", ArgumentsJson: `{"x":1}`}},
+		Usage:     &proto.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	})
+	s.Append(ToolCallEvent, &ToolCallData{Turn: 1, Step: 1, CallID: "t1", Name: "tool-a", Arguments: `{"x":1}`}, nil)
+	appendSurface(t, s, ToolResult, &ToolResultData{Turn: 1, Step: 1, CallID: "t1", Content: "r1"})
+	s.Append(StepEnd, &StepData{Turn: 1, Step: 1}, nil)
+	appendSurface(t, s, UserMessage, &UserMessageData{Content: "u2", Source: "user"})
+	s.Append(StepStart, &StepData{Turn: 1, Step: 2}, nil)
+	appendSurface(t, s, AssistantMessage, &AssistantMessageData{Turn: 1, Step: 2, Content: "a2"})
+	s.Append(StepEnd, &StepData{Turn: 1, Step: 2}, nil)
+	s.Append(TurnEnd, &TurnData{Turn: 1, Reason: "completed"}, nil)
+	return s
+}
+
+func TestSaveLoadRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	orig := buildSample(t)
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	restored, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("load returned nil session")
+	}
+	if restored.Len() != orig.Len() {
+		t.Fatalf("restored len = %d, want %d", restored.Len(), orig.Len())
+	}
+	// 事件逐一比对（seq/time/type/data/surface）
+	oe, re := orig.Events(), restored.Events()
+	for i := range oe {
+		if re[i].Seq != oe[i].Seq || re[i].Type != oe[i].Type {
+			t.Fatalf("event %d mismatch: %+v vs %+v", i, oe[i], re[i])
+		}
+		if (re[i].Surface == nil) != (oe[i].Surface == nil) {
+			t.Fatalf("event %d surface presence mismatch", i)
+		}
+		if re[i].Surface != nil && (*re[i].Surface != *oe[i].Surface) {
+			t.Fatalf("event %d surface = %+v, want %+v", i, re[i].Surface, oe[i].Surface)
+		}
+	}
+	// 派生历史一致（含工具调用）
+	om, rm := orig.DeriveMessages("sys"), restored.DeriveMessages("sys")
+	if len(om) != len(rm) {
+		t.Fatalf("derived %d vs %d messages", len(om), len(rm))
+	}
+	for i := range om {
+		if om[i].Role != rm[i].Role || om[i].Content != rm[i].Content {
+			t.Fatalf("derived msg %d mismatch: %+v vs %+v", i, om[i], rm[i])
+		}
+		if len(om[i].ToolCalls) != len(rm[i].ToolCalls) {
+			t.Fatalf("derived msg %d tool calls mismatch", i)
+		}
+	}
+}
+
+func TestLoadMissingFile(t *testing.T) {
+	s, err := Load(filepath.Join(t.TempDir(), "nope.jsonl"))
+	if err != nil {
+		t.Fatalf("load missing: %v", err)
+	}
+	if s != nil {
+		t.Fatalf("expected nil session for missing file, got %+v", s)
+	}
+}
+
+func TestLoadRejectsNonContiguousSeq(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.jsonl")
+	// 手工构造断号日志
+	if err := writeLines(path, `{"seq":0,"time":1,"type":"user/message","data":{"content":"u","source":"user"},"surface":{"op":"append"}}`, `{"seq":2,"time":2,"type":"user/message","data":{"content":"u2","source":"user"},"surface":{"op":"append"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for non-contiguous seq log")
+	}
+}
+
+func TestLoadRejectsUnknownType(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.jsonl")
+	if err := writeLines(path, `{"seq":0,"time":1,"type":"future/event","data":{},"surface":null}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for unknown event type")
+	}
+}
+
+func TestForkCopiesPrefix(t *testing.T) {
+	orig := buildSample(t)
+	// boundary = 最后一个事件（完整轮次前缀）→ 可 fork
+	child, err := orig.Fork(orig.Len() - 1)
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if child.Len() != orig.Len() {
+		t.Fatalf("child len = %d, want %d", child.Len(), orig.Len())
+	}
+	// 子会话独立追加不影响父会话
+	appendSurface(t, child, UserMessage, &UserMessageData{Content: "child-msg", Source: "user"})
+	if child.Len() != orig.Len()+1 || orig.Len() != buildSample(t).Len() {
+		t.Fatalf("child/orig lens = %d/%d after append, want %d/%d",
+			child.Len(), orig.Len(), buildSample(t).Len()+1, buildSample(t).Len())
+	}
+}
+
+func TestForkRejectsOpenTurn(t *testing.T) {
+	orig := buildSample(t)
+	// boundary = 8（user u2，轮次仍开放）→ 拒绝
+	if _, err := orig.Fork(8); err == nil {
+		t.Fatal("expected error for fork ending inside an open turn")
+	}
+}
+
+func TestForkRejectsOutOfRange(t *testing.T) {
+	orig := buildSample(t)
+	if _, err := orig.Fork(orig.Len()); err == nil {
+		t.Fatal("expected error for out-of-range boundary")
+	}
+}
+
+func TestLastTurn(t *testing.T) {
+	orig := buildSample(t)
+	if got := orig.LastTurn(); got != 1 {
+		t.Fatalf("LastTurn = %d, want 1", got)
+	}
+	empty := New()
+	if got := empty.LastTurn(); got != 0 {
+		t.Fatalf("empty LastTurn = %d, want 0", got)
+	}
+}
+
+func writeLines(path string, lines ...string) error {
+	return os.WriteFile(path, []byte(joinLines(lines...)), 0644)
+}
+
+func joinLines(lines ...string) string {
+	out := ""
+	for i, l := range lines {
+		if i > 0 {
+			out += "\n"
+		}
+		out += l
+	}
+	return out + "\n"
+}
