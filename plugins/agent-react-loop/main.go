@@ -13,6 +13,7 @@ import (
 
 	"dsc/plugin"
 	"dsc/proto"
+	"dsc/session"
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
@@ -31,18 +32,19 @@ type ReactLoopAgent struct {
 	toolClient proto.ToolServiceClient
 
 	// 新增字段
-	cancelFunc    context.CancelFunc // 用於取消當前 Run
-	runWg         sync.WaitGroup     // 等待 Run 完成
-	shutdownMu    sync.Mutex         // 保護關閉狀態
-	isShutdown    bool
+	cancelFunc context.CancelFunc // 用於取消當前 Run
+	runWg      sync.WaitGroup     // 等待 Run 完成
+	shutdownMu sync.Mutex         // 保護關閉狀態
+	isShutdown bool
 
-	// 多輪對話記憶：跨 Run 保留會話歷史
-	historyMu sync.Mutex
-	history   []*proto.Message
+	// 多輪對話記憶：跨 Run 保留會話歷史（事件溯源日志，第 6 步）
+	sessMu      sync.Mutex
+	sess        *session.Session
+	turnCounter int // 轮次编号（跨 Run 递增，对齐 DSH 的 turn 概念）
 
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
-	contextWindow    int        // 總容量（token 數），0 表示未設置（不做自動壓縮）
-	lastPromptTokens int32      // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
+	contextWindow    int           // 總容量（token 數），0 表示未設置（不做自動壓縮）
+	lastPromptTokens int32         // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
 	lastUsage        *plugin.Usage // 最近一次 LLM 請求的完整 usage 信息
 
 	// 記錄上次的工具名稱列表，用於檢測模式是否切換
@@ -188,27 +190,23 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 	}
 
-	// 讀取/追加當前用戶輸入到歷史
-	a.historyMu.Lock()
-	if len(a.history) == 0 {
-		// 第一次對話：構建完整 system prompt（基礎指令 + 各插件貢獻的上下文片段，如技能索引）
+	// 事件溯源会话：首轮创建并构建完整 system prompt；工具列表变化时重建 system prompt。
+	// 历史以事件追加进 session（对齐 DSH：模型可见即已记录），不再维护独立消息数组。
+	a.sessMu.Lock()
+	if a.sess == nil {
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
-		a.history = []*proto.Message{
-			{Role: "system", Content: a.sysPrompt},
-		}
-	} else {
-		// 如果不是第一次對話，且工具列表發生變化（例如模式切換導致工具上下線），則重置 system prompt 並更新歷史中的 system 消息
-		if sysPromptChanged {
-			a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
-			// 更新歷史中的 system 消息為最新的 sysPrompt
-			if len(a.history) > 0 && a.history[0].Role == "system" {
-				a.history[0] = &proto.Message{Role: "system", Content: a.sysPrompt}
-			}
-		}
+		a.sess = session.New()
+	} else if sysPromptChanged {
+		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 	}
-	a.history = append(a.history, &proto.Message{Role: "user", Content: input})
-	currentHistory := a.history
-	a.historyMu.Unlock()
+	a.turnCounter++
+	turnNo := a.turnCounter
+	sess := a.sess
+	a.sessMu.Unlock()
+
+	// 轮次与用户输入作为会话事件记录（turn/start 为 log-only，user/message 进入 surface）
+	sess.Append(session.TurnStart, &session.TurnData{Turn: turnNo}, nil)
+	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user"}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
 	// cancelLoop 返回被取消的结果
 	cancelResult := func() (*plugin.AgentResult, error) {
@@ -223,8 +221,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	if a.singleTurn {
 		maxIterations = 1
 	}
-	executedTools := false     // 記錄本輪是否執行了工具（單輪模式下視為正常完成）
-	executedToolsErr := false  // 記錄本輪執行的工具是否出現錯誤（單輪模式下據此判定退出碼）
+	executedTools := false    // 記錄本輪是否執行了工具（單輪模式下視為正常完成）
+	executedToolsErr := false // 記錄本輪執行的工具是否出現錯誤（單輪模式下據此判定退出碼）
+	stepNo := 0
 	// maxIterations == 0 表示不設上限，僅靠 ctx 取消（用戶 Ctrl+C / Shutdown）與模型自然收尾結束
 	for i := 0; maxIterations == 0 || i < maxIterations; i++ {
 		// 检查 ctx.Done()
@@ -233,6 +232,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			return cancelResult()
 		default:
 		}
+
+		stepNo++
+		// 步骤边界（log-only）
+		sess.Append(session.StepStart, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
 
 		// 上下文自動壓縮：已用容量（最近一次請求的 prompt token 數）超過 80% 時，
 		// 先讓模型把歷史壓縮成摘要，再繼續後續請求（保持簡單的 80% 觸發邏輯）
@@ -245,31 +248,34 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					Status: "tool",
 				})
 			}
-			if err := a.compactHistory(ctx, llmClient, &currentHistory, availableTools); err != nil {
+			summary, err := a.compactHistory(ctx, llmClient, sess.DeriveMessages(a.sysPrompt), availableTools)
+			if err != nil {
 				if emit != nil {
 					emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
 				}
 				return nil, err
 			}
-			// 壓縮後重新取得工具列表可能無變化，直接繼續下一輪
+			// 压缩落地（第 6 步·提交 2 的临时方案）：以摘要重建会话，
+			// 保持与旧实现「整段替换」等价的行为；提交 3 将改为 surface replace 保留日志。
+			ns := session.New()
+			ns.Append(session.UserMessage, &session.UserMessageData{
+				Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
+				Source:  "compaction",
+			}, &session.SurfaceOp{Op: session.SurfaceAppend})
+			a.sessMu.Lock()
+			a.sess = ns
+			a.sessMu.Unlock()
+			sess = ns
+			// 壓縮後已用容量無法從 Chat 精確獲取，重置為 0，下一輪流式調用會更新為真實值
+			a.lastPromptTokens = 0
 		}
 
-		// 上下文管理與截斷
-		const maxMessages = 20
-		if len(currentHistory) > maxMessages {
-			// 保留 system 和 user 第一条，删除中间，保留最后几条
-			// 简单实现：保留前 2 条（system + initial user）和最后 (maxMessages-2) 条
-			kept := currentHistory[:2]
-			tailStart := len(currentHistory) - (maxMessages - 2)
-			if tailStart < 2 {
-				tailStart = 2
-			}
-			currentHistory = append(kept, currentHistory[tailStart:]...)
-		}
+		// 请求历史由会话 surface 派生（system prompt 前置），不再依赖独立消息数组
+		msgs := sess.DeriveMessages(a.sysPrompt)
 
 		// 调用 LLM（流式或非流式）
 		req := &proto.ChatRequest{
-			Messages: currentHistory,
+			Messages: msgs,
 			Tools:    availableTools,
 		}
 		var content string
@@ -314,25 +320,38 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				if cr.Reasoning != "" {
 					emit(&plugin.RunStreamResponse{Reasoning: cr.Reasoning, Status: "reasoning"})
 				}
+				// 原始流分片记入会话（log-only：回放/UI 保真，不参与派生历史）
+				if cr.Content != "" || cr.Reasoning != "" {
+					sess.Append(session.AssistantChunk, &session.AssistantChunkData{
+						Turn: turnNo, Step: stepNo, Content: cr.Content, Reasoning: cr.Reasoning,
+					}, nil)
+				}
 				if len(cr.ToolCalls) > 0 {
 					toolCalls = cr.ToolCalls
 				}
 			}
 		}
 
-		// 追加助手消息（包含文本回复及工具调用；OpenAI 格式要求 assistant 回带 tool_calls）
-		assistantMsg := &proto.Message{
-			Role:    "assistant",
-			Content: content,
+		// 组装后的助手消息记入会话（surface；携带 usage 与工具调用，对齐 DSH assistant/message）
+		lastUsage := &proto.Usage{}
+		if a.lastUsage != nil {
+			lastUsage = &proto.Usage{
+				PromptTokens:     a.lastUsage.PromptTokens,
+				CompletionTokens: a.lastUsage.CompletionTokens,
+				TotalTokens:      a.lastUsage.TotalTokens,
+			}
 		}
-		if len(toolCalls) > 0 {
-			assistantMsg.ToolCalls = toolCalls
-		}
-		currentHistory = append(currentHistory, assistantMsg)
+		sess.Append(session.AssistantMessage, &session.AssistantMessageData{
+			Turn:      turnNo,
+			Step:      stepNo,
+			Content:   content,
+			ToolCalls: toolCalls,
+			Usage:     lastUsage,
+		}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
-		// 没有工具调用 → 返回最终结果（先持久化歷史）
+		// 没有工具调用 → 返回最终结果（轮次以 completed 关闭）
 		if len(toolCalls) == 0 {
-			a.saveHistory(currentHistory)
+			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
 				usage := &plugin.Usage{
@@ -367,6 +386,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			// 标记本轮执行了工具（单轮模式下据此判定为正常完成）
 			executedTools = true
 
+			// 模型请求的工具调用记入会话（log-only，与下方 tool/result 配对）
+			sess.Append(session.ToolCallEvent, &session.ToolCallData{
+				Turn: turnNo, Step: stepNo, CallID: tc.Id, Name: tc.Name, Arguments: tc.ArgumentsJson,
+			}, nil)
+
 			// 向客户端提示正在调用工具（携带工具名与参数 JSON，供 TUI 渲染 REX 式卡片）
 			if emit != nil {
 				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson})
@@ -380,20 +404,20 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			}
 			toolResp, err := toolClient.ExecuteTool(ctx, toolReq)
 			if err != nil {
-				// 错误也追加为 tool 消息
-				currentHistory = append(currentHistory, &proto.Message{
-					Role:       "tool",
-					Content:    fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
-					ToolCallId: tc.Id,
-				})
+				// 错误也作为 tool/result 记入（surface）
+				sess.Append(session.ToolResult, &session.ToolResultData{
+					Turn: turnNo, Step: stepNo, CallID: tc.Id,
+					Content: fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
+					Error:   err.Error(),
+				}, &session.SurfaceOp{Op: session.SurfaceAppend})
 				continue
 			}
 			if toolResp.Error != "" {
-				currentHistory = append(currentHistory, &proto.Message{
-					Role:       "tool",
-					Content:    fmt.Sprintf("Tool error: %s", toolResp.Error),
-					ToolCallId: tc.Id,
-				})
+				sess.Append(session.ToolResult, &session.ToolResultData{
+					Turn: turnNo, Step: stepNo, CallID: tc.Id,
+					Content: fmt.Sprintf("Tool error: %s", toolResp.Error),
+					Error:   toolResp.Error,
+				}, &session.SurfaceOp{Op: session.SurfaceAppend})
 				// 單輪模式下，工具報錯要視為失敗退出（影響退出碼）
 				if a.singleTurn {
 					executedToolsErr = true
@@ -403,20 +427,21 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error})
 				}
 			} else {
-				currentHistory = append(currentHistory, &proto.Message{
-					Role:       "tool",
-					Content:    toolResp.Content,
-					ToolCallId: tc.Id,
-				})
+				sess.Append(session.ToolResult, &session.ToolResultData{
+					Turn: turnNo, Step: stepNo, CallID: tc.Id,
+					Content: toolResp.Content,
+				}, &session.SurfaceOp{Op: session.SurfaceAppend})
 				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
 				if emit != nil {
 					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Content})
 				}
 			}
 		}
+		// 步骤结束（log-only）
+		sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
 	}
-	// 超过最大迭代次数（持久化歷史）
-	a.saveHistory(currentHistory)
+	// 超过最大迭代次数：轮次以 max-iterations 关闭（不再持久化独立消息数组，session 即历史）
+	sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "max-iterations"}, nil)
 	// 單輪模式（-input）下，工具已在本輪執行完畢，視為正常完成（而非“達迭代上限”錯誤），
 	// 這樣一次工具調用測試成功後程序能以退出碼 0 自然結束；若工具報錯則以退出碼 1 結束
 	if a.singleTurn && executedTools {
@@ -477,66 +502,49 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	return strings.Join(parts, "\n\n")
 }
 
-// saveHistory 將當前的會話上下文寫回 agent 歷史，供下一輪 Run 使用
-func (a *ReactLoopAgent) saveHistory(messages []*proto.Message) {
-	a.historyMu.Lock()
-	defer a.historyMu.Unlock()
-	a.history = messages
-}
-
 // compactSystemPrompt 上下文壓縮指令：要求模型只輸出精簡摘要，不添加額外解釋。
 const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史压缩成一段精简但信息完整的摘要，" +
 	"保留用户意图、已执行的工具调用及其结果、以及所有关键的中间结论，以便在后续对话中无需原始记录也能继续。" +
 	"只输出压缩后的摘要，不要输出任何解释、前言或结尾。"
 
-// compactHistory 當上下文已用容量超過 80% 時觸發：讓模型把 history 壓縮成摘要。
+// compactHistory 當上下文已用容量超過 80% 時觸發：讓模型把派生歷史壓縮成摘要。
+// 返回摘要文本（不含 system 消息，避免把基礎指令與技能索引壓進摘要），
+// 由調用方決定落點（第 6 步·提交 2 為重建會話，提交 3 改為 surface replace）。
 // max_tokens 設為淨餘（contextWindow - lastPromptTokens）的真實值，保證壓縮結果能放入剩餘空間。
-func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLMServiceClient, history *[]*proto.Message, tools []*proto.Tool) error {
+func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLMServiceClient, msgs []*proto.Message, tools []*proto.Tool) (string, error) {
 	if a.contextWindow <= 0 || a.lastPromptTokens <= 0 {
-		return nil
+		return "", nil
 	}
 	remaining := a.contextWindow - int(a.lastPromptTokens)
 	if remaining < 1024 {
 		remaining = 1024
 	}
-	// 壓縮請求：以 system 指令引導 + 完整歷史作為 user 內容
+	// 壓縮請求：以 system 指令引導 + 派生歷史作為 user 內容
 	// （跳過歷史中的 system 消息，避免把基礎指令與技能索引壓進摘要）
-	msgs := make([]*proto.Message, 0, len(*history)+2)
-	msgs = append(msgs, &proto.Message{Role: "system", Content: compactSystemPrompt})
-	msgs = append(msgs, &proto.Message{Role: "user", Content: "以下是需要压缩的对话历史："})
-	for _, m := range *history {
+	reqMsgs := make([]*proto.Message, 0, len(msgs)+2)
+	reqMsgs = append(reqMsgs, &proto.Message{Role: "system", Content: compactSystemPrompt})
+	reqMsgs = append(reqMsgs, &proto.Message{Role: "user", Content: "以下是需要压缩的对话历史："})
+	for _, m := range msgs {
 		if m.Role == "system" {
 			continue
 		}
-		msgs = append(msgs, m)
+		reqMsgs = append(reqMsgs, m)
 	}
 
 	req := &proto.ChatRequest{
-		Messages:  msgs,
+		Messages:  reqMsgs,
 		Tools:     tools,
 		MaxTokens: int32(remaining),
 	}
 	resp, err := llmClient.Chat(ctx, req)
 	if err != nil {
-		return fmt.Errorf("compact history failed: %w", err)
+		return "", fmt.Errorf("compact history failed: %w", err)
 	}
 	summary := strings.TrimSpace(resp.Content)
 	if summary == "" {
-		return fmt.Errorf("compact history returned empty summary")
+		return "", fmt.Errorf("compact history returned empty summary")
 	}
-
-	// 用壓縮後的摘要替換歷史（保留完整 system prompt 含技能索引，摘要作為 user 消息）
-	sysPrompt := a.sysPrompt
-	if sysPrompt == "" {
-		sysPrompt = "You are a helpful assistant with access to tools."
-	}
-	*history = []*proto.Message{
-		{Role: "system", Content: sysPrompt},
-		{Role: "user", Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary},
-	}
-	// 壓縮後已用容量無法從 Chat 精確獲取，重置為 0，下一輪流式調用會更新為真實值
-	a.lastPromptTokens = 0
-	return nil
+	return summary, nil
 }
 
 // ensureConnected 建立並快取 LLM/Tool 服務連接。
@@ -567,7 +575,7 @@ func (a *ReactLoopAgent) ensureConnected(llmID, toolID uint32) (proto.LLMService
 	return a.llmClient, a.toolClient, nil
 }
 
-func (a *ReactLoopAgent) Name(ctx context.Context) string { return "react-agent" }
+func (a *ReactLoopAgent) Name(ctx context.Context) string    { return "react-agent" }
 func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
 
 func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
