@@ -20,8 +20,8 @@ import (
 	"github.com/hashicorp/go-hclog"
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/go-version"
-	"gopkg.in/yaml.v3"
 	"google.golang.org/grpc"
+	"gopkg.in/yaml.v3"
 )
 
 // Manager 插件管理器
@@ -40,17 +40,17 @@ type Manager struct {
 	pluginLogger    hclog.Logger                    // logger for go-plugin internal logs
 
 	// 新增字段用於 Broker 和服務 ID 管理
-	broker              *goplugin.GRPCBroker // 統一的 broker，由 Agent 提供
-	mainAgentName       string               // 主 Agent 名稱
+	broker        *goplugin.GRPCBroker // 統一的 broker，由 Agent 提供
+	mainAgentName string               // 主 Agent 名稱
 	// agentToolServiceID 是挂载在 broker 上的“聚合 Tool 服务”ID：汇总所有工具插件注册表的统一入口，
 	// 一次性注入给 Agent（RegisterServices.ToolServiceId），热重载时沿用同一 ID。
 	agentToolServiceID  uint32
-	llmServiceIDs       map[string]uint32    // llm name -> serviceID
-	toolServiceIDs      map[string]uint32    // tool plugin name -> serviceID
-	pluginToolNames     map[string][]string  // tool plugin name -> list of tool names it provides
-	toolNameToServiceID map[string]uint32    // tool name -> serviceID
+	llmServiceIDs       map[string]uint32                  // llm name -> serviceID
+	toolServiceIDs      map[string]uint32                  // tool plugin name -> serviceID
+	pluginToolNames     map[string][]string                // tool plugin name -> list of tool names it provides
+	toolNameToServiceID map[string]uint32                  // tool name -> serviceID
 	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
-	states              map[string]*RuntimeState            // 插件名 -> 运行时状态快照
+	states              map[string]*RuntimeState           // 插件名 -> 运行时状态快照
 
 	// 动态注入插件相关字段：
 	// configPath 动态注入/卸载写回的 config.yaml 路径（config 始终为运行态唯一事实来源）。
@@ -65,6 +65,16 @@ type Manager struct {
 	eventsMu    sync.RWMutex
 	subscribers map[int]chan PluginEvent
 	nextSubID   int
+
+	// events 通用事件分发总线（emit/parallel/serial/bail/waterfall）：
+	// 供工具执行流水线等宿主内扩展点使用，与上面的生命周期推送通道正交。
+	events *EventBus
+
+	// policyClients 已加载 policy 插件的策略服务客户端（按插件名），
+	// 由桥接逻辑包装为工具流水线监听器（替代旁路）。
+	policyClients map[string]proto.FsObservationPolicyServiceClient
+	// policyOff policy 桥接监听器的移除函数（按插件名），卸载时一并撤销。
+	policyOff map[string][]func()
 
 	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
@@ -117,6 +127,9 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		stopHooks:           make(map[string][]func() error),
 		agentEntries:        make(map[string]PluginEntry),
 		pendingEntries:      make(map[string]PluginEntry),
+		events:              NewEventBus(),
+		policyClients:       make(map[string]proto.FsObservationPolicyServiceClient),
+		policyOff:           make(map[string][]func()),
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
@@ -305,8 +318,8 @@ func (m *Manager) unloadLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
 		m.transitionLocked(name, StateUnloading, "")
 		m.runStopHooksLocked(name) // 对称清理：先撤销工具/优雅关闭，再终止进程
-		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
-		client.Kill()           // 殺死插件子進程
+		delete(m.clients, name)    // 先摘除，令退出监控忽略该进程
+		client.Kill()              // 殺死插件子進程
 		delete(m.plugins, name)
 		delete(m.typeMap, name)
 		m.markDisposedLocked(name)
@@ -416,8 +429,8 @@ func (m *Manager) unloadAgentLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
 		m.transitionLocked(name, StateUnloading, "")
 		m.runStopHooksLocked(name) // 对称清理：先优雅关闭 agent，再终止进程
-		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
-		client.Kill()           // 殺死插件子進程
+		delete(m.clients, name)    // 先摘除，令退出监控忽略该进程
+		client.Kill()              // 殺死插件子進程
 		delete(m.agents, name)
 		delete(m.typeMap, name)
 		delete(m.agentServiceIDs, name)
@@ -633,8 +646,8 @@ func (m *Manager) unloadLLMLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
 		m.transitionLocked(name, StateUnloading, "")
 		m.runStopHooksLocked(name) // 统一对称清理入口（LLM 暂未注册 hook，保持空跑幂等）
-		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
-		client.Kill()           // 殺死插件子進程
+		delete(m.clients, name)    // 先摘除，令退出监控忽略该进程
+		client.Kill()              // 殺死插件子進程
 		delete(m.llms, name)
 		delete(m.typeMap, name)
 		m.markDisposedLocked(name)
@@ -874,7 +887,7 @@ func (m *Manager) Shutdown() {
 	defer m.mu.Unlock()
 	for name, client := range m.clients {
 		m.transitionLocked(name, StateUnloading, "")
-		delete(m.clients, name) // 先摘除，令退出监控忽略
+		delete(m.clients, name)    // 先摘除，令退出监控忽略
 		m.runStopHooksLocked(name) // 对称清理后再终止进程
 		client.Kill()
 		m.markDisposedLocked(name)
@@ -908,15 +921,6 @@ func (m *Manager) ListAgents() []string {
 // GetToolRegistry 暴露工具註冊表
 func (m *Manager) GetToolRegistry() *ToolRegistry {
 	return m.toolRegistry
-}
-
-// ExecuteTool 執行工具（供 RPC 調用）
-func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, error) {
-	tool, ok := m.toolRegistry.Get(toolName)
-	if !ok {
-		return "", fmt.Errorf("tool not found: %s", toolName)
-	}
-	return tool.Execute(ctx, argsJSON)
 }
 
 // ListContext 聚合所有已加載工具插件貢獻的上下文片段（如技能索引），
@@ -980,6 +984,12 @@ func (m *Manager) UnloadPlugin(name string) error {
 	delete(m.pluginMetadata, name)
 	delete(m.pendingEntries, name)
 	delete(m.agentEntries, name)
+	// 撤销 policy 桥接的流水线监听器
+	for _, off := range m.policyOff[name] {
+		off()
+	}
+	delete(m.policyOff, name)
+	delete(m.policyClients, name)
 	m.markDisposedLocked(name)
 
 	// 持久化：从 config.yaml 移除该插件声明，使运行态与重启态一致
@@ -1551,7 +1561,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 
 	// 跨平台處理二進制路徑
 	binaryPath := normalizeBinaryPath(entry.BinaryPath)
-	
+
 	// 校驗插件目錄命名規範
 	dirName := getPluginDirectoryName(binaryPath)
 	if err := validatePluginDirectoryName("agent", dirName); err != nil {
@@ -1608,7 +1618,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	m.clients[entry.Name] = client
 	m.agents[entry.Name] = agent
 	m.typeMap[entry.Name] = "agent"
-	m.agentServiceIDs[entry.Name] = 0 // 占位
+	m.agentServiceIDs[entry.Name] = 0  // 占位
 	m.agentEntries[entry.Name] = entry // 记录声明条目（含 DependsOn），供 PENDING 再激活时解析依赖
 	// 注册对称清理 hook：卸载/热重载时先优雅关闭 agent（进程内清理），再终止进程
 	a := agent
@@ -1791,9 +1801,19 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "policy"
 		m.pluginMetadata[entry.Name] = info
+		// 桥接：dial 策略插件的观测服务并注册为工具流水线监听器（替代旁路）
+		conn, err := broker.Dial(serviceID)
+		if err != nil {
+			client.Kill()
+			m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("dial policy service: %v", err))
+			return fmt.Errorf("failed to dial policy service for %s: %w", entry.Name, err)
+		}
+		pc := proto.NewFsObservationPolicyServiceClient(conn)
+		m.policyClients[entry.Name] = pc
+		m.policyOff[entry.Name] = m.bridgePolicyToPipeline(entry.Name, pc)
 		m.transitionLocked(entry.Name, StateActive, "")
 		go m.monitorExit(entry.Name, client)
-		m.logger.Info("Policy plugin loaded", "name", entry.Name, "serviceID", serviceID)
+		m.logger.Info("Policy plugin loaded and bridged to tool pipeline", "name", entry.Name, "serviceID", serviceID)
 
 	default:
 		client.Kill()
