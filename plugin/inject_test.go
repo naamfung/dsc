@@ -200,3 +200,65 @@ func TestReactivateNoopWhenNotPending(t *testing.T) {
 		t.Fatalf("active agent should not be re-registered, got %d calls", ag.calls())
 	}
 }
+
+// TestRepairPendingReactivateLoadedAgent 复现第 5 步端到端验证发现的缺陷：
+// PENDING agent 已随 LoadFromConfig 拉起（存在于 m.agents），但其 LLM 依赖缺失被记入
+// pendingEntries。随后注入 LLM 触发 repairPendingLocked 时，必须对这类“已加载但未激活”
+// 的 agent 执行 reactivateAgentLocked，而非仅因已加载就简单清除待办；且在 LLM 未就绪前
+// 必须保留待办（reactivate 是幂等空操作），不能误移出导致永久丢失再激活机会。
+func TestRepairPendingReactivateLoadedAgent(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	ag := &mockAgent{}
+	agentEntry := PluginEntry{
+		Name: "agent-x", Type: "agent", BinaryPath: "./agent",
+		DependsOn: &PluginDepends{LLM: "anthropic"},
+	}
+
+	m.mu.Lock()
+	m.agents["agent-x"] = ag            // 已拉起（与真实启动一致）
+	m.agentEntries["agent-x"] = agentEntry   // 记录含 DependsOn 的声明
+	m.states["agent-x"] = &RuntimeState{Type: "agent", State: StatePending}
+	m.pendingEntries["agent-x"] = agentEntry  // 依赖缺失，待再激活
+	m.mu.Unlock()
+
+	// LLM 尚未就绪：repair 不应误激活（reactivate 幂等空操作），也不应清除待办
+	if err := m.repairPendingLocked(); err != nil {
+		t.Fatalf("repairPendingLocked errored: %v", err)
+	}
+	m.mu.RLock()
+	_, stillPending := m.pendingEntries["agent-x"]
+	m.mu.RUnlock()
+	if ag.calls() != 0 {
+		t.Fatalf("agent reactivated before LLM ready: %d calls", ag.calls())
+	}
+	if !stillPending {
+		t.Fatalf("agent pending entry should remain while LLM dep is missing")
+	}
+
+	// 注入 LLM（其 llmServiceID 就绪）后再次 repair：
+	// agent 必须被注入 RegisterServices 并置为 Active，且移出待办
+	m.mu.Lock()
+	m.llmServiceIDs["anthropic"] = 55
+	m.mu.Unlock()
+	if err := m.repairPendingLocked(); err != nil {
+		t.Fatalf("repairPendingLocked errored: %v", err)
+	}
+	if ag.calls() != 1 {
+		t.Fatalf("loaded-but-pending agent should have been reactivated once, got %d calls", ag.calls())
+	}
+	if st, _ := m.GetPluginState("agent-x"); st.State != StateActive {
+		t.Fatalf("state = %s, want active after repair with LLM ready", st.State)
+	}
+	m.mu.RLock()
+	_, gone := m.pendingEntries["agent-x"]
+	m.mu.RUnlock()
+	if gone {
+		t.Fatalf("agent-x still in pendingEntries after reactivation")
+	}
+	ag.mu.Lock()
+	got := ag.registerCalls[0]
+	ag.mu.Unlock()
+	if got.llm != 55 {
+		t.Fatalf("RegisterServices llm = %d, want 55", got.llm)
+	}
+}

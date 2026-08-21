@@ -194,6 +194,12 @@ func (m *Manager) markPendingLocked(name, typ string, reason string) {
 	m.transitionLocked(name, StatePending, reason)
 }
 
+// isPendingLocked 判断名为 name 的插件当前是否处于 PENDING（需已持有 m.mu）。
+func (m *Manager) isPendingLocked(name string) bool {
+	st, ok := m.states[name]
+	return ok && st.State == StatePending
+}
+
 // markDisposedLocked 統一卸載終態：Stopping -> Disposed（需已持有 m.mu）。
 func (m *Manager) markDisposedLocked(name string) {
 	m.transitionLocked(name, StateDisposed, "")

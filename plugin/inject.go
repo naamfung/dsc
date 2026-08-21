@@ -127,7 +127,10 @@ func (m *Manager) repairPendingLocked() error {
 	for {
 		progressed := false
 		for name, entry := range m.pendingEntries {
-			if m.pluginLoadedLocked(name) { // 已被其他路径加载，仅清除待办
+			// 仅对 provider 生效：非 agent 条目若已被其他路径加载，仅清除待办。
+			// agent 必然已随 LoadFromConfig 拉起（作为 broker 提供者），“已加载”不代表已激活，
+			// 必须继续走到 reactivateAgentLocked 做依赖注入，否则会漏掉 PENDING agent 的再激活。
+			if entry.Type != "agent" && m.pluginLoadedLocked(name) {
 				delete(m.pendingEntries, name)
 				progressed = true
 				continue
@@ -150,7 +153,15 @@ func (m *Manager) repairPendingLocked() error {
 					return fmt.Errorf("failed to promote plugin %s: %w", name, err)
 				}
 			case "agent":
-				m.reactivateAgentLocked(name) // agent 已拉起，仅做依赖注入与激活
+				// agent 已拉起，仅做依赖注入与激活。reactivateAgentLocked 在 LLM 依赖
+				// 未就绪时是幂等空操作，此时必须保留待办以便后续注入再次尝试，不能仅因
+				// “依赖判定通过”就移出 pendingEntries（否则激活失败后会永久丢失再激活机会）。
+				m.reactivateAgentLocked(name)
+				if !m.isPendingLocked(name) { // 真正激活（离开 PENDING）后才移出待办
+					delete(m.pendingEntries, name)
+					progressed = true
+				}
+				continue
 			}
 			delete(m.pendingEntries, name)
 			progressed = true
