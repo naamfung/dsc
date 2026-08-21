@@ -105,7 +105,7 @@ func UpdateMode(mode string, configPath string) error {
 		// 如果配置文件不存在或加載失敗，創建一個新的配置
 		cfg = &Config{
 			WorkspaceRoot:            "./workspace",
-			WorkspaceProtectionEnabled: false,
+			WorkspaceProtectionEnabled: true,
 			Mode:                     mode,
 			Plugins:                  nil,
 			DefaultLLM:               "",

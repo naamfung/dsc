@@ -397,10 +397,10 @@ func main() {
 	}
 
 	// 從主配置 config/config.yaml 讀取工作空間保護狀態
+	// 默認啟用工作區保護，防止路徑遍歷攻擊
+	plugin.WorkspaceProtectionEnabled = true
 	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
-	if err == nil && mainCfg.WorkspaceProtectionEnabled {
-		plugin.WorkspaceProtectionEnabled = true
-	} else {
+	if err == nil && mainCfg != nil && !mainCfg.WorkspaceProtectionEnabled {
 		plugin.WorkspaceProtectionEnabled = false
 	}
 	logger.Info("workspace protection enabled", "enabled", plugin.WorkspaceProtectionEnabled)
@@ -578,10 +578,10 @@ func main() {
 	if !ok {
 		fail("agent %s not found after loading", agentName)
 	}
-	// 告訴 Agent 主進程 ToolService 代理的 serviceID；否則 agent-react-loop 的 toolServiceID 為 0，
+	// 一次性注入 Agent 的 LLM 與 Tool serviceID；否則 agent-react-loop 的 toolServiceID 為 0，
 	// 首條消息會直接返回 "service IDs not set" 錯誤（並被靜默吞掉，表現為無響應）
-	if err := agent.SetToolServiceID(context.Background(), toolServiceID); err != nil {
-		fail("failed to set tool service ID on agent: %v", err)
+	if err := agent.RegisterServices(context.Background(), llmServiceID, toolServiceID); err != nil {
+		fail("failed to register agent services: %v", err)
 	}
 
 	// 从配置中提取 LLM 模型名称

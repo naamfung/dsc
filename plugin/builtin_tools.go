@@ -12,8 +12,23 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-var WorkspaceRoot = "./workspace" // 可改為環境變數或配置
+// WorkspaceRoot 默認工作空間目錄，基於程序可執行文件所在目錄
+var WorkspaceRoot string
+
+// WorkspaceProtectionEnabled 工作空間保護開關
 var WorkspaceProtectionEnabled = false // 默認關閉工作空間機制保護，允許模型訪問整個文件系統而不作限制
+
+func init() {
+	// 初始化 WorkspaceRoot 為基於程序可執行文件所在目錄的 workspace 目錄
+	exePath, err := os.Executable()
+	if err != nil {
+		// 若無法獲取可執行文件路徑，則回退到相對路徑 ./workspace
+		WorkspaceRoot = "./workspace"
+	} else {
+		execDir := filepath.Dir(exePath)
+		WorkspaceRoot = filepath.Join(execDir, "workspace")
+	}
+}
 
 // isAbsPath 檢查路徑是否為絕對路徑（支持 Windows 盤符絕對路徑如 C:\ 或 C:/，以及 Unix 絕對路徑如 /xxx）
 func isAbsPath(path string) bool {
