@@ -1,6 +1,6 @@
 package plugin
 
-// stopHooks 对称清理 hook 的机制（第 3 步交付）。
+// stopHooks 对称清理 hook 的机制。
 //
 // 进程式插件由宿主 Kill 子进程即消亡，无法真正在插件进程内执行对称的 Start/Stop 回调。
 // 作为向 DSH(进程内 Cordis) 语义的映射，将「可逆清理」收敛到宿主侧：插件加载成功时，

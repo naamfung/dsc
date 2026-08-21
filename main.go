@@ -290,7 +290,7 @@ func main() {
 	})
 	defer mgr.Shutdown()
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
-	// 使运行期增删的插件在进程重启后依旧保留（第 4 步）
+	// 使运行期增删的插件在进程重启后依旧保留
 	mgr.SetConfigPath(filepath.Join(execDir, "config", "config.yaml"))
 
 	// fail 記錄錯誤後先清理已加載的插件子進程再退出，避免 os.Exit 跳過 defer 導致殘留孤兒進程
@@ -300,7 +300,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ===== 声明式加载（第 2 步）：合并 config.yaml + preset，交给 Manager 按 DependsOn 拓扑加载 =====
+	// ===== 声明式加载：合并 config.yaml + preset，交给 Manager 按 DependsOn 拓扑加载 =====
 	ext := ""
 	if runtime.GOOS == "windows" {
 		ext = ".exe"

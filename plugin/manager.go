@@ -52,7 +52,7 @@ type Manager struct {
 	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
 	states              map[string]*RuntimeState            // 插件名 -> 运行时状态快照
 
-	// 第 4 步「动态注入插件」新增字段：
+	// 动态注入插件相关字段：
 	// configPath 动态注入/卸载写回的 config.yaml 路径（config 始终为运行态唯一事实来源）。
 	// agentEntries  记录已声明的 agent 条目（含 DependsOn），供 PENDING agent 再激活时解析依赖。
 	// pendingEntries 记录依赖未满足、等待后续注入的插件条目（provider 未拉起，agent 已拉起）。
@@ -60,13 +60,13 @@ type Manager struct {
 	agentEntries   map[string]PluginEntry
 	pendingEntries map[string]PluginEntry
 
-	// 事件总线：插件生命周期状态迁移事件的订阅者表（第 3 步）。
+	// 事件总线：插件生命周期状态迁移事件的订阅者表。
 	// eventsMu 独立于 m.mu，避免状态机持锁发布事件时与订阅操作死锁。
 	eventsMu    sync.RWMutex
 	subscribers map[int]chan PluginEvent
 	nextSubID   int
 
-	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列（第 3 步）。
+	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
 }
 
@@ -1080,7 +1080,7 @@ func (m *Manager) GetMainAgentName() string {
 }
 
 // LoadPlugin 动态加载/注入插件（供 Admin /plugins/load 使用）。
-// 第 4 步起委托给 inject.go 的 injectionEntryLocked，做完整的端到端注入：
+// 委托给 inject.go 的 injectionEntryLocked，做完整的端到端注入：
 // 依赖判定（未满足→PENDING）、声明持久化（写回 config.yaml）、等待中的 PENDING 提升与 agent 再激活。
 func (m *Manager) LoadPlugin(entry PluginEntry) error {
 	m.mu.Lock()
@@ -1313,7 +1313,7 @@ func CheckCircularDependencies(entries []PluginEntry) error {
 	return nil
 }
 
-// LoadFromConfig 声明式加载所有插件（第 2 步交付）：
+// LoadFromConfig 声明式加载所有插件：
 // 复用配置中的 DependsOn/Type，在 Manager 内做依赖拓扑排序，取代原先由 Main 宿主手工编排加载序、
 // 手工两段式注入依赖的做法。流程：
 //  1. Agent 作为 broker 提供者优先拉起进程（获取 broker），但先不激活（状态 Ready/PENDING）；
@@ -1374,7 +1374,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	sorted, pending := topoSortPlugins(providerEntries, declared)
 	for _, e := range pending {
 		m.markPendingLocked(e.Name, e.Type, "dependency not satisfied")
-		m.pendingEntries[e.Name] = e // 记录待办条目，供动态注入补足依赖后提升（第 4 步）
+		m.pendingEntries[e.Name] = e // 记录待办条目，供动态注入补足依赖后提升
 	}
 	for _, entry := range sorted {
 		if err := m.loadProviderDeclarativeLocked(entry); err != nil {
@@ -1413,7 +1413,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		m.logger.Info("agent activated declaratively", "name", agentEntry.Name, "llmID", m.agentServiceIDs[agentEntry.Name], "toolID", toolID)
 	} else {
 		m.markPendingLocked(agentEntry.Name, "agent", "dependent LLM not loaded")
-		m.pendingEntries[agentEntry.Name] = *agentEntry // 记录待再激活的 agent 条目（第 4 步）
+		m.pendingEntries[agentEntry.Name] = *agentEntry // 记录待再激活的 agent 条目
 		m.logger.Warn("agent deferred to pending (missing LLM dependency)", "name", agentEntry.Name)
 	}
 

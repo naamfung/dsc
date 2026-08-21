@@ -72,7 +72,7 @@ func TestPersistInjectionUpsertAndRemoval(t *testing.T) {
 
 // TestPersistInjectionPreservesFile 校验 yaml.Node 保留法：
 // 注入写回只增改 plugins 序列——原文件的注释与未声明字段的缺省语义保留，
-// 不再把 WorkspaceProtectionEnabled 等零值字段补齐进 config.yaml（第 5 步推敲发现）。
+// 不再把 WorkspaceProtectionEnabled 等零值字段补齐进 config.yaml。
 func TestPersistInjectionPreservesFile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
@@ -264,7 +264,7 @@ func TestReactivateNoopWhenNotPending(t *testing.T) {
 	}
 }
 
-// TestRepairPendingReactivateLoadedAgent 复现第 5 步端到端验证发现的缺陷：
+// TestRepairPendingReactivateLoadedAgent 复现端到端验证发现的缺陷：
 // PENDING agent 已随 LoadFromConfig 拉起（存在于 m.agents），但其 LLM 依赖缺失被记入
 // pendingEntries。随后注入 LLM 触发 repairPendingLocked 时，必须对这类“已加载但未激活”
 // 的 agent 执行 reactivateAgentLocked，而非仅因已加载就简单清除待办；且在 LLM 未就绪前
