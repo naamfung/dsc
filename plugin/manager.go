@@ -47,6 +47,7 @@ type Manager struct {
 	pluginToolNames     map[string][]string  // tool plugin name -> list of tool names it provides
 	toolNameToServiceID map[string]uint32    // tool name -> serviceID
 	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
+	states              map[string]*RuntimeState            // 插件名 -> 运行时状态快照
 }
 
 type ManagerConfig struct {
@@ -90,11 +91,85 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		pluginToolNames:     make(map[string][]string),
 		toolNameToServiceID: make(map[string]uint32),
 		toolClients:         make(map[string]proto.ToolServiceClient),
+		states:              make(map[string]*RuntimeState),
 		pluginLogger:        pluginLogger,
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
 	return m
+}
+
+// trackStateLocked 在加载入口预置 Spawned 状态（需已持有 m.mu）。
+// 若插件已有更靠后的状态（如热重载中途失败重试），不强制回退。
+func (m *Manager) trackStateLocked(name, typ string) {
+	st, ok := m.states[name]
+	if !ok {
+		m.states[name] = &RuntimeState{Type: typ}
+		st = m.states[name]
+	}
+	if st.State == "" {
+		st.State = StateSpawned
+		st.UpdatedAt = time.Now()
+	}
+}
+
+// transitionLocked 迁移插件状态并落盘快照（需已持有 m.mu）。
+// 记录 to 时的错误信息；非法迁移会告警，便于暴露流程漏步。
+func (m *Manager) transitionLocked(name string, to PluginState, lastErr string) {
+	st, ok := m.states[name]
+	if !ok {
+		st = &RuntimeState{}
+		m.states[name] = st
+	}
+	old := st.State
+	if lastErr != "" {
+		st.LastError = lastErr
+	}
+	if to == StateFailed && lastErr == "" && st.LastError != "" {
+		// 保留上一次错误信息
+	}
+	st.State = to
+	st.UpdatedAt = time.Now()
+
+	if old == to {
+		return
+	}
+	if validPluginTransition(old, to) {
+		m.logger.Info("plugin state transition", "name", name, "from", old, "to", to)
+	} else if old != "" {
+		m.logger.Warn("invalid plugin state transition", "name", name, "from", old, "to", to)
+	}
+}
+
+// markDisposedLocked 统一卸载终态：Stopping -> Disposed（需已持有 m.mu）。
+func (m *Manager) markDisposedLocked(name string) {
+	m.transitionLocked(name, StateDisposed, "")
+}
+
+// monitorExit 监听子进程退出事件：仅当退出进程仍是当前注册的 client 且非主动卸载时，
+// 才把插件标记为 Failed，使崩溃可观测而非静默消失。热重载换进程后旧 client 的调用会被忽略。
+// 当前 go-plugin 版本仅暴露 Exited() bool（无等待通道），故采用轻量轮询。
+func (m *Manager) monitorExit(name string, client *goplugin.Client) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !client.Exited() {
+			continue
+		}
+		m.mu.Lock()
+		// 该进程已被卸载/替换，退出本次监控
+		if m.clients[name] != client {
+			m.mu.Unlock()
+			return
+		}
+		st := m.states[name]
+		unexpected := st == nil || (st.State != StateDisposed && st.State != StateFailed)
+		if unexpected {
+			m.transitionLocked(name, StateFailed, "plugin process exited unexpectedly")
+		}
+		m.mu.Unlock()
+		return
+	}
 }
 
 // Load 加載一個插件（啟動子進程）
@@ -109,6 +184,7 @@ func (m *Manager) Load(name string, binaryPath string) error {
 	if _, exists := m.plugins[name]; exists {
 		m.unloadLocked(name)
 	}
+	m.trackStateLocked(name, "dsc")
 
 	// 創建插件客戶端
 	cmd := exec.Command(binaryPath)
@@ -129,25 +205,31 @@ func (m *Manager) Load(name string, binaryPath string) error {
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to connect to plugin: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	// 獲取插件實例
 	raw, err := rpcClient.Dispense("dsc_plugin")
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to dispense plugin: %w", err)
 	}
 
 	impl, ok := raw.(DSCPlugin)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, "plugin does not implement DSCPlugin interface")
 		return fmt.Errorf("plugin does not implement DSCPlugin interface")
 	}
 
 	m.clients[name] = client
 	m.plugins[name] = impl
 	m.typeMap[name] = "dsc"
+	m.transitionLocked(name, StateReady, "")
+	go m.monitorExit(name, client)
 
 	m.logger.Info("plugin loaded", "name", name)
 	return nil
@@ -162,10 +244,12 @@ func (m *Manager) Unload(name string) error {
 
 func (m *Manager) unloadLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
-		client.Kill() // 殺死插件子進程
-		delete(m.clients, name)
+		m.transitionLocked(name, StateUnloading, "")
+		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
+		client.Kill()           // 殺死插件子進程
 		delete(m.plugins, name)
 		delete(m.typeMap, name)
+		m.markDisposedLocked(name)
 		m.logger.Info("plugin unloaded", "name", name)
 		return nil
 	}
@@ -207,6 +291,7 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	if _, exists := m.agents[name]; exists {
 		m.unloadAgentLocked(name)
 	}
+	m.trackStateLocked(name, "agent")
 
 	// 構建命令，加入 -llm-service-id 參數
 	cmdArgs := []string{"-llm-service-id", strconv.FormatUint(uint64(serviceID), 10)}
@@ -230,25 +315,31 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to connect to agent plugin: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	// 獲取插件實例
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to dispense agent plugin: %w", err)
 	}
 
 	impl, ok := raw.(Agent)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, "plugin does not implement Agent interface")
 		return fmt.Errorf("plugin does not implement Agent interface")
 	}
 
 	m.clients[name] = client
 	m.agents[name] = impl
 	m.typeMap[name] = "agent"
+	m.transitionLocked(name, StateReady, "")
+	go m.monitorExit(name, client)
 
 	m.logger.Info("agent plugin loaded", "name", name)
 	return nil
@@ -263,11 +354,13 @@ func (m *Manager) UnloadAgent(name string) error {
 
 func (m *Manager) unloadAgentLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
-		client.Kill() // 殺死插件子進程
-		delete(m.clients, name)
+		m.transitionLocked(name, StateUnloading, "")
+		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
+		client.Kill()           // 殺死插件子進程
 		delete(m.agents, name)
 		delete(m.typeMap, name)
 		delete(m.agentServiceIDs, name)
+		m.markDisposedLocked(name)
 		m.logger.Info("agent plugin unloaded", "name", name)
 		return nil
 	}
@@ -299,6 +392,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	if _, exists := m.agents[name]; exists {
 		m.unloadAgentLocked(name)
 	}
+	m.trackStateLocked(name, "agent")
 
 	// 創建插件客戶端（先不傳遞 serviceID，稍後通過 broker 生成）
 	cmd := exec.Command(binaryPath)
@@ -321,12 +415,15 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return nil, 0, fmt.Errorf("failed to connect to agent plugin: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, "agent plugin is not a gRPC client")
 		return nil, 0, fmt.Errorf("agent plugin is not a gRPC client")
 	}
 
@@ -338,12 +435,14 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return nil, 0, fmt.Errorf("failed to dispense agent plugin: %w", err)
 	}
 
 	impl, ok := raw.(Agent)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, "plugin does not implement Agent interface")
 		return nil, 0, fmt.Errorf("plugin does not implement Agent interface")
 	}
 
@@ -352,6 +451,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	_, err = agentClient.SetLLMServiceID(context.Background(), &proto.SetLLMServiceIDRequest{ServiceId: serviceID})
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return nil, 0, fmt.Errorf("failed to set service ID on agent: %w", err)
 	}
 
@@ -359,6 +459,8 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 	m.agents[name] = impl
 	m.typeMap[name] = "agent"
 	m.agentServiceIDs[name] = serviceID
+	m.transitionLocked(name, StateActive, "")
+	go m.monitorExit(name, client)
 
 	m.logger.Info("agent plugin loaded", "name", name, "serviceID", serviceID)
 	return broker, serviceID, nil
@@ -379,6 +481,7 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 	if _, exists := m.llms[name]; exists {
 		m.unloadLLMLocked(name)
 	}
+	m.trackStateLocked(name, "llm")
 
 	// 創建插件客戶端
 	cmd := exec.Command(binaryPath)
@@ -402,25 +505,31 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to connect to LLM plugin: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	// 獲取插件實例
 	raw, err := rpcClient.Dispense("llm")
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to dispense LLM plugin: %w", err)
 	}
 
 	impl, ok := raw.(LLMProvider)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(name, StateFailed, "plugin does not implement LLMProvider interface")
 		return fmt.Errorf("plugin does not implement LLMProvider interface")
 	}
 
 	m.clients[name] = client
 	m.llms[name] = impl
 	m.typeMap[name] = "llm"
+	m.transitionLocked(name, StateReady, "")
+	go m.monitorExit(name, client)
 
 	m.logger.Info("llm plugin loaded", "name", name)
 	return nil
@@ -443,10 +552,12 @@ func (m *Manager) UnloadLLM(name string) error {
 
 func (m *Manager) unloadLLMLocked(name string) error {
 	if client, exists := m.clients[name]; exists {
-		client.Kill() // 殺死插件子進程
-		delete(m.clients, name)
+		m.transitionLocked(name, StateUnloading, "")
+		delete(m.clients, name) // 先摘除，令退出监控忽略该进程
+		client.Kill()           // 殺死插件子進程
 		delete(m.llms, name)
 		delete(m.typeMap, name)
+		m.markDisposedLocked(name)
 		m.logger.Info("llm plugin unloaded", "name", name)
 		return nil
 	}
@@ -495,29 +606,35 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 	rpcClient, err := newClient.Client()
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("new plugin connection failed: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	raw, err := rpcClient.Dispense("dsc_plugin")
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("dispense new plugin failed: %w", err)
 	}
 
 	newImpl, ok := raw.(DSCPlugin)
 	if !ok {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, "new plugin does not implement DSCPlugin interface")
 		return fmt.Errorf("new plugin does not implement DSCPlugin interface")
 	}
 
-	// 2. 卸載舊 client（若存在）
-	if oldClient, exists := m.clients[name]; exists {
-		oldClient.Kill()
-	}
-	// 3. 更新映射
+	// 3. 先更新映射，再杀旧进程（令旧进程的退出监控不再生效）
+	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.plugins[name] = newImpl
 	m.typeMap[name] = "dsc"
+	if oldClient != nil {
+		oldClient.Kill()
+	}
+	m.transitionLocked(name, StateReady, "")
+	go m.monitorExit(name, newClient)
 
 	m.logger.Info("plugin hot-reloaded", "name", name)
 	return nil
@@ -548,12 +665,15 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	rpcClient, err := newClient.Client()
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("new agent plugin connection failed: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
 	if !ok {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, "new agent plugin is not a gRPC client")
 		return fmt.Errorf("new agent plugin is not a gRPC client")
 	}
 
@@ -562,36 +682,41 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	_, err = agentClient.SetLLMServiceID(context.Background(), &proto.SetLLMServiceIDRequest{ServiceId: oldServiceID})
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to set service ID on agent: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("dispense new agent plugin failed: %w", err)
 	}
 
 	newImpl, ok := raw.(Agent)
 	if !ok {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, "new agent plugin does not implement Agent interface")
 		return fmt.Errorf("new agent plugin does not implement Agent interface")
 	}
 
-	// 2. 卸載舊 client（若存在），先嘗試優雅關閉
-	if oldAgent, exists := m.agents[name]; exists {
-		// 嘗試優雅關閉，不強制
-		err := oldAgent.Shutdown(context.Background(), false)
-		if err != nil {
-			m.logger.Warn("agent shutdown failed, falling back to kill", "name", name, "error", err)
-		}
-	}
-	if oldClient, exists := m.clients[name]; exists {
-		oldClient.Kill()
-	}
-	// 3. 更新映射
+	// 3. 先更新映射，再关旧 agent（旧进程退出监控随之失效）
+	oldAgent := m.agents[name]
+	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.agents[name] = newImpl
 	m.typeMap[name] = "agent"
+	if oldAgent != nil {
+		// 嘗試優雅關閉，不強制
+		if err := oldAgent.Shutdown(context.Background(), false); err != nil {
+			m.logger.Warn("agent shutdown failed, falling back to kill", "name", name, "error", err)
+		}
+	}
+	if oldClient != nil {
+		oldClient.Kill()
+	}
+	m.transitionLocked(name, StateActive, "")
+	go m.monitorExit(name, newClient)
 
 	m.logger.Info("agent plugin hot-reloaded", "name", name, "serviceID", oldServiceID)
 	return nil
@@ -617,29 +742,35 @@ func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 	rpcClient, err := newClient.Client()
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("new LLM plugin connection failed: %w", err)
 	}
+	m.transitionLocked(name, StateConnecting, "")
 
 	raw, err := rpcClient.Dispense("llm")
 	if err != nil {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("dispense new LLM plugin failed: %w", err)
 	}
 
 	newImpl, ok := raw.(LLMProvider)
 	if !ok {
 		newClient.Kill()
+		m.transitionLocked(name, StateFailed, "new LLM plugin does not implement LLMProvider interface")
 		return fmt.Errorf("new LLM plugin does not implement LLMProvider interface")
 	}
 
-	// 2. 卸載舊 client（若存在）
-	if oldClient, exists := m.clients[name]; exists {
-		oldClient.Kill()
-	}
-	// 3. 更新映射
+	// 3. 先更新映射，再杀旧进程（旧进程退出监控随之失效）
+	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.llms[name] = newImpl
 	m.typeMap[name] = "llm"
+	if oldClient != nil {
+		oldClient.Kill()
+	}
+	m.transitionLocked(name, StateActive, "")
+	go m.monitorExit(name, newClient)
 
 	m.logger.Info("LLM plugin hot-reloaded", "name", name)
 	return nil
@@ -661,7 +792,10 @@ func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for name, client := range m.clients {
+		m.transitionLocked(name, StateUnloading, "")
+		delete(m.clients, name) // 先摘除，令退出监控忽略
 		client.Kill()
+		m.markDisposedLocked(name)
 		m.logger.Info("plugin killed", "name", name)
 	}
 	m.clients = make(map[string]*goplugin.Client)
@@ -672,6 +806,7 @@ func (m *Manager) Shutdown() {
 	m.agentServiceIDs = make(map[string]uint32)
 	m.toolNameToServiceID = make(map[string]uint32)
 	m.pluginMetadata = make(map[string]*metadata.PluginInfo)
+	m.states = make(map[string]*RuntimeState)
 }
 
 // ListAgents 列出所有已加載的 Agent 插件
@@ -768,39 +903,75 @@ func (m *Manager) UnloadPlugin(name string) error {
 
 // PluginInfoSummary 插件信息摘要
 type PluginInfoSummary struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Version string `json:"version"`
-	Enabled bool   `json:"enabled"`
+	Name    string      `json:"name"`
+	Type    string      `json:"type"`
+	Version string      `json:"version"`
+	Enabled bool        `json:"enabled"`
+	State   PluginState `json:"state"`
 }
 
-// ListPlugins 返回所有已加載插件的列表
+// ListPlugins 返回所有已加載插件的列表，并携带运行时状态。
+// 除当前已注册/已加载的插件外，也会带上已卸载(disposed/failed)的终态插件，便于观测最近失败或下线的插件。
 func (m *Manager) ListPlugins() []PluginInfoSummary {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	seen := make(map[string]bool, len(m.pluginMetadata)+len(m.typeMap)+len(m.states))
 	var plugins []PluginInfoSummary
-	for name, info := range m.pluginMetadata {
-		plugins = append(plugins, PluginInfoSummary{
-			Name:    name,
-			Type:    info.Type,
-			Version: info.Version,
-			Enabled: true,
-		})
-	}
-	for name, typ := range m.typeMap {
-		// 如果已經在 pluginMetadata 中，則跳過
-		if _, exists := m.pluginMetadata[name]; exists {
-			continue
+
+	add := func(name, typ, version string, enabled bool, state PluginState) {
+		if seen[name] {
+			return
 		}
+		seen[name] = true
 		plugins = append(plugins, PluginInfoSummary{
 			Name:    name,
 			Type:    typ,
-			Version: "unknown",
-			Enabled: true,
+			Version: version,
+			Enabled: enabled,
+			State:   state,
 		})
 	}
+
+	for name, info := range m.pluginMetadata {
+		st := m.states[name]
+		state := StateActive
+		if st != nil {
+			state = st.State
+		}
+		add(name, info.Type, info.Version, true, state)
+	}
+	for name, typ := range m.typeMap {
+		if seen[name] {
+			continue
+		}
+		st := m.states[name]
+		state := StateReady
+		if st != nil {
+			state = st.State
+		}
+		add(name, typ, "unknown", true, state)
+	}
+	// 已卸载/失败的终态插件：保留观测，不视为启用中
+	for name, st := range m.states {
+		if seen[name] {
+			continue
+		}
+		enabled := st.State == StateFailed // 失败仍属目标集合，可重试
+		add(name, st.Type, "unknown", enabled, st.State)
+	}
 	return plugins
+}
+
+// GetPluginState 获取指定插件的当前运行时状态。
+func (m *Manager) GetPluginState(name string) (RuntimeState, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	st, ok := m.states[name]
+	if !ok {
+		return RuntimeState{}, false
+	}
+	return *st, true
 }
 
 // GetPluginMetadata 獲取特定插件的元數據
@@ -1138,6 +1309,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		if err := agent.SetToolServiceID(context.Background(), toolID); err != nil && hasTool {
 			return fmt.Errorf("failed to set Tool service ID: %w", err)
 		}
+		m.transitionLocked(agentEntry.Name, StateActive, "")
 		m.logger.Info("agent dependencies set", "llmID", llmID, "toolID", toolID)
 	}
 
@@ -1150,6 +1322,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	if _, exists := m.agents[entry.Name]; exists {
 		m.unloadAgentLocked(entry.Name)
 	}
+	m.trackStateLocked(entry.Name, "agent")
 
 	// 跨平台處理二進制路徑
 	binaryPath := normalizeBinaryPath(entry.BinaryPath)
@@ -1178,12 +1351,15 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, err.Error())
 		return nil, nil, fmt.Errorf("failed to connect to agent plugin: %w", err)
 	}
+	m.transitionLocked(entry.Name, StateConnecting, "")
 
 	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, "agent plugin is not a gRPC client")
 		return nil, nil, fmt.Errorf("agent plugin is not a gRPC client")
 	}
 
@@ -1193,11 +1369,13 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, err.Error())
 		return nil, nil, fmt.Errorf("failed to dispense agent plugin: %w", err)
 	}
 	agent, ok := raw.(Agent)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, "plugin does not implement Agent interface")
 		return nil, nil, fmt.Errorf("plugin does not implement Agent interface")
 	}
 
@@ -1206,6 +1384,8 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*goplugin.GRPCBroker
 	m.agents[entry.Name] = agent
 	m.typeMap[entry.Name] = "agent"
 	m.agentServiceIDs[entry.Name] = 0 // 占位
+	m.transitionLocked(entry.Name, StateReady, "")
+	go m.monitorExit(entry.Name, client)
 
 	m.logger.Info("agent plugin loaded for broker", "name", entry.Name)
 	return broker, agent, nil
@@ -1230,6 +1410,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	if err := validatePluginDirectoryName(entry.Type, dirName); err != nil {
 		return fmt.Errorf("invalid plugin directory name '%s' for type '%s': %w", dirName, entry.Type, err)
 	}
+	m.trackStateLocked(entry.Name, entry.Type)
 
 	// 創建客戶端
 	cmd := exec.Command(binaryPath)
@@ -1250,12 +1431,15 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	rpcClient, err := client.Client()
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, err.Error())
 		return fmt.Errorf("failed to connect to plugin: %w", err)
 	}
+	m.transitionLocked(entry.Name, StateConnecting, "")
 
 	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
 	if !ok {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, "plugin is not a gRPC client")
 		return fmt.Errorf("plugin is not a gRPC client")
 	}
 
@@ -1263,6 +1447,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	info, err := GetPluginInfo(grpcClient.Conn)
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, err.Error())
 		return fmt.Errorf("failed to get plugin info: %w", err)
 	}
 
@@ -1270,24 +1455,29 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	cons, err := version.NewConstraint(">= 1.0, < 2.0")
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, err.Error())
 		return fmt.Errorf("failed to create version constraint: %w", err)
 	}
 
 	v, err := version.NewVersion(info.ApiVersion)
 	if err != nil {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, err.Error())
 		return fmt.Errorf("invalid API version %s: %w", info.ApiVersion, err)
 	}
 
 	if !cons.Check(v) {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("unsupported API version %s", info.ApiVersion))
 		return fmt.Errorf("unsupported API version %s, expected >=1.0 <2.0", info.ApiVersion)
 	}
 
 	if info.Type != entry.Type {
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("plugin type mismatch: expected %s, got %s", entry.Type, info.Type))
 		return fmt.Errorf("plugin type mismatch: expected %s, got %s", entry.Type, info.Type)
 	}
+	m.transitionLocked(entry.Name, StateReady, "")
 
 	switch info.Type {
 	case "llm":
@@ -1303,6 +1493,8 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "llm"
 		m.pluginMetadata[entry.Name] = info
+		m.transitionLocked(entry.Name, StateActive, "")
+		go m.monitorExit(entry.Name, client)
 		m.logger.Info("LLM service registered", "name", entry.Name, "serviceID", serviceID)
 
 	case "tool":
@@ -1324,6 +1516,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		}
 		if err != nil {
 			client.Kill()
+			m.transitionLocked(entry.Name, StateFailed, err.Error())
 			return fmt.Errorf("failed to list tools after retries: %w", err)
 		}
 		var toolNames []string
@@ -1353,6 +1546,8 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "tool"
 		m.pluginMetadata[entry.Name] = info
+		m.transitionLocked(entry.Name, StateActive, "")
+		go m.monitorExit(entry.Name, client)
 		m.logger.Info("Tool service registered", "name", entry.Name, "serviceID", serviceID)
 
 	case "policy":
@@ -1360,10 +1555,13 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "policy"
 		m.pluginMetadata[entry.Name] = info
+		m.transitionLocked(entry.Name, StateActive, "")
+		go m.monitorExit(entry.Name, client)
 		m.logger.Info("Policy plugin loaded", "name", entry.Name, "serviceID", serviceID)
 
 	default:
 		client.Kill()
+		m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("unsupported plugin type: %s", info.Type))
 		return fmt.Errorf("unsupported plugin type: %s", info.Type)
 	}
 	return nil
@@ -1442,9 +1640,11 @@ func (m *Manager) SwitchMode(mode string) error {
 		if !targetTools[name] {
 			// 卸載 tool/plugin
 			if client, exists := m.clients[name]; exists {
+				m.transitionLocked(name, StateUnloading, "")
+				delete(m.clients, name) // 先摘除，令退出监控忽略
 				client.Kill()
+				m.markDisposedLocked(name)
 			}
-			delete(m.clients, name)
 			delete(m.typeMap, name)
 			delete(m.pluginMetadata, name)
 
