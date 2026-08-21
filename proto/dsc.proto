@@ -16,8 +16,7 @@ service AgentService {
   rpc RunStream(RunRequest) returns (stream RunStreamResponse);
   rpc Name(NameRequest) returns (NameResponse);
   rpc Version(VersionRequest) returns (VersionResponse);
-  rpc SetLLMServiceID(SetLLMServiceIDRequest) returns (SetLLMServiceIDResponse);
-  rpc SetToolServiceID(SetToolServiceIDRequest) returns (SetToolServiceIDResponse);
+  rpc RegisterServices(RegisterServicesRequest) returns (RegisterServicesResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -130,18 +129,12 @@ message ToolCall {
   string arguments_json = 3;  // JSON 字符串
 }
 
-message SetLLMServiceIDRequest {
-  uint32 service_id = 1;
+message RegisterServicesRequest {
+  uint32 llm_service_id = 1;
+  uint32 tool_service_id = 2;
 }
 
-message SetLLMServiceIDResponse {
-}
-
-message SetToolServiceIDRequest {
-  uint32 service_id = 1;
-}
-
-message SetToolServiceIDResponse {
+message RegisterServicesResponse {
 }
 
 message ShutdownRequest {

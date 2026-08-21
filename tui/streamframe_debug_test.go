@@ -29,8 +29,7 @@ func (s *stubAgent) Run(context.Context, string) (*plugin.AgentResult, error) {
 
 func (s *stubAgent) Name(context.Context) string { return "stub" }
 func (s *stubAgent) Version(context.Context) string { return "0" }
-func (s *stubAgent) SetLLMServiceID(context.Context, uint32) error  { return nil }
-func (s *stubAgent) SetToolServiceID(context.Context, uint32) error { return nil }
+func (s *stubAgent) RegisterServices(context.Context, uint32, uint32) error { return nil }
 func (s *stubAgent) Shutdown(context.Context, bool) error           { return nil }
 
 func TestPumpLoopRealFlow(t *testing.T) {

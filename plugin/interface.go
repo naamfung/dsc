@@ -40,10 +40,9 @@ type Agent interface {
 	// 可以添加其他方法，如 Name(), Version() 等
 	Name(ctx context.Context) string
 	Version(ctx context.Context) string
-	// SetLLMServiceID 设置 LLM service ID
-	SetLLMServiceID(ctx context.Context, id uint32) error
-	// SetToolServiceID 设置 Tool service ID
-	SetToolServiceID(ctx context.Context, id uint32) error
+	// RegisterServices 一次性注入 Agent 运行所需的依赖 serviceID（LLM 与 Tool）。
+	// 取代原先的 SetLLMServiceID/SetToolServiceID 两段式握手，保证一次性原子下发。
+	RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error
 	// Shutdown 优雅关闭 Agent（用于热加载前）
 	Shutdown(ctx context.Context, force bool) error
 }

@@ -239,8 +239,7 @@ const (
 	AgentService_RunStream_FullMethodName        = "/dsc.AgentService/RunStream"
 	AgentService_Name_FullMethodName             = "/dsc.AgentService/Name"
 	AgentService_Version_FullMethodName          = "/dsc.AgentService/Version"
-	AgentService_SetLLMServiceID_FullMethodName  = "/dsc.AgentService/SetLLMServiceID"
-	AgentService_SetToolServiceID_FullMethodName = "/dsc.AgentService/SetToolServiceID"
+	AgentService_RegisterServices_FullMethodName = "/dsc.AgentService/RegisterServices"
 	AgentService_Shutdown_FullMethodName         = "/dsc.AgentService/Shutdown"
 )
 
@@ -252,8 +251,7 @@ type AgentServiceClient interface {
 	RunStream(ctx context.Context, in *RunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RunStreamResponse], error)
 	Name(ctx context.Context, in *NameRequest, opts ...grpc.CallOption) (*NameResponse, error)
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
-	SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error)
-	SetToolServiceID(ctx context.Context, in *SetToolServiceIDRequest, opts ...grpc.CallOption) (*SetToolServiceIDResponse, error)
+	RegisterServices(ctx context.Context, in *RegisterServicesRequest, opts ...grpc.CallOption) (*RegisterServicesResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
@@ -314,20 +312,10 @@ func (c *agentServiceClient) Version(ctx context.Context, in *VersionRequest, op
 	return out, nil
 }
 
-func (c *agentServiceClient) SetLLMServiceID(ctx context.Context, in *SetLLMServiceIDRequest, opts ...grpc.CallOption) (*SetLLMServiceIDResponse, error) {
+func (c *agentServiceClient) RegisterServices(ctx context.Context, in *RegisterServicesRequest, opts ...grpc.CallOption) (*RegisterServicesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetLLMServiceIDResponse)
-	err := c.cc.Invoke(ctx, AgentService_SetLLMServiceID_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *agentServiceClient) SetToolServiceID(ctx context.Context, in *SetToolServiceIDRequest, opts ...grpc.CallOption) (*SetToolServiceIDResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetToolServiceIDResponse)
-	err := c.cc.Invoke(ctx, AgentService_SetToolServiceID_FullMethodName, in, out, cOpts...)
+	out := new(RegisterServicesResponse)
+	err := c.cc.Invoke(ctx, AgentService_RegisterServices_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -352,8 +340,7 @@ type AgentServiceServer interface {
 	RunStream(*RunRequest, grpc.ServerStreamingServer[RunStreamResponse]) error
 	Name(context.Context, *NameRequest) (*NameResponse, error)
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
-	SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error)
-	SetToolServiceID(context.Context, *SetToolServiceIDRequest) (*SetToolServiceIDResponse, error)
+	RegisterServices(context.Context, *RegisterServicesRequest) (*RegisterServicesResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
@@ -377,11 +364,8 @@ func (UnimplementedAgentServiceServer) Name(context.Context, *NameRequest) (*Nam
 func (UnimplementedAgentServiceServer) Version(context.Context, *VersionRequest) (*VersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Version not implemented")
 }
-func (UnimplementedAgentServiceServer) SetLLMServiceID(context.Context, *SetLLMServiceIDRequest) (*SetLLMServiceIDResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetLLMServiceID not implemented")
-}
-func (UnimplementedAgentServiceServer) SetToolServiceID(context.Context, *SetToolServiceIDRequest) (*SetToolServiceIDResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetToolServiceID not implemented")
+func (UnimplementedAgentServiceServer) RegisterServices(context.Context, *RegisterServicesRequest) (*RegisterServicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterServices not implemented")
 }
 func (UnimplementedAgentServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
@@ -472,38 +456,20 @@ func _AgentService_Version_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AgentService_SetLLMServiceID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetLLMServiceIDRequest)
+func _AgentService_RegisterServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterServicesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AgentServiceServer).SetLLMServiceID(ctx, in)
+		return srv.(AgentServiceServer).RegisterServices(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AgentService_SetLLMServiceID_FullMethodName,
+		FullMethod: AgentService_RegisterServices_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AgentServiceServer).SetLLMServiceID(ctx, req.(*SetLLMServiceIDRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AgentService_SetToolServiceID_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetToolServiceIDRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AgentServiceServer).SetToolServiceID(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AgentService_SetToolServiceID_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AgentServiceServer).SetToolServiceID(ctx, req.(*SetToolServiceIDRequest))
+		return srv.(AgentServiceServer).RegisterServices(ctx, req.(*RegisterServicesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -546,12 +512,8 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentService_Version_Handler,
 		},
 		{
-			MethodName: "SetLLMServiceID",
-			Handler:    _AgentService_SetLLMServiceID_Handler,
-		},
-		{
-			MethodName: "SetToolServiceID",
-			Handler:    _AgentService_SetToolServiceID_Handler,
+			MethodName: "RegisterServices",
+			Handler:    _AgentService_RegisterServices_Handler,
 		},
 		{
 			MethodName: "Shutdown",

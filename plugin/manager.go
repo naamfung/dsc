@@ -446,13 +446,13 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 		return nil, 0, fmt.Errorf("plugin does not implement Agent interface")
 	}
 
-	// 透過 RPC 設置 serviceID
+	// 透過 RPC 注冊 LLM serviceID（tool serviceID 在聲明式注入時一次下發）
 	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.SetLLMServiceID(context.Background(), &proto.SetLLMServiceIDRequest{ServiceId: serviceID})
+	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: serviceID, ToolServiceId: 0})
 	if err != nil {
 		client.Kill()
 		m.transitionLocked(name, StateFailed, err.Error())
-		return nil, 0, fmt.Errorf("failed to set service ID on agent: %w", err)
+		return nil, 0, fmt.Errorf("failed to register service IDs on agent: %w", err)
 	}
 
 	m.clients[name] = client
@@ -677,13 +677,13 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new agent plugin is not a gRPC client")
 	}
 
-	// 透過 RPC 設置 serviceID
+	// 透過 RPC 重新注冊 LLM serviceID（tool serviceID 由聲明式注入時一次下發）
 	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.SetLLMServiceID(context.Background(), &proto.SetLLMServiceIDRequest{ServiceId: oldServiceID})
+	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: oldServiceID, ToolServiceId: 0})
 	if err != nil {
 		newClient.Kill()
 		m.transitionLocked(name, StateFailed, err.Error())
-		return fmt.Errorf("failed to set service ID on agent: %w", err)
+		return fmt.Errorf("failed to register service IDs on agent: %w", err)
 	}
 
 	raw, err := rpcClient.Dispense("agent")
@@ -1273,7 +1273,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		}
 	}
 
-	// 第四步：為 Agent 設置 LLM 和 Tool 服務 ID
+	// 第四步：為 Agent 一次性注入 LLM 與 Tool 服務 ID
 	if agentEntry.DependsOn != nil {
 		var llmID, toolID uint32
 		hasLLM := false
@@ -1302,15 +1302,12 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 			}
 		}
 
-		// 調用 Agent 的 RPC 設置 ID
-		if err := agent.SetLLMServiceID(context.Background(), llmID); err != nil && hasLLM {
-			return fmt.Errorf("failed to set LLM service ID: %w", err)
-		}
-		if err := agent.SetToolServiceID(context.Background(), toolID); err != nil && hasTool {
-			return fmt.Errorf("failed to set Tool service ID: %w", err)
+		// 一次性注入 Agent 的 LLM 與 Tool serviceID
+		if err := agent.RegisterServices(context.Background(), llmID, toolID); err != nil {
+			return fmt.Errorf("failed to register agent services: %w", err)
 		}
 		m.transitionLocked(agentEntry.Name, StateActive, "")
-		m.logger.Info("agent dependencies set", "llmID", llmID, "toolID", toolID)
+		m.logger.Info("agent dependencies registered", "llmID", llmID, "toolID", toolID, "registeredLLM", hasLLM, "registeredTool", hasTool)
 	}
 
 	m.logger.Info("all plugins loaded from config", "agent", agentEntry.Name)
