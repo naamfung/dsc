@@ -184,9 +184,15 @@ func (m *Manager) reactivateAgentLocked(name string) {
 	if !ok || entry.DependsOn == nil || entry.DependsOn.LLM == "" {
 		return
 	}
-	llmID, ok := m.llmServiceIDs[entry.DependsOn.LLM]
-	if !ok {
-		return // LLM 依赖仍未就绪
+	// 多 provider 路由：确保聚合 LLM 服务已挂载（primary 更新为声明的 provider），
+	// primary 就绪后才激活
+	llmID, err := m.serveAggregateLLMLocked(entry.DependsOn.LLM)
+	if err != nil {
+		m.logger.Warn("aggregate llm service unavailable on reactivation", "error", err)
+		return
+	}
+	if _, ok := m.llms[entry.DependsOn.LLM]; !ok {
+		return // primary LLM 依赖仍未就绪
 	}
 	agent, ok := m.agents[name]
 	if !ok {
