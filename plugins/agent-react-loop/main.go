@@ -38,12 +38,12 @@ type ReactLoopAgent struct {
 	isShutdown bool
 
 	// 多輪對話記憶：跨 Run 保留會話歷史（事件溯源日志）
-	sessMu sync.Mutex
-	sess   *session.Session
+	sessMu      sync.Mutex
+	sess        *session.Session
 	turnCounter int // 轮次编号（跨 Run 递增，对齐 DSH 的 turn 概念）
 
-	// 会话事件日志落盘路径（DSC_SESSION_FILE，缺省 ./session.jsonl）
-	sessionPath string
+	// 多会话事件日志存储（DSC_SESSION_DIR，缺省 ./sessions）；固定使用 default 会话
+	store *session.Store
 
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
 	contextWindow    int           // 總容量（token 數），0 表示未設置（不做自動壓縮）
@@ -193,24 +193,22 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 	}
 
-	// 事件溯源会话：首轮从磁盘恢复或新建，并构建完整 system prompt；
-	// 工具列表变化时重建 system prompt。
+	// 事件溯源会话：首轮从磁盘恢复或新建（多会话 Store，固定 default 会话），
+	// 并构建完整 system prompt；工具列表变化时重建 system prompt。
 	// 历史以事件追加进 session（对齐 DSH：模型可见即已记录），不再维护独立消息数组。
 	a.sessMu.Lock()
 	if a.sess == nil {
-		restored, err := session.Load(a.sessionPath)
+		restored, err := a.store.Ensure("default")
 		if err != nil {
 			a.sessMu.Unlock()
 			return nil, fmt.Errorf("failed to restore session: %w", err)
 		}
-		if restored != nil {
-			a.sess = restored
+		if restored.Len() > 0 {
 			a.turnCounter = restored.LastTurn()
-			fmt.Printf("[Agent Loop] session restored from %s (%d events, last turn %d)\n",
-				a.sessionPath, restored.Len(), a.turnCounter)
-		} else {
-			a.sess = session.New()
+			fmt.Printf("[Agent Loop] session restored from store (%d events, last turn %d)\n",
+				restored.Len(), a.turnCounter)
 		}
+		a.sess = restored
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 	} else if sysPromptChanged {
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
@@ -220,9 +218,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	sess := a.sess
 	a.sessMu.Unlock()
 
-	// 每次 Run 结束（含错误路径）将事件日志落盘
+	// 每次 Run 结束（含错误路径）将事件日志落盘（多会话 Store）
 	defer func() {
-		if err := sess.Save(a.sessionPath); err != nil {
+		if err := a.store.Save(sess); err != nil {
 			fmt.Printf("[Agent Loop] failed to save session: %v\n", err)
 		}
 	}()
@@ -682,11 +680,16 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	}
 	// 讀取宿主傳入的 preset persona（DSC_PRESET_PERSONA，「你是一個…助手」身份句）
 	agent.persona = os.Getenv("DSC_PRESET_PERSONA")
-	// 会话事件日志落盘路径（DSC_SESSION_FILE，缺省落在插件工作目录）
-	agent.sessionPath = os.Getenv("DSC_SESSION_FILE")
-	if agent.sessionPath == "" {
-		agent.sessionPath = "session.jsonl"
+	// 多会话事件日志存储（DSC_SESSION_DIR，缺省落在插件工作目录下的 sessions/）
+	dir := os.Getenv("DSC_SESSION_DIR")
+	if dir == "" {
+		dir = "sessions"
 	}
+	store, err := session.NewStore(dir)
+	if err != nil {
+		return fmt.Errorf("failed to open session store: %w", err)
+	}
+	agent.store = store
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
 	return nil
 }
