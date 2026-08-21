@@ -42,6 +42,9 @@ type ReactLoopAgent struct {
 	sess        *session.Session
 	turnCounter int // 轮次编号（跨 Run 递增，对齐 DSH 的 turn 概念）
 
+	// 第 7 步：会话事件日志落盘路径（DSC_SESSION_FILE，缺省 ./session.jsonl）
+	sessionPath string
+
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
 	contextWindow    int           // 總容量（token 數），0 表示未設置（不做自動壓縮）
 	lastPromptTokens int32         // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
@@ -190,12 +193,25 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 	}
 
-	// 事件溯源会话：首轮创建并构建完整 system prompt；工具列表变化时重建 system prompt。
+	// 事件溯源会话：首轮从磁盘恢复（第 7 步）或新建，并构建完整 system prompt；
+	// 工具列表变化时重建 system prompt。
 	// 历史以事件追加进 session（对齐 DSH：模型可见即已记录），不再维护独立消息数组。
 	a.sessMu.Lock()
 	if a.sess == nil {
+		restored, err := session.Load(a.sessionPath)
+		if err != nil {
+			a.sessMu.Unlock()
+			return nil, fmt.Errorf("failed to restore session: %w", err)
+		}
+		if restored != nil {
+			a.sess = restored
+			a.turnCounter = restored.LastTurn()
+			fmt.Printf("[Agent Loop] session restored from %s (%d events, last turn %d)\n",
+				a.sessionPath, restored.Len(), a.turnCounter)
+		} else {
+			a.sess = session.New()
+		}
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
-		a.sess = session.New()
 	} else if sysPromptChanged {
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 	}
@@ -203,6 +219,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	turnNo := a.turnCounter
 	sess := a.sess
 	a.sessMu.Unlock()
+
+	// 每次 Run 结束（含错误路径）将事件日志落盘（第 7 步）
+	defer func() {
+		if err := sess.Save(a.sessionPath); err != nil {
+			fmt.Printf("[Agent Loop] failed to save session: %v\n", err)
+		}
+	}()
 
 	// 轮次与用户输入作为会话事件记录（turn/start 为 log-only，user/message 进入 surface）
 	sess.Append(session.TurnStart, &session.TurnData{Turn: turnNo}, nil)
@@ -659,6 +682,11 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	}
 	// 讀取宿主傳入的 preset persona（DSC_PRESET_PERSONA，「你是一個…助手」身份句）
 	agent.persona = os.Getenv("DSC_PRESET_PERSONA")
+	// 第 7 步：会话事件日志落盘路径（DSC_SESSION_FILE，缺省落在插件工作目录）
+	agent.sessionPath = os.Getenv("DSC_SESSION_FILE")
+	if agent.sessionPath == "" {
+		agent.sessionPath = "session.jsonl"
+	}
 	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
 	return nil
 }
