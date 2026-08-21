@@ -1160,6 +1160,8 @@ var slashCommands = []compItem{
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
 	{label: "/workspace on", insert: "/workspace on", hint: "启用工作空间机制保护"},
 	{label: "/workspace off", insert: "/workspace off", hint: "关闭工作空间机制保护"},
+	{label: "/sandbox on", insert: "/sandbox on", hint: "启用沙箱保护（只读，拒绝一切文件写）"},
+	{label: "/sandbox off", insert: "/sandbox off", hint: "关闭沙箱保护（不额外拦截）"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
 	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
@@ -1284,6 +1286,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /mode standard  切换至标准模式",
 			"  /workspace on   启用工作空间机制保护（限制文件操作在工作区目录内）",
 			"  /workspace off  关闭工作空间机制保护（允许模型访问整个文件系统而不作限制）",
+			"  /sandbox on   启用沙箱保护（只读策略，拒绝一切文件写操作）",
+			"  /sandbox off  关闭沙箱保护（full 策略，不再额外拦截文件写）",
 			"  /sessions    列出所有会话",
 			"  /session <id>  切换到指定会话（如 /session session-3）",
 			"  /exit        退出聊天",
@@ -1382,6 +1386,32 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
 		} else {
 			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 工作空間保護") + "\n已關閉工作空間機制保護（允許模型訪問整個文件系統而不作限制）。")
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/sandbox on":
+		if m.manager != nil {
+			m.manager.SetSandboxPolicy(plugin.SandboxReadOnly)
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已启用沙箱保护（只读策略，拒绝一切文件写操作）。")
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/sandbox off":
+		if m.manager != nil {
+			m.manager.SetSandboxPolicy(plugin.SandboxFullAccess)
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已关闭沙箱保护（full 策略，不再额外拦截文件写）。")
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}

@@ -92,14 +92,25 @@ func inWorkspace(path string) bool {
 	return abs == absBase || strings.HasPrefix(abs, absBase+string(os.PathSeparator))
 }
 
+// SetSandboxPolicy 运行时切换沙箱策略（TUI /sandbox 命令用；线程安全）。
+func (m *Manager) SetSandboxPolicy(p SandboxPolicy) {
+	m.sandboxPolicyVal.Store(int32(p))
+}
+
+// GetSandboxPolicy 读取当前沙箱策略。
+func (m *Manager) GetSandboxPolicy() SandboxPolicy {
+	return SandboxPolicy(m.sandboxPolicyVal.Load())
+}
+
 // sandboxPolicy 工具流水线 pre-execute 瀑布策略：fail-closed 拦截写操作。
-func sandboxPolicy(policy SandboxPolicy) WaterfallListener {
+// 策略经 get 动态读取，支持运行时切换（TUI /sandbox 命令）。
+func sandboxPolicy(get func() SandboxPolicy) WaterfallListener {
 	return func(ctx EventContext, next func(EventContext) error) error {
 		inv, _ := ctx.Data.(*ToolInvocation)
 		if inv == nil {
 			return next(ctx)
 		}
-		if err := sandboxCheck(policy, inv.ToolName, inv.ArgumentsJSON); err != nil {
+		if err := sandboxCheck(get(), inv.ToolName, inv.ArgumentsJSON); err != nil {
 			return err // fail-closed：拒绝，不执行
 		}
 		return next(ctx)

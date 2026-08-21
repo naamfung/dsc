@@ -58,16 +58,41 @@ func TestSessionsCommandLists(t *testing.T) {
 	}
 }
 
-// TestSessionCommandSwitchFailure 校验切换失败时显示错误（stub 无法直接模拟，
-// 用 manager 为空、agent 为自定义错误 stub 的方式验证错误分支）。
-func TestSessionCommandSwitchFailure(t *testing.T) {
-	ag := &stubAgent{}
-	m := New(ag, nil, context.Background(), "m", "minimal", 131072)
-	// manager 为 nil 不影响 /session（走 agent.SwitchSession），stub 返回 nil 成功。
-	// 这里验证成功分支的提示文案。
-	_, _ = m.runSlashCommand("/session session-3")
+// TestSandboxCommandToggle 校验 /sandbox on/off 切换运行时沙箱策略。
+func TestSandboxCommandToggle(t *testing.T) {
+	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
+
+	// 初始为缺省 workspace
+	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxWorkspaceWrite {
+		t.Fatalf("initial policy = %v, want workspace", got)
+	}
+	if handled, _ := m.runSlashCommand("/sandbox on"); !handled {
+		t.Fatal("/sandbox on should be handled")
+	}
+	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxReadOnly {
+		t.Fatalf("after on, policy = %v, want read-only", got)
+	}
+	if handled, _ := m.runSlashCommand("/sandbox off"); !handled {
+		t.Fatal("/sandbox off should be handled")
+	}
+	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxFullAccess {
+		t.Fatalf("after off, policy = %v, want full", got)
+	}
 	full := strings.Join(m.lines, "\n")
-	if !strings.Contains(full, "已切换到会话 session-3") {
-		t.Fatalf("should confirm switch, got: %q", full)
+	if !strings.Contains(full, "沙箱") {
+		t.Fatalf("should show sandbox messages, got: %q", full)
+	}
+}
+
+// TestSandboxCommandWithoutManager 校验 manager 缺失时的错误分支。
+func TestSandboxCommandWithoutManager(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "m", "minimal", 131072)
+	if handled, _ := m.runSlashCommand("/sandbox on"); !handled {
+		t.Fatal("/sandbox on should be handled")
+	}
+	full := strings.Join(m.lines, "\n")
+	if !strings.Contains(full, "插件管理器不可用") {
+		t.Fatalf("should show manager-unavailable error, got: %q", full)
 	}
 }

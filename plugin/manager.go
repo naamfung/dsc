@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"dsc/proto"
@@ -79,6 +80,9 @@ type Manager struct {
 	policyClients map[string]proto.FsObservationPolicyServiceClient
 	// policyOff policy 桥接监听器的移除函数（按插件名），卸载时一并撤销。
 	policyOff map[string][]func()
+
+	// sandboxPolicyVal 运行时沙箱策略（atomic，支持 TUI /sandbox 命令动态切换）。
+	sandboxPolicyVal atomic.Int32
 
 	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
@@ -152,8 +156,9 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		logger.Warn("spill store unavailable", "error", err)
 	}
 	// sandbox：进程效应策略层（DSC_SANDBOX: full/workspace/readonly，缺省 workspace），
-	// pre-execute fail-closed 拦截写操作
-	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(ParseSandboxPolicy(os.Getenv("DSC_SANDBOX"))))
+	// pre-execute fail-closed 拦截写操作；运行时可用 SetSandboxPolicy 动态切换
+	m.sandboxPolicyVal.Store(int32(ParseSandboxPolicy(os.Getenv("DSC_SANDBOX"))))
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(m.GetSandboxPolicy))
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))
 	return m
