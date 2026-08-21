@@ -60,10 +60,16 @@ type SurfaceOp struct {
 }
 
 // 各事件类型的 payload（类型安全判别联合）。
-type TurnData struct{ Turn int; Reason string }
+type TurnData struct {
+	Turn   int
+	Reason string
+}
 type StepData struct{ Turn, Step int }
 type UserMessageData struct{ Content, Source string }
-type AssistantChunkData struct{ Turn, Step int; Content, Reasoning string }
+type AssistantChunkData struct {
+	Turn, Step         int
+	Content, Reasoning string
+}
 type AssistantMessageData struct {
 	Turn, Step  int
 	Content     string
@@ -72,8 +78,14 @@ type AssistantMessageData struct {
 	Usage       *proto.Usage
 	Interrupted bool
 }
-type ToolCallData struct{ Turn, Step int; CallID, Name, Arguments string }
-type ToolResultData struct{ Turn, Step int; CallID, Content, Error string }
+type ToolCallData struct {
+	Turn, Step              int
+	CallID, Name, Arguments string
+}
+type ToolResultData struct {
+	Turn, Step             int
+	CallID, Content, Error string
+}
 type CompactionSummaryData struct{ Content string }
 
 // Event 一条会话日志条目。Seq 单调连续（= 日志长度），Time 为 epoch 毫秒。
@@ -101,6 +113,9 @@ type Session struct {
 
 // New 创建空会话。
 func New() *Session { return &Session{} }
+
+// ID 返回会话标识（由 Store 分配；直接 New 创建的会话为空）。
+func (s *Session) ID() string { return s.id }
 
 // Len 返回日志长度（下一事件的 seq）。
 func (s *Session) Len() int {

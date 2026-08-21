@@ -58,6 +58,53 @@ func TestSessionsCommandLists(t *testing.T) {
 	}
 }
 
+// TestSessionCommandNew 校验 /session new 新建会话并切换。
+func TestSessionCommandNew(t *testing.T) {
+	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	ag := &stubAgent{}
+	m := New(ag, mgr, context.Background(), "m", "minimal", 131072)
+
+	if handled, _ := m.runSlashCommand("/session new"); !handled {
+		t.Fatal("/session new should be handled")
+	}
+	if len(ag.switchCalls) != 1 {
+		t.Fatalf("switchCalls = %v, want 1", ag.switchCalls)
+	}
+	full := strings.Join(m.lines, "\n")
+	if !strings.Contains(full, "已新建并切换到会话") {
+		t.Fatalf("should confirm new session, got: %q", full)
+	}
+}
+
+// TestSessionCommandDelete 校验 /session delete <id> 删除会话。
+func TestSessionCommandDelete(t *testing.T) {
+	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	// 先建一个会话供删除
+	id, err := mgr.CreateSession()
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
+
+	if handled, _ := m.runSlashCommand("/session delete " + id); !handled {
+		t.Fatal("/session delete should be handled")
+	}
+	full := strings.Join(m.lines, "\n")
+	if !strings.Contains(full, "已删除会话") {
+		t.Fatalf("should confirm delete, got: %q", full)
+	}
+	// 验证文件已被删除
+	summaries, err := mgr.ListSessions()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, s := range summaries {
+		if s.ID == id {
+			t.Fatalf("session %s should be deleted", id)
+		}
+	}
+}
+
 // TestSandboxCommandToggle 校验 /sandbox on/off 切换运行时沙箱策略。
 func TestSandboxCommandToggle(t *testing.T) {
 	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})

@@ -1163,7 +1163,9 @@ var slashCommands = []compItem{
 	{label: "/sandbox on", insert: "/sandbox on", hint: "启用沙箱保护（只读，拒绝一切文件写）"},
 	{label: "/sandbox off", insert: "/sandbox off", hint: "关闭沙箱保护（不额外拦截）"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
+	{label: "/session new", insert: "/session new", hint: "新建会话并切换"},
 	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
+	{label: "/session delete", insert: "/session delete ", hint: "删除指定会话（如 /session delete session-3）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -1290,6 +1292,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /sandbox off  关闭沙箱保护（full 策略，不再额外拦截文件写）",
 			"  /sessions    列出所有会话",
 			"  /session <id>  切换到指定会话（如 /session session-3）",
+			"  /session new  新建会话并切换",
+			"  /session delete <id>  删除指定会话",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 帮助") + "\n" + help)
@@ -1459,15 +1463,42 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	case "/quit", "/exit":
 		return true, tea.Quit
 	}
-	// /session <id> 切换会话（前缀匹配，与上方的精确 case 互补）
+	// /session <id> 切换 / new 新建 / delete <id> 删除（前缀匹配）
 	if strings.HasPrefix(cmd, "/session ") {
-		id := strings.TrimSpace(strings.TrimPrefix(cmd, "/session "))
-		if id == "" {
-			m.appendMessage(errorSty.Render("用法: /session <会话 id>"))
-		} else if err := m.agent.SwitchSession(m.ctx, id); err != nil {
-			m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
-		} else {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已切换到会话 %s。", id))
+		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/session "))
+		switch {
+		case rest == "new":
+			if m.manager == nil {
+				m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+			} else {
+				id, err := m.manager.CreateSession()
+				if err != nil {
+					m.appendMessage(errorSty.Render("新建会话失败: ") + err.Error())
+				} else if err := m.agent.SwitchSession(m.ctx, id); err != nil {
+					m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
+				} else {
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已新建并切换到会话 %s。", id))
+				}
+			}
+		case strings.HasPrefix(rest, "delete "):
+			id := strings.TrimSpace(strings.TrimPrefix(rest, "delete "))
+			if id == "" {
+				m.appendMessage(errorSty.Render("用法: /session delete <会话 id>"))
+			} else if m.manager == nil {
+				m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+			} else if err := m.manager.DeleteSession(id); err != nil {
+				m.appendMessage(errorSty.Render("删除会话失败: ") + err.Error())
+			} else {
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已删除会话 %s。", id))
+			}
+		default:
+			if rest == "" {
+				m.appendMessage(errorSty.Render("用法: /session <会话 id>，或 /session new，或 /session delete <id>"))
+			} else if err := m.agent.SwitchSession(m.ctx, rest); err != nil {
+				m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
+			} else {
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已切换到会话 %s。", rest))
+			}
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
