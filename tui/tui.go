@@ -67,7 +67,7 @@ var (
 	// dividerSty 状态栏分隔线：U+2500 轻线已是最细的框线字符，改用更暗的灰色
 	// 使其在视觉上更纤细、不抢注意力。
 	dividerSty = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#4A4A4A"))
+			Foreground(lipgloss.Color("#4A4A4A"))
 
 	// reasonReapply 思考块的暗色 SGR 前缀：「前景 #6B6B6B(107,107,107)」。
 	// 思考块先按 markdown 渲染，行内样式会以 \x1b[m 复位；本前缀用于整体着色，
@@ -1160,6 +1160,8 @@ var slashCommands = []compItem{
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
 	{label: "/workspace on", insert: "/workspace on", hint: "启用工作空间机制保护"},
 	{label: "/workspace off", insert: "/workspace off", hint: "关闭工作空间机制保护"},
+	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
+	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -1282,6 +1284,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /mode standard  切换至标准模式",
 			"  /workspace on   启用工作空间机制保护（限制文件操作在工作区目录内）",
 			"  /workspace off  关闭工作空间机制保护（允许模型访问整个文件系统而不作限制）",
+			"  /sessions    列出所有会话",
+			"  /session <id>  切换到指定会话（如 /session session-3）",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 帮助") + "\n" + help)
@@ -1385,8 +1389,62 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.render()
 		m.viewport.GotoBottom()
 		return true, nil
+	case "/sessions":
+		if m.manager != nil {
+			summaries, err := m.manager.ListSessions()
+			if err != nil {
+				m.appendMessage(errorSty.Render("列出会话失败: ") + err.Error())
+			} else if len(summaries) == 0 {
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + "\n（暂无会话）")
+			} else {
+				var b strings.Builder
+				b.WriteString(assistantNameSty.Render(assistantMark + " DSC · 会话列表\n"))
+				for _, s := range summaries {
+					fmt.Fprintf(&b, "  %s · %d 事件", s.ID, s.Events)
+					if s.Preview != "" {
+						b.WriteString(" · " + s.Preview)
+					}
+					b.WriteString("\n")
+				}
+				b.WriteString("切换: /session <id>（如 /session session-3）")
+				m.appendMessage(b.String())
+			}
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/session":
+		m.appendMessage(errorSty.Render("用法: /session <会话 id>，如 /session session-3 或 /session default"))
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
 	case "/quit", "/exit":
 		return true, tea.Quit
+	}
+	// /session <id> 切换会话（前缀匹配，与上方的精确 case 互补）
+	if strings.HasPrefix(cmd, "/session ") {
+		id := strings.TrimSpace(strings.TrimPrefix(cmd, "/session "))
+		if id == "" {
+			m.appendMessage(errorSty.Render("用法: /session <会话 id>"))
+		} else if err := m.agent.SwitchSession(m.ctx, id); err != nil {
+			m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
+		} else {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已切换到会话 %s。", id))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
 	}
 	return false, nil
 }
@@ -1590,7 +1648,7 @@ func (m *Model) statusBar() string {
 	if pad < 1 {
 		pad = 1
 	}
-	return divider + "\n" + dimSty.Render(left + strings.Repeat(" ", pad) + right)
+	return divider + "\n" + dimSty.Render(left+strings.Repeat(" ", pad)+right)
 }
 
 // View 渲染视图

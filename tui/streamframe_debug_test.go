@@ -10,7 +10,10 @@ import (
 )
 
 // stubAgent 返回一个预填充的流通道（reasoning → streaming → success）
-type stubAgent struct{ frames []*plugin.RunStreamResponse }
+type stubAgent struct {
+	frames      []*plugin.RunStreamResponse
+	switchCalls []string
+}
 
 func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *plugin.RunStreamResponse, error) {
 	ch := make(chan *plugin.RunStreamResponse)
@@ -27,11 +30,14 @@ func (s *stubAgent) Run(context.Context, string) (*plugin.AgentResult, error) {
 	return nil, nil
 }
 
-func (s *stubAgent) Name(context.Context) string { return "stub" }
-func (s *stubAgent) Version(context.Context) string { return "0" }
+func (s *stubAgent) Name(context.Context) string                            { return "stub" }
+func (s *stubAgent) Version(context.Context) string                         { return "0" }
 func (s *stubAgent) RegisterServices(context.Context, uint32, uint32) error { return nil }
-func (s *stubAgent) SwitchSession(context.Context, string) error { return nil }
-func (s *stubAgent) Shutdown(context.Context, bool) error           { return nil }
+func (s *stubAgent) SwitchSession(_ context.Context, id string) error {
+	s.switchCalls = append(s.switchCalls, id)
+	return nil
+}
+func (s *stubAgent) Shutdown(context.Context, bool) error { return nil }
 
 func TestPumpLoopRealFlow(t *testing.T) {
 	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
