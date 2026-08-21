@@ -14,11 +14,9 @@ import (
 	"time"
 
 	"dsc/plugin"
-	"dsc/proto"
 	"dsc/tui"
 	"github.com/hashicorp/go-hclog"
 	"gopkg.in/yaml.v3"
-	"google.golang.org/grpc"
 )
 
 // defaultContextWindow 未配置且探测失败时使用的默认上下文窗口大小：128K（按 1024 计）
@@ -64,129 +62,6 @@ func probeContextWindow(baseURL string) int {
 		return payload.Data[0].MaxModelLen
 	}
 	return 0
-}
-
-// LLMProxyServer 实现 LLMService，转发到 LLMProvider
-type LLMProxyServer struct {
-	proto.UnimplementedLLMServiceServer
-	mgr     *plugin.Manager
-	llmName string
-}
-
-func (s *LLMProxyServer) getLLM() plugin.LLMProvider {
-	llm, ok := s.mgr.GetLLM(s.llmName)
-	if !ok {
-		return nil
-	}
-	return llm
-}
-
-func (s *LLMProxyServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
-	llm := s.getLLM()
-	if llm == nil {
-		return nil, fmt.Errorf("LLM not available")
-	}
-	messages, tools := convertChatRequest(req)
-	resp, err := llm.Chat(ctx, messages, tools, int(req.MaxTokens))
-	if err != nil {
-		return nil, err
-	}
-	toolCalls := make([]*proto.ToolCall, len(resp.ToolCalls))
-	for i, tc := range resp.ToolCalls {
-		argsJSON, _ := json.Marshal(tc.Arguments)
-		toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
-	}
-	return &proto.ChatResponse{
-		Content:      resp.Content,
-		FinishReason: resp.FinishReason,
-		ToolCalls:    toolCalls,
-	}, nil
-}
-
-// ChatStream 转发 LLM 插件的流式响应（旧版直连路径使用）
-func (s *LLMProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
-	llm := s.getLLM()
-	if llm == nil {
-		return fmt.Errorf("LLM not available")
-	}
-	messages, tools := convertChatRequest(req)
-	ch, err := llm.ChatStream(stream.Context(), messages, tools)
-	if err != nil {
-		return err
-	}
-	for item := range ch {
-		if item.Error != "" {
-			return fmt.Errorf("LLM stream error: %s", item.Error)
-		}
-		toolCalls := make([]*proto.ToolCall, len(item.ToolCalls))
-		for i, tc := range item.ToolCalls {
-			argsJSON, _ := json.Marshal(tc.Arguments)
-			toolCalls[i] = &proto.ToolCall{Name: tc.Name, ArgumentsJson: string(argsJSON)}
-		}
-		if err := stream.Send(&proto.ChatStreamResponse{
-			Content:      item.Content,
-			FinishReason: item.FinishReason,
-			ToolCalls:    toolCalls,
-			Usage:        plugin.UsageToProto(item.Usage),
-			Reasoning:    item.Reasoning,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// convertChatRequest 将 proto 请求转换为内部消息与工具列表（旧版直连路径使用）
-func convertChatRequest(req *proto.ChatRequest) ([]plugin.Message, []plugin.Tool) {
-	messages := make([]plugin.Message, len(req.Messages))
-	for i, m := range req.Messages {
-		msg := plugin.Message{Role: m.Role, Content: m.Content}
-		if len(m.ToolCalls) > 0 {
-			msg.ToolCalls = make([]plugin.ToolCall, len(m.ToolCalls))
-			for j, tc := range m.ToolCalls {
-				var args map[string]interface{}
-				if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
-					args = map[string]interface{}{}
-				}
-				msg.ToolCalls[j] = plugin.ToolCall{ID: tc.Id, Name: tc.Name, Arguments: args}
-			}
-		}
-		messages[i] = msg
-	}
-	tools := make([]plugin.Tool, len(req.Tools))
-	for i, t := range req.Tools {
-		tools[i] = plugin.Tool{Name: t.Name, Description: t.Description, ParametersJSON: t.ParametersJson}
-	}
-	return messages, tools
-}
-
-func (s *LLMProxyServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
-	llm := s.getLLM()
-	if llm == nil {
-		return nil, fmt.Errorf("LLM not available")
-	}
-	return &proto.NameResponse{Name: llm.Name(ctx)}, nil
-}
-func (s *LLMProxyServer) Version(ctx context.Context, req *proto.VersionRequest) (*proto.VersionResponse, error) {
-	llm := s.getLLM()
-	if llm == nil {
-		return nil, fmt.Errorf("LLM not available")
-	}
-	return &proto.VersionResponse{Version: llm.Version(ctx)}, nil
-}
-func (s *LLMProxyServer) HealthCheck(ctx context.Context, req *proto.HealthCheckRequest) (*proto.HealthCheckResponse, error) {
-	llm := s.getLLM()
-	if llm == nil {
-		return nil, fmt.Errorf("LLM not available")
-	}
-	err := llm.HealthCheck(ctx)
-	status := "okay"
-	msg := ""
-	if err != nil {
-		status = "error"
-		msg = err.Error()
-	}
-	return &proto.HealthCheckResponse{Status: status, Message: msg}, nil
 }
 
 func loadConfig(path string) (*plugin.Config, error) {
@@ -421,59 +296,92 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 1. 加載 LLM 插件（維持原來的啟動邏輯）
-	llmName := os.Getenv("LLM_PROVIDER")
-	// 從主配置 config/config.yaml 讀取默認 LLM
-	if llmName == "" {
-		if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil && mainCfg.DefaultLLM != "" {
-			llmName = mainCfg.DefaultLLM
-		}
-	}
-	if llmName == "" {
-		llmName = "openai"
-	}
+	// ===== 声明式加载（第 2 步）：合并 config.yaml + preset，交给 Manager 按 DependsOn 拓扑加载 =====
 	ext := ""
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
 	}
 
-	// 從主配置 config/config.yaml 讀取 LLM 插件的配置（binary_path 和 env）
-	llmBinaryCfg := ""
-	llmEnv := map[string]string{}
-
-	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
-		for _, entry := range mainCfg.Plugins {
-			if entry.Type == "llm" && entry.Name == llmName && entry.Enabled {
-				llmBinaryCfg = entry.BinaryPath
-				llmEnv = entry.Env
-				break
+	// 从 config.yaml 收集启用的 LLM 条目与 agent 条目（沿用其 binary_path/env 声明）
+	var llmEntries []plugin.PluginEntry
+	var agentEntry *plugin.PluginEntry
+	if mainCfg != nil {
+		for i := range mainCfg.Plugins {
+			e := mainCfg.Plugins[i]
+			if !e.Enabled {
+				continue
+			}
+			switch e.Type {
+			case "llm":
+				llmEntries = append(llmEntries, e)
+			case "agent":
+				if agentEntry == nil {
+					agentEntry = &mainCfg.Plugins[i]
+				}
 			}
 		}
 	}
 
-	defaultLLmRel := filepath.Join("plugins", "llm-"+llmName, "llm-"+llmName+ext)
-	llmBinaryForStat := statBinaryPath(execDir, llmBinaryCfg, defaultLLmRel)
-
-	// 檢查 LLM 二進制文件是否存在
-	if _, err := os.Stat(llmBinaryForStat); os.IsNotExist(err) {
-		fail("LLM binary not found for provider %q at %q", llmName, llmBinaryForStat)
+	// 若 config.yaml 未声明任何启用的 LLM，则按 环境变量 → DefaultLLM → openai 回退构造默认条目
+	if len(llmEntries) == 0 {
+		llmName := os.Getenv("LLM_PROVIDER")
+		if llmName == "" && mainCfg != nil {
+			llmName = mainCfg.DefaultLLM
+		}
+		if llmName == "" {
+			llmName = "openai"
+		}
+		llmEntries = append(llmEntries, plugin.PluginEntry{
+			Name:       llmName,
+			Type:       "llm",
+			Enabled:    true,
+			BinaryPath: loadBinaryPath("", "./plugins/llm-"+llmName+"/llm-"+llmName+ext),
+		})
 	}
 
-	llmBinaryToLoad := loadBinaryPath(llmBinaryCfg, "./plugins/llm-"+llmName+"/llm-"+llmName+ext)
-
-	if err := mgr.LoadLLM(llmName, llmBinaryToLoad, llmEnv); err != nil {
-		fail("failed to load LLM %s: %v", llmName, err)
+	// 确定“活跃 LLM”用于探测上下文窗口与展示模型名：agent.depends_on.llm → LLM_PROVIDER → DefaultLLM → 首个启用条目
+	activeLLMName := ""
+	if agentEntry != nil && agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
+		activeLLMName = agentEntry.DependsOn.LLM
 	}
-	logger.Info("llm loaded", "name", llmName)
+	if activeLLMName == "" {
+		if v := os.Getenv("LLM_PROVIDER"); v != "" {
+			activeLLMName = v
+		} else if mainCfg != nil && mainCfg.DefaultLLM != "" {
+			activeLLMName = mainCfg.DefaultLLM
+		}
+	}
+	if activeLLMName == "" {
+		activeLLMName = llmEntries[0].Name
+	}
 
-	// 計算上下文窗口容量（token 數）：
-	// 優先取配置值 → 探測 LLAMACPP /v1/models 的 n_ctx → 默認 128K×1024
+	activeLLMBinary := ""
+	activeLLMEnv := map[string]string{}
+	for _, e := range llmEntries {
+		if e.Name == activeLLMName {
+			activeLLMEnv = e.Env
+			rel := e.BinaryPath
+			if rel == "" {
+				rel = "./plugins/llm-" + activeLLMName + "/llm-" + activeLLMName + ext
+			}
+			activeLLMBinary = statBinaryPath(execDir, rel, "./plugins/llm-"+activeLLMName+"/llm-"+activeLLMName+ext)
+			break
+		}
+	}
+	if activeLLMBinary == "" {
+		activeLLMBinary = statBinaryPath(execDir, "", "./plugins/llm-"+activeLLMName+"/llm-"+activeLLMName+ext)
+	}
+	if _, err := os.Stat(activeLLMBinary); os.IsNotExist(err) {
+		fail("LLM binary not found for provider %q at %q", activeLLMName, activeLLMBinary)
+	}
+
+	// 上下文窗口容量（token 数）：配置值 → 探测 LLAMACPP /v1/models 的 n_ctx → 默认 128K×1024
 	contextWindow := 0
-	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil && mainCfg.ContextWindow > 0 {
+	if mainCfg != nil && mainCfg.ContextWindow > 0 {
 		contextWindow = mainCfg.ContextWindow
 	}
 	if contextWindow == 0 {
-		if baseURL := llmEnv["OPENAI_BASE_URL"]; baseURL != "" {
+		if baseURL := activeLLMEnv["OPENAI_BASE_URL"]; baseURL != "" {
 			contextWindow = probeContextWindow(baseURL)
 			if contextWindow > 0 {
 				logger.Info("context window probed from llm server", "window", contextWindow)
@@ -485,83 +393,49 @@ func main() {
 	}
 	logger.Info("context window", "window", contextWindow)
 
-	// 2. 加載 Agent 插件（把上下文窗口容量傳給 agent，供其做 80% 自動壓縮；
-	//    -input 模式下同時傳入單輪模式標記，讓代理循環僅執行一次）
-	agentName := "agent-react-loop" // 默認 Agent 名稱
-	agentBinaryCfg := ""
-	agentEnv := map[string]string{
-		"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
+	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy（来自 preset）
+	merged := &plugin.Config{}
+	merged.Plugins = append(merged.Plugins, llmEntries...)
+	if agentEntry == nil {
+		// config.yaml 未声明 agent，用默认 agent-react-loop
+		merged.Plugins = append(merged.Plugins, plugin.PluginEntry{
+			Name:       "agent-react-loop",
+			Type:       "agent",
+			Enabled:    true,
+			BinaryPath: loadBinaryPath("", "./plugins/agent-react-loop/agent-react-loop"+ext),
+		})
+	} else {
+		// 为 agent 注入运行参数（上下文窗口、persona、单轮标记），再并入其声明 env
+		agentEnv := map[string]string{
+			"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
+		}
+		if presetCfg != nil && presetCfg.Persona != "" {
+			agentEnv["DSC_PRESET_PERSONA"] = presetCfg.Persona
+		}
+		if inputText != "" {
+			agentEnv["DSC_SINGLE_TURN"] = "1"
+		}
+		for k, v := range agentEntry.Env {
+			agentEnv[k] = v
+		}
+		agentEntry.Env = agentEnv
+		merged.Plugins = append(merged.Plugins, *agentEntry)
 	}
-	// 把预设 persona（"你是一個…助手" 身份句）傳給 agent；無則為空、走官方默認
-	if presetCfg != nil && presetCfg.Persona != "" {
-		agentEnv["DSC_PRESET_PERSONA"] = presetCfg.Persona
-	}
-	if inputText != "" {
-		agentEnv["DSC_SINGLE_TURN"] = "1"
-	}
-
-	// 從主配置 config/config.yaml 讀取 Agent 插件的配置
-	if mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml")); err == nil {
-		for _, entry := range mainCfg.Plugins {
-			if entry.Type == "agent" && entry.Enabled {
-				agentName = entry.Name
-				if agentBinaryCfg == "" {
-					agentBinaryCfg = entry.BinaryPath
-				}
-				// 合併 env（如果有）
-				for k, v := range entry.Env {
-					agentEnv[k] = v
-				}
-				break
+	if presetCfg != nil {
+		for _, e := range presetCfg.Plugins {
+			if e.Enabled && (e.Type == "tool" || e.Type == "policy") {
+				merged.Plugins = append(merged.Plugins, e)
 			}
 		}
 	}
 
-	defaultAgentRel := filepath.Join("plugins", "agent-react-loop", "agent-react-loop"+ext)
-	agentBinaryForStat := statBinaryPath(execDir, agentBinaryCfg, defaultAgentRel)
-
-	// 檢查 Agent 二進制文件是否存在
-	if _, err := os.Stat(agentBinaryForStat); os.IsNotExist(err) {
-		fail("Agent binary not found for agent %q at %q", agentName, agentBinaryForStat)
+	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices，
+	// 取代原先 Main 手工编排 LLM→Agent→Tools 顺序与两段式依赖注入
+	if err := mgr.LoadFromConfig(merged); err != nil {
+		fail("failed to load plugins declaratively: %v", err)
 	}
 
-	agentBinaryToLoad := loadBinaryPath(agentBinaryCfg, "./plugins/agent-react-loop/agent-react-loop"+ext)
-
-	broker, llmServiceID, err := mgr.LoadAgentAndGetBroker(agentName, agentBinaryToLoad, agentEnv)
-	if err != nil {
-		fail("failed to load Agent: %v", err)
-	}
-	logger.Info("agent loaded", "name", agentName, "serviceID", llmServiceID)
-
-	// 3. 註冊 LLM 服務（在 goroutine 中，避免阻塞）
-	go func() {
-		broker.AcceptAndServe(llmServiceID, func(opts []grpc.ServerOption) *grpc.Server {
-			s := grpc.NewServer(opts...)
-			proto.RegisterLLMServiceServer(s, &LLMProxyServer{mgr: mgr, llmName: llmName})
-			return s
-		})
-	}()
-
-	// 4. 如果 preset 配置中有插件列表（tools 和 policies），則從配置加載
-	if presetCfg != nil && len(presetCfg.Plugins) > 0 {
-		if err := mgr.LoadToolsAndPoliciesFromConfig(presetCfg); err != nil {
-			fail("failed to load plugins from preset config: %v", err)
-		}
-		logger.Info("plugins loaded from preset config", "count", len(presetCfg.Plugins), "mode", mode)
-	}
-
-	// 5. 注册 ToolService（在 goroutine 中，避免阻塞）
-	toolServiceID := broker.NextId()
-	go func() {
-		broker.AcceptAndServe(toolServiceID, func(opts []grpc.ServerOption) *grpc.Server {
-			s := grpc.NewServer(opts...)
-			proto.RegisterToolServiceServer(s, plugin.NewToolGRPCServer(mgr))
-			return s
-		})
-	}()
-	logger.Info("tool service id generated", "serviceID", toolServiceID)
-
-	// 6. 啟動管理 API
+	// 启动管理 API
 	adminAddr := os.Getenv("DSC_ADMIN_ADDR")
 	if adminAddr == "" {
 		adminAddr = ":9999"
@@ -569,8 +443,8 @@ func main() {
 	mgr.StartAdmin(adminAddr)
 	logger.Info("admin api started", "addr", adminAddr)
 
-	// 7. 获取 Agent 并运行 TUI 聊天界面
-	agentName = mgr.GetMainAgentName()
+	// 获取 Agent 并运行
+	agentName := mgr.GetMainAgentName()
 	if agentName == "" {
 		agentName = "agent-react-loop"
 	}
@@ -578,27 +452,19 @@ func main() {
 	if !ok {
 		fail("agent %s not found after loading", agentName)
 	}
-	// 一次性注入 Agent 的 LLM 與 Tool serviceID；否則 agent-react-loop 的 toolServiceID 為 0，
-	// 首條消息會直接返回 "service IDs not set" 錯誤（並被靜默吞掉，表現為無響應）
-	if err := agent.RegisterServices(context.Background(), llmServiceID, toolServiceID); err != nil {
-		fail("failed to register agent services: %v", err)
-	}
 
-	// 从配置中提取 LLM 模型名称
+	// 从配置提取 LLM 模型名称用于 TUI 展示
 	llmModelName := "Unknown"
-	// 嘗試從 presetCfg 獲取（雖然 presetCfg 中沒有 llm 配置，但保留邏輯）
-	if presetCfg != nil {
-		for _, entry := range presetCfg.Plugins {
-			if entry.Type == "llm" && entry.Enabled {
-				if v, ok := entry.Env["ANTHROPIC_MODEL"]; ok {
-					llmModelName = v
-				} else if v, ok := entry.Env["OPENAI_MODEL"]; ok {
-					llmModelName = v
-				} else if v, ok := entry.Env["OLLAMA_MODEL"]; ok {
-					llmModelName = v
-				}
-				break
+	for _, e := range llmEntries {
+		if e.Name == activeLLMName {
+			if v, ok := e.Env["ANTHROPIC_MODEL"]; ok {
+				llmModelName = v
+			} else if v, ok := e.Env["OPENAI_MODEL"]; ok {
+				llmModelName = v
+			} else if v, ok := e.Env["OLLAMA_MODEL"]; ok {
+				llmModelName = v
 			}
+			break
 		}
 	}
 	if llmModelName == "Unknown" {

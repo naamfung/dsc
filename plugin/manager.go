@@ -42,6 +42,9 @@ type Manager struct {
 	// 新增字段用於 Broker 和服務 ID 管理
 	broker              *goplugin.GRPCBroker // 統一的 broker，由 Agent 提供
 	mainAgentName       string               // 主 Agent 名稱
+	// agentToolServiceID 是挂载在 broker 上的“聚合 Tool 服务”ID：汇总所有工具插件注册表的统一入口，
+	// 一次性注入给 Agent（RegisterServices.ToolServiceId），热重载时沿用同一 ID。
+	agentToolServiceID  uint32
 	llmServiceIDs       map[string]uint32    // llm name -> serviceID
 	toolServiceIDs      map[string]uint32    // tool plugin name -> serviceID
 	pluginToolNames     map[string][]string  // tool plugin name -> list of tool names it provides
@@ -141,7 +144,21 @@ func (m *Manager) transitionLocked(name string, to PluginState, lastErr string) 
 	}
 }
 
-// markDisposedLocked 统一卸载终态：Stopping -> Disposed（需已持有 m.mu）。
+// markPendingLocked 把插件置为待办（PENDING）：依赖未满足，暂不对外服务（需已持有 m.mu）。
+// 对应 DSH 的 PENDING，等待依赖注入后就绪。进程尚未拉起的插件直接预置 PENDING 快照；
+// 已拉起的（如 agent）则从当前态迁入 PENDING。
+func (m *Manager) markPendingLocked(name, typ string, reason string) {
+	st, ok := m.states[name]
+	if !ok {
+		m.states[name] = &RuntimeState{Type: typ, State: StatePending, UpdatedAt: time.Now(), LastError: reason}
+		m.logger.Info("plugin marked pending", "name", name, "reason", reason)
+		return
+	}
+	st.Type = typ
+	m.transitionLocked(name, StatePending, reason)
+}
+
+// markDisposedLocked 統一卸載終態：Stopping -> Disposed（需已持有 m.mu）。
 func (m *Manager) markDisposedLocked(name string) {
 	m.transitionLocked(name, StateDisposed, "")
 }
@@ -446,15 +463,6 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 		return nil, 0, fmt.Errorf("plugin does not implement Agent interface")
 	}
 
-	// 透過 RPC 注冊 LLM serviceID（tool serviceID 在聲明式注入時一次下發）
-	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: serviceID, ToolServiceId: 0})
-	if err != nil {
-		client.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
-		return nil, 0, fmt.Errorf("failed to register service IDs on agent: %w", err)
-	}
-
 	m.clients[name] = client
 	m.agents[name] = impl
 	m.typeMap[name] = "agent"
@@ -470,11 +478,33 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	_, err := m.loadLLMEntryLocked(PluginEntry{
+		Name:       name,
+		Type:       "llm",
+		BinaryPath: binaryPath,
+		Env:        env,
+	})
+	return err
+}
 
+// loadLLMEntryLocked 加載 LLM 插件並存儲 provider（需已持有 m.mu）。
+// 供 LoadFromConfig 在声明式加载流程中复用，避免重复加锁。
+func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
+	binaryPath := entry.BinaryPath
+	if binaryPath == "" {
+		ext := ""
+		if runtime.GOOS == "windows" {
+			ext = ".exe"
+		}
+		binaryPath = fmt.Sprintf("./plugins/%s/%s%s", entry.Name, entry.Name, ext)
+	}
+	binaryPath = normalizeBinaryPath(binaryPath)
+
+	name := entry.Name
 	// 校驗插件目錄命名規範
 	dirName := getPluginDirectoryName(binaryPath)
 	if err := validatePluginDirectoryName("llm", dirName); err != nil {
-		return fmt.Errorf("invalid LLM plugin directory name '%s': %w", dirName, err)
+		return nil, fmt.Errorf("invalid LLM plugin directory name '%s': %w", dirName, err)
 	}
 
 	// 如果已加載，先卸載
@@ -488,8 +518,8 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 	if m.config.ExecDir != "" {
 		cmd.Dir = m.config.ExecDir
 	}
-	if len(env) > 0 {
-		cmd.Env = buildEnv(env)
+	if len(entry.Env) > 0 {
+		cmd.Env = buildEnv(entry.Env)
 	}
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
@@ -506,7 +536,7 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 	if err != nil {
 		client.Kill()
 		m.transitionLocked(name, StateFailed, err.Error())
-		return fmt.Errorf("failed to connect to LLM plugin: %w", err)
+		return nil, fmt.Errorf("failed to connect to LLM plugin: %w", err)
 	}
 	m.transitionLocked(name, StateConnecting, "")
 
@@ -515,14 +545,14 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 	if err != nil {
 		client.Kill()
 		m.transitionLocked(name, StateFailed, err.Error())
-		return fmt.Errorf("failed to dispense LLM plugin: %w", err)
+		return nil, fmt.Errorf("failed to dispense LLM plugin: %w", err)
 	}
 
 	impl, ok := raw.(LLMProvider)
 	if !ok {
 		client.Kill()
 		m.transitionLocked(name, StateFailed, "plugin does not implement LLMProvider interface")
-		return fmt.Errorf("plugin does not implement LLMProvider interface")
+		return nil, fmt.Errorf("plugin does not implement LLMProvider interface")
 	}
 
 	m.clients[name] = client
@@ -532,7 +562,7 @@ func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string)
 	go m.monitorExit(name, client)
 
 	m.logger.Info("llm plugin loaded", "name", name)
-	return nil
+	return impl, nil
 }
 
 // GetLLM 獲取已加載的 LLM 實例
@@ -677,9 +707,9 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		return fmt.Errorf("new agent plugin is not a gRPC client")
 	}
 
-	// 透過 RPC 重新注冊 LLM serviceID（tool serviceID 由聲明式注入時一次下發）
+	// 透過 RPC 重新注冊 LLM serviceID（tool serviceID 沿用已有聚合 Tool 服务）
 	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: oldServiceID, ToolServiceId: 0})
+	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: oldServiceID, ToolServiceId: m.agentToolServiceID})
 	if err != nil {
 		newClient.Kill()
 		m.transitionLocked(name, StateFailed, err.Error())
@@ -1226,7 +1256,15 @@ func CheckCircularDependencies(entries []PluginEntry) error {
 	return nil
 }
 
-// LoadFromConfig 從配置加載所有插件（重新設計版：先加載 Agent 獲取 Broker，再加載 LLM/Tool）
+// LoadFromConfig 声明式加载所有插件（第 2 步交付）：
+// 复用配置中的 DependsOn/Type，在 Manager 内做依赖拓扑排序，取代原先由 Main 宿主手工编排加载序、
+// 手工两段式注入依赖的做法。流程：
+//  1. Agent 作为 broker 提供者优先拉起进程（获取 broker），但先不激活（状态 Ready/PENDING）；
+//  2. 其余 LLM/Tool/Policy 按 DependsOn 拓扑排序加载（LLM 经 loadLLMEntryLocked 原生加载后，
+//     再由 serveLLMProviderLocked 挂载为 broker 上的 gRPC 服务；Tool/Policy 走 loadPluginWithBroker）；
+//     依赖未满足的 provider 置为 PENDING 并跳过，而非硬失败；
+//  3. 依 agent 的 DependsOn 解析 LLM serviceID 与「聚合 Tool 服务」ID，一次性 RegisterServices 注入并置为 ACTIVE；
+//     若 agent 声明的 LLM 依赖缺失，则退回 PENDING 等待后续注入。
 func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1236,21 +1274,30 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		return fmt.Errorf("circular dependency detected in plugin configuration: %w", err)
 	}
 
-	// 第一步：找到 Agent 插件（假設第一個類型為 agent 的）
+	// 整体已声明（启用）的插件名，用于判定依赖指向的是否为本配置声明的插件
+	declared := make(map[string]bool)
+	for _, e := range cfg.Plugins {
+		if e.Enabled {
+			declared[e.Name] = true
+		}
+	}
+
+	// 分離 Agent（broker 提供者）與 provider（LLM/Tool/Policy）
 	var agentEntry *PluginEntry
-	var otherEntries []PluginEntry
-	for _, entry := range cfg.Plugins {
+	var providerEntries []PluginEntry
+	for i := range cfg.Plugins {
+		entry := cfg.Plugins[i]
 		if !entry.Enabled {
 			continue
 		}
 		if entry.Type == "agent" {
 			if agentEntry == nil {
-				agentEntry = &entry
+				agentEntry = &cfg.Plugins[i]
 			} else {
 				m.logger.Warn("multiple agent plugins found, using first one", "first", agentEntry.Name, "ignored", entry.Name)
 			}
-		} else {
-			otherEntries = append(otherEntries, entry)
+		} else if entry.Type == "llm" || entry.Type == "tool" || entry.Type == "policy" {
+			providerEntries = append(providerEntries, entry)
 		}
 	}
 
@@ -1258,60 +1305,182 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		return fmt.Errorf("no agent plugin found in config")
 	}
 
-	// 第二步：加載 Agent 並獲取 Broker
-	broker, agent, err := m.loadAgentAndGetBroker(*agentEntry)
+	// 先拉起 agent 进程获取 broker（代理依赖 LLM/Tool 的注入，激活放到 provider 就绪之后）
+	broker, _, err := m.loadAgentAndGetBroker(*agentEntry)
 	if err != nil {
 		return fmt.Errorf("failed to load agent: %w", err)
 	}
 	m.broker = broker
 	m.mainAgentName = agentEntry.Name
 
-	// 第三步：加載其他插件（LLM、Tool）
-	for _, entry := range otherEntries {
-		if err := m.loadPluginWithBroker(entry, broker); err != nil {
+	// 按 DependsOn 对 provider 做拓扑排序；未能满足依赖的进入 PENDING
+	sorted, pending := topoSortPlugins(providerEntries, declared)
+	for _, e := range pending {
+		m.markPendingLocked(e.Name, e.Type, "dependency not satisfied")
+	}
+	for _, entry := range sorted {
+		if err := m.loadProviderDeclarativeLocked(entry); err != nil {
+			m.transitionLocked(entry.Name, StateFailed, err.Error())
 			return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
 		}
 	}
 
-	// 第四步：為 Agent 一次性注入 LLM 與 Tool 服務 ID
-	if agentEntry.DependsOn != nil {
-		var llmID, toolID uint32
-		hasLLM := false
-		hasTool := false
-
-		if agentEntry.DependsOn.LLM != "" {
-			if id, ok := m.llmServiceIDs[agentEntry.DependsOn.LLM]; ok {
-				llmID = id
-				hasLLM = true
-			} else {
-				return fmt.Errorf("dependent LLM '%s' not loaded", agentEntry.DependsOn.LLM)
-			}
+	// 依 agent 的 DependsOn 解析 LLM 与聚合 Tool 服务，一次性注入
+	hasLLM := false
+	toolID := uint32(0)
+	if agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
+		if id, ok := m.llmServiceIDs[agentEntry.DependsOn.LLM]; ok {
+			hasLLM = true
+			m.agentServiceIDs[agentEntry.Name] = id // 记录注入的 LLM serviceID，热重载时沿用
 		}
-
-		if len(agentEntry.DependsOn.Tools) > 0 {
-			toolName := agentEntry.DependsOn.Tools[0]
-			// 依賴值可為工具名（如 read_file），也可為提供該工具的插件名（如 filesystem）
-			if id, ok := m.toolNameToServiceID[toolName]; ok {
-				toolID = id
-				hasTool = true
-			} else if id, ok := m.toolServiceIDs[toolName]; ok {
-				toolID = id
-				hasTool = true
-			} else {
-				return fmt.Errorf("dependent Tool '%s' not loaded", toolName)
-			}
+	}
+	// 有工具插件加载或 agent 声明了工具依赖时，才提供聚合 Tool 服务
+	if len(m.toolServiceIDs) > 0 || (agentEntry.DependsOn != nil && len(agentEntry.DependsOn.Tools) > 0) {
+		if id, err := m.serveAggregateToolLocked(); err == nil {
+			toolID = id
+		} else {
+			m.logger.Warn("aggregate tool service unavailable", "error", err)
 		}
+	}
 
-		// 一次性注入 Agent 的 LLM 與 Tool serviceID
-		if err := agent.RegisterServices(context.Background(), llmID, toolID); err != nil {
+	if hasLLM {
+		agent, ok := m.agents[agentEntry.Name]
+		if !ok {
+			return fmt.Errorf("agent %s not loaded", agentEntry.Name)
+		}
+		if err := agent.RegisterServices(context.Background(), m.agentServiceIDs[agentEntry.Name], toolID); err != nil {
 			return fmt.Errorf("failed to register agent services: %w", err)
 		}
 		m.transitionLocked(agentEntry.Name, StateActive, "")
-		m.logger.Info("agent dependencies registered", "llmID", llmID, "toolID", toolID, "registeredLLM", hasLLM, "registeredTool", hasTool)
+		m.logger.Info("agent activated declaratively", "name", agentEntry.Name, "llmID", m.agentServiceIDs[agentEntry.Name], "toolID", toolID)
+	} else {
+		m.markPendingLocked(agentEntry.Name, "agent", "dependent LLM not loaded")
+		m.logger.Warn("agent deferred to pending (missing LLM dependency)", "name", agentEntry.Name)
 	}
 
 	m.logger.Info("all plugins loaded from config", "agent", agentEntry.Name)
 	return nil
+}
+
+// loadProviderDeclarativeLocked 加载单个 provider 条目（需已持有 m.mu）。
+// LLM 走原生进程内加载（loadLLMEntryLocked）后挂载为 broker 上的 gRPC 服务；
+// Tool/Policy 走 loadPluginWithBroker（含类型/版本元数据校验）。
+func (m *Manager) loadProviderDeclarativeLocked(entry PluginEntry) error {
+	switch entry.Type {
+	case "llm":
+		if _, err := m.loadLLMEntryLocked(entry); err != nil {
+			return err
+		}
+		if _, err := m.serveLLMProviderLocked(entry.Name); err != nil {
+			return err
+		}
+	case "tool", "policy":
+		if err := m.loadPluginWithBroker(entry, m.broker); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported provider type: %s", entry.Type)
+	}
+	return nil
+}
+
+// serveAggregateToolLocked 在 broker 上挂载「聚合 Tool 服务」并返回其 serviceID（需已持有 m.mu）。
+// 该服务汇总所有工具插件注册表（ToolGRPCServer），供 agent 一次性注入，替代 Main 手工注册。
+func (m *Manager) serveAggregateToolLocked() (uint32, error) {
+	if m.broker == nil {
+		return 0, fmt.Errorf("broker not available, cannot serve aggregate tool service")
+	}
+	serviceID := m.broker.NextId()
+	go m.broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+		s := grpc.NewServer(opts...)
+		proto.RegisterToolServiceServer(s, NewToolGRPCServer(m))
+		return s
+	})
+	m.agentToolServiceID = serviceID
+	return serviceID, nil
+}
+
+// declaredPluginDeps 返回 entry 声明的、指向「整体已声明（启用）插件集」内插件的依赖名（去重）。
+// 只有这些才参与拓扑排序；指向非插件名（如具体工具名 read_file）的引用由运行时解析，不算拓扑依赖。
+func declaredPluginDeps(entry PluginEntry, declared map[string]bool) []string {
+	var deps []string
+	seen := make(map[string]bool)
+	add := func(n string) {
+		if n != "" && declared[n] && !seen[n] {
+			seen[n] = true
+			deps = append(deps, n)
+		}
+	}
+	if entry.DependsOn != nil {
+		add(entry.DependsOn.LLM)
+		for _, t := range entry.DependsOn.Tools {
+			add(t)
+		}
+	}
+	return deps
+}
+
+// topoSortPlugins 依 DependsOn 对启用条目做稳定拓扑排序（Kahn），返回两个集合：
+//   - sorted：依赖已满足、可立即加载的条目（依赖先于依赖者）；
+//   - pending：依赖指向本批声明插件但未满足（如指向禁用/缺失的插件）的条目。
+//
+// 环形依赖已在调用前置的 CheckCircularDependencies 拦截，故此处的 pending 均为「缺依赖」。
+func topoSortPlugins(entries []PluginEntry, declared map[string]bool) (sorted, pending []PluginEntry) {
+	byName := make(map[string]PluginEntry, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+
+	// 每个节点的拓扑依赖（去重）
+	depOf := make(map[string][]string, len(entries))
+	for _, e := range entries {
+		depOf[e.Name] = declaredPluginDeps(e, declared)
+	}
+
+	indeg := make(map[string]int, len(entries))
+	dependents := make(map[string][]string)
+	for n, ds := range depOf {
+		indeg[n] = len(ds)
+		for _, d := range ds {
+			dependents[d] = append(dependents[d], n)
+		}
+	}
+
+	// 就绪队列：入度为 0 的节点
+	ready := make([]string, 0, len(entries))
+	for n, d := range indeg {
+		if d == 0 {
+			ready = append(ready, n)
+		}
+	}
+
+	head := 0
+	for head < len(ready) {
+		n := ready[head]
+		head++
+		// 依赖中途被判定未满足的节点不会入队；此处仅处理已入队节点
+		if _, ok := byName[n]; !ok {
+			continue
+		}
+		sorted = append(sorted, byName[n])
+		for _, dep := range dependents[n] {
+			indeg[dep]--
+			if indeg[dep] == 0 {
+				ready = append(ready, dep)
+			}
+		}
+	}
+
+	placed := make(map[string]bool, len(sorted))
+	for _, e := range sorted {
+		placed[e.Name] = true
+	}
+	for _, e := range entries {
+		if !placed[e.Name] {
+			pending = append(pending, e)
+		}
+	}
+	return sorted, pending
 }
 
 // loadAgentAndGetBroker 加載 Agent 插件，返回 broker 和 Agent 實例（尚未設置依賴）
