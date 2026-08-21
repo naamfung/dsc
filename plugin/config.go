@@ -1,15 +1,26 @@
 package plugin
 
+import (
+	"os"
+	"path/filepath"
+
+	"gopkg.in/yaml.v3"
+)
+
+var ConfigPath = "./config/config.yaml" // 默認配置文件路徑
+
 type Config struct {
-	WorkspaceRoot string        `json:"workspace_root" yaml:"workspace_root"`
-	Plugins       []PluginEntry `json:"plugins" yaml:"plugins"`
+	WorkspaceRoot            string        `json:"workspace_root" yaml:"workspace_root"`
+	WorkspaceProtectionEnabled bool          `json:"workspace_protection_enabled" yaml:"workspace_protection_enabled"`
+	Mode                     string        `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
+	Plugins                  []PluginEntry `json:"plugins" yaml:"plugins"`
 	// 可保留舊的 LLM 字段便於過渡，但推薦統一使用 Plugins
-	DefaultLLM    string        `json:"default_llm" yaml:"default_llm"`
+	DefaultLLM               string        `json:"default_llm" yaml:"default_llm"`
 	// ContextWindow 上下文窗口大小（token 数）；0 表示未配置，
 	// 由宿主探测 LLAMACPP 的 /v1/models 獲取 n_ctx，仍失敗則用默認 128K×1024
-	ContextWindow int `json:"context_window" yaml:"context_window"`
+	ContextWindow            int           `json:"context_window" yaml:"context_window"`
 	// Persona "你是一個…助手" 身份句（預設可配，同 DSH 的 deployment persona）；空則用 DeepSeek 官方默認
-	Persona string `json:"persona" yaml:"persona"`
+	Persona                  string        `json:"persona" yaml:"persona"`
 }
 
 type PluginEntry struct {
@@ -26,4 +37,71 @@ type PluginEntry struct {
 type PluginDepends struct {
 	LLM   string   `json:"llm" yaml:"llm"`
 	Tools []string `json:"tools" yaml:"tools"`
+}
+
+// LoadConfig 從指定路徑加載配置
+func LoadConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// SaveConfig 將配置保存到指定路徑
+func SaveConfig(path string, cfg *Config) error {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	// 確保目錄存在
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// UpdateWorkspaceProtectionEnabled 更新工作空間保護狀態並保存到配置文件
+func UpdateWorkspaceProtectionEnabled(enabled bool, configPath string) error {
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		// 如果配置文件不存在或加載失敗，創建一個新的配置
+		cfg = &Config{
+			WorkspaceRoot:            "./workspace",
+			WorkspaceProtectionEnabled: enabled,
+			Mode:                     "standard",
+			Plugins:                  nil,
+			DefaultLLM:               "",
+			ContextWindow:            0,
+			Persona:                  "",
+		}
+	} else {
+		cfg.WorkspaceProtectionEnabled = enabled
+	}
+	return SaveConfig(configPath, cfg)
+}
+
+// UpdateMode 更新模式狀態並保存到配置文件
+func UpdateMode(mode string, configPath string) error {
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		// 如果配置文件不存在或加載失敗，創建一個新的配置
+		cfg = &Config{
+			WorkspaceRoot:            "./workspace",
+			WorkspaceProtectionEnabled: false,
+			Mode:                     mode,
+			Plugins:                  nil,
+			DefaultLLM:               "",
+			ContextWindow:            0,
+			Persona:                  "",
+		}
+	} else {
+		cfg.Mode = mode
+	}
+	return SaveConfig(configPath, cfg)
 }

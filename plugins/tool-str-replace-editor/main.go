@@ -115,6 +115,42 @@ func withinBase(real, realBase string) bool {
 	return strings.HasPrefix(real, realBase+string(os.PathSeparator)) || real == realBase
 }
 
+// isAbsPath 檢查路徑是否為絕對路徑（支持 Windows 盤符絕對路徑如 C:\ 或 C:/，以及 Unix 絕對路徑如 /xxx）
+func isAbsPath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+	// 檢查是否為 Windows 盤符絕對路徑（如 C:/xxx 或 C:\xxx）
+	if len(path) >= 2 && path[1] == ':' {
+		c := path[0]
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	}
+	// 檢查是否為 Unix 絕對路徑或 Windows 無盤符根路徑（以 / 或 \ 開頭）
+	if len(path) >= 1 && (path[0] == '/' || path[0] == '\\') {
+		return true
+	}
+	return false
+}
+
+// makeAbsPath 將路徑轉換為絕對路徑，正確處理 Unix 絕對路徑和 Windows 盤符絕對路徑
+func makeAbsPath(reqPath string) (string, error) {
+	// 先使用 FromSlash 轉換斜槓，將 / 轉換為 \（在 Windows 上）
+	cleanReq := filepath.FromSlash(reqPath)
+
+	// 檢查是否為 Windows 盤符絕對路徑 (如 C:\ 或 C:/)
+	if len(cleanReq) >= 2 && cleanReq[1] == ':' {
+		c := cleanReq[0]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			return filepath.Abs(cleanReq)
+		}
+	}
+
+	// 檢查是否為 Unix 絕對路徑或 Windows 無盤符根路徑 (以 / 或 \ 開頭)
+	// 在 Windows 上，以 \ 開頭的路徑被視為相對於當前驅動器的根目錄
+	// 直接使用 filepath.Abs 即可正確處理這種情況（會映射為如 D:\Agents\novelforge\main.go）
+	return filepath.Abs(cleanReq)
+}
+
 // resolveExistingAncestor 從 dir 開始向上逐級查找第一個存在的路徑並解析符號鏈接；
 // 返回其真實路徑。所有層級都不存在時返回 false。
 func resolveExistingAncestor(dir string) (string, bool) {
@@ -134,6 +170,26 @@ func resolveExistingAncestor(dir string) (string, bool) {
 // safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接繞過）。
 // base 若不存在會先創建；目標路徑或其父目錄不存在時也能正常解析（中間目錄可由調用方自行創建）。
 func safePath(base, reqPath string) (string, error) {
+	// 如果 reqPath 已經是絕對路徑（包括 Windows 盤符絕對路徑如 C:\ 或 C:/，以及 Unix 絕對路徑如 /xxx），則直接基於它進行安全校驗，絕不與 base 拼接
+	if isAbsPath(reqPath) {
+		absReq, err := makeAbsPath(reqPath)
+		if err != nil {
+			return "", err
+		}
+		realReq, err := filepath.EvalSymlinks(absReq)
+		if err != nil {
+			// 解析失敗，可能文件不存在，則檢查父目錄
+			parent := filepath.Dir(absReq)
+			_, symlinksErr := filepath.EvalSymlinks(parent)
+			if symlinksErr != nil {
+				return "", symlinksErr
+			}
+			// 對於絕對路徑，返回解析後的絕對路徑（不強制要求它在 base 下）
+			return absReq, nil
+		}
+		return realReq, nil
+	}
+
 	absBase, err := filepath.Abs(base)
 	if err != nil {
 		return "", err

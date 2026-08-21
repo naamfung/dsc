@@ -1059,6 +1059,48 @@ func renderToolCall(name, argsJSON string) string {
 	if strings.TrimSpace(name) == "" {
 		return ""
 	}
+
+	// 針對 str_replace_editor 工具，解析 command 和 path，顯示為 Edit(View, path) 等格式
+	if name == "str_replace_editor" || strings.Contains(name, "editor") {
+		var argsMap map[string]interface{}
+		if err := json.Unmarshal([]byte(argsJSON), &argsMap); err == nil {
+			if cmd, ok := argsMap["command"].(string); ok {
+				var cmdDisplay string
+				switch strings.ToLower(cmd) {
+				case "view":
+					cmdDisplay = "View"
+				case "create":
+					cmdDisplay = "Create"
+				case "str_replace":
+					cmdDisplay = "StrReplace"
+				case "insert":
+					cmdDisplay = "Insert"
+				default:
+					// Fallback: capitalize first letter
+					runes := []rune(cmd)
+					if len(runes) > 0 {
+						runes[0] = rune(strings.ToUpper(string(runes[0]))[0])
+					}
+					cmdDisplay = string(runes)
+				}
+
+				verb := "Edit"
+				head := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#05A5A5")).Render(verb)
+
+				if path, ok := argsMap["path"].(string); ok && strings.TrimSpace(path) != "" {
+					clampedPath := clampToolArg(path, 60)
+					// 顯示格式：Edit(View, /root/file/path)
+					argStr := "(" + cmdDisplay + ", " + clampedPath + ")"
+					head += dimSty.Render(argStr)
+				} else {
+					head += dimSty.Render("(" + cmdDisplay + ")")
+				}
+				return "  " + lipgloss.NewStyle().Foreground(accent).Render("●") + " " + head
+			}
+		}
+	}
+
+	// 默認顯示邏輯
 	verb := toolDisplayName(name)
 	dot := lipgloss.NewStyle().Foreground(accent).Render("●")
 	head := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#05A5A5")).Render(verb)
@@ -1116,6 +1158,8 @@ var slashCommands = []compItem{
 	{label: "/skills", insert: "/skills", hint: "列出所有已安装的技能"},
 	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
+	{label: "/workspace on", insert: "/workspace on", hint: "启用工作空间机制保护"},
+	{label: "/workspace off", insert: "/workspace off", hint: "关闭工作空间机制保护"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -1222,6 +1266,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /skills      列出所有已安装的技能",
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
+			"  /workspace on   启用工作空间机制保护（限制文件操作在工作区目录内）",
+			"  /workspace off  关闭工作空间机制保护（允许模型访问整个文件系统而不作限制）",
 			"  /exit        退出聊天",
 		}, "\n")
 		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 帮助") + "\n" + help)
@@ -1258,7 +1304,12 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "minimal" // 實時反映標題欄模式
-				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
+				err := plugin.UpdateMode("minimal", plugin.ConfigPath)
+				if err != nil {
+					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+				} else {
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
+				}
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
@@ -1276,10 +1327,43 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "standard" // 實時反映標題欄模式
-				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
+				err := plugin.UpdateMode("standard", plugin.ConfigPath)
+				if err != nil {
+					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+				} else {
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
+				}
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/workspace on":
+		plugin.WorkspaceProtectionEnabled = true
+		err := plugin.UpdateWorkspaceProtectionEnabled(true, plugin.ConfigPath)
+		if err != nil {
+			m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+		} else {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 工作空間保護") + "\n已啟用工作空間機制保護（限制文件操作在工作區目錄內）。")
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/workspace off":
+		plugin.WorkspaceProtectionEnabled = false
+		err := plugin.UpdateWorkspaceProtectionEnabled(false, plugin.ConfigPath)
+		if err != nil {
+			m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+		} else {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 工作空間保護") + "\n已關閉工作空間機制保護（允許模型訪問整個文件系統而不作限制）。")
 		}
 		m.input.SetValue("")
 		m.completion = completion{}

@@ -396,6 +396,15 @@ func main() {
 		presetCfg = nil
 	}
 
+	// 從主配置 config/config.yaml 讀取工作空間保護狀態
+	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
+	if err == nil && mainCfg.WorkspaceProtectionEnabled {
+		plugin.WorkspaceProtectionEnabled = true
+	} else {
+		plugin.WorkspaceProtectionEnabled = false
+	}
+	logger.Info("workspace protection enabled", "enabled", plugin.WorkspaceProtectionEnabled)
+
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
 		PluginDir:    filepath.Join(execDir, "plugins"),
 		ExecDir:      execDir,

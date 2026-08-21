@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/lipgloss/v2 v2.0.4
 	github.com/anthropics/anthropic-sdk-go v1.63.1
+	github.com/atotto/clipboard v0.1.4
 	github.com/casbin/casbin v1.9.1
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
@@ -15,11 +16,13 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/garyburd/redigo v1.6.4
 	github.com/go-playground/validator/v10 v10.30.3
+	github.com/go-rod/rod v0.116.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-version v1.9.0
+	github.com/jig/lisp v0.2.24
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
 	github.com/microcosm-cc/bluemonday v1.0.27
@@ -36,11 +39,11 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/vmihailenco/msgpack.v2 v2.9.2
 	gopkg.in/yaml.v3 v3.0.1
+	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
 	github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible // indirect
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
@@ -57,7 +60,6 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-rod/rod v0.116.2 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
@@ -66,7 +68,6 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
-	github.com/jig/lisp v0.2.24 // indirect
 	github.com/jig/scanner v1.2.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
@@ -98,6 +99,7 @@ require (
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
 	google.golang.org/appengine v1.6.5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
@@ -106,6 +108,7 @@ replace github.com/hashicorp/go-plugin => ./libs/go-plugin-1.8.0
 
 // LLM SDK 改用本地版本（libs/），避免外部破坏性修改影响稳定性
 replace github.com/anthropics/anthropic-sdk-go => ./libs/anthropic-sdk-go
+
 replace github.com/sashabaranov/go-openai => ./libs/go-openai
 
 replace github.com/ollama/ollama => ./libs/ollama
