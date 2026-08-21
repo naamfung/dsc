@@ -133,6 +133,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
+	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
+	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))
 	return m
 }
 
