@@ -1199,7 +1199,12 @@ func readSkillFrontmatter(path, fallback string) (string, string) {
 func listSkills() []string {
 	dir := os.Getenv("DSC_SKILLS_DIR")
 	if dir == "" {
-		dir = "./skills"
+		// 使用 os.Getwd() 獲取當前工作目錄的絕對路徑，然後拼接 skills 目錄
+		cwd, err := os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+		dir = filepath.Join(cwd, "skills")
 	}
 	var out []string
 	if builtin := scanSkillSection(filepath.Join(dir, "builtin")); len(builtin) > 0 {
