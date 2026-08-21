@@ -115,7 +115,7 @@ func main() {
 	
 	var extraAdvice string
 	if runtime.GOOS == "windows" {
-		extraAdvice = "Use standard Unix/Linux shell commands (e.g., ls, find, cd, grep) instead of PowerShell-specific cmdlets."
+		extraAdvice = "Note: This interpreter does not support PowerShell (PWSH), CMD, or other Windows-specific shell command interpreters. Please use standard Unix/Linux POSIX shell commands only (e.g., ls, find, cd, grep)."
 	}
 
 	description := baseDescription + " " + pathAdvice
