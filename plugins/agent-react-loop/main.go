@@ -255,17 +255,19 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				}
 				return nil, err
 			}
-			// 压缩落地（第 6 步·提交 2 的临时方案）：以摘要重建会话，
-			// 保持与旧实现「整段替换」等价的行为；提交 3 将改为 surface replace 保留日志。
-			ns := session.New()
-			ns.Append(session.UserMessage, &session.UserMessageData{
-				Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
-				Source:  "compaction",
-			}, &session.SurfaceOp{Op: session.SurfaceAppend})
-			a.sessMu.Lock()
-			a.sess = ns
-			a.sessMu.Unlock()
-			sess = ns
+			// 压缩落地（surface replace）：追加 CompactionSummary 事件遮蔽全部旧 surface
+			// 节点，派生历史退化为 [system, 摘要]，但原事件保留在日志（append-only 无损，
+			// 可回放/恢复）。替代提交 2 的「重建会话」临时方案。
+			nodes := sess.SurfaceNodes()
+			if len(nodes) > 0 {
+				sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
+					Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
+				}, &session.SurfaceOp{Op: session.SurfaceReplace, Start: nodes[0], End: nodes[len(nodes)-1]})
+			} else {
+				sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
+					Content: summary,
+				}, &session.SurfaceOp{Op: session.SurfaceAppend})
+			}
 			// 壓縮後已用容量無法從 Chat 精確獲取，重置為 0，下一輪流式調用會更新為真實值
 			a.lastPromptTokens = 0
 		}
