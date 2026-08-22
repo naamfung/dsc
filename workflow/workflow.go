@@ -8,10 +8,11 @@
 //   - 事件仅供观察，携带 run id + meta，不暴露取消/释放权限
 //
 // 脚本为 async 模型（对齐 DSH）：agent() 返回 Promise，脚本需 await；
-// parallel(thunks) 在并发上限内扇出 thunk（子 agent 真并发，受
-// MaxConcurrentAgents 并发上限与 MaxTotalAgents 总量上限双约束）。
-// 致命错误（INVALID_ARGUMENT / AGENT_CAP / ITEM_CAP 等）逸出 parallel，
-// 普通子 agent 失败在脚本侧可见 null。pipeline() 等仍暂缓。
+// parallel(thunks) 在并发上限内扇出 thunk，pipeline(items, ...stages) 无跨阶段
+// 屏障地逐项跑 stage 链（stage 签名 (previous, item, index)，item 间并发）。
+// 子 agent 真并发，受 MaxConcurrentAgents 并发上限与 MaxTotalAgents 总量上限
+// 双约束。致命错误（INVALID_ARGUMENT / AGENT_CAP / ITEM_CAP 等）逸出组合器，
+// 普通子 agent 失败与普通 stage 错误在脚本侧可见 null。
 package workflow
 
 import (

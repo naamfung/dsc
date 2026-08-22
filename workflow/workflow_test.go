@@ -369,3 +369,95 @@ func TestRunParallelFatalEscapes(t *testing.T) {
 		t.Fatalf("AGENT_CAP should escape parallel, got %+v", r)
 	}
 }
+
+func TestRunPipeline(t *testing.T) {
+	fr := &fakeRunner{resps: map[string]string{"read a": "ra", "read b": "rb"}}
+	r := run(t, StartRequest{
+		Meta:   Meta{Name: "pipe", Description: "staged fan-out"},
+		Script: `const answers = await pipeline(["a", "b"], (prev, item) => agent("read " + item)); return answers;`,
+		Runner: fr,
+	})
+	if r.StopReason != StopCompleted {
+		t.Fatalf("stop reason = %q, err = %s", r.StopReason, r.Error)
+	}
+	arr, _ := r.Value.([]any)
+	if len(arr) != 2 || arr[0] != "ra" || arr[1] != "rb" {
+		t.Fatalf("value = %+v", r.Value)
+	}
+	if r.AgentsStarted != 2 || len(fr.calls) != 2 {
+		t.Fatalf("agents = %d, calls = %v", r.AgentsStarted, fr.calls)
+	}
+}
+
+// TestRunPipelinePreviousAndIndex 验证 stage 签名 (previous, item, index)：
+// previous 为上一 stage 输出（首个 stage 为 item 本身）。
+func TestRunPipelinePreviousAndIndex(t *testing.T) {
+	r := run(t, StartRequest{
+		Meta:   Meta{Name: "pipe2", Description: "prev chain"},
+		Script: `return await pipeline([10, 20], (prev, item, i) => prev + item, (prev, item, i) => prev * (i + 1));`,
+		Runner: &fakeRunner{},
+	})
+	if r.StopReason != StopCompleted {
+		t.Fatalf("got %+v", r)
+	}
+	// item10: stage1=10+10=20, stage2=20*(0+1)=20；item20: stage1=20+20=40, stage2=40*(1+1)=80
+	arr, _ := r.Value.([]any)
+	if len(arr) != 2 || arr[0] != int64(20) || arr[1] != int64(80) {
+		t.Fatalf("value = %+v", r.Value)
+	}
+}
+
+// TestRunPipelineStageErrorNullsItem 验证普通 stage 错误 → 该 item 为 null，
+// 其余 item 不受影响（对齐 DSH per-item null）。
+func TestRunPipelineStageErrorNullsItem(t *testing.T) {
+	r := run(t, StartRequest{
+		Meta:   Meta{Name: "pipe3", Description: "item null"},
+		Script: `return await pipeline([10, 20], (prev, item) => { if (item === 10) throw new Error("ordinary failure"); return "kept-" + item; });`,
+		Runner: &fakeRunner{},
+	})
+	if r.StopReason != StopCompleted {
+		t.Fatalf("got %+v", r)
+	}
+	arr, _ := r.Value.([]any)
+	if len(arr) != 2 || arr[0] != nil || arr[1] != "kept-20" {
+		t.Fatalf("value = %+v", r.Value)
+	}
+}
+
+// TestRunPipelineValidation 校验 pipeline 参数契约：非数组、无 stage、
+// 非函数 stage、超单次条目上限。
+func TestRunPipelineValidation(t *testing.T) {
+	fr := &fakeRunner{}
+	cases := []struct{ script, code, want string }{
+		{`return await pipeline("no", () => 1);`, ErrInvalidArgument, "requires an items array"},
+		{`return await pipeline([1]);`, ErrInvalidArgument, "at least one stage"},
+		{`return await pipeline([1], "x");`, ErrInvalidArgument, "stage 0 is not a function"},
+		{`return await pipeline([1, 2, 3], (x) => x);`, ErrItemCap, "maxItemsPerCall"},
+	}
+	for _, c := range cases {
+		r := run(t, StartRequest{
+			Meta:            Meta{Name: "pv2", Description: "x"},
+			Script:          c.script,
+			Runner:          fr,
+			MaxItemsPerCall: 2,
+		})
+		if r.StopReason != StopError || !strings.Contains(r.Error, c.code) || !strings.Contains(r.Error, c.want) {
+			t.Fatalf("%q = %+v", c.script, r)
+		}
+	}
+}
+
+// TestRunPipelineFatalEscapes 验证致命错误逸出 pipeline：stage 内 agent
+// 超总量上限 → AGENT_CAP 以 stopReason=error 结算（非 per-item null）。
+func TestRunPipelineFatalEscapes(t *testing.T) {
+	fr := &fakeRunner{resps: map[string]string{"a": "x"}}
+	r := run(t, StartRequest{
+		Meta:           Meta{Name: "pf", Description: "x"},
+		Script:         `return await pipeline([1, 2], (prev, item) => agent("a"));`,
+		Runner:         fr,
+		MaxTotalAgents: 1,
+	})
+	if r.StopReason != StopError || !strings.Contains(r.Error, ErrAgentCap) {
+		t.Fatalf("AGENT_CAP should escape pipeline, got %+v", r)
+	}
+}

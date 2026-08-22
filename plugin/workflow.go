@@ -26,9 +26,11 @@ func (t *workflowTool) Description() string {
 		"one subagent and returns a Promise resolving to its result text, or null if the subagent " +
 		"failed (await it; options may include `label`); parallel(thunks) runs thunks concurrently " +
 		"under the configured agent concurrency limit and resolves to an array of their results in " +
-		"order (each thunk is typically () => agent(prompt)); phase(title) and log(msg) record " +
-		"progress (phase titles must match the declared meta.phases). The script ends with " +
-		"`return <json-value>`, which becomes the workflow result."
+		"order (each thunk is typically () => agent(prompt)); pipeline(items, ...stages) passes " +
+		"each item through the stage functions (previous, item, index) in order with items " +
+		"processed concurrently — a stage failure drops that item to null, fatal errors abort the " +
+		"whole run; phase(title) and log(msg) record progress (phase titles must match the declared " +
+		"meta.phases). The script ends with `return <json-value>`, which becomes the workflow result."
 }
 
 func (t *workflowTool) ParametersSchema() json.RawMessage {
