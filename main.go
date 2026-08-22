@@ -178,7 +178,7 @@ func main() {
 		} else if arg == "-mode" {
 			if i+1 < len(os.Args) {
 				nextArg := os.Args[i+1]
-				if nextArg == "minimal" || nextArg == "standard" {
+				if nextArg == "minimal" || nextArg == "standard" || nextArg == "creation" {
 					mode = nextArg
 				} else {
 					mode = "standard" // 默認 standard
@@ -434,6 +434,16 @@ func main() {
 				merged.Plugins = append(merged.Plugins, e)
 			}
 		}
+	}
+
+	// 注入当前模式到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
+	// 「插件创造」仅在创造模式（creation）下允许。
+	for i := range merged.Plugins {
+		e := &merged.Plugins[i]
+		if e.Env == nil {
+			e.Env = map[string]string{}
+		}
+		e.Env["DSC_MODE"] = mode
 	}
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices，

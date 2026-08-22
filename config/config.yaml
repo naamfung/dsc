@@ -25,10 +25,22 @@ plugins:
     binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
     enabled: true
 
+  # 内部使用：逆推情节生成小说工具插件（经互通机制 1 复用宿主 LLM）
+  - name: tool-novelforge
+    type: tool
+    binary_path: ./plugins/tool-novelforge/novelforge.exe
+    enabled: true
+
+  # LUA HOST：空壳工具插件，加载 LUA 脚本（运行已创建的工具；新脚本仅在创造模式生效）
+  - name: tool-lua-host
+    type: tool
+    binary_path: ./plugins/tool-lua-host/lua-host.exe
+    enabled: true
+
   - name: agent-react-loop
     type: agent
     binary_path: ./plugins/agent-react-loop/agent-react-loop.exe
     enabled: true
     depends_on:
       llm: llm-anthropic
-      tools: [tool-filesystem]
+      tools: [tool-filesystem, tool-novelforge, tool-lua-host]

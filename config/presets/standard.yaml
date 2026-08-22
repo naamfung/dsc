@@ -21,3 +21,13 @@ plugins:
   - name: tool-skill
     type: tool
     enabled: true
+  # 内部使用：逆推情节生成小说工具插件（经互通机制 1 复用宿主 LLM）
+  - name: tool-novelforge
+    type: tool
+    enabled: true
+    binary_path: ./plugins/tool-novelforge/novelforge.exe
+  # LUA HOST：空壳工具插件，加载 LUA 脚本（运行已创建的工具；新脚本仅在创造模式生效）
+  - name: tool-lua-host
+    type: tool
+    enabled: true
+    binary_path: ./plugins/tool-lua-host/lua-host.exe

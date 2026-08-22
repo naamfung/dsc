@@ -1213,6 +1213,7 @@ var slashCommands = []compItem{
 	{label: "/skills", insert: "/skills", hint: "列出所有已安装的技能"},
 	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
+	{label: "/mode creation", insert: "/mode creation", hint: "切换至创造模式（可经 tool-lua-host 创造 LUA 插件）"},
 	{label: "/workspace on", insert: "/workspace on", hint: "启用工作空间机制保护"},
 	{label: "/workspace off", insert: "/workspace off", hint: "关闭工作空间机制保护"},
 	{label: "/sandbox on", insert: "/sandbox on", hint: "启用沙箱保护（只读，拒绝一切文件写）"},
@@ -1349,6 +1350,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /skills      列出所有已安装的技能",
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
+			"  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-plugin-creator 技能提供指导）",
 			"  /workspace on   启用工作空间机制保护（限制文件操作在工作区目录内）",
 			"  /workspace off  关闭工作空间机制保护（允许模型访问整个文件系统而不作限制）",
 			"  /sandbox on   启用沙箱保护（只读策略，拒绝一切文件写操作）",
@@ -1428,6 +1430,29 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
 				} else {
 					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
+				}
+			}
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/mode creation":
+		if m.manager != nil {
+			err := m.manager.SwitchMode("creation")
+			if err != nil {
+				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
+			} else {
+				m.mode = "creation" // 實時反映標題欄模式
+				err := plugin.UpdateMode("creation", plugin.ConfigPath)
+				if err != nil {
+					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+				} else {
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至創造模式 (creation)：可經 tool-lua-host 編寫 LUA 插件（參考 lua-plugin-creator 技能）。")
 				}
 			}
 		} else {
