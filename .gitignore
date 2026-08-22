@@ -19,3 +19,9 @@ workspace/
 session.jsonl
 sessions/
 spill/
+
+# Node.js dependencies and build caches
+node_modules/
+.svelte-kit/
+bun.lock
+bun.lockb
