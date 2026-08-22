@@ -442,6 +442,13 @@ func main() {
 		fail("failed to load plugins declaratively: %v", err)
 	}
 
+	// 启动 cron 定时任务调度器（失败仅告警，不阻塞主流程）
+	if err := mgr.StartJobs(); err != nil {
+		logger.Warn("failed to start jobs scheduler", "err", err)
+	} else {
+		logger.Info("jobs scheduler started")
+	}
+
 	// 启动管理 API
 	adminAddr := os.Getenv("DSC_ADMIN_ADDR")
 	if adminAddr == "" {
