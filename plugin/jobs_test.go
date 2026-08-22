@@ -119,6 +119,37 @@ func TestJobTools(t *testing.T) {
 	}
 }
 
+// TestJobDoneEventBus 验证通用送达：jobs 落定 → 宿主事件总线 JobDoneEvent，
+// 任何订阅者（TUI/web/novelforge）都能收到。
+func TestJobDoneEventBus(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	got := make(chan jobs.JobSnapshot, 1)
+	unsub := m.OnEvent(JobDoneEvent, func(ctx EventContext) (any, error) {
+		if s, ok := ctx.Data.(jobs.JobSnapshot); ok {
+			got <- s
+		}
+		return nil, nil
+	})
+	defer unsub()
+
+	id, _ := m.jobs.Start(jobs.StartSpec{
+		Kind: "workflow", Label: "x",
+		Start: func() (jobs.JobHooks, error) {
+			done := make(chan jobs.JobOutcome, 1)
+			go func() { done <- jobs.JobOutcome{Status: jobs.StatusCompleted, Output: "ok"} }()
+			return jobs.JobHooks{Done: done}, nil
+		},
+	})
+	select {
+	case s := <-got:
+		if s.ID != id || s.Status != jobs.StatusCompleted {
+			t.Fatalf("event snapshot = %+v", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("JobDoneEvent should be delivered")
+	}
+}
+
 // TestJobToolsOwnerIsolation 验证工具层 owner 隔离：caller 经 ctx 注入，
 // 外来会话被拒绝、无 owner 任务开放。
 func TestJobToolsOwnerIsolation(t *testing.T) {

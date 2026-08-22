@@ -163,6 +163,10 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_output"})
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_list"})
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_kill"})
+	// 后台任务完成 → 宿主事件总线（通用送达：TUI 唤醒、web/novelforge 等插件订阅）
+	m.jobs.OnJobDone(func(s jobs.JobSnapshot) {
+		m.events.Emit(JobDoneEvent, EventContext{Data: s})
+	})
 	// spill：超长工具结果外置（阈值 4000 字符，目录可经 DSC_SPILL_DIR 配置）；
 	// post-execute 策略 + read_spill 取回工具
 	spillDir := os.Getenv("DSC_SPILL_DIR")

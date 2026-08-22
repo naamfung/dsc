@@ -92,10 +92,12 @@ type JobSnapshot struct {
 
 // Registry 后台任务注册表（线程安全）。
 type Registry struct {
-	mu    sync.Mutex
-	jobs  map[string]*Job
-	order []string // 启动顺序（List 按此返回）
-	seq   int
+	mu            sync.Mutex
+	jobs          map[string]*Job
+	order         []string // 启动顺序（List 按此返回）
+	seq           int
+	doneListeners map[int]func(JobSnapshot) // 完成监听器（contained，落定时通知）
+	nextListener  int
 }
 
 // NewRegistry 创建空注册表。
@@ -147,7 +149,6 @@ func (r *Registry) Start(spec StartSpec) (string, error) {
 	go func() {
 		outcome := <-hooks.Done
 		r.mu.Lock()
-		defer r.mu.Unlock()
 		j.snapshot.FinishedAt = time.Now()
 		switch outcome.Status {
 		case StatusCompleted:
@@ -163,8 +164,40 @@ func (r *Registry) Start(spec StartSpec) (string, error) {
 		}
 		j.snapshot.Detail = outcome.Detail
 		close(j.settled)
+		// 完成监听器（contained）：在锁外逐个调用，异常隔离，不阻塞落定
+		listeners := make([]func(JobSnapshot), 0, len(r.doneListeners))
+		for _, fn := range r.doneListeners {
+			listeners = append(listeners, fn)
+		}
+		snap := j.snapshot
+		r.mu.Unlock()
+		for _, fn := range listeners {
+			func() {
+				defer func() { _ = recover() }()
+				fn(snap)
+			}()
+		}
 	}()
 	return id, nil
+}
+
+// OnJobDone 注册完成监听器（对齐 DSH onJobDone）：每个落定记录都会通知所有
+// 监听器，携带 fresh 快照。监听器异常被隔离（contained），不影响落定与其他
+// 监听器。返回取消函数（幂等）。
+func (r *Registry) OnJobDone(fn func(snapshot JobSnapshot)) func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.doneListeners == nil {
+		r.doneListeners = make(map[int]func(JobSnapshot))
+	}
+	id := r.nextListener
+	r.nextListener++
+	r.doneListeners[id] = fn
+	return func() {
+		r.mu.Lock()
+		delete(r.doneListeners, id)
+		r.mu.Unlock()
+	}
 }
 
 // authorize 校验任务存在且调用方被授权（owner 隔离：空调用方仅限无 owner 任务）。

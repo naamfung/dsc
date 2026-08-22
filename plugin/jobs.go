@@ -26,6 +26,16 @@ func CallerFromContext(ctx context.Context) string {
 	return ""
 }
 
+// JobDoneEvent 后台任务完成事件名（宿主事件总线发布；任何 UI/插件均可订阅，
+// 对齐 DSH onJobDone 的通用送达——TUI 唤醒、web 界面插件、novelforge 等）。
+const JobDoneEvent EventName = "job/done"
+
+// OnEvent 订阅宿主事件总线（如 JobDoneEvent 完成通知；TUI/web 插件等复用）。
+// 返回取消函数。
+func (m *Manager) OnEvent(name EventName, fn Listener) func() {
+	return m.events.On(name, fn)
+}
+
 // jobTool 面向模型的 job 工具族（对齐 DSH tool-jobs：job_output/job_list/job_kill）。
 // 后台任务由 Manager.jobs 注册表承载（owner 隔离 + 消费式游标；v1 生产方：
 // workflow background）。caller（调用方会话）经工具调用链路注入 ctx。
