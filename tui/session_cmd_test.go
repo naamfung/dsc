@@ -58,6 +58,24 @@ func TestSessionsCommandLists(t *testing.T) {
 	}
 }
 
+// TestPlanCommandToggle 校验 /plan 与 /plan off 触发 agent 的 SetPlanMode。
+func TestPlanCommandToggle(t *testing.T) {
+	ag := &stubAgent{}
+	m := New(ag, nil, context.Background(), "m", "minimal", 131072)
+
+	handled, _ := m.runSlashCommand("/plan")
+	if !handled {
+		t.Fatal("/plan should be handled")
+	}
+	handled, _ = m.runSlashCommand("/plan off")
+	if !handled {
+		t.Fatal("/plan off should be handled")
+	}
+	if len(ag.planCalls) != 2 || ag.planCalls[0] != true || ag.planCalls[1] != false {
+		t.Fatalf("planCalls = %v, want [true false]", ag.planCalls)
+	}
+}
+
 // TestSessionCommandNew 校验 /session new 新建会话并切换。
 func TestSessionCommandNew(t *testing.T) {
 	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})

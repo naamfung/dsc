@@ -35,6 +35,9 @@ type Config struct {
 	ContextWindow int `json:"context_window" yaml:"context_window"`
 	// Persona "你是一個…助手" 身份句（預設可配，同 DSH 的 deployment persona）；空則用 DeepSeek 官方默認
 	Persona string `json:"persona" yaml:"persona"`
+	// PlanSection plan 模式激活时注入 system prompt 的部署方引导文案（同 DSH plan-mode 的 section）；
+	// 空则用 react-loop 内置默认（DSH 示例文案）
+	PlanSection string `json:"plan_section" yaml:"plan_section"`
 }
 
 type PluginEntry struct {
