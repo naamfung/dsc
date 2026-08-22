@@ -77,7 +77,7 @@ func planGoalTools() []*proto.Tool {
 func (a *ReactLoopAgent) executeLocalTool(ctx context.Context, tc *proto.ToolCall) (*proto.ExecuteToolResponse, bool) {
 	switch tc.Name {
 	case toolExitPlanMode:
-		return a.execExitPlanMode(tc)
+		return a.execExitPlanMode(ctx, tc)
 	case toolGetGoal:
 		return a.execGetGoal(tc)
 	case toolCreateGoal:
@@ -88,10 +88,19 @@ func (a *ReactLoopAgent) executeLocalTool(ctx context.Context, tc *proto.ToolCal
 	return &proto.ExecuteToolResponse{Error: "unknown local tool " + tc.Name}, false
 }
 
-// execExitPlanMode 呈现完整计划并退出 plan 模式（对齐 DSH exit_plan_mode）。
-// v1 简化：计划已作为助手消息流式呈现给用户，无独立审批通道——执行即视为批准退出；
-// 用户可随时打断，沙箱/批准限制由各自的策略层独立强制执行。
-func (a *ReactLoopAgent) execExitPlanMode(tc *proto.ToolCall) (*proto.ExecuteToolResponse, bool) {
+// 评审问题常量（对齐 DSH plan-mode 的 plan-review）。
+const (
+	reviewID            = "plan-review"
+	approveLabel        = "Approve"
+	keepPlanningLabel   = "Keep planning"
+	keepPlanningMessage = "The user chose to keep planning; revise the plan and present it again."
+)
+
+// execExitPlanMode 呈现完整计划并经用户评审后退出 plan 模式（对齐 DSH exit_plan_mode）：
+// 经 UserQuestionsService 向用户展示计划，用户批准（Approve）才退出并开始执行；
+// 选择 Keep planning（可附反馈）则留在 plan 模式；用户放弃评审则停下等待其消息。
+// 无评审通道（headless/-input）时报错，模型据此引导用户切换会话模式。
+func (a *ReactLoopAgent) execExitPlanMode(ctx context.Context, tc *proto.ToolCall) (*proto.ExecuteToolResponse, bool) {
 	var args struct {
 		Plan string `json:"plan"`
 	}
@@ -99,21 +108,88 @@ func (a *ReactLoopAgent) execExitPlanMode(tc *proto.ToolCall) (*proto.ExecuteToo
 		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("exit_plan_mode: %v", err)}, false
 	}
 	a.sessMu.Lock()
-	defer a.sessMu.Unlock()
-	if !session.FoldPlanMode(a.sess.Events()) {
+	inPlanMode := session.FoldPlanMode(a.sess.Events())
+	a.sessMu.Unlock()
+	if !inPlanMode {
 		return &proto.ExecuteToolResponse{Error: "exit_plan_mode is only available in plan mode"}, false
 	}
 	if !regexp.MustCompile(`^#\s+\S`).MatchString(strings.TrimSpace(args.Plan)) {
 		return &proto.ExecuteToolResponse{Error: "exit_plan_mode requires a non-empty markdown plan starting with a # heading"}, false
 	}
-	a.sess.Append(session.PlanMode, &session.PlanModeData{Active: false}, nil)
-	if err := a.store.Save(a.sess); err != nil {
-		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("exit plan mode: %v", err)}, false
+
+	client := a.ensureUserQuestionsClient()
+	if client == nil {
+		return &proto.ExecuteToolResponse{
+			Error: "no user-questions channel is available to review the plan; ask the user to switch the session mode instead",
+		}, false
 	}
+	resp, err := client.Ask(ctx, &proto.AskRequest{Questions: []*proto.AskQuestion{{
+		Id:       reviewID,
+		Header:   "Plan review",
+		Question: "Approve this plan and leave plan mode?",
+		Detail:   args.Plan,
+		Options: []*proto.AskOption{
+			{Label: approveLabel, Description: "Leave plan mode; the plan is carried out from the next step."},
+			{Label: keepPlanningLabel, Description: "Stay in plan mode; feedback goes back to the model."},
+		},
+		Intent: &proto.AskIntent{Kind: "plan-review", Approve: approveLabel},
+	}}})
+	if err != nil {
+		return &proto.ExecuteToolResponse{Error: "exit_plan_mode review failed: " + err.Error()}, false
+	}
+	if resp.GetError() != "" {
+		return &proto.ExecuteToolResponse{Error: mapReviewError(resp.GetError(), resp.GetMessage())}, false
+	}
+
+	approved, feedback := parseReview(resp)
+	if !approved {
+		if feedback != "" {
+			return &proto.ExecuteToolResponse{Error: keepPlanningMessage + " Their feedback: " + feedback}, false
+		}
+		return &proto.ExecuteToolResponse{Error: keepPlanningMessage}, false
+	}
+
+	// 批准：退出 plan 模式（log-only 事件落盘），后续步骤由模型开始执行计划
+	a.sessMu.Lock()
+	a.sess.Append(session.PlanMode, &session.PlanModeData{Active: false}, nil)
+	err = a.store.Save(a.sess)
 	a.planActive = false
 	a.sysPromptNeedsUpdate = true
-	// 对齐 DSH 规范返回值；后续步骤由模型开始执行计划
+	a.sessMu.Unlock()
+	if err != nil {
+		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("exit plan mode: %v", err)}, false
+	}
 	return &proto.ExecuteToolResponse{Content: `{"approved":true}`}, false
+}
+
+// parseReview 解析评审回答：唯一选中 Approve 且无自定义文本视为批准；
+// 否则视为继续规划（附带自定义反馈）。
+func parseReview(resp *proto.AskResponse) (approved bool, feedback string) {
+	for _, ans := range resp.GetAnswers() {
+		if ans.GetId() != reviewID {
+			continue
+		}
+		if len(ans.GetSelected()) == 1 && ans.GetSelected()[0] == approveLabel && ans.GetCustom() == "" {
+			return true, ""
+		}
+		return false, ans.GetCustom()
+	}
+	return false, ""
+}
+
+// mapReviewError 把宿主评审通道错误码转成对模型可行动的提示（对齐 DSH 的评审失败措辞）。
+func mapReviewError(code, message string) string {
+	switch code {
+	case "ASK_ABORTED", "CANCELLED":
+		return "The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message."
+	case "NO_PROVIDER":
+		return "no user-questions channel is available to review the plan; ask the user to switch the session mode instead"
+	default:
+		if message != "" {
+			return message
+		}
+		return "exit_plan_mode review failed with code " + code
+	}
 }
 
 // execGetGoal 返回当前目标视图或 null（对齐 DSH get_goal）。
