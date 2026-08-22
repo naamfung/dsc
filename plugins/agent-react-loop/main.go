@@ -391,8 +391,26 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			Usage:     lastUsage,
 		}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
-		// 没有工具调用 → 返回最终结果（轮次以 completed 关闭）
+		// 没有工具调用 → 目标续行驱动器检查（对齐 DSH goal-round-driver）：
+		// goal active+armed+预算未耗尽时，准入下一轮 goal-round 用户消息并继续循环。
+		// 单轮模式（-input 自动化）不自动续行；人类消息不消耗预算。
 		if len(toolCalls) == 0 {
+			if !a.singleTurn {
+				if g := session.FoldGoal(sess.Events()); goalRoundDriver(g, a.goalActivation, a.goalRounds) {
+					a.goalRounds++
+					sess.Append(session.UserMessage, &session.UserMessageData{
+						Content: goalRoundPrompt(g, a.goalRounds),
+						Source:  "goal_round",
+					}, &session.SurfaceOp{Op: session.SurfaceAppend})
+					if emit != nil {
+						emit(&plugin.RunStreamResponse{
+							Output: fmt.Sprintf("\n[Goal Round %d/%d]\n", a.goalRounds, g.MaxGoalRounds),
+							Status: "tool",
+						})
+					}
+					continue
+				}
+			}
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」

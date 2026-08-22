@@ -124,7 +124,7 @@ func (a *ReactLoopAgent) execGetGoal(tc *proto.ToolCall) (*proto.ExecuteToolResp
 	if g == nil {
 		return &proto.ExecuteToolResponse{Content: `{"goal":null}`}, false
 	}
-	content, err := goalViewJSON(g, a.goalActivation)
+	content, err := goalViewJSON(g, a.goalActivation, a.goalRounds)
 	if err != nil {
 		return &proto.ExecuteToolResponse{Error: err.Error()}, false
 	}
@@ -198,7 +198,7 @@ func (a *ReactLoopAgent) applyGoalOp(op session.GoalOp) (*proto.ExecuteToolRespo
 	}
 	a.goalActivation = armed
 	conclude := op.Action == "complete" || op.Action == "blocked"
-	content, err := goalViewJSON(next, armed)
+	content, err := goalViewJSON(next, armed, a.goalRounds)
 	if err != nil {
 		return &proto.ExecuteToolResponse{Error: err.Error()}, false
 	}
@@ -207,13 +207,13 @@ func (a *ReactLoopAgent) applyGoalOp(op session.GoalOp) (*proto.ExecuteToolRespo
 
 // goalViewJSON 渲染 goal 工具的规范结果 JSON（对齐 DSH 紧凑 JSON 形状）：
 // {goal:{id,revision,objective,phase,roundsStarted,maxGoalRounds,blockedReason?}, activation}
-func goalViewJSON(g *session.GoalSnapshot, activation bool) (string, error) {
+func goalViewJSON(g *session.GoalSnapshot, activation bool, rounds int) (string, error) {
 	goal := map[string]any{
 		"id":            g.ID,
 		"revision":      g.Revision,
 		"objective":     g.Objective,
 		"phase":         g.Phase,
-		"roundsStarted": 0, // v1 无 goal-round 驱动器（jobs/workflow 落地后推进）
+		"roundsStarted": rounds,
 		"maxGoalRounds": g.MaxGoalRounds,
 	}
 	if g.BlockedReason != nil {
@@ -225,4 +225,30 @@ func goalViewJSON(g *session.GoalSnapshot, activation bool) (string, error) {
 	}
 	b, err := json.Marshal(map[string]any{"goal": goal, "activation": act})
 	return string(b), err
+}
+
+// goalRoundDriver 同会话 goal 续行驱动器判定（对齐 DSH goal-round-driver）：
+// phase 为 active、已启用续行（armed）且 Round 预算未耗尽时准入下一轮。
+// 人类消息不消耗预算；pause/complete/blocked/clear 停用续行后天然阻止。
+func goalRoundDriver(goal *session.GoalSnapshot, activation bool, rounds int) bool {
+	if goal == nil {
+		return false
+	}
+	return goal.Phase == session.GoalPhaseActive && activation && rounds < goal.MaxGoalRounds
+}
+
+// goalRoundPrompt 渲染下一轮 goal-round 用户消息（对齐 DSH goal-round-driver
+// 的提示词：JSON 引用的目标 + 正数轮次编号 + 续行指引）。
+func goalRoundPrompt(goal *session.GoalSnapshot, round int) string {
+	objective, _ := json.Marshal(goal.Objective)
+	return "<goal_round>\n" +
+		"Objective: " + string(objective) + "\n" +
+		fmt.Sprintf("Round: %d/%d\n\n", round, goal.MaxGoalRounds) +
+		"Continue working toward the objective in this same session. Treat the current workspace, " +
+		"tool results, and durable session state as authoritative; inspect them instead of assuming " +
+		"earlier narration is still current. Make concrete progress and verify the result. Before " +
+		"claiming completion, gather evidence that the whole objective is achieved, read the current " +
+		"goal, and mark it complete. If work remains, leave the goal active for the next round. Follow " +
+		"the configured goal-tool policy before reporting a blocker.\n" +
+		"</goal_round>"
 }
