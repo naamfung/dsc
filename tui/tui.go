@@ -1,4 +1,4 @@
-// Package tui 提供基于 Bubble Tea 的终端聊天界面。
+﻿// Package tui 提供基于 Bubble Tea 的终端聊天界面。
 // 该界面运行在宿主进程中（不通过 go-plugin 子进程），
 // 因为 TUI 需要直接操作终端 raw mode 和 stdout，而插件子进程的 stdout 会被 go-plugin 捕获。
 package tui
@@ -21,7 +21,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"dsc/jobs"
+	"dsc/cron"
 	"dsc/plugin"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
@@ -1188,11 +1188,11 @@ var slashCommands = []compItem{
 	{label: "/sandbox on", insert: "/sandbox on", hint: "启用沙箱保护（只读，拒绝一切文件写）"},
 	{label: "/sandbox off", insert: "/sandbox off", hint: "关闭沙箱保护（不额外拦截）"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
-	{label: "/jobs", insert: "/jobs", hint: "列出所有定时任务"},
-	{label: "/job add", insert: "/job add ", hint: "添加定时任务（如 /job add \"0 8 * * *\" 写日报）"},
-	{label: "/job remove", insert: "/job remove ", hint: "删除定时任务"},
-	{label: "/job on", insert: "/job on ", hint: "启用定时任务"},
-	{label: "/job off", insert: "/job off ", hint: "停用定时任务"},
+	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
+	{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
+	{label: "/cron remove", insert: "/cron remove ", hint: "删除定时任务"},
+	{label: "/cron on", insert: "/cron on ", hint: "启用定时任务"},
+	{label: "/cron off", insert: "/cron off ", hint: "停用定时任务"},
 	{label: "/plan", insert: "/plan", hint: "进入 plan 模式（先探索设计，再经 exit_plan_mode 呈现计划）"},
 	{label: "/plan off", insert: "/plan off", hint: "退出 plan 模式"},
 	{label: "/session new", insert: "/session new", hint: "新建会话并切换"},
@@ -1324,10 +1324,10 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /sandbox on   启用沙箱保护（只读策略，拒绝一切文件写操作）",
 			"  /sandbox off  关闭沙箱保护（full 策略，不再额外拦截文件写）",
 			"  /sessions    列出所有会话",
-			"  /jobs       列出所有定时任务",
-			"  /job add <cron> <prompt>  添加定时任务（cron 为 5 段表达式，如 0 8 * * *）",
-			"  /job remove <id>  删除定时任务",
-			"  /job on|off <id>  启用/停用定时任务",
+			"  /crons       列出所有定时任务",
+			"  /cron add <cron> <prompt>  添加定时任务（cron 为 5 段表达式，如 0 8 * * *）",
+			"  /cron remove <id>  删除定时任务",
+			"  /cron on|off <id>  启用/停用定时任务",
 			"  /plan       进入 plan 模式（先探索与设计，再经 exit_plan_mode 呈现完整计划）",
 			"  /plan off   退出 plan 模式",
 			"  /session <id>  切换到指定会话（如 /session session-3）",
@@ -1541,11 +1541,11 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.render()
 		m.viewport.GotoBottom()
 		return true, nil
-	case "/jobs":
+	case "/crons":
 		if m.manager == nil {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 		} else {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + "\n" + m.renderJobs())
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + "\n" + m.renderCrons())
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -1553,8 +1553,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.render()
 		m.viewport.GotoBottom()
 		return true, nil
-	case "/job":
-		m.appendMessage(errorSty.Render("用法: /job add <cron(5 段)> <prompt>，/job remove <id>，/job on|off <id>"))
+	case "/cron":
+		m.appendMessage(errorSty.Render("用法: /cron add <cron(5 段)> <prompt>，/cron remove <id>，/cron on|off <id>"))
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
@@ -1564,24 +1564,24 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	case "/quit", "/exit":
 		return true, tea.Quit
 	}
-	// /job add|remove|on|off（前缀匹配）
-	if strings.HasPrefix(cmd, "/job ") {
-		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/job "))
+	// /cron add|remove|on|off（前缀匹配）
+	if strings.HasPrefix(cmd, "/cron ") {
+		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/cron "))
 		switch {
 		case strings.HasPrefix(rest, "add "):
 			tokens := strings.Fields(strings.TrimPrefix(rest, "add "))
 			if len(tokens) < 6 {
-				m.appendMessage(errorSty.Render("用法: /job add <cron> <prompt>，如 /job add \"0 8 * * *\" 写今日日报"))
+				m.appendMessage(errorSty.Render("用法: /cron add <cron> <prompt>，如 /cron add \"0 8 * * *\" 写今日日报"))
 			} else if m.manager == nil {
 				m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 			} else {
-				j := &jobs.Job{
-					Name:    "job-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
+				j := &cron.Job{
+					Name:    "cron-" + strconv.FormatInt(time.Now().UnixMilli(), 10),
 					Cron:    strings.Join(tokens[:5], " "),
 					Prompt:  strings.Join(tokens[5:], " "),
 					Enabled: true,
 				}
-				if err := m.manager.AddJob(j); err != nil {
+				if err := m.manager.AddCronJob(j); err != nil {
 					m.appendMessage(errorSty.Render("添加任务失败: ") + err.Error())
 				} else {
 					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + fmt.Sprintf("\n已添加任务 %s（cron: %s）。", j.ID, j.Cron))
@@ -1590,10 +1590,10 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		case strings.HasPrefix(rest, "remove "):
 			id := strings.TrimSpace(strings.TrimPrefix(rest, "remove "))
 			if id == "" {
-				m.appendMessage(errorSty.Render("用法: /job remove <任务 id>"))
+				m.appendMessage(errorSty.Render("用法: /cron remove <任务 id>"))
 			} else if m.manager == nil {
 				m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-			} else if err := m.manager.RemoveJob(id); err != nil {
+			} else if err := m.manager.RemoveCronJob(id); err != nil {
 				m.appendMessage(errorSty.Render("删除任务失败: ") + err.Error())
 			} else {
 				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + fmt.Sprintf("\n已删除任务 %s。", id))
@@ -1605,10 +1605,10 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				id = strings.TrimSpace(strings.TrimPrefix(rest, "off "))
 			}
 			if id == "" {
-				m.appendMessage(errorSty.Render("用法: /job on|off <任务 id>"))
+				m.appendMessage(errorSty.Render("用法: /cron on|off <任务 id>"))
 			} else if m.manager == nil {
 				m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-			} else if err := m.manager.SetJobEnabled(id, enabled); err != nil {
+			} else if err := m.manager.SetCronJobEnabled(id, enabled); err != nil {
 				m.appendMessage(errorSty.Render("切换任务状态失败: ") + err.Error())
 			} else if enabled {
 				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + fmt.Sprintf("\n已启用任务 %s。", id))
@@ -1616,7 +1616,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + fmt.Sprintf("\n已停用任务 %s。", id))
 			}
 		default:
-			m.appendMessage(errorSty.Render("用法: /job add <cron> <prompt>，/job remove <id>，/job on|off <id>"))
+			m.appendMessage(errorSty.Render("用法: /cron add <cron> <prompt>，/cron remove <id>，/cron on|off <id>"))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -1674,11 +1674,11 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	return false, nil
 }
 
-// renderJobs 渲染定时任务列表（/jobs 命令）。
-func (m *Model) renderJobs() string {
-	list := m.manager.ListJobs()
+// renderCrons 渲染定时任务列表（/crons 命令）。
+func (m *Model) renderCrons() string {
+	list := m.manager.ListCronJobs()
 	if len(list) == 0 {
-		return "（暂无定时任务，可用 /job add <cron> <prompt> 添加）"
+		return "（暂无定时任务，可用 /cron add <cron> <prompt> 添加）"
 	}
 	var b strings.Builder
 	for _, j := range list {
