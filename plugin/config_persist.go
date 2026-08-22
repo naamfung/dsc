@@ -134,74 +134,83 @@ func saveConfigNode(path string, doc *yaml.Node) error {
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
-// persistInjectionLocked 将注入的插件条目合并写回 config.yaml（同名覆盖，其余条目原样保留）。
-// 动态注入默认启用条目（Enabled=true）。需已持有 m.mu。
-func (m *Manager) persistInjectionLocked(entry PluginEntry) error {
+// mutatePluginsSessionLocked 读取 config.yaml，定位（必要时创建）plugins 序列，
+// 交由 mutate 闭包对序列做变换；仅当 changed=true 时写回文件并返回 true。
+// 共享「读配置 → 定位 plugins 序列 → 变换 → 写回」流程（注入与移除两处复用）。
+// createMissing 决定文档不存在时是否新建；否则直接返回未变化。需已持有 m.mu。
+func (m *Manager) mutatePluginsSessionLocked(createMissing bool, mutate func(root, seq *yaml.Node) (changed bool, err error)) (bool, error) {
 	path := m.persistConfigPath()
 	doc, err := readConfigDocumentNode(path)
 	if err != nil {
-		return fmt.Errorf("read config for injection: %w", err)
+		return false, err
 	}
 	root := configMappingNode(doc)
 	if doc == nil {
+		if !createMissing {
+			return false, nil
+		}
 		doc = &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
 	}
-	entry.Enabled = true
-	entryNode, err := entryToNode(entry)
-	if err != nil {
-		return fmt.Errorf("serialize injected entry: %w", err)
-	}
 	seq := pluginsSequenceNode(root)
-	upserted := false
-	for i, item := range seq.Content {
-		if entryNameFromNode(item) == entry.Name {
-			seq.Content[i] = entryNode
-			upserted = true
-			break
+	changed, err := mutate(root, seq)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, saveConfigNode(path, doc)
+}
+
+// persistInjectionLocked 将注入的插件条目合并写回 config.yaml（同名覆盖，其余条目原样保留）。
+// 动态注入默认启用条目（Enabled=true）。需已持有 m.mu。
+func (m *Manager) persistInjectionLocked(entry PluginEntry) error {
+	entry.Enabled = true
+	_, err := m.mutatePluginsSessionLocked(true, func(root, seq *yaml.Node) (bool, error) {
+		entryNode, err := entryToNode(entry)
+		if err != nil {
+			return false, err
 		}
-	}
-	if !upserted {
+		for i, item := range seq.Content {
+			if entryNameFromNode(item) == entry.Name {
+				seq.Content[i] = entryNode
+				return true, nil
+			}
+		}
 		seq.Content = append(seq.Content, entryNode)
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("persist config for injection: %w", err)
 	}
-	if err := saveConfigNode(path, doc); err != nil {
-		return fmt.Errorf("save config after injection: %w", err)
-	}
-	m.logger.Info("injected plugin persisted", "name", entry.Name, "type", entry.Type, "config", path)
+	m.logger.Info("injected plugin persisted", "name", entry.Name, "type", entry.Type, "config", m.persistConfigPath())
 	return nil
 }
 
 // persistRemovalLocked 从 config.yaml 的 plugins 序列中移除指定插件条目。
 // 文件缺失、无 plugins 序列或条目不存在时视为幂等成功（支持重复卸载）。需已持有 m.mu。
 func (m *Manager) persistRemovalLocked(name string) error {
-	path := m.persistConfigPath()
-	doc, err := readConfigDocumentNode(path)
-	if err != nil {
-		return fmt.Errorf("read config for removal: %w", err)
-	}
-	if doc == nil {
-		return nil
-	}
-	root := configMappingNode(doc)
-	seq := findPluginsSequence(root)
-	if seq == nil {
-		return nil // 无 plugins 序列，无需写文件
-	}
-	kept := seq.Content[:0]
-	removed := false
-	for _, item := range seq.Content {
-		if entryNameFromNode(item) == name {
-			removed = true
-			continue
+	changed, err := m.mutatePluginsSessionLocked(false, func(root, seq *yaml.Node) (bool, error) {
+		kept := seq.Content[:0]
+		removed := false
+		for _, item := range seq.Content {
+			if entryNameFromNode(item) == name {
+				removed = true
+				continue
+			}
+			kept = append(kept, item)
 		}
-		kept = append(kept, item)
+		if !removed {
+			return false, nil
+		}
+		seq.Content = kept
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("persist config for removal: %w", err)
 	}
-	if !removed {
-		return nil
+	if changed {
+		m.logger.Info("removed plugin persisted", "name", name, "config", m.persistConfigPath())
 	}
-	seq.Content = kept
-	if err := saveConfigNode(path, doc); err != nil {
-		return fmt.Errorf("save config after removal: %w", err)
-	}
-	m.logger.Info("removed plugin persisted", "name", name, "config", path)
 	return nil
 }

@@ -71,8 +71,8 @@ func (m *Manager) StartAdmin(addr string) {
 // handleLoad 處理加載插件請求
 func (m *Manager) handleLoad(c *vodka.Context) error {
 	var entry PluginEntry
-	if err := c.Bind(&entry); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &entry); err != nil {
+		return err
 	}
 
 	if err := m.LoadPlugin(entry); err != nil {
@@ -87,8 +87,8 @@ func (m *Manager) handleUnload(c *vodka.Context) error {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &req); err != nil {
+		return err
 	}
 
 	if err := m.UnloadPlugin(req.Name); err != nil {
@@ -101,8 +101,8 @@ func (m *Manager) handleUnload(c *vodka.Context) error {
 // handleReload 處理重載插件請求
 func (m *Manager) handleReload(c *vodka.Context) error {
 	var entry PluginEntry
-	if err := c.Bind(&entry); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &entry); err != nil {
+		return err
 	}
 
 	// 先卸載
@@ -174,8 +174,8 @@ func (m *Manager) handleMetadata(c *vodka.Context) error {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &req); err != nil {
+		return err
 	}
 
 	info, exists := m.GetPluginMetadata(req.Name)

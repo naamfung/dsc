@@ -1,7 +1,6 @@
 package plugin
 
 import (
-	"fmt"
 	"net/http"
 
 	"dsc/cron"
@@ -27,8 +26,8 @@ func (m *Manager) handleCronAdd(c *vodka.Context) error {
 		Enabled       bool   `json:"enabled"`
 		MaxIterations int    `json:"max_iterations"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &req); err != nil {
+		return err
 	}
 	j := &cron.Job{
 		Name: req.Name, Cron: req.Cron, Prompt: req.Prompt,
@@ -45,8 +44,8 @@ func (m *Manager) handleCronRemove(c *vodka.Context) error {
 	var req struct {
 		ID string `json:"id"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &req); err != nil {
+		return err
 	}
 	if err := m.RemoveCronJob(req.ID); err != nil {
 		return vodka.NewHTTPError(http.StatusNotFound, err.Error())
@@ -60,8 +59,8 @@ func (m *Manager) handleCronEnable(c *vodka.Context) error {
 		ID      string `json:"id"`
 		Enabled bool   `json:"enabled"`
 	}
-	if err := c.Bind(&req); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+	if err := bindBody(c, &req); err != nil {
+		return err
 	}
 	if err := m.SetCronJobEnabled(req.ID, req.Enabled); err != nil {
 		return vodka.NewHTTPError(http.StatusNotFound, err.Error())
