@@ -95,6 +95,15 @@ type ReactLoopAgent struct {
 	// todoAllowParallel 为 true 时允许多个任务同时 in_progress（DSC_TODO_ALLOW_PARALLEL，
 	// 缺省 false 强制单活跃项纪律）。
 	todoAllowParallel bool
+
+	// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链状态进程本地。
+	repeatChainName      string
+	repeatChainCanonical string
+	repeatChainCount     int
+	// 配置：阈值（DSC_REPEAT_THRESHOLDS，缺省 3,5,8）与排除工具（DSC_REPEAT_EXCLUDE，
+	// 缺省 todo_write——记录类工具穿插不掩盖循环）。
+	repeatThresholds []int
+	repeatExclude    []string
 }
 
 func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error {
@@ -526,6 +535,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Content})
 				}
 			}
+			// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链检测在每次调用后，
+			// 达阈值时在工具结果之后注入合成 user message（source guard）
+			if reminder := a.repeatGuardTrack(tc.Name, canonicalArgs(tc.ArgumentsJson)); reminder != "" {
+				sess.Append(session.UserMessage, &session.UserMessageData{
+					Content: reminder, Source: "guard",
+				}, &session.SurfaceOp{Op: session.SurfaceAppend})
+			}
 		}
 		// 步骤结束（log-only）
 		sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
@@ -871,6 +887,25 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	// todo 任务清单并行开关（DSC_TODO_ALLOW_PARALLEL，缺省 false：最多一个 in_progress）
 	if v := os.Getenv("DSC_TODO_ALLOW_PARALLEL"); v == "1" || strings.EqualFold(v, "true") {
 		agent.todoAllowParallel = true
+	}
+	// 重复工具提醒阈值（DSC_REPEAT_THRESHOLDS，逗号分隔升序，缺省 3,5,8）
+	agent.repeatThresholds = []int{3, 5, 8}
+	if v := os.Getenv("DSC_REPEAT_THRESHOLDS"); v != "" {
+		var ts []int
+		for _, part := range strings.Split(v, ",") {
+			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil && n >= 2 {
+				ts = append(ts, n)
+			}
+		}
+		if len(ts) > 0 {
+			sort.Ints(ts)
+			agent.repeatThresholds = ts
+		}
+	}
+	// 重复提醒排除工具（DSC_REPEAT_EXCLUDE，逗号分隔，缺省 todo_write）
+	agent.repeatExclude = []string{"todo_write"}
+	if v := os.Getenv("DSC_REPEAT_EXCLUDE"); v != "" {
+		agent.repeatExclude = strings.Split(v, ",")
 	}
 	// 多会话事件日志存储（DSC_SESSION_DIR，缺省落在插件工作目录下的 sessions/）
 	dir := os.Getenv("DSC_SESSION_DIR")
