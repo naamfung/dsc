@@ -124,8 +124,11 @@ func (acc *BetaMessage) Accumulate(event BetaRawMessageStreamEventUnion) error {
 		}
 		acc.JSON.raw, _ = sjson.SetRaw(acc.JSON.raw, "content", rawArray(acc.Content))
 	case "content_block_stop":
-		if err := checkContentBlockIndex(event.Type, event.Index, len(acc.Content)); err != nil {
-			return err
+		// Ignore stop events for indices that exceed the current content blocks.
+		// This can happen with fallback/refusal cut scenarios where the API
+		// sends stop events for blocks that were never started or already closed.
+		if event.Index < 0 || event.Index >= int64(len(acc.Content)) {
+			return nil
 		}
 		refreshBetaContentBlockRaw(&acc.Content[event.Index])
 	}
