@@ -223,3 +223,57 @@ func TestRegistryWait(t *testing.T) {
 		t.Fatalf("already-settled wait = %+v", snap)
 	}
 }
+
+func TestRegistryOnJobDone(t *testing.T) {
+	r := NewRegistry()
+	got := make(chan JobSnapshot, 4)
+	unsub := r.OnJobDone(func(s JobSnapshot) { got <- s })
+
+	// 落定 → 通知监听器（含 status）
+	id, _ := r.Start(StartSpec{
+		Kind: "workflow", Label: "x",
+		Start: func() (JobHooks, error) {
+			return finishOutcome(StatusCompleted, "", "ok"), nil
+		},
+	})
+	select {
+	case s := <-got:
+		if s.ID != id || s.Status != StatusCompleted {
+			t.Fatalf("notified snapshot = %+v", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener should be notified on settlement")
+	}
+
+	// 监听器异常被隔离（不影响落定与其他监听器）
+	panicFlag := false
+	r.OnJobDone(func(s JobSnapshot) { panic("boom") })
+	r.OnJobDone(func(s JobSnapshot) { panicFlag = true })
+	id2, _ := r.Start(StartSpec{Kind: "bash", Label: "y", Start: func() (JobHooks, error) {
+		return finishOutcome(StatusCompleted, "", "y"), nil
+	}})
+	waitStatus(t, r, id2, StatusCompleted)
+	select {
+	case s := <-got:
+		if s.ID != id2 {
+			t.Fatalf("second notified snapshot = %+v", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second listener should be notified")
+	}
+	if !panicFlag {
+		t.Fatal("contained listener should still run after a panicking sibling")
+	}
+
+	// 取消订阅后不再通知
+	unsub()
+	id3, _ := r.Start(StartSpec{Kind: "bash", Label: "z", Start: func() (JobHooks, error) {
+		return finishOutcome(StatusCompleted, "", "z"), nil
+	}})
+	waitStatus(t, r, id3, StatusCompleted)
+	select {
+	case s := <-got:
+		t.Fatalf("unsubscribed listener should not fire, got %+v", s)
+	case <-time.After(30 * time.Millisecond):
+	}
+}

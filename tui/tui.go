@@ -22,6 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"dsc/cron"
+	"dsc/jobs"
 	"dsc/plugin"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
@@ -237,6 +238,12 @@ type Model struct {
 	// 用户评审通道：program 供 askProvider 把问题送进事件循环；question 为待回答的问题
 	program  *tea.Program
 	question *pendingQuestion
+
+	// 后台任务完成通知唤醒（对齐 DSH completionDelivery: wakeup）：
+	// wakeBudget 连续唤醒预算（用户消息恢复），pendingWakeups 忙碌/预算耗尽时排队
+	// 的通知（下一条用户消息前置注入）。
+	wakeBudget     int
+	pendingWakeups []string
 }
 
 // New 创建一个聊天界面模型
@@ -275,6 +282,7 @@ func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 		input:            input,
 		spinner:          s,
 		currentSessionID: "default",
+		wakeBudget:       maxConsecutiveWakes,
 	}
 }
 
@@ -474,6 +482,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.render()
 		return m, nil
 
+	case jobDoneMsg:
+		// 后台任务完成：排队通知并尝试唤醒（空闲自动开启一轮）
+		m.pendingWakeups = append(m.pendingWakeups, renderJobDoneNotice(msg.snapshot))
+		m.render()
+		return m, m.tryWakeup()
+
 	case tea.KeyPressMsg:
 		// 问题覆盖层激活时，按键只用于选择/确认/放弃
 		if m.question != nil {
@@ -546,22 +560,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
+			// 排队中的完成通知注入本轮输入（对齐 DSH：忙碌 owner 的通知进入 next-step inbox）
+			sendText := text
+			if len(m.pendingWakeups) > 0 {
+				sendText = strings.Join(m.pendingWakeups, "\n\n") + "\n\n" + text
+				m.pendingWakeups = nil
+			}
 			// 记录到历史（仅用户消息，斜杠命令不入历史）
 			m.history = append(m.history, text)
 			m.histPos = len(m.history)
 			m.draft = ""
-			m.appendMessage(renderUserBubble(text, m.width-4))
 			m.input.SetValue("")
 			m.completion = completion{}
-			m.thinking = true
-			m.turnCount++
-			m.syncInputHeight() // 输入清空回落单行 + 思考行占位 → 重算消息区高度
-			m.render()
-			m.viewport.GotoBottom()
-			return m, tea.Batch(
-				m.submitCmd(text),
-				m.spinner.Tick,
-			)
+			m.wakeBudget = maxConsecutiveWakes // 用户消息恢复唤醒预算（对齐 DSH）
+			return m, m.startTurn(sendText, renderUserBubble(text, m.width-4))
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -618,7 +630,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.render()
 			m.input.Focus()
 			m.viewport.GotoBottom()
-			return m, nil
+			// 轮次结束：若有排队通知且预算未耗尽，自动开启唤醒轮
+			return m, m.tryWakeup()
 		}
 		if msg.err != nil {
 			m.thinking = false
@@ -1965,6 +1978,13 @@ func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 			// 已有 provider（重复注册）仅记录，不阻塞启动
 			_ = err
 		}
+		// 后台任务完成 → 宿主事件总线 → 通知唤醒（对齐 DSH completionDelivery: wakeup）
+		manager.OnEvent(plugin.JobDoneEvent, func(ctx plugin.EventContext) (any, error) {
+			if s, ok := ctx.Data.(jobs.JobSnapshot); ok {
+				m.program.Send(jobDoneMsg{snapshot: s})
+			}
+			return nil, nil
+		})
 	}
 	_, err := p.Run()
 	return err
