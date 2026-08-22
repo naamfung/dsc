@@ -918,9 +918,10 @@ type ToolServiceClient interface {
 	// ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
 	// content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
 	ListContext(ctx context.Context, in *ListContextRequest, opts ...grpc.CallOption) (*ListContextResponse, error)
-	// SetInterconnect 互通握手（机制 1/2）：宿主把挂载在本插件 client broker 上的
-	// 聚合 LLM 服务与插件通知服务的 serviceID 传给插件进程——插件经自身 broker.Dial
-	// 即可复用宿主 LLM 插件与事件总线，无需在插件启动时注入 env（避开握手时序）。
+	// SetInterconnect 互通握手（机制 1/2/4）：宿主把挂载在本插件 client broker 上的
+	// 聚合 LLM 服务、聚合 Tool 服务与插件通知服务的 serviceID 传给插件进程——插件经
+	// 自身 broker.Dial 即可复用宿主 LLM 插件、调用宿主工具流水线（转发到任意工具插件）
+	// 与事件总线，无需在插件启动时注入 env（避开握手时序）。
 	// 旧插件未实现时返回 Unimplemented，宿主应跳过。
 	SetInterconnect(ctx context.Context, in *InterconnectRequest, opts ...grpc.CallOption) (*InterconnectResponse, error)
 }
@@ -982,9 +983,10 @@ type ToolServiceServer interface {
 	// ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
 	// content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
 	ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error)
-	// SetInterconnect 互通握手（机制 1/2）：宿主把挂载在本插件 client broker 上的
-	// 聚合 LLM 服务与插件通知服务的 serviceID 传给插件进程——插件经自身 broker.Dial
-	// 即可复用宿主 LLM 插件与事件总线，无需在插件启动时注入 env（避开握手时序）。
+	// SetInterconnect 互通握手（机制 1/2/4）：宿主把挂载在本插件 client broker 上的
+	// 聚合 LLM 服务、聚合 Tool 服务与插件通知服务的 serviceID 传给插件进程——插件经
+	// 自身 broker.Dial 即可复用宿主 LLM 插件、调用宿主工具流水线（转发到任意工具插件）
+	// 与事件总线，无需在插件启动时注入 env（避开握手时序）。
 	// 旧插件未实现时返回 Unimplemented，宿主应跳过。
 	SetInterconnect(context.Context, *InterconnectRequest) (*InterconnectResponse, error)
 	mustEmbedUnimplementedToolServiceServer()

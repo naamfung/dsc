@@ -1656,6 +1656,23 @@ func (m *Manager) serveAggregateToolLocked() (uint32, error) {
 	return serviceID, nil
 }
 
+// serveAggregateToolOnBroker 在指定 broker 上挂载「聚合 Tool 服务」（NewToolGRPCServer，
+// 请求经宿主 ExecuteTool 流水线转发到任意工具插件）；返回 serviceID。互通机制 4 中，
+// 该服务须挂在本插件 client 的 broker 上（插件进程经自身 broker.Dial 访问），而不仅是
+// agent broker——供 tool-lua-host 等「宿主内工具」经 dsc.tool.call 调用其他工具插件。
+func (m *Manager) serveAggregateToolOnBroker(broker *goplugin.GRPCBroker) (uint32, error) {
+	if broker == nil {
+		return 0, fmt.Errorf("broker not available, cannot serve aggregate tool service")
+	}
+	serviceID := broker.NextId()
+	go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+		s := grpc.NewServer(opts...)
+		proto.RegisterToolServiceServer(s, NewToolGRPCServer(m))
+		return s
+	})
+	return serviceID, nil
+}
+
 // declaredPluginDeps 返回 entry 声明的、指向「整体已声明（启用）插件集」内插件的依赖名（去重）。
 // 只有这些才参与拓扑排序；指向非插件名（如具体工具名 read_file）的引用由运行时解析，不算拓扑依赖。
 func declaredPluginDeps(entry PluginEntry, declared map[string]bool) []string {
@@ -1929,19 +1946,53 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
 		serviceID := broker.NextId()
 
-		// 为 gRPC 调用创建带超时的 context
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		var listResp *proto.ListToolsResponse
-		var err error
-		for attempt := 0; attempt < 3; attempt++ {
-			listResp, err = toolClient.ListTools(ctx, &proto.ListToolsRequest{})
-			if err == nil {
-				break
+		proxy := &toolProxyServer{client: toolClient}
+		go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+			s := grpc.NewServer(opts...)
+			proto.RegisterToolServiceServer(s, proxy)
+			return s
+		})
+		m.toolServiceIDs[entry.Name] = serviceID
+		m.toolClients[entry.Name] = toolClient
+		// 互通机制 3：插件钩子回调客户端（插件未注册 PluginHookService 时
+		// 调用返回 UNIMPLEMENTED，宿主容错跳过）
+		m.toolHookClients[entry.Name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
+		m.toolHookOrder = append(m.toolHookOrder, entry.Name)
+		// 互通机制 1/2/4：聚合 LLM、聚合 Tool 与插件通知服务须挂在本插件 client 的
+		// broker 上（插件进程经自身 broker.Dial 访问）；serviceID 经 SetInterconnect
+		// 传给插件进程（旧插件未实现则 UNIMPLEMENTED 容错跳过）。
+		if pBroker := grpcClient.Broker(); pBroker != nil {
+			llmID := uint32(0)
+			if m.agentLLMServiceID != 0 {
+				if id, err := m.serveAggregateLLMOnBroker(pBroker, m.agentLLMName); err == nil {
+					llmID = id
+				}
 			}
-			time.Sleep(time.Duration(1<<attempt) * 100 * time.Millisecond)
+			toolID := uint32(0)
+			if id, err := m.serveAggregateToolOnBroker(pBroker); err == nil {
+				toolID = id
+			}
+			notifyID := uint32(0)
+			if id, err := m.servePluginNotifyOnBroker(pBroker); err == nil {
+				notifyID = id
+			}
+			if llmID != 0 || toolID != 0 || notifyID != 0 {
+				ictx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				_, err := toolClient.SetInterconnect(ictx, &proto.InterconnectRequest{
+					LlmServiceId: llmID, NotifyServiceId: notifyID, ToolServiceId: toolID,
+				})
+				cancel()
+				if err != nil {
+					m.logger.Warn("plugin does not support interconnect", "plugin", entry.Name, "error", err)
+				}
+			}
 		}
+
+		// 工具清单在 SetInterconnect 之后拉取：宿主内工具（如 tool-lua-host）的脚本
+		// 在握手时加载，必须先握手再列工具，否则其注册的工具会缺失。
+		listCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		listResp, err := toolClient.ListTools(listCtx, &proto.ListToolsRequest{})
+		cancel()
 		if err != nil {
 			client.Kill()
 			m.transitionLocked(entry.Name, StateFailed, err.Error())
@@ -1962,44 +2013,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 			toolNames = append(toolNames, t.Name)
 			m.toolNameToServiceID[t.Name] = serviceID
 		}
-		proxy := &toolProxyServer{client: toolClient}
-		go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
-			s := grpc.NewServer(opts...)
-			proto.RegisterToolServiceServer(s, proxy)
-			return s
-		})
-		m.toolServiceIDs[entry.Name] = serviceID
 		m.pluginToolNames[entry.Name] = toolNames
-		m.toolClients[entry.Name] = toolClient
-		// 互通机制 3：插件钩子回调客户端（插件未注册 PluginHookService 时
-		// 调用返回 UNIMPLEMENTED，宿主容错跳过）
-		m.toolHookClients[entry.Name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
-		m.toolHookOrder = append(m.toolHookOrder, entry.Name)
-		// 互通机制 1/2：聚合 LLM 与插件通知服务须挂在本插件 client 的 broker
-		// 上（插件进程经自身 broker.Dial 访问）；serviceID 经 SetInterconnect
-		// 传给插件进程（旧插件未实现则 UNIMPLEMENTED 容错跳过）。
-		if m.agentLLMServiceID != 0 {
-			if pBroker := grpcClient.Broker(); pBroker != nil {
-				llmID := uint32(0)
-				if id, err := m.serveAggregateLLMOnBroker(pBroker, m.agentLLMName); err == nil {
-					llmID = id
-				}
-				notifyID := uint32(0)
-				if id, err := m.servePluginNotifyOnBroker(pBroker); err == nil {
-					notifyID = id
-				}
-				if llmID != 0 || notifyID != 0 {
-					ictx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					_, err := toolClient.SetInterconnect(ictx, &proto.InterconnectRequest{
-						LlmServiceId: llmID, NotifyServiceId: notifyID,
-					})
-					cancel()
-					if err != nil {
-						m.logger.Warn("plugin does not support interconnect", "plugin", entry.Name, "error", err)
-					}
-				}
-			}
-		}
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "tool"
 		m.pluginMetadata[entry.Name] = info
