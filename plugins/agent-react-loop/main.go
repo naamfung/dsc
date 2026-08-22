@@ -90,6 +90,11 @@ type ReactLoopAgent struct {
 	planActive                    bool
 	goalActivation                bool
 	goalRounds                    int
+
+	// todo 任务清单部署配置（对齐 DSH allowParallelInProgress 开关）：
+	// todoAllowParallel 为 true 时允许多个任务同时 in_progress（DSC_TODO_ALLOW_PARALLEL，
+	// 缺省 false 强制单活跃项纪律）。
+	todoAllowParallel bool
 }
 
 func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error {
@@ -241,8 +246,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	sess := a.sess
 	a.sessMu.Unlock()
 
-	// 宿主托管的工具（plan/goal + ask_user_question）追加进模型可见目录（执行时拦截，见下方工具循环）
-	availableTools = append(availableTools, hostTools()...)
+	// 宿主托管的工具（plan/goal + ask_user_question + todo_write）追加进模型可见目录（执行时拦截，见下方工具循环）
+	availableTools = append(availableTools, a.hostTools()...)
 
 	// 每次 Run 结束（含错误路径）将事件日志落盘（多会话 Store）
 	defer func() {
@@ -856,6 +861,10 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			agent.blockedAfterConsecutiveRounds = n
 		}
+	}
+	// todo 任务清单并行开关（DSC_TODO_ALLOW_PARALLEL，缺省 false：最多一个 in_progress）
+	if v := os.Getenv("DSC_TODO_ALLOW_PARALLEL"); v == "1" || strings.EqualFold(v, "true") {
+		agent.todoAllowParallel = true
 	}
 	// 多会话事件日志存储（DSC_SESSION_DIR，缺省落在插件工作目录下的 sessions/）
 	dir := os.Getenv("DSC_SESSION_DIR")

@@ -204,7 +204,7 @@ func TestExitPlanMode(t *testing.T) {
 }
 
 func TestLocalToolRouting(t *testing.T) {
-	for _, name := range []string{toolGetGoal, toolUpdateGoal, toolCreateGoal, toolExitPlanMode, toolAskUserQuestion} {
+	for _, name := range []string{toolGetGoal, toolUpdateGoal, toolCreateGoal, toolExitPlanMode, toolAskUserQuestion, toolTodoWrite} {
 		if !isLocalTool(name) {
 			t.Fatalf("%s should route locally", name)
 		}
@@ -212,6 +212,88 @@ func TestLocalToolRouting(t *testing.T) {
 	for _, name := range []string{"shell", "read_file"} {
 		if isLocalTool(name) {
 			t.Fatalf("%s should route remotely", name)
+		}
+	}
+}
+
+func TestTodoWrite(t *testing.T) {
+	a := newTestAgent(t)
+
+	// 空清单 → 清空确认
+	resp, _ := callTool(t, a, toolTodoWrite, `{"todos":[]}`)
+	if resp.Error != "" || resp.Content != "Updated todo list: 0 pending, 0 in progress, 0 completed." {
+		t.Fatalf("empty list = %+v", resp)
+	}
+	if ts := session.FoldTodos(a.sess.Events()); len(ts) != 0 {
+		t.Fatalf("folded todos = %+v", ts)
+	}
+
+	// 正常写清单 → 确认文本 + 事件可折叠
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[
+		{"content":"explore","status":"pending"},
+		{"content":"implement","status":"in_progress"},
+		{"content":"verify","status":"completed"}]}`)
+	if resp.Error != "" || resp.Content != "Updated todo list: 1 pending, 1 in progress, 1 completed." {
+		t.Fatalf("write = %+v", resp)
+	}
+	ts := session.FoldTodos(a.sess.Events())
+	if len(ts) != 3 || ts[0].Content != "explore" || ts[1].Status != session.TodoInProgress || ts[2].Status != session.TodoCompleted {
+		t.Fatalf("folded todos = %+v", ts)
+	}
+
+	// content 为空 → 稳定失败文本
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[{"content":"  ","status":"pending"}]}`)
+	if resp.Error == "" || !strings.Contains(resp.Error, "`content` must be a non-empty string") {
+		t.Fatalf("empty content = %q", resp.Error)
+	}
+	// 重复 content → 稳定失败文本
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[{"content":"x","status":"pending"},{"content":"x","status":"completed"}]}`)
+	if resp.Error == "" || !strings.Contains(resp.Error, `duplicate content "x"`) {
+		t.Fatalf("duplicate = %q", resp.Error)
+	}
+	// 额外键 → 拒绝
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[{"content":"x","status":"pending","id":"1"}]}`)
+	if resp.Error == "" || !strings.Contains(resp.Error, "unexpected key") {
+		t.Fatalf("extra key = %q", resp.Error)
+	}
+	// 非法 status → 拒绝
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[{"content":"x","status":"done"}]}`)
+	if resp.Error == "" || !strings.Contains(resp.Error, "`status` must be one of") {
+		t.Fatalf("bad status = %q", resp.Error)
+	}
+	// 多个 in_progress（默认单活跃项纪律）→ 拒绝
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[
+		{"content":"a","status":"in_progress"},
+		{"content":"b","status":"in_progress"}]}`)
+	if resp.Error == "" || !strings.Contains(resp.Error, "at most one task may be in_progress (got 2)") {
+		t.Fatalf("parallel in_progress = %q", resp.Error)
+	}
+
+	// 部署开启并行 → 允许多个 in_progress，工具描述同步变化
+	a.todoAllowParallel = true
+	resp, _ = callTool(t, a, toolTodoWrite, `{"todos":[
+		{"content":"a","status":"in_progress"},
+		{"content":"b","status":"in_progress"}]}`)
+	if resp.Error != "" || !strings.Contains(resp.Content, "2 in progress") {
+		t.Fatalf("parallel allowed = %+v", resp)
+	}
+	found := false
+	for _, tool := range a.hostTools() {
+		if tool.Name == toolTodoWrite {
+			found = true
+			if !strings.Contains(tool.Description, "Multiple tasks may be in_progress") {
+				t.Fatalf("parallel description = %q", tool.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("todo_write should be in host tools")
+	}
+	// 关闭并行 → 描述回退单活跃项
+	a.todoAllowParallel = false
+	for _, tool := range a.hostTools() {
+		if tool.Name == toolTodoWrite && !strings.Contains(tool.Description, "At most one task may be in_progress") {
+			t.Fatalf("strict description = %q", tool.Description)
 		}
 	}
 }

@@ -39,6 +39,9 @@ const (
 	PlanMode EventType = "plan/mode"
 	// GoalChange 目标状态变更（log-only：携带完整快照；clear 为 tombstone）。
 	GoalChange EventType = "goal/change"
+	// TodoWrite 任务清单整表替换（log-only：投影/UI 状态，不进模型历史；
+	// 每个 turn/start 使当前有效计划失效，见 FoldTodos）。
+	TodoWrite EventType = "todo/write"
 )
 
 // Surface op 取值。

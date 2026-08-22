@@ -24,6 +24,7 @@ const (
 	toolCreateGoal      = "create_goal"
 	toolUpdateGoal      = "update_goal"
 	toolAskUserQuestion = "ask_user_question"
+	toolTodoWrite       = "todo_write"
 )
 
 // plan 模式激活时注入 system prompt 的部署方引导文案（可由 DSC_PLAN_SECTION 覆盖）。
@@ -41,7 +42,7 @@ const goalPolicyPrompt = "Use goal tools for one long-running completion objecti
 // isLocalTool 判断工具名是否为宿主托管的工具（执行时拦截，不走工具插件）。
 func isLocalTool(name string) bool {
 	switch name {
-	case toolExitPlanMode, toolGetGoal, toolCreateGoal, toolUpdateGoal, toolAskUserQuestion:
+	case toolExitPlanMode, toolGetGoal, toolCreateGoal, toolUpdateGoal, toolAskUserQuestion, toolTodoWrite:
 		return true
 	}
 	return false
@@ -49,7 +50,7 @@ func isLocalTool(name string) bool {
 
 // hostTools 返回宿主托管的工具定义，追加进模型可见的工具目录
 // （对齐 DSH：exit_plan_mode 始终注册，plan 模式转换只改变提示词段，不改变工具目录）。
-func hostTools() []*proto.Tool {
+func (a *ReactLoopAgent) hostTools() []*proto.Tool {
 	return []*proto.Tool{
 		{
 			Name:           toolExitPlanMode,
@@ -78,7 +79,23 @@ func hostTools() []*proto.Tool {
 				"To recommend an option, put it first and append \"(Recommended)\" to its label.",
 			ParametersJson: `{"type":"object","properties":{"questions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"question":{"type":"string"},"header":{"type":"string"},"options":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label"]}},"multi_select":{"type":"boolean"}},"required":["id","question"]}}},"required":["questions"],"additionalProperties":false}`,
 		},
+		{
+			Name: toolTodoWrite,
+			Description: "Replace the agent's full todo list for the current session (no partial updates, no read-back). " +
+				"Send the complete list on every call; each todo needs non-empty content and a status of pending, in_progress, or completed. " +
+				parallelInProgressNote(a.todoAllowParallel) + " The list is cleared when a new turn starts.",
+			ParametersJson: `{"type":"object","properties":{"todos":{"type":"array","items":{"type":"object","properties":{"content":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed"]}},"required":["content","status"]}}},"required":["todos"],"additionalProperties":false}`,
+		},
 	}
+}
+
+// parallelInProgressNote 依部署配置生成 in_progress 并发纪律说明（对齐 DSH 的
+// allowParallelInProgress 开关：开关同时改变面向模型的指令与接受的输入）。
+func parallelInProgressNote(allow bool) string {
+	if allow {
+		return "Multiple tasks may be in_progress when work runs in parallel."
+	}
+	return "At most one task may be in_progress at a time."
 }
 
 // executeLocalTool 执行宿主托管的工具。第二个返回值表示是否需要在
@@ -95,6 +112,8 @@ func (a *ReactLoopAgent) executeLocalTool(ctx context.Context, tc *proto.ToolCal
 		return a.execUpdateGoal(tc)
 	case toolAskUserQuestion:
 		return a.execAskUserQuestion(ctx, tc)
+	case toolTodoWrite:
+		return a.execTodoWrite(tc)
 	}
 	return &proto.ExecuteToolResponse{Error: "unknown local tool " + tc.Name}, false
 }
@@ -252,6 +271,92 @@ func (a *ReactLoopAgent) execAskUserQuestion(ctx context.Context, tc *proto.Tool
 		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("ask_user_question: encode answers: %v", err)}, false
 	}
 	return &proto.ExecuteToolResponse{Content: string(b)}, false
+}
+
+// execTodoWrite 整表替换当前会话的任务清单（对齐 DSH tool-todo）：
+// 每次调用发送完整列表（无部分更新、无回读）；校验 content 非空、无重复、
+// 无额外键、status 三态，并按部署配置（DSC_TODO_ALLOW_PARALLEL）约束同时
+// in_progress 的数量。写 todo/write 事件（log-only）并落盘，返回统计确认。
+func (a *ReactLoopAgent) execTodoWrite(tc *proto.ToolCall) (*proto.ExecuteToolResponse, bool) {
+	var args struct {
+		Todos []map[string]json.RawMessage `json:"todos"`
+	}
+	if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
+		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("todo_write: %v", err)}, false
+	}
+	todos, err := validateTodos(args.Todos, a.todoAllowParallel)
+	if err != nil {
+		return &proto.ExecuteToolResponse{Error: err.Error()}, false
+	}
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sess == nil {
+		return &proto.ExecuteToolResponse{Error: "todo_write: session not loaded"}, false
+	}
+	a.sess.Append(session.TodoWrite, &session.TodoWriteData{Todos: todos}, nil)
+	if err := a.store.Save(a.sess); err != nil {
+		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("todo_write: persist: %v", err)}, false
+	}
+	pending, inProgress, completed := 0, 0, 0
+	for _, t := range todos {
+		switch t.Status {
+		case session.TodoPending:
+			pending++
+		case session.TodoInProgress:
+			inProgress++
+		case session.TodoCompleted:
+			completed++
+		}
+	}
+	return &proto.ExecuteToolResponse{
+		Content: fmt.Sprintf("Updated todo list: %d pending, %d in progress, %d completed.", pending, inProgress, completed),
+	}, false
+}
+
+// validateTodos 校验并构造任务清单（对齐 DSH 稳定失败文本）：
+// content 非空且不重复、status 三态、拒绝 content/status 之外的键；
+// allowParallel 为 false 时最多一个 in_progress。
+func validateTodos(items []map[string]json.RawMessage, allowParallel bool) ([]session.TodoItem, error) {
+	todos := make([]session.TodoItem, 0, len(items))
+	seen := map[string]bool{}
+	inProgress := 0
+	for _, item := range items {
+		var content, status string
+		for k, v := range item {
+			switch k {
+			case "content":
+				if err := json.Unmarshal(v, &content); err != nil {
+					return nil, fmt.Errorf("invalid todo: `content` must be a non-empty string")
+				}
+			case "status":
+				if err := json.Unmarshal(v, &status); err != nil {
+					return nil, fmt.Errorf("invalid todo: `status` must be one of pending, in_progress, completed")
+				}
+			default:
+				return nil, fmt.Errorf("invalid todos: unexpected key %q", k)
+			}
+		}
+		if strings.TrimSpace(content) == "" {
+			return nil, fmt.Errorf("invalid todo: `content` must be a non-empty string")
+		}
+		if seen[content] {
+			return nil, fmt.Errorf("invalid todos: duplicate content %q", content)
+		}
+		seen[content] = true
+		switch status {
+		case session.TodoPending, session.TodoInProgress, session.TodoCompleted:
+		default:
+			return nil, fmt.Errorf("invalid todo: `status` must be one of pending, in_progress, completed")
+		}
+		if status == session.TodoInProgress {
+			inProgress++
+		}
+		todos = append(todos, session.TodoItem{Content: content, Status: status})
+	}
+	if !allowParallel && inProgress > 1 {
+		return nil, fmt.Errorf("invalid todos: at most one task may be in_progress (got %d)", inProgress)
+	}
+	return todos, nil
 }
 
 // execGetGoal 返回当前目标视图或 null（对齐 DSH get_goal）。
