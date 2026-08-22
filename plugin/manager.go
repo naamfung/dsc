@@ -18,8 +18,6 @@ import (
 
 	"dsc/cron"
 	"dsc/jobs"
-	"dsc/plugin/llmclient"
-	"dsc/plugin/notify"
 	"dsc/proto"
 	"dsc/proto/metadata"
 	"dsc/session"
@@ -1545,6 +1543,31 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.broker = broker
 	m.mainAgentName = agentEntry.Name
 
+	// 互通服务先行挂载：聚合 LLM / 插件通知 / 用户评审通道的 serviceID 需在
+	// provider 加载前确定，pluginEnv 才会把 ID 注入插件进程——工具插件（如
+	// novelforge）加载时即可经互通机制 1/2 复用宿主 LLM 与事件总线。聚合
+	// LLM 服务在请求时动态路由 provider，提前挂载安全。
+	hasLLM := false
+	llmID := uint32(0)
+	toolID := uint32(0)
+	if agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
+		if id, err := m.serveAggregateLLMLocked(agentEntry.DependsOn.LLM); err == nil {
+			llmID = id
+		} else {
+			m.logger.Warn("aggregate llm service unavailable", "error", err)
+		}
+	}
+	if _, err := m.servePluginNotifyLocked(); err != nil {
+		m.logger.Warn("plugin notify service unavailable", "error", err)
+	}
+	if uqID, err := m.serveUserQuestionsLocked(); err == nil {
+		if agent, ok := m.agents[agentEntry.Name]; ok {
+			_ = agent.SetUserQuestionsService(context.Background(), uqID)
+		}
+	} else {
+		m.logger.Warn("user-questions service unavailable", "error", err)
+	}
+
 	// 按 DependsOn 对 provider 做拓扑排序；未能满足依赖的进入 PENDING
 	sorted, pending := topoSortPlugins(providerEntries, declared)
 	for _, e := range pending {
@@ -1558,19 +1581,11 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		}
 	}
 
-	// 依 agent 的 DependsOn 解析 LLM 与聚合 Tool 服务，一次性注入。
+	// provider 就绪后：确认 LLM、挂载聚合 Tool 服务并一次性注入 agent。
 	// LLM 走多 provider 路由：agent 连接聚合 LLM 服务，primary 为声明的 provider。
-	hasLLM := false
-	llmID := uint32(0)
-	toolID := uint32(0)
-	if agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
-		if id, err := m.serveAggregateLLMLocked(agentEntry.DependsOn.LLM); err == nil {
-			llmID = id
-			if _, ok := m.llms[agentEntry.DependsOn.LLM]; ok {
-				hasLLM = true
-			}
-		} else {
-			m.logger.Warn("aggregate llm service unavailable", "error", err)
+	if agentEntry.DependsOn != nil {
+		if _, ok := m.llms[agentEntry.DependsOn.LLM]; ok {
+			hasLLM = true
 		}
 	}
 	// 有工具插件加载或 agent 声明了工具依赖时，才提供聚合 Tool 服务
@@ -1580,22 +1595,6 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		} else {
 			m.logger.Warn("aggregate tool service unavailable", "error", err)
 		}
-	}
-
-	// 挂载用户评审通道（UserQuestionsService）并注入 agent，
-	// 供 exit_plan_mode 等宿主工具向用户提问并等待回答。
-	if uqID, err := m.serveUserQuestionsLocked(); err == nil {
-		if agent, ok := m.agents[agentEntry.Name]; ok {
-			_ = agent.SetUserQuestionsService(context.Background(), uqID)
-		}
-	} else {
-		m.logger.Warn("user-questions service unavailable", "error", err)
-	}
-
-	// 挂载插件通知服务（PluginNotifyService）：插件进程经 broker 发布事件
-	// 到宿主事件总线（互通机制 2），serviceID 随 pluginEnv 注入插件进程。
-	if _, err := m.servePluginNotifyLocked(); err != nil {
-		m.logger.Warn("plugin notify service unavailable", "error", err)
 	}
 
 	if hasLLM {
@@ -1976,6 +1975,31 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		// 调用返回 UNIMPLEMENTED，宿主容错跳过）
 		m.toolHookClients[entry.Name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
 		m.toolHookOrder = append(m.toolHookOrder, entry.Name)
+		// 互通机制 1/2：聚合 LLM 与插件通知服务须挂在本插件 client 的 broker
+		// 上（插件进程经自身 broker.Dial 访问）；serviceID 经 SetInterconnect
+		// 传给插件进程（旧插件未实现则 UNIMPLEMENTED 容错跳过）。
+		if m.agentLLMServiceID != 0 {
+			if pBroker := grpcClient.Broker(); pBroker != nil {
+				llmID := uint32(0)
+				if id, err := m.serveAggregateLLMOnBroker(pBroker, m.agentLLMName); err == nil {
+					llmID = id
+				}
+				notifyID := uint32(0)
+				if id, err := m.servePluginNotifyOnBroker(pBroker); err == nil {
+					notifyID = id
+				}
+				if llmID != 0 || notifyID != 0 {
+					ictx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_, err := toolClient.SetInterconnect(ictx, &proto.InterconnectRequest{
+						LlmServiceId: llmID, NotifyServiceId: notifyID,
+					})
+					cancel()
+					if err != nil {
+						m.logger.Warn("plugin does not support interconnect", "plugin", entry.Name, "error", err)
+					}
+				}
+			}
+		}
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "tool"
 		m.pluginMetadata[entry.Name] = info
@@ -2027,22 +2051,12 @@ func buildEnv(custom map[string]string) []string {
 	return env
 }
 
-// pluginEnv 计算插件进程 env：宿主环境 + 插件自定义 env + 互通服务注入。
-// 注入聚合 LLM 服务 ID（DSC_LLM_SERVICE_ID）与插件通知服务 ID
-// （DSC_NOTIFY_SERVICE_ID）：工具/策略插件经 broker.Dial 复用宿主三个 LLM
-// 插件（llm-openai/anthropic/ollama）与宿主事件总线，无需自带 LLM。
+// pluginEnv 计算插件进程 env：宿主环境 + 插件自定义 env。
+// 互通服务 ID 不再经 env 注入（握手时序问题）：改为宿主加载工具插件后经
+// ToolService.SetInterconnect 把挂载在本插件 client broker 上的服务 ID 传入
+// 插件进程（互通机制 1/2）。
 func (m *Manager) pluginEnv(entry PluginEntry) []string {
-	env := make(map[string]string, len(entry.Env)+2)
-	for k, v := range entry.Env {
-		env[k] = v
-	}
-	if m.agentLLMServiceID != 0 {
-		env[llmclient.EnvServiceID] = strconv.FormatUint(uint64(m.agentLLMServiceID), 10)
-	}
-	if m.pluginNotifyServiceID != 0 {
-		env[notify.EnvServiceID] = strconv.FormatUint(uint64(m.pluginNotifyServiceID), 10)
-	}
-	return buildEnv(env)
+	return buildEnv(entry.Env)
 }
 
 // LoadToolsAndPoliciesFromConfig 從配置加載 tool 和 policy 插件

@@ -30,6 +30,9 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 	if req.MaxIterations <= 0 {
 		req.MaxIterations = defaultSubagentIterations
 	}
+	// 子代理同样拿到宿主聚合工具目录（互通：cron/subagent 任务可调用工具插件，
+	// 与主 agent 从聚合 ToolService.ListTools 拿到的一致）
+	tools := m.AllToolsProto()
 	msgs := []*proto.Message{
 		{Role: "system", Content: "You are a subagent executing a delegated task. " +
 			"Complete the task using the available tools if needed, then return only the final result, concise."},
@@ -40,7 +43,7 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 		// 走流式聚合（与主 agent 一致）：unary Chat 在 thinking 模式下可能只返回
 		// thinking 块而 text 为空，流式帧则完整携带文本增量
 		col := &frameCollector{}
-		if err := agg.ChatStream(&proto.ChatRequest{Messages: msgs}, col); err != nil {
+		if err := agg.ChatStream(&proto.ChatRequest{Messages: msgs, Tools: tools}, col); err != nil {
 			return "", fmt.Errorf("subagent llm call: %w", err)
 		}
 		var content string

@@ -31,18 +31,29 @@ func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteTool
 }
 
 func (s *ToolGRPCServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	tools := s.mgr.GetToolRegistry().ToOpenAITools()
-	var protoTools []*proto.Tool
-	for _, t := range tools {
-		fn := t["function"].(map[string]interface{})
+	return &proto.ListToolsResponse{Tools: s.mgr.AllToolsProto()}, nil
+}
+
+// AllToolsProto 返回宿主聚合工具目录（proto.Tool 列表），供子代理 LLM 请求等
+// 复用（与主 agent 从 ListTools 拿到的一致）。
+func (m *Manager) AllToolsProto() []*proto.Tool {
+	openaiTools := m.GetToolRegistry().ToOpenAITools()
+	out := make([]*proto.Tool, 0, len(openaiTools))
+	for _, t := range openaiTools {
+		fn, ok := t["function"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := fn["name"].(string)
+		desc, _ := fn["description"].(string)
 		paramsJSON, _ := json.Marshal(fn["parameters"])
-		protoTools = append(protoTools, &proto.Tool{
-			Name:           fn["name"].(string),
-			Description:    fn["description"].(string),
+		out = append(out, &proto.Tool{
+			Name:           name,
+			Description:    desc,
 			ParametersJson: string(paramsJSON),
 		})
 	}
-	return &proto.ListToolsResponse{Tools: protoTools}, nil
+	return out
 }
 
 // ListContext 聚合所有工具插件贡献的上下文片段（如技能索引），供 agent 拼接到 system prompt

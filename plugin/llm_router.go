@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"dsc/proto"
+	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
 
@@ -113,17 +114,28 @@ func (m *Manager) serveAggregateLLMLocked(primary string) (uint32, error) {
 		}
 		return m.agentLLMServiceID, nil
 	}
-	if m.broker == nil {
+	m.agentLLMName = primary
+	serviceID, err := m.serveAggregateLLMOnBroker(m.broker, primary)
+	if err != nil {
+		return 0, err
+	}
+	m.agentLLMServiceID = serviceID
+	return serviceID, nil
+}
+
+// serveAggregateLLMOnBroker 在指定 broker 上挂载聚合 LLM 服务（provider 请求时
+// 动态路由）；返回 serviceID。互通机制 1 中，该服务须挂在本插件 client 的
+// broker 上（插件进程经自身 broker.Dial 访问），而不仅是 agent broker。
+func (m *Manager) serveAggregateLLMOnBroker(broker *goplugin.GRPCBroker, primary string) (uint32, error) {
+	if broker == nil {
 		return 0, fmt.Errorf("broker not available, cannot serve aggregate LLM service")
 	}
-	m.agentLLMName = primary
-	serviceID := m.broker.NextId()
-	go m.broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+	serviceID := broker.NextId()
+	go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
 		s := grpc.NewServer(opts...)
 		proto.RegisterLLMServiceServer(s, &llmAggregateServer{m: m})
 		return s
 	})
-	m.agentLLMServiceID = serviceID
 	return serviceID, nil
 }
 
