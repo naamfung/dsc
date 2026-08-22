@@ -64,6 +64,11 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON)}
 	// pre-execute + execute：next 为实际执行；pre 监听器不调 next 即 veto
 	runErr := m.events.Waterfall(EventToolPreExecute, EventContext{Data: inv}, func(EventContext) error {
+		// 互通机制 3：插件 BeforeTool 钩子（可 veto/改写参数；按加载顺序调用）
+		if veto := m.runPluginBeforeTool(ctx, inv); veto != nil {
+			inv.Err = veto
+			return veto
+		}
 		tool, ok := m.toolRegistry.Get(toolName)
 		if !ok {
 			inv.Err = fmt.Errorf("tool not found: %s", toolName)
@@ -79,7 +84,7 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 				defer cancel()
 			}
 		}
-		result, err := tool.Execute(execCtx, argsJSON)
+		result, err := tool.Execute(execCtx, json.RawMessage(inv.ArgumentsJSON))
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = &ToolTimeoutError{Tool: toolName, Ms: timeoutMs}
 		}
@@ -91,6 +96,8 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 	}
 	// post-execute：观测/改写，next 原样透传 inv.Err
 	if err := m.events.Waterfall(EventToolPostExecute, EventContext{Data: inv}, func(EventContext) error {
+		// 互通机制 3：插件 AfterTool 钩子（可改写结果/错误）
+		m.runPluginAfterTool(ctx, inv)
 		return inv.Err
 	}); err != nil {
 		return "", err

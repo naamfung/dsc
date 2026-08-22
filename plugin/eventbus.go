@@ -49,6 +49,7 @@ type EventBus struct {
 	next int
 	emit map[EventName][]listenerEntry
 	wf   map[EventName][]waterfallEntry
+	any  []listenerEntry // 全局监听器（带 order，供移除；Emit 时与按名监听器一起调用）
 }
 
 // NewEventBus 创建事件总线。
@@ -56,6 +57,26 @@ func NewEventBus() *EventBus {
 	return &EventBus{
 		emit: make(map[EventName][]listenerEntry),
 		wf:   make(map[EventName][]waterfallEntry),
+	}
+}
+
+// OnAny 注册全局监听器（每次 Emit 都会调用，无论事件名；供宿主向插件广播
+// 事件）。返回移除函数。
+func (b *EventBus) OnAny(fn Listener) func() {
+	b.mu.Lock()
+	b.next++
+	entry := listenerEntry{order: b.next, fn: fn}
+	b.any = append(b.any, entry)
+	b.mu.Unlock()
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		for i, e := range b.any {
+			if e.order == entry.order {
+				b.any = append(b.any[:i], b.any[i+1:]...)
+				break
+			}
+		}
 	}
 }
 
@@ -111,6 +132,17 @@ func (b *EventBus) snapshotEmit(name EventName) []Listener {
 	return out
 }
 
+// snapshotAny 返回全局监听器快照（按注册顺序）。
+func (b *EventBus) snapshotAny() []Listener {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]Listener, len(b.any))
+	for i, e := range b.any {
+		out[i] = e.fn
+	}
+	return out
+}
+
 // snapshotWaterfall 返回洋葱监听器快照（按注册顺序）。
 func (b *EventBus) snapshotWaterfall(name EventName) []WaterfallListener {
 	b.mu.RLock()
@@ -124,9 +156,13 @@ func (b *EventBus) snapshotWaterfall(name EventName) []WaterfallListener {
 }
 
 // Emit 同步顺序调用所有监听器，忽略返回值；监听器错误仅记录不中断。
+// 按名监听器与全局监听器（OnAny）都会收到事件。
 func (b *EventBus) Emit(name EventName, ctx EventContext) {
 	ctx.Name = name
 	for _, fn := range b.snapshotEmit(name) {
+		_, _ = fn(ctx)
+	}
+	for _, fn := range b.snapshotAny() {
 		_, _ = fn(ctx)
 	}
 }

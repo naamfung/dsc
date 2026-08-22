@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"dsc/jobs"
 	"dsc/proto"
@@ -57,4 +58,96 @@ func (s *pluginNotifyServer) Notify(ctx context.Context, req *proto.NotifyReques
 	}
 	s.m.events.Emit(EventName(req.GetName()), EventContext{Data: data})
 	return &proto.NotifyResponse{}, nil
+}
+
+// hookClientsSnapshot 返回按加载顺序的插件钩子客户端快照（读锁保护，防热加载竞态）。
+func (m *Manager) hookClientsSnapshot() []proto.PluginHookServiceClient {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]proto.PluginHookServiceClient, 0, len(m.toolHookOrder))
+	for _, n := range m.toolHookOrder {
+		out = append(out, m.toolHookClients[n])
+	}
+	return out
+}
+
+// runPluginBeforeTool 调用所有插件 BeforeTool 钩子（按加载顺序）：任一 veto
+// 阻止执行；参数可被改写（后续用新参数）。插件不可用（UNIMPLEMENTED 等）跳过。
+func (m *Manager) runPluginBeforeTool(ctx context.Context, inv *ToolInvocation) error {
+	for _, c := range m.hookClientsSnapshot() {
+		if c == nil {
+			continue
+		}
+		resp, err := c.BeforeTool(ctx, &proto.BeforeToolRequest{
+			ToolName: inv.ToolName, ArgumentsJson: inv.ArgumentsJSON, CallId: inv.CallID,
+		})
+		if err != nil {
+			continue // UNIMPLEMENTED/插件不可用容错
+		}
+		if resp.GetVeto() {
+			if resp.GetError() != "" {
+				return fmt.Errorf("plugin vetoed %s: %s", inv.ToolName, resp.GetError())
+			}
+			return fmt.Errorf("plugin vetoed %s", inv.ToolName)
+		}
+		if resp.GetArgumentsJson() != "" && resp.GetArgumentsJson() != inv.ArgumentsJSON {
+			inv.ArgumentsJSON = resp.GetArgumentsJson()
+		}
+	}
+	return nil
+}
+
+// runPluginAfterTool 调用所有插件 AfterTool 钩子：可改写结果/错误。
+func (m *Manager) runPluginAfterTool(ctx context.Context, inv *ToolInvocation) {
+	for _, c := range m.hookClientsSnapshot() {
+		if c == nil {
+			continue
+		}
+		resp, err := c.AfterTool(ctx, &proto.AfterToolRequest{
+			ToolName: inv.ToolName, ArgumentsJson: inv.ArgumentsJSON, CallId: inv.CallID,
+			Result: inv.Result, Error: errString(inv.Err),
+		})
+		if err != nil {
+			continue
+		}
+		if resp.GetError() != "" {
+			inv.Err = fmt.Errorf("%s", resp.GetError())
+		} else if resp.GetResult() != "" {
+			inv.Result = resp.GetResult()
+			inv.Err = nil
+		}
+	}
+}
+
+// errString 错误转字符串（nil → 空）。
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// broadcastEventToPlugins 把宿主事件异步广播给所有插件（互通机制 3 OnEvent）：
+// 插件可经此订阅宿主及其他插件（notify 发布）的事件，无需协调发布方。
+func (m *Manager) broadcastEventToPlugins(name EventName, data any) {
+	clients := m.hookClientsSnapshot()
+	if len(clients) == 0 {
+		return
+	}
+	dataJSON := ""
+	if data != nil {
+		if b, err := json.Marshal(data); err == nil {
+			dataJSON = string(b)
+		}
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, c := range clients {
+			if c == nil {
+				continue
+			}
+			_, _ = c.OnEvent(ctx, &proto.OnEventRequest{Name: string(name), DataJson: dataJSON})
+		}
+	}()
 }
