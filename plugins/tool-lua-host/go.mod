@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	dsc v0.0.0
 	github.com/hashicorp/go-plugin v1.8.0
-	github.com/wippyai/go-lua v0.0.0
+	github.com/wippyai/go-lua v1.5.17
 	google.golang.org/grpc v1.83.0
 )
 

@@ -57,6 +57,10 @@ go build -o plugins/tool-lisp-eval/tool-lisp-eval.exe ./plugins/tool-lisp-eval
 echo "Building tool-skill plugin..."
 go build -o plugins/tool-skill/tool-skill.exe ./plugins/tool-skill
 
+# 构建 tool-lua-host 插件
+echo "Building tool-lua-host plugin..."
+cd ./plugins/tool-lua-host && go build && cd ../../
+
 # 构建 policy-fs-observation 插件
 echo "Building policy-fs-observation plugin..."
 go build -o plugins/policy-fs-observation/policy-fs-observation.exe ./plugins/policy-fs-observation
