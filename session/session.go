@@ -35,6 +35,10 @@ const (
 	ToolResult EventType = "tool/result"
 	// CompactionSummary 上下文压缩的摘要节点（surface replace 遮蔽被压缩范围）。
 	CompactionSummary EventType = "compaction/summary"
+	// PlanMode plan 模式状态（log-only：整值替换，最后一条生效，fold 恢复）。
+	PlanMode EventType = "plan/mode"
+	// GoalChange 目标状态变更（log-only：携带完整快照；clear 为 tombstone）。
+	GoalChange EventType = "goal/change"
 )
 
 // Surface op 取值。
