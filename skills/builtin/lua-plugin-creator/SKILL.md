@@ -5,7 +5,7 @@ description: 极全面的 LUA 插件创造指南——教模型经 tool-lua-host
 
 # LUA 插件创造指南（Lua Plugin Creator）
 
-本技能指导你（DSC 的 Agent）**自己创造 LUA 插件**：当现有工具无法满足需求时，编写一个 LUA 脚本，由 `tool-lua-host` 加载后注册为新工具，**无需修改宿主主程序，无需请求开发人员介入**。
+本技能指导你（DSC 的 Agent）**自己创造 DSC LUA 插件**：当现有工具无法满足需求时，编写一个 DSC 专属的 LUA 脚本，由 `tool-lua-host` 加载后注册为新工具，**无需修改宿主主程序，无需请求开发人员介入**。
 
 ---
 
@@ -24,7 +24,7 @@ description: 极全面的 LUA 插件创造指南——教模型经 tool-lua-host
 
 关键特性：
 - **独立 VM**：每个脚本一个独立的 LUA 状态机，脚本之间隔离，崩溃互不影响。
-- **沙箱**：VM 不提供 `os`/`io` 库——脚本**无法直接读写文件系统、执行进程、访问网络**。需要这类能力时用 `dsc.tool.call` 调用宿主已有工具（如 `shell`、`read_file`）。
+- **沙箱**：VM 不提供 `os`/`io` 库——脚本**无法直接读写文件系统、执行进程、访问网络**。需要这类能力时用 `dsc.tool.call` 调用宿主已有工具（如 `shell`、`str_replace_editor`）。
 - **热加载**：脚本目录每 2 秒轮询一次。新增/修改 `main.lua` 后无需重启，自动生效；删除脚本目录则工具自动卸载。
 - **类型检查**：脚本加载前经静态类型检查器校验（语法错误会阻止加载，类型诊断会打印警告但不阻止运行）。**给代码写类型注解，让问题在加载前暴露**。
 
@@ -34,7 +34,7 @@ description: 极全面的 LUA 插件创造指南——教模型经 tool-lua-host
 
 | 情形 | 行动 |
 |---|---|
-| 现有工具组合可满足（如先 `read_file` 再 `shell`） | **优先组合，不创造** |
+| 现有工具组合可满足（如先 `str_replace_editor` 再 `shell`） | **优先组合，不创造** |
 | 需要多步骤、有状态、可复用的流程 | **创造插件**（脚本内可自由编排 dsc API） |
 | 需要跨工具共享状态 | 用 `dsc.store` |
 | 需要在宿主工具执行前后干预（拦截/改写参数/结果） | 用 `dsc.hook` |
@@ -100,7 +100,7 @@ dsc.tool.list() -> { {name, description}, ... }
 ```
 
 - 经宿主完整工具流水线执行（含策略拦截、钩子、超时），**与 Agent 直接调用完全一致**。
-- 适合编排：脚本作为"编排层"，把 shell / read_file / str_replace_editor 组合成复合工具。
+- 适合编排：脚本作为"编排层"，把 shell / str_replace_editor / str_replace_editor 组合成复合工具。
 - 参数用 table 传入（与目标工具的 JSON Schema 对应）。
 
 ```lua
@@ -334,7 +334,7 @@ end
 
 | 误区 | 正解 |
 |---|---|
-| 想直接读文件/执行进程 | 沙箱无 os/io，用 `dsc.tool.call("shell" / "read_file", ...)` |
+| 想直接读文件/执行进程 | 沙箱无 os/io，用 `dsc.tool.call("shell" / "str_replace_editor", ...)` |
 | `dsc.llm.chat` 返回空 | 已内部走流式；确认 `user` 必填、`system` 可省 |
 | handler 返回 table 期望原样 | table 自动 JSON 序列化；要纯文本就返回字符串 |
 | 依赖"自己工具内部调用的工具"经过自己的 before 钩子 | 嵌套调用时本脚本钩子会跳过（防死锁） |
