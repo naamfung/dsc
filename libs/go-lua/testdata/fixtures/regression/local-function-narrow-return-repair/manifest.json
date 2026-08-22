@@ -1,0 +1,9 @@
+{
+  "description": "Local function literal summary should repair pre-flow nested never artifacts after narrowing",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

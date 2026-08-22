@@ -1,0 +1,17 @@
+{
+  "description": "Soundness counterpart for notification delivery runtime, pinning unsafe optional cache, tag, registry, and time uses in the same multi-module application shape.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "delivery_store.lua",
+    "template_builder.lua",
+    "transport_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 6
+  }
+}

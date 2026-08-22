@@ -1,0 +1,17 @@
+{
+  "description": "Application-shaped tenant policy runtime mixing staged validators, closure-built evaluators, metatable-backed store/runtime objects, discriminated requests and decisions, dynamic evaluator registries, optional cached decisions, callbacks, counters, tag maps, and time-based summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "policy_store.lua",
+    "validator_builder.lua",
+    "rule_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

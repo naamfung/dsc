@@ -1,0 +1,7 @@
+{
+  "description": "Dynamic registry data flowing through page_registry into renderer-style optional string guard",
+  "files": [
+    "page_registry.lua",
+    "main.lua"
+  ]
+}

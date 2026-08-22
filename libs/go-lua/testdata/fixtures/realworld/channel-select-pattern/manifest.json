@@ -1,0 +1,4 @@
+{
+  "files": ["types.lua", "handler.lua", "main.lua"],
+  "packages": ["channel"]
+}

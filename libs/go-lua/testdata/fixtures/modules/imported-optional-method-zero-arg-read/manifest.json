@@ -1,0 +1,7 @@
+{
+  "description": "Imported module preserves optional method parameters across export/import for zero-arg method calls",
+  "files": [
+    "http_client.lua",
+    "main.lua"
+  ]
+}

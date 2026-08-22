@@ -1,0 +1,11 @@
+{
+  "description": "Imported record aliases should contextually type empty map fields inside returned table literals.",
+  "files": [
+    "protocol.lua",
+    "store.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

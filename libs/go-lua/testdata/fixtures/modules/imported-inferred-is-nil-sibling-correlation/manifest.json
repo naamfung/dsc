@@ -1,0 +1,11 @@
+{
+  "description": "Imported inferred is_nil export must narrow sibling multi-return slots across module boundaries",
+  "files": [
+    "test.lua",
+    "client.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

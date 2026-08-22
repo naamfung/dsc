@@ -1,0 +1,7 @@
+{
+  "description": "Multi-file module boundary regression for page_registry -> renderer style optional string guards",
+  "files": [
+    "page_registry.lua",
+    "main.lua"
+  ]
+}

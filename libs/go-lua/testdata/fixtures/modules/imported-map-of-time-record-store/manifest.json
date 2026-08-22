@@ -1,0 +1,12 @@
+{
+  "description": "Imported record aliases with package-backed time fields should stay stable as map values inside exported store objects.",
+  "files": [
+    "protocol.lua",
+    "store.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

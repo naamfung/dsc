@@ -1,0 +1,17 @@
+{
+  "description": "Application-shaped notification delivery runtime mixing closure-built renderers, fluent transport builders, metatable-backed store/runtime objects, discriminated requests, dynamic transport registries, optional cached receipts, callbacks, counters, tag maps, and time-based summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "delivery_store.lua",
+    "template_builder.lua",
+    "transport_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

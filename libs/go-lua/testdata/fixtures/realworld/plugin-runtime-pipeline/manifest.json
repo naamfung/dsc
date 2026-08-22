@@ -1,0 +1,17 @@
+{
+  "description": "Plugin runtime pipeline mixing generic results, fluent retry-policy and plugin builders, closure-built handlers, metatable-backed runtime/store objects, callback hooks, dynamic registries, optional caches, and time-based summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "policy_builder.lua",
+    "plugin_builder.lua",
+    "helpers.lua",
+    "runtime_store.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

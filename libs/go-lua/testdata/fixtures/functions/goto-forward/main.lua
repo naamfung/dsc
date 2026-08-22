@@ -1,0 +1,2 @@
+goto target
+::target::

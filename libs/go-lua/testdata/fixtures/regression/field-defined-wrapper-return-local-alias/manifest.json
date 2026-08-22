@@ -1,0 +1,9 @@
+{
+  "description": "Field-defined wrapper return should survive local aliasing after the dominating visible write",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

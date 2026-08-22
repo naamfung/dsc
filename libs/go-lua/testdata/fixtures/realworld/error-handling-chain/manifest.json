@@ -1,0 +1,3 @@
+{
+  "files": ["errors.lua", "validator.lua", "main.lua"]
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Application-shaped event bus mixing closure-built subscribers and projectors, metatable-backed runtime/store objects, discriminated events, dynamic registries, optional projections, callbacks, counters, and time-based replay summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "checkpoint_store.lua",
+    "subscriber_builder.lua",
+    "projector_builder.lua",
+    "bus.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "description": "Aliased wrapper value typing must respect the current reassigned function value instead of reviving the original definition",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 1
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "description": "Single-target assignment should preserve direct call result type after field reassignment",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Application-shaped CQRS runtime mixing staged validation, fluent command handlers, metatable-backed stores, discriminated commands, dynamic registries, optional projections, counters, callbacks, and time-based summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "order_store.lua",
+    "validator_builder.lua",
+    "handler_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "description": "Non-dominating branch field writes must not make later call results definite",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 2
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Cross-module imported record alias should work as the expected type for returned table literals and constructor results.",
+  "files": [
+    "protocol.lua",
+    "store.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

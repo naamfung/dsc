@@ -1,0 +1,18 @@
+{
+  "description": "Soundness coverage for plugin supervisor runtime: optional cached receipts, optional maps, optional times, missing handler lookup, and union output fields must not be treated as definite.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "plugin_store.lua",
+    "validator_builder.lua",
+    "handler_builder.lua",
+    "fallback_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 6
+  }
+}

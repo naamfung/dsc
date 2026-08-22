@@ -1,0 +1,12 @@
+{
+  "name": "imported-handler-map-lookup-after-discriminant",
+  "packages": [],
+  "files": [
+    "protocol.lua",
+    "builder.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

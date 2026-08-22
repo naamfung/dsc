@@ -1,0 +1,9 @@
+{
+  "description": "Annotating session timestamps as time.Time preserves sound time arithmetic",
+  "packages": ["time"],
+  "check": {"errors": 0},
+  "files": [
+    "session_state.lua",
+    "main.lua"
+  ]
+}

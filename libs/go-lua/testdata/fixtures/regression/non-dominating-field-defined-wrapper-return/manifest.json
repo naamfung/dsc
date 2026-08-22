@@ -1,0 +1,9 @@
+{
+  "description": "Field-defined wrappers must not treat non-dominating captured field writes as definite",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 2
+  }
+}
