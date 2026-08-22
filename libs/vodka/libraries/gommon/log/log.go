@@ -127,64 +127,64 @@ func (l *Logger) SetHeader(h string) {
 }
 
 func (l *Logger) Print(i ...interface{}) {
-	l.log(0, "", i...)
+	l.log(0, "", i)
 	// fmt.Fprintln(l.output, i...)
 }
 
 func (l *Logger) Printf(format string, args ...interface{}) {
-	l.log(0, format, args...)
+	l.log(0, format, args)
 }
 
 func (l *Logger) Printj(j JSON) {
-	l.log(0, "json", j)
+	l.log(0, "json", []interface{}{j})
 }
 
 func (l *Logger) Debug(i ...interface{}) {
-	l.log(DEBUG, "", i...)
+	l.log(DEBUG, "", i)
 }
 
 func (l *Logger) Debugf(format string, args ...interface{}) {
-	l.log(DEBUG, format, args...)
+	l.log(DEBUG, format, args)
 }
 
 func (l *Logger) Debugj(j JSON) {
-	l.log(DEBUG, "json", j)
+	l.log(DEBUG, "json", []interface{}{j})
 }
 
 func (l *Logger) Info(i ...interface{}) {
-	l.log(INFO, "", i...)
+	l.log(INFO, "", i)
 }
 
 func (l *Logger) Infof(format string, args ...interface{}) {
-	l.log(INFO, format, args...)
+	l.log(INFO, format, args)
 }
 
 func (l *Logger) Infoj(j JSON) {
-	l.log(INFO, "json", j)
+	l.log(INFO, "json", []interface{}{j})
 }
 
 func (l *Logger) Warn(i ...interface{}) {
-	l.log(WARN, "", i...)
+	l.log(WARN, "", i)
 }
 
 func (l *Logger) Warnf(format string, args ...interface{}) {
-	l.log(WARN, format, args...)
+	l.log(WARN, format, args)
 }
 
 func (l *Logger) Warnj(j JSON) {
-	l.log(WARN, "json", j)
+	l.log(WARN, "json", []interface{}{j})
 }
 
 func (l *Logger) Error(i ...interface{}) {
-	l.log(ERROR, "", i...)
+	l.log(ERROR, "", i)
 }
 
 func (l *Logger) Errorf(format string, args ...interface{}) {
-	l.log(ERROR, format, args...)
+	l.log(ERROR, format, args)
 }
 
 func (l *Logger) Errorj(j JSON) {
-	l.log(ERROR, "json", j)
+	l.log(ERROR, "json", []interface{}{j})
 }
 
 func (l *Logger) Fatal(i ...interface{}) {
@@ -209,7 +209,7 @@ func (l *Logger) Panic(i ...interface{}) {
 
 func (l *Logger) Panicf(format string, args ...interface{}) {
 	l.Printf(format, args...)
-	panic(fmt.Sprintf(format, args))
+	panic(fmt.Sprintf(format, args...))
 }
 
 func (l *Logger) Panicj(j JSON) {
@@ -337,7 +337,7 @@ func Panicj(j JSON) {
 	global.Panicj(j)
 }
 
-func (l *Logger) log(v Lvl, format string, args ...interface{}) {
+func (l *Logger) log(v Lvl, msg string, args []interface{}) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	buf := l.bufferPool.Get().(*bytes.Buffer)
@@ -347,16 +347,16 @@ func (l *Logger) log(v Lvl, format string, args ...interface{}) {
 
 	if v >= l.level || v == 0 {
 		message := ""
-		if format == "" {
+		if msg == "" {
 			message = fmt.Sprint(args...)
-		} else if format == "json" {
+		} else if msg == "json" {
 			b, err := json.Marshal(args[0])
 			if err != nil {
 				panic(err)
 			}
 			message = string(b)
 		} else {
-			message = fmt.Sprintf(format, args...)
+			message = fmt.Sprintf(msg, args...)
 		}
 
 		_, err := l.template.ExecuteFunc(buf, func(w io.Writer, tag string) (int, error) {
@@ -386,7 +386,7 @@ func (l *Logger) log(v Lvl, format string, args ...interface{}) {
 				// JSON header
 				buf.Truncate(i)
 				buf.WriteByte(',')
-				if format == "json" {
+				if msg == "json" {
 					buf.WriteString(message[1:])
 				} else {
 					buf.WriteString(`"message":`)

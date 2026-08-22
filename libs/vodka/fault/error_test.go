@@ -24,7 +24,7 @@ func TestErrorHandler(t *testing.T) {
 	c := m.NewContext(req, res, h, handler1, handler2)
 	assert.Nil(t, c.Next())
 	assert.Equal(t, vodka.StatusInternalServerError, res.Code)
-	assert.Equal(t, "abc\n", res.Body.String())
+	assert.Equal(t, "abc", res.Body.String())
 	assert.Equal(t, "abc", buf.String())
 
 	buf.Reset()
@@ -43,7 +43,7 @@ func TestErrorHandler(t *testing.T) {
 	c = m.NewContext(req, res, h, handler1, handler2)
 	assert.Nil(t, c.Next())
 	assert.Equal(t, http.StatusInternalServerError, res.Code)
-	assert.Equal(t, "123\n", res.Body.String())
+	assert.Equal(t, "123", res.Body.String())
 	assert.Equal(t, "abc", buf.String())
 
 	buf.Reset()
@@ -53,23 +53,26 @@ func TestErrorHandler(t *testing.T) {
 	c = m.NewContext(req, res, h, handler1, handler2)
 	assert.Nil(t, c.Next())
 	assert.Equal(t, http.StatusInternalServerError, res.Code)
-	assert.Equal(t, "abc\n", res.Body.String())
+	assert.Equal(t, "abc", res.Body.String())
 	assert.Equal(t, "", buf.String())
 }
 
 func Test_writeError(t *testing.T) {
+	m := vodka.New()
+
+	// 普通错误 → 500 + 错误文本（对齐当前 HandleError 行为：不追加换行）
 	res := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/users/", nil)
-	m := vodka.New()
 	c := m.NewContext(req, res)
-	convertError(c, errors.New("abc"))
+	c.HandleError(errors.New("abc"))
 	assert.Equal(t, http.StatusInternalServerError, res.Code)
 	assert.Equal(t, "abc", res.Body.String())
 
+	// HTTPError → 其状态码 + 消息
 	res = httptest.NewRecorder()
 	req, _ = http.NewRequest("GET", "/users/", nil)
 	c = m.NewContext(req, res)
-	convertError(c, vodka.NewHTTPError(http.StatusNotFound, "xyz"))
+	c.HandleError(vodka.NewHTTPError(http.StatusNotFound, "xyz"))
 	assert.Equal(t, http.StatusNotFound, res.Code)
 	assert.Equal(t, "xyz", res.Body.String())
 }

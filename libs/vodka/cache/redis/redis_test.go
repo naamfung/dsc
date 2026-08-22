@@ -1,13 +1,21 @@
 package redis
 
 import (
+	"net"
 	"testing"
+	"time"
 
 	"dsc/libs/vodka/cache"
 )
 
 func TestRedisCache(t *testing.T) {
-	var err error
+	// 集成测试：无本地 Redis 服务时跳过，避免每次 go test ./... 报错干扰
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:6379", 500*time.Millisecond)
+	if err != nil {
+		t.Skip("redis not available at 127.0.0.1:6379")
+	}
+	_ = conn.Close()
+
 	c, err := cache.New(cache.Options{Adapter: "redis", AdapterConfig: `{"Addr":"127.0.0.1:6379"}`, Section: "test"})
 	if err != nil {
 		t.Fatal(err)

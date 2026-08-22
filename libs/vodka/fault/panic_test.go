@@ -41,7 +41,7 @@ func TestPanicHandler(t *testing.T) {
 	c = m.NewContext(req, res, h2, h, handler3, handler2)
 	assert.Nil(t, c.Next())
 	assert.Equal(t, http.StatusInternalServerError, res.Code)
-	assert.Equal(t, "xyz\n", res.Body.String())
-	assert.Contains(t, buf.String(), "recovery_test.go")
+	assert.Equal(t, "xyz", res.Body.String())
+	assert.Contains(t, buf.String(), "panic_test.go")
 	assert.Contains(t, buf.String(), "xyz")
 }
