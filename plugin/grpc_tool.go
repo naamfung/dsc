@@ -18,6 +18,10 @@ func NewToolGRPCServer(mgr *Manager) *ToolGRPCServer {
 }
 
 func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
+	// owner 隔离：调用方会话标识注入 ctx，job 工具按此授权
+	if sid := req.GetSessionId(); sid != "" {
+		ctx = WithCaller(ctx, sid)
+	}
 	var args json.RawMessage = []byte(req.ArgumentsJson)
 	result, err := s.mgr.ExecuteTool(ctx, req.ToolName, args)
 	if err != nil {

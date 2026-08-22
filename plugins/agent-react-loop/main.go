@@ -484,6 +484,12 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					ArgumentsJson: tc.ArgumentsJson,
 					ToolCallId:    tc.Id,
 				}
+				// owner 隔离：附带调用方会话标识（job 工具按此授权）
+				a.sessMu.Lock()
+				if a.sess != nil {
+					toolReq.SessionId = a.sess.ID()
+				}
+				a.sessMu.Unlock()
 				var err error
 				toolResp, err = toolClient.ExecuteTool(ctx, toolReq)
 				if err != nil {

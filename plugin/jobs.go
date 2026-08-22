@@ -10,9 +10,25 @@ import (
 	"dsc/jobs"
 )
 
+// ctxCallerKey context 键：从工具调用链路解析出的调用方会话标识。
+type ctxCallerKey struct{}
+
+// WithCaller 把调用方会话标识注入 ctx。
+func WithCaller(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, ctxCallerKey{}, sessionID)
+}
+
+// CallerFromContext 读取 ctx 中的调用方会话标识（空 = 无会话调用方）。
+func CallerFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxCallerKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // jobTool 面向模型的 job 工具族（对齐 DSH tool-jobs：job_output/job_list/job_kill）。
-// 后台任务由 Manager.jobs 注册表承载（v1 生产方：workflow background）。
-// v1 简化：非阻塞读取最终输出（无流式游标）、kill 转发取消请求、无完成自动唤醒。
+// 后台任务由 Manager.jobs 注册表承载（owner 隔离 + 消费式游标；v1 生产方：
+// workflow background）。caller（调用方会话）经工具调用链路注入 ctx。
 
 // defaultWaitTimeout 与 maxWaitTimeout job_output 的 wait 默认/上限等待时间（对齐 DSH）。
 const (
@@ -30,7 +46,7 @@ func (t *jobTool) Name() string { return t.name }
 func (t *jobTool) Description() string {
 	switch t.name {
 	case "job_output":
-		return "Read a background job's output and status. Non-blocking by default; set wait:true to block until the job settles (bounded by timeout_ms, capped at 600000). Responses end with [status: ...]."
+		return "Read a background job's output and status. Non-blocking by default; set wait:true to block until the job settles (bounded by timeout_ms, capped at 600000). Stream jobs return the next output delta; final-output jobs return the terminal output once settled. Responses end with [status: ...]."
 	case "job_list":
 		return "List background jobs visible to this caller as '<id> [<kind>] <status> — <label>', one per line."
 	case "job_kill":
@@ -52,19 +68,21 @@ func (t *jobTool) ParametersSchema() json.RawMessage {
 }
 
 func (t *jobTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	caller := CallerFromContext(ctx)
 	switch t.name {
 	case "job_output":
-		return t.execOutput(ctx, args)
+		return t.execOutput(ctx, args, caller)
 	case "job_list":
-		return t.execList(ctx)
+		return t.execList(caller)
 	case "job_kill":
-		return t.execKill(ctx, args)
+		return t.execKill(args, caller)
 	}
 	return "", fmt.Errorf("job: unknown tool %q", t.name)
 }
 
-// execOutput 读取任务输出与状态（对齐 DSH job_output 文本形态）。
-func (t *jobTool) execOutput(ctx context.Context, args json.RawMessage) (string, error) {
+// execOutput 读取任务输出与状态（对齐 DSH job_output）：非阻塞默认；
+// wait=true 时先有界等待落定，再消费读取。
+func (t *jobTool) execOutput(ctx context.Context, args json.RawMessage, caller string) (string, error) {
 	var p struct {
 		JobID     string `json:"job_id"`
 		Wait      bool   `json:"wait"`
@@ -80,60 +98,49 @@ func (t *jobTool) execOutput(ctx context.Context, args json.RawMessage) (string,
 	if deadline > maxWaitTimeout {
 		deadline = maxWaitTimeout
 	}
-	waitCtx := ctx
 	if p.Wait {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, deadline)
-		defer cancel()
-	}
-	// wait：轮询直到任务落定或超时（任务保持存活，超时返回存活快照）
-	for {
-		j, ok := t.m.jobs.Get(p.JobID)
-		if !ok {
-			return "", fmt.Errorf("job_output: no such job %q", p.JobID)
-		}
-		if !p.Wait || j.Status != jobs.StatusRunning {
-			return renderJobOutput(j), nil
-		}
-		select {
-		case <-waitCtx.Done():
-			return renderJobOutput(j), nil
-		case <-time.After(100 * time.Millisecond):
+		if _, err := t.m.jobs.Wait(p.JobID, deadline, caller); err != nil {
+			return "", fmt.Errorf("job_output: %w", err)
 		}
 	}
+	rd, err := t.m.jobs.Read(p.JobID, caller)
+	if err != nil {
+		return "", fmt.Errorf("job_output: %w", err)
+	}
+	return renderJobOutput(rd), nil
 }
 
 // renderJobOutput 渲染 job_output 结果（对齐 DSH：输出 + [status: ...] 结尾；
 // 空输出用 (no output yet)）。
-func renderJobOutput(j *jobs.Job) string {
+func renderJobOutput(rd jobs.Read) string {
 	var b strings.Builder
-	if j.Output != "" {
-		b.WriteString(j.Output)
+	if rd.Text != "" {
+		b.WriteString(rd.Text)
 	} else {
 		b.WriteString("(no output yet)")
 	}
-	b.WriteString("\n[status: " + string(j.Status) + "]")
-	if j.Error != "" {
-		b.WriteString(" " + j.Error)
+	b.WriteString("\n[status: " + string(rd.Snapshot.Status) + "]")
+	if rd.Snapshot.Detail != "" {
+		b.WriteString(" " + rd.Snapshot.Detail)
 	}
 	return b.String()
 }
 
-// execList 列出任务（对齐 DSH job_list：<id> [<kind>] <status> — <label>）。
-func (t *jobTool) execList(ctx context.Context) (string, error) {
-	jobs := t.m.jobs.List()
-	if len(jobs) == 0 {
+// execList 列出调用方可见任务（对齐 DSH job_list：<id> [<kind>] <status> — <label>）。
+func (t *jobTool) execList(caller string) (string, error) {
+	all := t.m.jobs.List(caller)
+	if len(all) == 0 {
 		return "(no background jobs)", nil
 	}
 	var b strings.Builder
-	for _, j := range jobs {
+	for _, j := range all {
 		fmt.Fprintf(&b, "%s [%s] %s — %s\n", j.ID, j.Kind, j.Status, j.Label)
 	}
 	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
 // execKill 请求取消任务（对齐 DSH job_kill：请求取消 / 已结束返回终态）。
-func (t *jobTool) execKill(ctx context.Context, args json.RawMessage) (string, error) {
+func (t *jobTool) execKill(args json.RawMessage, caller string) (string, error) {
 	var p struct {
 		JobID  string `json:"job_id"`
 		Reason string `json:"reason"`
@@ -141,13 +148,18 @@ func (t *jobTool) execKill(ctx context.Context, args json.RawMessage) (string, e
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("job_kill: invalid args: %w", err)
 	}
-	j, ok := t.m.jobs.Get(p.JobID)
-	if !ok {
-		return "", fmt.Errorf("job_kill: no such job %q", p.JobID)
+	res, err := t.m.jobs.Kill(p.JobID, caller, p.Reason)
+	if err != nil {
+		return "", fmt.Errorf("job_kill: %w", err)
 	}
-	if j.Status != jobs.StatusRunning {
-		return fmt.Sprintf("job %s already finished [status: %s]", p.JobID, j.Status), nil
+	switch res {
+	case jobs.KillRequested:
+		return fmt.Sprintf("requested cancellation of job %s", p.JobID), nil
+	default: // already-finished
+		snap, gerr := t.m.jobs.Get(p.JobID, caller)
+		if gerr != nil {
+			return "", fmt.Errorf("job_kill: %w", gerr)
+		}
+		return fmt.Sprintf("job %s already finished [status: %s]", p.JobID, snap.Status), nil
 	}
-	t.m.jobs.Kill(p.JobID)
-	return fmt.Sprintf("requested cancellation of job %s", p.JobID), nil
 }

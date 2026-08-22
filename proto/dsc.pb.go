@@ -1870,6 +1870,7 @@ type ExecuteToolRequest struct {
 	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	ArgumentsJson string                 `protobuf:"bytes,2,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"` // JSON string
 	ToolCallId    string                 `protobuf:"bytes,3,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`        // 用于关联
+	SessionId     string                 `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`             // 调用方会话标识（owner 隔离：job 工具按此授权）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1921,6 +1922,13 @@ func (x *ExecuteToolRequest) GetArgumentsJson() string {
 func (x *ExecuteToolRequest) GetToolCallId() string {
 	if x != nil {
 		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ExecuteToolRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
 	}
 	return ""
 }
@@ -2527,12 +2535,14 @@ const file_dsc_proto_rawDesc = "" +
 	"\x05force\x18\x01 \x01(\bR\x05force\"F\n" +
 	"\x10ShutdownResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"z\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x99\x01\n" +
 	"\x12ExecuteToolRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12%\n" +
 	"\x0earguments_json\x18\x02 \x01(\tR\rargumentsJson\x12 \n" +
 	"\ftool_call_id\x18\x03 \x01(\tR\n" +
-	"toolCallId\"E\n" +
+	"toolCallId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\"E\n" +
 	"\x13ExecuteToolResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\x12\n" +

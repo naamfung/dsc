@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -12,67 +11,215 @@ func waitStatus(t *testing.T, r *Registry, id string, want JobStatus) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if j, ok := r.Get(id); ok && j.Status == want {
+		if snap, err := r.Get(id, ""); err == nil && snap.Status == want {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if j, ok := r.Get(id); ok {
-		t.Fatalf("job %s = %s (%s), want %s", id, j.Status, j.Output, want)
+	if snap, err := r.Get(id, ""); err == nil {
+		t.Fatalf("job %s = %s (%s), want %s", id, snap.Status, snap.Detail, want)
 	}
 	t.Fatalf("job %s not found", id)
+}
+
+// finishOutcome 便捷构造：立即交付终态。
+func finishOutcome(status JobStatus, detail, output string) JobHooks {
+	done := make(chan JobOutcome, 1)
+	go func() { done <- JobOutcome{Status: status, Detail: detail, Output: output} }()
+	return JobHooks{Done: done}
 }
 
 func TestRegistryLifecycle(t *testing.T) {
 	r := NewRegistry()
 
-	// 成功：登记即 running，完成后 succeeded + 输出
-	j := r.Start("workflow", "tally", func(ctx context.Context) (string, error) {
-		time.Sleep(10 * time.Millisecond)
-		return "ok", nil
+	// 成功（final-output）：登记即 running，落定后 completed + 终态幂等读
+	id, err := r.Start(StartSpec{
+		Kind:  "workflow",
+		Label: "tally",
+		Start: func() (JobHooks, error) {
+			done := make(chan JobOutcome, 1)
+			go func() { time.Sleep(10 * time.Millisecond); done <- JobOutcome{Status: StatusCompleted, Output: "ok"} }()
+			return JobHooks{Done: done}, nil
+		},
 	})
-	if j.ID != "workflow-1" || j.Status != StatusRunning {
-		t.Fatalf("start = %+v", j)
+	if err != nil || id != "workflow-1" {
+		t.Fatalf("start = %q, %v", id, err)
 	}
-	waitStatus(t, r, j.ID, StatusSucceeded)
-	if j.Output != "ok" || j.Error != "" {
-		t.Fatalf("succeeded job = %+v", j)
+	if snap, _ := r.Get(id, ""); snap.Status != StatusRunning {
+		t.Fatalf("started job should be running, got %s", snap.Status)
 	}
-
-	// 失败：fn 返回错误 → failed + 错误文本
-	j2 := r.Start("workflow", "boom", func(ctx context.Context) (string, error) {
-		return "", errors.New("boom")
-	})
-	waitStatus(t, r, j2.ID, StatusFailed)
-	if j2.Error != "boom" {
-		t.Fatalf("failed job = %+v", j2)
+	waitStatus(t, r, id, StatusCompleted)
+	rd, err := r.Read(id, "")
+	if err != nil || rd.Text != "ok" || rd.Snapshot.Status != StatusCompleted {
+		t.Fatalf("read = %+v, %v", rd, err)
 	}
-
-	// 取消：Kill 经 ctx 传播，fn 感知后落定 cancelled
-	j3 := r.Start("workflow", "hang", func(ctx context.Context) (string, error) {
-		<-ctx.Done()
-		return "", ctx.Err()
-	})
-	if !r.Kill(j3.ID) {
-		t.Fatal("kill running job should succeed")
+	if !rd.Snapshot.Reported {
+		t.Fatal("terminal read should mark reported")
 	}
-	waitStatus(t, r, j3.ID, StatusCancelled)
-
-	// 已结束的任务不可再 kill
-	if r.Kill(j3.ID) {
-		t.Fatal("kill finished job should fail")
-	}
-	// 不存在的任务
-	if _, ok := r.Get("nope"); ok {
-		t.Fatal("unknown job should not be found")
-	}
-	if r.Kill("nope") {
-		t.Fatal("kill unknown job should fail")
+	// 终态读取幂等（不消费）
+	rd2, _ := r.Read(id, "")
+	if rd2.Text != "ok" {
+		t.Fatalf("terminal read should be idempotent, got %q", rd2.Text)
 	}
 
-	// List：三个任务按启动顺序
-	all := r.List()
+	// 失败
+	id2, _ := r.Start(StartSpec{Kind: "workflow", Label: "boom", Start: func() (JobHooks, error) {
+		return finishOutcome(StatusFailed, "boom", ""), nil
+	}})
+	waitStatus(t, r, id2, StatusFailed)
+	if snap, _ := r.Get(id2, ""); snap.Detail != "boom" {
+		t.Fatalf("failed detail = %q", snap.Detail)
+	}
+
+	// 取消（killed）：kill 标记 stopping + reported，生产方 settle killed
+	id3, _ := r.Start(StartSpec{Kind: "workflow", Label: "hang", Start: func() (JobHooks, error) {
+		done := make(chan JobOutcome, 1)
+		cancel := func(reason string) {
+			go func() { done <- JobOutcome{Status: StatusKilled} }()
+		}
+		return JobHooks{Cancel: cancel, Done: done}, nil
+	}})
+	if res, err := r.Kill(id3, "", "too slow"); err != nil || res != KillRequested {
+		t.Fatalf("kill = %q, %v", res, err)
+	}
+	waitStatus(t, r, id3, StatusKilled)
+	if res, _ := r.Kill(id3, "", ""); res != KillAlreadyFinished {
+		t.Fatalf("kill finished = %q", res)
+	}
+
+	// Start 抛错不登记
+	if _, err := r.Start(StartSpec{Kind: "workflow", Label: "bad", Start: func() (JobHooks, error) {
+		return JobHooks{}, errors.New("boom")
+	}}); err == nil {
+		t.Fatal("starter error should propagate")
+	}
+	// 无效 spec
+	if _, err := r.Start(StartSpec{Label: "no-kind"}); err == nil {
+		t.Fatal("missing kind should fail")
+	}
+
+	// 未知任务
+	if _, err := r.Get("nope", ""); err == nil {
+		t.Fatal("unknown job should fail")
+	}
+
+	// List 按启动顺序
+	all := r.List("")
 	if len(all) != 3 || all[0].ID != "workflow-1" || all[2].ID != "workflow-3" {
 		t.Fatalf("list = %+v", all)
+	}
+}
+
+func TestRegistryOwnerIsolation(t *testing.T) {
+	r := NewRegistry()
+
+	// 有 owner 的任务：仅 owner 可访问
+	id, _ := r.Start(StartSpec{
+		Kind: "workflow", Label: "private", Owner: "sess-a",
+		Start: func() (JobHooks, error) {
+			return finishOutcome(StatusCompleted, "", "secret"), nil
+		},
+	})
+	if _, err := r.Get(id, "sess-a"); err != nil {
+		t.Fatalf("owner should access own job: %v", err)
+	}
+	for _, caller := range []string{"sess-b", ""} {
+		if _, err := r.Get(id, caller); err == nil {
+			t.Fatalf("caller %q should be denied", caller)
+		}
+		if _, err := r.Read(id, caller); err == nil {
+			t.Fatalf("caller %q should be denied read", caller)
+		}
+		if _, err := r.Kill(id, caller, ""); err == nil {
+			t.Fatalf("caller %q should be denied kill", caller)
+		}
+	}
+	if all := r.List("sess-b"); len(all) != 0 {
+		t.Fatalf("foreign caller should see no owned jobs, got %+v", all)
+	}
+	if all := r.List("sess-a"); len(all) != 1 {
+		t.Fatalf("owner should see own job, got %+v", all)
+	}
+	// 无 owner 的任务：所有调用方（含空）可访问
+	id2, _ := r.Start(StartSpec{Kind: "bash", Label: "open", Start: func() (JobHooks, error) {
+		return finishOutcome(StatusCompleted, "", "open"), nil
+	}})
+	waitStatus(t, r, id2, StatusCompleted)
+	for _, caller := range []string{"sess-b", ""} {
+		if snap, err := r.Get(id2, caller); err != nil || snap.Status != StatusCompleted {
+			t.Fatalf("unowned job should be open to %q: %v", caller, err)
+		}
+	}
+	if all := r.List("sess-b"); len(all) != 1 || all[0].ID != id2 {
+		t.Fatalf("unowned job should be visible to foreign caller, got %+v", all)
+	}
+}
+
+func TestRegistryStreamCursor(t *testing.T) {
+	r := NewRegistry()
+	chunks := []string{"a", "b", "c"}
+	pos := 0
+	id, _ := r.Start(StartSpec{
+		Kind: "bash", Label: "stream",
+		Start: func() (JobHooks, error) {
+			done := make(chan JobOutcome, 1)
+			go func() { time.Sleep(20 * time.Millisecond); done <- JobOutcome{Status: StatusCompleted} }()
+			return JobHooks{
+				Done: done,
+				ReadOutput: func() string {
+					if pos < len(chunks) {
+						c := chunks[pos]
+						pos++
+						return c
+					}
+					return ""
+				},
+			}, nil
+		},
+	})
+	// 消费式游标：每次返回下一个增量
+	rd1, _ := r.Read(id, "")
+	if rd1.Text != "a" {
+		t.Fatalf("first delta = %q", rd1.Text)
+	}
+	rd2, _ := r.Read(id, "")
+	if rd2.Text != "b" {
+		t.Fatalf("second delta = %q", rd2.Text)
+	}
+	waitStatus(t, r, id, StatusCompleted)
+	rd3, _ := r.Read(id, "")
+	if rd3.Text != "c" {
+		t.Fatalf("final delta = %q", rd3.Text)
+	}
+	rd4, _ := r.Read(id, "")
+	if rd4.Text != "" {
+		t.Fatalf("consumed cursor should read empty, got %q", rd4.Text)
+	}
+}
+
+func TestRegistryWait(t *testing.T) {
+	r := NewRegistry()
+	id, _ := r.Start(StartSpec{
+		Kind: "workflow", Label: "slow",
+		Start: func() (JobHooks, error) {
+			done := make(chan JobOutcome, 1)
+			go func() { time.Sleep(50 * time.Millisecond); done <- JobOutcome{Status: StatusCompleted, Output: "done"} }()
+			return JobHooks{Done: done}, nil
+		},
+	})
+	// 短超时：返回存活快照
+	snap, err := r.Wait(id, 5*time.Millisecond, "")
+	if err != nil || snap.Status != StatusRunning {
+		t.Fatalf("short wait = %+v, %v", snap, err)
+	}
+	// 长超时：落定后返回终态 + reported
+	snap, err = r.Wait(id, 2*time.Second, "")
+	if err != nil || snap.Status != StatusCompleted || !snap.Reported {
+		t.Fatalf("wait settled = %+v, %v", snap, err)
+	}
+	// 已终态立即返回
+	snap, _ = r.Wait(id, 0, "")
+	if snap.Status != StatusCompleted {
+		t.Fatalf("already-settled wait = %+v", snap)
 	}
 }

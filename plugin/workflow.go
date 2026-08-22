@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"dsc/jobs"
 	"dsc/workflow"
 )
 
@@ -77,17 +78,47 @@ func (t *workflowTool) Execute(ctx context.Context, args json.RawMessage) (strin
 		Runner: workflowAgentRunner{m: t.m},
 		Events: workflowEventSink{m: t.m},
 	}
-	// 后台模式：经 jobs 注册表启动（job_kill 取消经 jctx 传播到 workflow run），
-	// 立即返回 job id，模型后续用 job_output/job_list/job_kill 管理。
+	// 后台模式：经 jobs 注册表启动（job_kill 取消经 cancel 钩子传播到 workflow
+	// run），立即返回 job id，模型后续用 job_output/job_list/job_kill 管理。
+	// owner 绑定调用方会话（空调用方 = 无 owner，开放给所有调用方）。
 	if p.Background {
-		job := t.m.jobs.Start("workflow", p.Meta.Name, func(jctx context.Context) (string, error) {
-			run, err := workflow.Start(jctx, req)
-			if err != nil {
-				return "", err
-			}
-			return collectWorkflow(jctx, run)
+		job, jerr := t.m.jobs.Start(jobs.StartSpec{
+			Kind:  "workflow",
+			Label: p.Meta.Name,
+			Owner: CallerFromContext(ctx),
+			Start: func() (jobs.JobHooks, error) {
+				runCtx, cancel := context.WithCancel(context.Background())
+				run, err := workflow.Start(runCtx, req)
+				if err != nil {
+					return jobs.JobHooks{}, err
+				}
+				done := make(chan jobs.JobOutcome, 1)
+				go func() {
+					r := <-run.Result
+					switch r.StopReason {
+					case workflow.StopCompleted:
+						out, merr := renderWorkflowResult(run.Meta.Name, r)
+						if merr != nil {
+							done <- jobs.JobOutcome{Status: jobs.StatusFailed, Detail: merr.Error()}
+						} else {
+							done <- jobs.JobOutcome{Status: jobs.StatusCompleted, Output: out}
+						}
+					case workflow.StopCancelled:
+						done <- jobs.JobOutcome{Status: jobs.StatusKilled}
+					default:
+						done <- jobs.JobOutcome{Status: jobs.StatusFailed, Detail: r.Error}
+					}
+				}()
+				return jobs.JobHooks{
+					Cancel: func(reason string) { cancel() },
+					Done:   done,
+				}, nil
+			},
 		})
-		return fmt.Sprintf("workflow %q started in background (job %s). Track it with job_output.", p.Meta.Name, job.ID), nil
+		if jerr != nil {
+			return "", jerr
+		}
+		return fmt.Sprintf("workflow %q started in background (job %s). Track it with job_output.", p.Meta.Name, job), nil
 	}
 	run, err := workflow.Start(ctx, req)
 	if err != nil {
@@ -101,23 +132,28 @@ func collectWorkflow(ctx context.Context, run *workflow.Run) (string, error) {
 	r := <-run.Result
 	switch r.StopReason {
 	case workflow.StopCompleted:
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "workflow %q completed (%d agent(s)).\nReturn value:\n", run.Meta.Name, r.AgentsStarted)
-		if r.Value == nil {
-			sb.WriteString("null")
-			return sb.String(), nil
-		}
-		b, jerr := json.MarshalIndent(r.Value, "", "  ")
-		if jerr != nil {
-			return "", fmt.Errorf("workflow: marshal result: %w", jerr)
-		}
-		sb.Write(b)
-		return sb.String(), nil
+		return renderWorkflowResult(run.Meta.Name, r)
 	case workflow.StopCancelled:
 		return "", fmt.Errorf("workflow run was cancelled")
 	default:
 		return "", fmt.Errorf("workflow run failed: %s", r.Error)
 	}
+}
+
+// renderWorkflowResult 渲染 workflow 完成结果（前台/后台共用）。
+func renderWorkflowResult(name string, r workflow.Result) (string, error) {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "workflow %q completed (%d agent(s)).\nReturn value:\n", name, r.AgentsStarted)
+	if r.Value == nil {
+		sb.WriteString("null")
+		return sb.String(), nil
+	}
+	b, err := json.MarshalIndent(r.Value, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("workflow: marshal result: %w", err)
+	}
+	sb.Write(b)
+	return sb.String(), nil
 }
 
 // workflowAgentRunner agent() 钩子的子 agent 执行器：走宿主 RunSubagent。
