@@ -31,18 +31,18 @@ type LogWriterFunc func(req *http.Request, res *LogResponseWriter, elapsed float
 // request, as well as the elapsed time since the request first came through the middleware.
 // LogWriterFunc can then do whatever logging it needs to do.
 //
-//     import (
-//         "log"
-//         "yougam/libraries/vodka"
-//         "yougam/libraries/vodka/access"
-//         "net/http"
-//     )
+//	import (
+//	    "log"
+//	    "yougam/libraries/vodka"
+//	    "yougam/libraries/vodka/access"
+//	    "net/http"
+//	)
 //
-//     func myCustomLogger(req http.Context, res access.LogResponseWriter, elapsed int64) {
-//         // Do something with the request, response, and elapsed time data here
-//     }
-//     r := vodka.New()
-//     r.Use(access.CustomLogger(myCustomLogger))
+//	func myCustomLogger(req http.Context, res access.LogResponseWriter, elapsed int64) {
+//	    // Do something with the request, response, and elapsed time data here
+//	}
+//	r := vodka.New()
+//	r.Use(access.CustomLogger(myCustomLogger))
 func CustomLogger(loggerFunc LogWriterFunc) vodka.Handler {
 	return func(c *vodka.Context) error {
 		startTime := time.Now()
@@ -64,14 +64,14 @@ func CustomLogger(loggerFunc LogWriterFunc) vodka.Handler {
 // The access log messages contain information including client IPs, time used to serve each request, request line,
 // response status and size.
 //
-//     import (
-//         "log"
-//         "yougam/libraries/vodka"
-//         "yougam/libraries/vodka/access"
-//     )
+//	import (
+//	    "log"
+//	    "yougam/libraries/vodka"
+//	    "yougam/libraries/vodka/access"
+//	)
 //
-//     r := vodka.New()
-//     r.Use(access.Logger(log.Printf))
+//	r := vodka.New()
+//	r.Use(access.Logger(log.Printf))
 func Logger(log LogFunc) vodka.Handler {
 	var logger = func(req *http.Request, rw *LogResponseWriter, elapsed float64) {
 		clientIP := GetClientIP(req)

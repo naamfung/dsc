@@ -36,9 +36,13 @@ type recSink struct {
 	ends   int
 }
 
-func (r *recSink) OnStart(string, Meta)        { r.mu.Lock(); r.starts++; r.mu.Unlock() }
-func (r *recSink) OnPhase(_ string, t string)  { r.mu.Lock(); r.phases = append(r.phases, t); r.mu.Unlock() }
-func (r *recSink) OnLog(_ string, m string)    { r.mu.Lock(); r.logs = append(r.logs, m); r.mu.Unlock() }
+func (r *recSink) OnStart(string, Meta) { r.mu.Lock(); r.starts++; r.mu.Unlock() }
+func (r *recSink) OnPhase(_ string, t string) {
+	r.mu.Lock()
+	r.phases = append(r.phases, t)
+	r.mu.Unlock()
+}
+func (r *recSink) OnLog(_ string, m string) { r.mu.Lock(); r.logs = append(r.logs, m); r.mu.Unlock() }
 func (r *recSink) OnAgentStart(_ string, seq int, l string) {
 	r.mu.Lock()
 	r.agents = append(r.agents, "start:"+l)
@@ -222,9 +226,9 @@ func TestRunResultUnserializable(t *testing.T) {
 func TestRunCancelled(t *testing.T) {
 	fr := &fakeRunner{}
 	run, err := Start(context.Background(), StartRequest{
-		Meta:   Meta{Name: "hang", Description: "x"},
-		Script: `while (Date.now() < 1e15) {} return 1;`,
-		Runner: fr,
+		Meta:    Meta{Name: "hang", Description: "x"},
+		Script:  `while (Date.now() < 1e15) {} return 1;`,
+		Runner:  fr,
 		Timeout: 5 * time.Second,
 	})
 	if err != nil {

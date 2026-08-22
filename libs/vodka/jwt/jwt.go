@@ -1,10 +1,10 @@
 package jwt
 
 import (
-	"errors"
-	"fmt"
 	"dsc/libs/vodka"
 	"dsc/libs/vodka/skipper"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"

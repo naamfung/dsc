@@ -40,11 +40,11 @@ const (
 // 非法迁移会被记录告警，便于尽早暴露流程漏步。
 var pluginStateTransitions = map[PluginState]map[PluginState]bool{
 	StatePending: {
-		StateSpawned:  true, // 依赖就绪，重新拉起
+		StateSpawned:    true, // 依赖就绪，重新拉起
 		StateConnecting: true, // 动态注入后依赖就绪，provider 直接进入握手
 		StateActive:     true, // 已拉起的 PENDING agent，依赖就绪后直接激活
-		StateFailed:   true,
-		StateDisposed: true,
+		StateFailed:     true,
+		StateDisposed:   true,
 	},
 	StateSpawned: {
 		StateConnecting: true,
@@ -52,8 +52,8 @@ var pluginStateTransitions = map[PluginState]map[PluginState]bool{
 		StateDisposed:   true,
 	},
 	StateConnecting: {
-		StateReady:   true,
-		StateFailed:  true,
+		StateReady:    true,
+		StateFailed:   true,
 		StateDisposed: true,
 	},
 	StateReady: {

@@ -100,11 +100,12 @@ type CookieProvider struct {
 // Init Init cookie session provider with max lifetime and config json.
 // maxLifetime is ignored.
 // json config:
-// 	securityKey - hash string
-// 	blockKey - gob encode hash string. it's saved as aes crypto.
-// 	securityName - recognized name in encoded cookie string
-// 	cookieName - cookie name
-// 	maxAge - cookie max life time.
+//
+//	securityKey - hash string
+//	blockKey - gob encode hash string. it's saved as aes crypto.
+//	securityName - recognized name in encoded cookie string
+//	cookieName - cookie name
+//	maxAge - cookie max life time.
 func (pder *CookieProvider) Init(maxLifetime int64, config string) error {
 	pder.config = &cookieConfig{}
 	err := json.Unmarshal([]byte(config), pder.config)

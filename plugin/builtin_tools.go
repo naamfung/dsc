@@ -128,7 +128,7 @@ func getValidAbsolutePath(reqPath string) (string, error) {
 		if err == nil {
 			vol := filepath.VolumeName(cwd)
 			cleanReqNoLeadSep := strings.TrimLeft(reqPath, "/\\")
-			
+
 			// 構建為 D:/Agents/novelforge/main.go 格式（正斜槓）
 			absUnixStyle := ""
 			if strings.HasSuffix(vol, ":") {
@@ -201,7 +201,7 @@ func getValidAbsolutePath(reqPath string) (string, error) {
 
 	// 如果傳統 Go 路徑處理失敗，嘗試使用 mvdan.cc/sh/v3/interp 執行 shell 命令來驗證或轉換路徑
 	ctx := context.Background()
-	
+
 	// 嘗試使用 shell 的 `test -e` 或 `ls -ld` 來驗證路徑
 	shellCmds := []string{
 		// 嘗試將路徑作為參數傳遞給 shell 並檢查

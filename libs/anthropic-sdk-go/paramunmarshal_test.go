@@ -154,4 +154,3 @@ func TestParamUnmarshalStringPromotion(t *testing.T) {
 		t.Errorf("beta content string not promoted, got %#v", bm.Content)
 	}
 }
-

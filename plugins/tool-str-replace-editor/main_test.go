@@ -78,8 +78,8 @@ func TestStrReplace(t *testing.T) {
 	server, _ := newTestServer(t)
 
 	_, err := exec(t, server, map[string]interface{}{
-		"command": "create",
-		"path":    "/workspace/test/fib.go",
+		"command":   "create",
+		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\nfunc main() {\n\tprintln(\"hi\")\n}\n",
 	})
 	if err != nil {
@@ -91,10 +91,10 @@ func TestStrReplace(t *testing.T) {
 	}
 
 	res, err := exec(t, server, map[string]interface{}{
-		"command":   "str_replace",
-		"path":      "/workspace/test/fib.go",
-		"old_str":   `println("hi")`,
-		"new_str":   `fmt.Println("hi")`,
+		"command": "str_replace",
+		"path":    "/workspace/test/fib.go",
+		"old_str": `println("hi")`,
+		"new_str": `fmt.Println("hi")`,
 	})
 	if err != nil {
 		t.Fatalf("str_replace failed: %v", err)
@@ -125,8 +125,8 @@ func TestInsert(t *testing.T) {
 	server, _ := newTestServer(t)
 
 	_, err := exec(t, server, map[string]interface{}{
-		"command": "create",
-		"path":    "/workspace/test/fib.go",
+		"command":   "create",
+		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\n\nfunc main() {\n}\n",
 	})
 	if err != nil {
@@ -137,10 +137,10 @@ func TestInsert(t *testing.T) {
 	}
 
 	res, err := exec(t, server, map[string]interface{}{
-		"command":    "insert",
-		"path":       "/workspace/test/fib.go",
+		"command":     "insert",
+		"path":        "/workspace/test/fib.go",
 		"insert_line": 2,
-		"new_str":    "// inserted",
+		"new_str":     "// inserted",
 	})
 	if err != nil {
 		t.Fatalf("insert failed: %v", err)
@@ -157,11 +157,11 @@ func TestInsert(t *testing.T) {
 
 func TestNormalizeWorkspacePath(t *testing.T) {
 	cases := map[string]string{
-		"/workspace/test/fib.go":  "test/fib.go",
-		"/workspace/fib.go":       "fib.go",
-		`\workspace\a\b.go`:       `a\b.go`,
-		"test/plain.go":           "test/plain.go",
-		"workspace/nested.go":     "workspace/nested.go",
+		"/workspace/test/fib.go": "test/fib.go",
+		"/workspace/fib.go":      "fib.go",
+		`\workspace\a\b.go`:      `a\b.go`,
+		"test/plain.go":          "test/plain.go",
+		"workspace/nested.go":    "workspace/nested.go",
 	}
 	for in, want := range cases {
 		if got := normalizeWorkspacePath(in); got != want {

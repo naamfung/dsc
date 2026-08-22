@@ -121,9 +121,9 @@ func (t *Template) ExecuteFunc(w io.Writer, f TagFunc) (int64, error) {
 // values from the map m and writes the result to the given writer w.
 //
 // Substitution map m may contain values with the following types:
-//   * []byte - the fastest value type
-//   * string - convenient value type
-//   * TagFunc - flexible value type
+//   - []byte - the fastest value type
+//   - string - convenient value type
+//   - TagFunc - flexible value type
 //
 // Returns the number of bytes written to w.
 func (t *Template) Execute(w io.Writer, m map[string]interface{}) (int64, error) {
@@ -149,10 +149,9 @@ func (t *Template) ExecuteFuncString(f TagFunc) string {
 // values from the map m and returns the result.
 //
 // Substitution map m may contain values with the following types:
-//   * []byte - the fastest value type
-//   * string - convenient value type
-//   * TagFunc - flexible value type
-//
+//   - []byte - the fastest value type
+//   - string - convenient value type
+//   - TagFunc - flexible value type
 func (t *Template) ExecuteString(m map[string]interface{}) string {
 	return t.ExecuteFuncString(func(w io.Writer, tag string) (int, error) { return stdTagFunc(w, tag, m) })
 }

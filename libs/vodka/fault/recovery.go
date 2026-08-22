@@ -28,14 +28,14 @@ type (
 // An optional error conversion function can also be provided to convert an error into a normalized one
 // before sending it to the response.
 //
-//     import (
-//         "log"
-//         "dsc/libs/vodka"
-//         "dsc/libs/vodka/fault"
-//     )
+//	import (
+//	    "log"
+//	    "dsc/libs/vodka"
+//	    "dsc/libs/vodka/fault"
+//	)
 //
-//     r := vodka.New()
-//     r.Use(fault.Recovery(log.Printf))
+//	r := vodka.New()
+//	r.Use(fault.Recovery(log.Printf))
 func Recovery(logf LogFunc, errorf ...ConvertErrorFunc) vodka.Handler {
 	handlePanic := PanicHandler(logf)
 	return func(c *vodka.Context) error {

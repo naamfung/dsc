@@ -73,7 +73,7 @@ func Test_ToSnakeCase(t *testing.T) {
 		"TW":                 "tw",
 		"_C":                 "_c",
 
-		"  sentence case  ":                                    "__sentence_case__",
+		"  sentence case  ": "__sentence_case__",
 		" Mixed-hyphen case _and SENTENCE_case and UPPER-case": "_mixed_hyphen_case__and_sentence_case_and_upper_case",
 	}
 	Convey("Convert string into snake case", t, func() {

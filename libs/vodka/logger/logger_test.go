@@ -131,7 +131,7 @@ func TestLoggerTemplate(t *testing.T) {
 		"\"status\":200":                       true,
 		"\"bytes_in\":0":                       true,
 		"google.com":                           true,
-		"dsc/libs/vodka-tests-agent":                  true,
+		"dsc/libs/vodka-tests-agent":           true,
 		"6ba7b810-9dad-11d1-80b4-00c04fd430c8": true,
 		"ac08034cd216a647fc2eb62f2bcf7b810":    true,
 	}

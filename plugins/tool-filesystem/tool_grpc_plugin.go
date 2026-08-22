@@ -12,7 +12,7 @@ import (
 // ToolMetadataGRPCPlugin 是實現了 goplugin.GRPCPlugin 接口的適配器，同時註冊 ToolService 和 PluginMetadata
 type ToolMetadataGRPCPlugin struct {
 	goplugin.Plugin
-	ToolImpl   *ToolServiceServer
+	ToolImpl     *ToolServiceServer
 	MetadataImpl *MetadataServer
 }
 
