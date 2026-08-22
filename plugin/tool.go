@@ -17,6 +17,13 @@ type ToolDefinition interface {
 	Execute(ctx context.Context, args json.RawMessage) (string, error)
 }
 
+// TimeoutProvider 可选接口：工具声明单次调用超时（毫秒，<=0 不设）。
+// 对齐 DSH timeout-policy：声明 timeoutMs 的工具在执行时获得协作式截止时间，
+// 截止时间先到时返回 TOOL_TIMEOUT。协作式 = 工具必须转发/感知 ctx 取消。
+type TimeoutProvider interface {
+	TimeoutMs() int
+}
+
 // PluginToolCall 表示 LLM 發起的一次工具調用
 type PluginToolCall struct {
 	ID        string          `json:"id"`

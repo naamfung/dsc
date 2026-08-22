@@ -3,7 +3,9 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
 	"dsc/proto"
 )
@@ -45,8 +47,19 @@ func filePathFromArgs(argsJSON string) string {
 	return ""
 }
 
+// ToolTimeoutError 工具调用超时（对齐 DSH TOOL_TIMEOUT 结构化结果）。
+type ToolTimeoutError struct {
+	Tool string
+	Ms   int
+}
+
+func (e *ToolTimeoutError) Error() string {
+	return fmt.Sprintf("Error: tool call timed out after %dms (TOOL_TIMEOUT)", e.Ms)
+}
+
 // ExecuteTool 以流水线方式执行工具：pre-execute(waterfall) → execute → post-execute(waterfall)。
 // 任何阶段返回错误即中止；post 阶段的监听器可改写 inv.Result。
+// 声明 TimeoutProvider 的工具在 execute 阶段获得协作式单次调用截止时间（timeout-policy）。
 func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, error) {
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON)}
 	// pre-execute + execute：next 为实际执行；pre 监听器不调 next 即 veto
@@ -56,7 +69,20 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 			inv.Err = fmt.Errorf("tool not found: %s", toolName)
 			return inv.Err
 		}
-		result, err := tool.Execute(ctx, argsJSON)
+		// timeout-policy：声明 timeoutMs 的工具设置协作式截止时间（对齐 DSH）
+		execCtx, timeoutMs := ctx, 0
+		if tp, ok := tool.(TimeoutProvider); ok {
+			if ms := tp.TimeoutMs(); ms > 0 {
+				timeoutMs = ms
+				var cancel context.CancelFunc
+				execCtx, cancel = context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
+				defer cancel()
+			}
+		}
+		result, err := tool.Execute(execCtx, argsJSON)
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = &ToolTimeoutError{Tool: toolName, Ms: timeoutMs}
+		}
 		inv.Result, inv.Err = result, err
 		return err
 	})
