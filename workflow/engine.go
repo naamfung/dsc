@@ -175,6 +175,80 @@ func settle(ctx context.Context, req StartRequest, id string) Result {
 		return res
 	})
 
+	// dsc_is_fatal：供 pipeline 脚本侧区分致命错误（Go 钩子 panic 的 *RunError）
+	// 与普通错误。*RunError 经 Export 还原（对齐 DSH 的 instanceof 隔离：脚本
+	// 伪造的 {Code:...} 对象不能冒充致命错误，落入 per-item null）。
+	vm.Set("dsc_is_fatal", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(valueToRunError(call.Argument(0)) != nil)
+	})
+
+	// dsc_pipeline_run：pipeline 的 JS 运行时（一次定义、多次调用）。每个 item
+	// 独立串行跑完全部 stages（无跨阶段屏障），item 之间并发（Promise.all）；
+	// stage 签名 (previous, item, index)，previous 为上一 stage 输出（首个 stage
+	// 为 item 本身）。stage 抛普通错误 → 该 item 为 null 并跳过其剩余 stages；
+	// 致命错误（dsc_is_fatal）传播整链。
+	if _, err := vm.RunString(`
+function dsc_pipeline_run(items, stages) {
+  return Promise.all(items.map(async (item, index) => {
+    let value = item;
+    try {
+      for (const stage of stages) {
+        value = await stage(value, item, index);
+      }
+      return value;
+    } catch (e) {
+      if (dsc_is_fatal(e)) throw e;
+      return null;
+    }
+  }));
+}
+`); err != nil {
+		return classifyError(err, agentsCount) // 理论不发生（固定源码）
+	}
+
+	// pipeline(items, ...stages)：逐项 stage 链（对齐 DSH），无跨阶段屏障；
+	// 致命错误（INVALID_ARGUMENT / ITEM_CAP / AGENT_CAP）逸出调用。
+	vm.Set("pipeline", func(call goja.FunctionCall) goja.Value {
+		itemsV := call.Argument(0)
+		if itemsV == nil || goja.IsUndefined(itemsV) || goja.IsNull(itemsV) || itemsV.ToObject(vm).ClassName() != "Array" {
+			panicErr(ErrInvalidArgument, fmt.Errorf("pipeline() requires an items array"))
+		}
+		itemsObj := itemsV.ToObject(vm)
+		length := int(itemsObj.Get("length").ToInteger())
+		maxItems := req.MaxItemsPerCall
+		if maxItems <= 0 {
+			maxItems = defaultMaxItemsPerCall
+		}
+		if length > maxItems {
+			panicErr(ErrItemCap, fmt.Errorf("pipeline() exceeds maxItemsPerCall (%d)", maxItems))
+		}
+		stages := call.Arguments[1:]
+		if len(stages) == 0 {
+			panicErr(ErrInvalidArgument, fmt.Errorf("pipeline() requires at least one stage function"))
+		}
+		for i, s := range stages {
+			if _, ok := goja.AssertFunction(s); !ok {
+				panicErr(ErrInvalidArgument, fmt.Errorf("pipeline() stage %d is not a function", i))
+			}
+		}
+		runFn, ok := goja.AssertFunction(vm.Get("dsc_pipeline_run"))
+		if !ok {
+			panicErr("SCRIPT_RUNTIME", fmt.Errorf("dsc_pipeline_run unavailable"))
+		}
+		stageVals := make([]any, len(stages))
+		for i, s := range stages {
+			stageVals[i] = s
+		}
+		res, err := runFn(goja.Undefined(), itemsV, vm.NewArray(stageVals...))
+		if err != nil {
+			if re := unwrapRunError(err); re != nil {
+				panic(vm.ToValue(re)) // 致命错误原样逸出（如 AGENT_CAP）
+			}
+			panicErr("SCRIPT_RUNTIME", err)
+		}
+		return res
+	})
+
 	// phase(title)：声明了 meta.phases 时须精确匹配，否则报错。
 	vm.Set("phase", func(call goja.FunctionCall) goja.Value {
 		title := call.Argument(0).String()
