@@ -85,9 +85,9 @@ func TestWorkflowToolBackground(t *testing.T) {
 	}
 
 	// 后台任务完成 → job_output 取回结果
-	waitJobStatus(t, m, "workflow-1", jobs.StatusSucceeded)
+	waitJobStatus(t, m, "workflow-1", jobs.StatusCompleted)
 	out, err = outTool.Execute(context.Background(), []byte(`{"job_id":"workflow-1"}`))
-	if err != nil || !strings.Contains(out, `"sum": 5`) || !strings.Contains(out, "[status: succeeded]") {
+	if err != nil || !strings.Contains(out, `"sum": 5`) || !strings.Contains(out, "[status: completed]") {
 		t.Fatalf("background output = %q, %v", out, err)
 	}
 }
