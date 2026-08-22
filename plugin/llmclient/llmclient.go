@@ -60,6 +60,12 @@ func (c *Client) Close() error {
 }
 
 // Chat 执行一次非流式对话（经宿主聚合路由；maxTokens 0 = 服务端默认）。
+// 注意：thinking 模式下 unary Chat 可能只返回思考块而文本为空，优先用 ChatStream。
 func (c *Client) Chat(ctx context.Context, messages []*proto.Message, maxTokens int32) (*proto.ChatResponse, error) {
 	return c.c.Chat(ctx, &proto.ChatRequest{Messages: messages, MaxTokens: maxTokens})
+}
+
+// ChatStream 执行一次流式对话（经宿主聚合路由），逐帧返回。
+func (c *Client) ChatStream(ctx context.Context, messages []*proto.Message, maxTokens int32) (proto.LLMService_ChatStreamClient, error) {
+	return c.c.ChatStream(ctx, &proto.ChatRequest{Messages: messages, MaxTokens: maxTokens})
 }
