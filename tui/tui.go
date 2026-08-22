@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1132,7 +1133,20 @@ func renderToolResult(result string, isErr bool) string {
 	if result == "" {
 		return ""
 	}
-	lines := strings.Split(result, "\n")
+
+	// 嘗試將結果格式化為 JSON（如果它是有效的 JSON 且不是錯誤）
+	formattedResult := result
+	if !isErr {
+		if isJSON(result) {
+			var prettyJSON bytes.Buffer
+			err := json.Indent(&prettyJSON, []byte(result), "", "  ")
+			if err == nil {
+				formattedResult = prettyJSON.String()
+			}
+		}
+	}
+
+	lines := strings.Split(formattedResult, "\n")
 	indent := strings.Repeat(" ", len(connector))
 	var b strings.Builder
 	b.WriteString(dimSty.Render(connector))
@@ -1153,6 +1167,12 @@ func renderToolResult(result string, isErr bool) string {
 		}
 	}
 	return b.String()
+}
+
+// isJSON 檢查給定字符串是否是有效的 JSON。
+func isJSON(s string) bool {
+	var js map[string]any
+	return json.Unmarshal([]byte(s), &js) == nil
 }
 
 // 内置斜杠命令列表（当前为宿主可直接执行的命令）。
