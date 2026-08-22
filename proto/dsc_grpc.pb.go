@@ -1299,6 +1299,200 @@ var PluginNotifyService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	PluginHookService_BeforeTool_FullMethodName = "/dsc.PluginHookService/BeforeTool"
+	PluginHookService_AfterTool_FullMethodName  = "/dsc.PluginHookService/AfterTool"
+	PluginHookService_OnEvent_FullMethodName    = "/dsc.PluginHookService/OnEvent"
+)
+
+// PluginHookServiceClient is the client API for PluginHookService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PluginHookService 插件侧钩子/事件订阅服务（互通机制 3）：插件在自身 gRPC
+// server 上注册，宿主在工具流水线与事件广播时回调。使插件 A 能在不通知
+// 主程序和其他插件的情况下，钩子式改变插件 B 的工具行为（拦截/改写）。
+type PluginHookServiceClient interface {
+	// 工具执行前（宿主 pre-execute 流水线内，按插件加载顺序调用）：可 veto
+	// 或改写参数；veto 阻止执行。
+	BeforeTool(ctx context.Context, in *BeforeToolRequest, opts ...grpc.CallOption) (*BeforeToolResponse, error)
+	// 工具执行后：可改写结果/错误。
+	AfterTool(ctx context.Context, in *AfterToolRequest, opts ...grpc.CallOption) (*AfterToolResponse, error)
+	// 宿主事件订阅：含其他插件经 PluginNotifyService 发布的事件。
+	OnEvent(ctx context.Context, in *OnEventRequest, opts ...grpc.CallOption) (*OnEventResponse, error)
+}
+
+type pluginHookServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPluginHookServiceClient(cc grpc.ClientConnInterface) PluginHookServiceClient {
+	return &pluginHookServiceClient{cc}
+}
+
+func (c *pluginHookServiceClient) BeforeTool(ctx context.Context, in *BeforeToolRequest, opts ...grpc.CallOption) (*BeforeToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BeforeToolResponse)
+	err := c.cc.Invoke(ctx, PluginHookService_BeforeTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pluginHookServiceClient) AfterTool(ctx context.Context, in *AfterToolRequest, opts ...grpc.CallOption) (*AfterToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AfterToolResponse)
+	err := c.cc.Invoke(ctx, PluginHookService_AfterTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *pluginHookServiceClient) OnEvent(ctx context.Context, in *OnEventRequest, opts ...grpc.CallOption) (*OnEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OnEventResponse)
+	err := c.cc.Invoke(ctx, PluginHookService_OnEvent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PluginHookServiceServer is the server API for PluginHookService service.
+// All implementations must embed UnimplementedPluginHookServiceServer
+// for forward compatibility.
+//
+// PluginHookService 插件侧钩子/事件订阅服务（互通机制 3）：插件在自身 gRPC
+// server 上注册，宿主在工具流水线与事件广播时回调。使插件 A 能在不通知
+// 主程序和其他插件的情况下，钩子式改变插件 B 的工具行为（拦截/改写）。
+type PluginHookServiceServer interface {
+	// 工具执行前（宿主 pre-execute 流水线内，按插件加载顺序调用）：可 veto
+	// 或改写参数；veto 阻止执行。
+	BeforeTool(context.Context, *BeforeToolRequest) (*BeforeToolResponse, error)
+	// 工具执行后：可改写结果/错误。
+	AfterTool(context.Context, *AfterToolRequest) (*AfterToolResponse, error)
+	// 宿主事件订阅：含其他插件经 PluginNotifyService 发布的事件。
+	OnEvent(context.Context, *OnEventRequest) (*OnEventResponse, error)
+	mustEmbedUnimplementedPluginHookServiceServer()
+}
+
+// UnimplementedPluginHookServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPluginHookServiceServer struct{}
+
+func (UnimplementedPluginHookServiceServer) BeforeTool(context.Context, *BeforeToolRequest) (*BeforeToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BeforeTool not implemented")
+}
+func (UnimplementedPluginHookServiceServer) AfterTool(context.Context, *AfterToolRequest) (*AfterToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AfterTool not implemented")
+}
+func (UnimplementedPluginHookServiceServer) OnEvent(context.Context, *OnEventRequest) (*OnEventResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OnEvent not implemented")
+}
+func (UnimplementedPluginHookServiceServer) mustEmbedUnimplementedPluginHookServiceServer() {}
+func (UnimplementedPluginHookServiceServer) testEmbeddedByValue()                           {}
+
+// UnsafePluginHookServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PluginHookServiceServer will
+// result in compilation errors.
+type UnsafePluginHookServiceServer interface {
+	mustEmbedUnimplementedPluginHookServiceServer()
+}
+
+func RegisterPluginHookServiceServer(s grpc.ServiceRegistrar, srv PluginHookServiceServer) {
+	// If the following call panics, it indicates UnimplementedPluginHookServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PluginHookService_ServiceDesc, srv)
+}
+
+func _PluginHookService_BeforeTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BeforeToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginHookServiceServer).BeforeTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginHookService_BeforeTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginHookServiceServer).BeforeTool(ctx, req.(*BeforeToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PluginHookService_AfterTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AfterToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginHookServiceServer).AfterTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginHookService_AfterTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginHookServiceServer).AfterTool(ctx, req.(*AfterToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PluginHookService_OnEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OnEventRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginHookServiceServer).OnEvent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginHookService_OnEvent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginHookServiceServer).OnEvent(ctx, req.(*OnEventRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PluginHookService_ServiceDesc is the grpc.ServiceDesc for PluginHookService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PluginHookService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dsc.PluginHookService",
+	HandlerType: (*PluginHookServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "BeforeTool",
+			Handler:    _PluginHookService_BeforeTool_Handler,
+		},
+		{
+			MethodName: "AfterTool",
+			Handler:    _PluginHookService_AfterTool_Handler,
+		},
+		{
+			MethodName: "OnEvent",
+			Handler:    _PluginHookService_OnEvent_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dsc.proto",
+}
+
+const (
 	FsObservationPolicyService_GetObservation_FullMethodName    = "/dsc.FsObservationPolicyService/GetObservation"
 	FsObservationPolicyService_UpdateObservation_FullMethodName = "/dsc.FsObservationPolicyService/UpdateObservation"
 )

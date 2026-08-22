@@ -59,7 +59,12 @@ type Manager struct {
 	pluginToolNames     map[string][]string                // tool plugin name -> list of tool names it provides
 	toolNameToServiceID map[string]uint32                  // tool name -> serviceID
 	toolClients         map[string]proto.ToolServiceClient // tool plugin name -> 插件 ToolService 客户端（供 ListContext 聚合）
-	states              map[string]*RuntimeState           // 插件名 -> 运行时状态快照
+	// 互通机制 3：插件钩子回调客户端（toolHookClients，按加载顺序 toolHookOrder）。
+	// 宿主在工具流水线（BeforeTool/AfterTool）与事件广播（OnEvent）时回调插件，
+	// 使插件 A 无需通知主程序/其他插件即可钩子式改变插件 B 的工具行为。
+	toolHookClients map[string]proto.PluginHookServiceClient
+	toolHookOrder   []string
+	states          map[string]*RuntimeState // 插件名 -> 运行时状态快照
 
 	// 动态注入插件相关字段：
 	// configPath 动态注入/卸载写回的 config.yaml 路径（config 始终为运行态唯一事实来源）。
@@ -147,6 +152,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		pluginToolNames:     make(map[string][]string),
 		toolNameToServiceID: make(map[string]uint32),
 		toolClients:         make(map[string]proto.ToolServiceClient),
+		toolHookClients:     make(map[string]proto.PluginHookServiceClient),
 		states:              make(map[string]*RuntimeState),
 		pluginLogger:        pluginLogger,
 		subscribers:         make(map[int]chan PluginEvent),
@@ -171,6 +177,11 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// 后台任务完成 → 宿主事件总线（通用送达：TUI 唤醒、web/novelforge 等插件订阅）
 	m.jobs.OnJobDone(func(s jobs.JobSnapshot) {
 		m.events.Emit(JobDoneEvent, EventContext{Data: s})
+	})
+	// 宿主事件 → 插件广播（互通机制 3：插件经 PluginHookService.OnEvent 订阅）
+	m.events.OnAny(func(ctx EventContext) (any, error) {
+		m.broadcastEventToPlugins(ctx.Name, ctx.Data)
+		return nil, nil
 	})
 	// spill：超长工具结果外置（阈值 4000 字符，目录可经 DSC_SPILL_DIR 配置）；
 	// post-execute 策略 + read_spill 取回工具
@@ -1961,6 +1972,10 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 		m.toolServiceIDs[entry.Name] = serviceID
 		m.pluginToolNames[entry.Name] = toolNames
 		m.toolClients[entry.Name] = toolClient
+		// 互通机制 3：插件钩子回调客户端（插件未注册 PluginHookService 时
+		// 调用返回 UNIMPLEMENTED，宿主容错跳过）
+		m.toolHookClients[entry.Name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
+		m.toolHookOrder = append(m.toolHookOrder, entry.Name)
 		m.clients[entry.Name] = client
 		m.typeMap[entry.Name] = "tool"
 		m.pluginMetadata[entry.Name] = info
