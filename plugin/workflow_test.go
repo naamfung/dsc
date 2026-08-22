@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"dsc/jobs"
 )
 
 func TestWorkflowToolRegistered(t *testing.T) {
@@ -62,5 +64,30 @@ func TestWorkflowToolExecute(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), syntax); err == nil ||
 		!strings.Contains(err.Error(), "SCRIPT_PARSE") {
 		t.Fatalf("syntax error should be SCRIPT_PARSE, got %v", err)
+	}
+}
+
+func TestWorkflowToolBackground(t *testing.T) {
+	m := NewManager(&ManagerConfig{ExecDir: t.TempDir()})
+	tool, _ := m.toolRegistry.Get("workflow")
+	outTool, _ := m.toolRegistry.Get("job_output")
+
+	// background=true：立即返回 job id，不阻塞
+	args, _ := json.Marshal(map[string]any{
+		"meta":       map[string]any{"name": "bg", "description": "background tally"},
+		"script":     `return {sum: args.a + args.b};`,
+		"args":       map[string]any{"a": 2, "b": 3},
+		"background": true,
+	})
+	out, err := tool.Execute(context.Background(), args)
+	if err != nil || !strings.Contains(out, "started in background (job workflow-1)") {
+		t.Fatalf("background start = %q, %v", out, err)
+	}
+
+	// 后台任务完成 → job_output 取回结果
+	waitJobStatus(t, m, "workflow-1", jobs.StatusSucceeded)
+	out, err = outTool.Execute(context.Background(), []byte(`{"job_id":"workflow-1"}`))
+	if err != nil || !strings.Contains(out, `"sum": 5`) || !strings.Contains(out, "[status: succeeded]") {
+		t.Fatalf("background output = %q, %v", out, err)
 	}
 }

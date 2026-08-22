@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"dsc/cron"
+	"dsc/jobs"
 	"dsc/proto"
 	"dsc/proto/metadata"
 	"dsc/session"
@@ -78,7 +79,6 @@ type Manager struct {
 
 	// cronScheduler cron 定时任务调度器（StartCron 启动，Shutdown 停止）。
 	cronScheduler *cron.Scheduler
-
 	// 用户评审通道：userQuestionProvider 为 UI provider（TUI 注册）；
 	// userQuestionsServiceID 为挂载在 broker 上的 UserQuestionsService ID（注入 agent）。
 	userQuestionProvider   UserQuestionProvider
@@ -95,6 +95,10 @@ type Manager struct {
 
 	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
+
+	// jobs 后台任务注册表（对齐 DSH jobs v1 种子）：workflow 后台运行等
+	// 长任务经 Registry.Start 启动，模型用 job_output/job_list/job_kill 查询管理。
+	jobs *jobs.Registry
 }
 
 type ManagerConfig struct {
@@ -147,13 +151,18 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		events:              NewEventBus(),
 		policyClients:       make(map[string]proto.FsObservationPolicyServiceClient),
 		policyOff:           make(map[string][]func()),
+		jobs:                jobs.NewRegistry(),
 	}
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
 	// 内建 subagent 工具（宿主侧子代理，委派任务给独立小循环）
 	_ = m.toolRegistry.Register(&subagentTool{m: m})
-	// 内建 workflow 工具（宿主侧 JS 编排脚本，可扇出 subagent）
+	// 内建 workflow 工具（宿主侧 JS 编排脚本，可扇出 subagent；支持后台运行）
 	_ = m.toolRegistry.Register(&workflowTool{m: m})
+	// 内建 job 工具族（后台任务查询/取消，对齐 DSH tool-jobs：job_output/job_list/job_kill）
+	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_output"})
+	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_list"})
+	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_kill"})
 	// spill：超长工具结果外置（阈值 4000 字符，目录可经 DSC_SPILL_DIR 配置）；
 	// post-execute 策略 + read_spill 取回工具
 	spillDir := os.Getenv("DSC_SPILL_DIR")

@@ -30,7 +30,9 @@ func (t *workflowTool) Description() string {
 		"each item through the stage functions (previous, item, index) in order with items " +
 		"processed concurrently — a stage failure drops that item to null, fatal errors abort the " +
 		"whole run; phase(title) and log(msg) record progress (phase titles must match the declared " +
-		"meta.phases). The script ends with `return <json-value>`, which becomes the workflow result."
+		"meta.phases). The script ends with `return <json-value>`, which becomes the workflow result. " +
+		"Set background:true to start it as a background job and get its job id immediately; track " +
+		"it with job_output / job_kill instead of blocking the current turn."
 }
 
 func (t *workflowTool) ParametersSchema() json.RawMessage {
@@ -51,7 +53,8 @@ func (t *workflowTool) ParametersSchema() json.RawMessage {
 				"required": ["name", "description"]
 			},
 			"script": {"type": "string", "description": "The plain-JavaScript workflow script body (see tool description for conventions)."},
-			"args": {"type": "object", "description": "Optional JSON input exposed to the script as the 'args' global."}
+			"args": {"type": "object", "description": "Optional JSON input exposed to the script as the 'args' global."},
+			"background": {"type": "boolean", "description": "Start as a background job and return its job id immediately; track it with job_output / job_kill."}
 		},
 		"required": ["meta", "script"]
 	}`)
@@ -59,23 +62,42 @@ func (t *workflowTool) ParametersSchema() json.RawMessage {
 
 func (t *workflowTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Meta   workflow.Meta `json:"meta"`
-		Script string        `json:"script"`
-		Args   any           `json:"args"`
+		Meta       workflow.Meta `json:"meta"`
+		Script     string        `json:"script"`
+		Args       any           `json:"args"`
+		Background bool          `json:"background"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("workflow: invalid args: %w", err)
 	}
-	run, err := workflow.Start(ctx, workflow.StartRequest{
+	req := workflow.StartRequest{
 		Meta:   p.Meta,
 		Script: p.Script,
 		Args:   p.Args,
 		Runner: workflowAgentRunner{m: t.m},
 		Events: workflowEventSink{m: t.m},
-	})
+	}
+	// 后台模式：经 jobs 注册表启动（job_kill 取消经 jctx 传播到 workflow run），
+	// 立即返回 job id，模型后续用 job_output/job_list/job_kill 管理。
+	if p.Background {
+		job := t.m.jobs.Start("workflow", p.Meta.Name, func(jctx context.Context) (string, error) {
+			run, err := workflow.Start(jctx, req)
+			if err != nil {
+				return "", err
+			}
+			return collectWorkflow(jctx, run)
+		})
+		return fmt.Sprintf("workflow %q started in background (job %s). Track it with job_output.", p.Meta.Name, job.ID), nil
+	}
+	run, err := workflow.Start(ctx, req)
 	if err != nil {
 		return "", err
 	}
+	return collectWorkflow(ctx, run)
+}
+
+// collectWorkflow 等待运行结算并渲染结果（前台/后台共用；result 不拒绝）。
+func collectWorkflow(ctx context.Context, run *workflow.Run) (string, error) {
 	r := <-run.Result
 	switch r.StopReason {
 	case workflow.StopCompleted:
