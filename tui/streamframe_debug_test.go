@@ -37,7 +37,8 @@ func (s *stubAgent) SwitchSession(_ context.Context, id string) error {
 	s.switchCalls = append(s.switchCalls, id)
 	return nil
 }
-func (s *stubAgent) Shutdown(context.Context, bool) error { return nil }
+func (s *stubAgent) SetPlanMode(context.Context, bool) error { return nil }
+func (s *stubAgent) Shutdown(context.Context, bool) error    { return nil }
 
 func TestPumpLoopRealFlow(t *testing.T) {
 	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{

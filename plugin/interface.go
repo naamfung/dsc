@@ -46,6 +46,10 @@ type Agent interface {
 	// SwitchSession 切换当前会话（事件溯源 store 中按 id 加载并接管）。
 	// 用于 TUI 多会话切换；目标会话不存在时返回错误。
 	SwitchSession(ctx context.Context, sessionID string) error
+	// SetPlanMode 设置当前会话的 plan 模式（log-only plan/mode 事件，fold 恢复）。
+	// 用于 TUI /plan 命令；激活时在 system prompt 注入部署方配置的 section，
+	// 供模型先探索与设计，再通过 exit_plan_mode 工具呈现完整计划并退出。
+	SetPlanMode(ctx context.Context, active bool) error
 	// Shutdown 优雅关闭 Agent（用于热加载前）
 	Shutdown(ctx context.Context, force bool) error
 }

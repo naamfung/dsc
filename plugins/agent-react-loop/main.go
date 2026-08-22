@@ -210,8 +210,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 		a.sess = restored
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
-	} else if sysPromptChanged {
+	} else if sysPromptChanged || a.sysPromptNeedsUpdate {
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
+		a.sysPromptNeedsUpdate = false
 	}
 	a.turnCounter++
 	turnNo := a.turnCounter
@@ -583,9 +584,29 @@ func (a *ReactLoopAgent) SwitchSession(ctx context.Context, sessionID string) er
 	a.sessMu.Lock()
 	a.sess = sess
 	a.turnCounter = sess.LastTurn()
+	a.sysPromptNeedsUpdate = true // 新会话的 plan/goal 状态不同，下次 Run 重建 system prompt
 	a.sessMu.Unlock()
 	fmt.Printf("[Agent Loop] switched to session %s (%d events, last turn %d)\n",
 		sessionID, sess.Len(), a.turnCounter)
+	return nil
+}
+
+// SetPlanMode 设置当前会话的 plan 模式：追加 log-only plan/mode 事件并落盘
+// （事件溯源：恢复/fork/压缩都能直接折叠回 plan 状态），并标记下次 Run 重建
+// system prompt 以注入/移除 plan section。对齐 DSH plan-mode 的软引导设计：
+// 仅注入引导文案，不强制任何沙箱或批准限制。
+func (a *ReactLoopAgent) SetPlanMode(ctx context.Context, active bool) error {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sess == nil {
+		return fmt.Errorf("set plan mode: session not loaded")
+	}
+	a.sess.Append(session.PlanMode, &session.PlanModeData{Active: active}, nil)
+	if err := a.store.Save(a.sess); err != nil {
+		return fmt.Errorf("set plan mode: %w", err)
+	}
+	a.sysPromptNeedsUpdate = true
+	fmt.Printf("[Agent Loop] plan mode set to %v\n", active)
 	return nil
 }
 
@@ -751,6 +772,13 @@ func (s *agentGRPCServer) SwitchSession(ctx context.Context, req *proto.SwitchSe
 		return &proto.SwitchSessionResponse{Success: false, Message: err.Error()}, nil
 	}
 	return &proto.SwitchSessionResponse{Success: true}, nil
+}
+
+func (s *agentGRPCServer) SetPlanMode(ctx context.Context, req *proto.SetPlanModeRequest) (*proto.SetPlanModeResponse, error) {
+	if err := s.impl.SetPlanMode(ctx, req.Active); err != nil {
+		return &proto.SetPlanModeResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SetPlanModeResponse{Success: true}, nil
 }
 
 func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {
