@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"dsc/jobs"
 	"dsc/proto"
 	"dsc/proto/metadata"
 	"dsc/session"
@@ -74,6 +75,9 @@ type Manager struct {
 	// events 通用事件分发总线（emit/parallel/serial/bail/waterfall）：
 	// 供工具执行流水线等宿主内扩展点使用，与上面的生命周期推送通道正交。
 	events *EventBus
+
+	// jobScheduler cron 定时任务调度器（StartJobs 启动，Shutdown 停止）。
+	jobScheduler *jobs.Scheduler
 
 	// policyClients 已加载 policy 插件的策略服务客户端（按插件名），
 	// 由桥接逻辑包装为工具流水线监听器（替代旁路）。
@@ -924,6 +928,7 @@ func (m *Manager) ListLLMs() []string {
 func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.stopJobsLocked() // 先停调度，避免新任务触发时插件已退出
 	for name, client := range m.clients {
 		m.transitionLocked(name, StateUnloading, "")
 		delete(m.clients, name)    // 先摘除，令退出监控忽略
