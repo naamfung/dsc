@@ -7,8 +7,11 @@
 //   - agent() 每次调用归属一个 subagent，计数 agentsStarted
 //   - 事件仅供观察，携带 run id + meta，不暴露取消/释放权限
 //
-// v1 简化：agent() 为同步钩子（脚本无需 await；阻塞等待子 agent 完成），
-// parallel()/pipeline() 等并发编排暂缓。
+// 脚本为 async 模型（对齐 DSH）：agent() 返回 Promise，脚本需 await；
+// parallel(thunks) 在并发上限内扇出 thunk（子 agent 真并发，受
+// MaxConcurrentAgents 并发上限与 MaxTotalAgents 总量上限双约束）。
+// 致命错误（INVALID_ARGUMENT / AGENT_CAP / ITEM_CAP 等）逸出 parallel，
+// 普通子 agent 失败在脚本侧可见 null。pipeline() 等仍暂缓。
 package workflow
 
 import (
@@ -68,6 +71,7 @@ const (
 	ErrScriptParse          = "SCRIPT_PARSE"
 	ErrInvalidArgument      = "INVALID_ARGUMENT"
 	ErrAgentCap             = "AGENT_CAP"
+	ErrItemCap              = "ITEM_CAP"
 	ErrResultUnserializable = "RESULT_UNSERIALIZABLE"
 	ErrCancelled            = "CANCELLED"
 )
@@ -89,17 +93,26 @@ type EventSink interface {
 
 // StartRequest 一次工作流启动请求。
 type StartRequest struct {
-	Meta           Meta
-	Script         string
-	Args           any // 以全局变量 args 暴露给脚本
-	MaxTotalAgents int // 本次运行子 agent 总数上限；<=0 不设限
-	Runner         AgentRunner
-	Events         EventSink
-	Timeout        time.Duration // 单次运行上限；<=0 用默认 30 分钟
+	Meta   Meta
+	Script string
+	Args   any // 以全局变量 args 暴露给脚本
+	// MaxTotalAgents 本次运行子 agent 总数上限；<=0 不设限。
+	MaxTotalAgents int
+	// MaxConcurrentAgents 并发的 agent() 上限；<=0 按可用 CPU 并行度解析。
+	// parallel() 扇出的 thunk 受此上限约束（agent goroutine 排队等待）。
+	MaxConcurrentAgents int
+	// MaxItemsPerCall 一次 parallel() 调用接受的条目数上限；<=0 用默认 4096。
+	MaxItemsPerCall int
+	Runner          AgentRunner
+	Events          EventSink
+	Timeout         time.Duration // 单次运行上限；<=0 用默认 30 分钟
 }
 
 // defaultTimeout 单次工作流运行默认超时。
 const defaultTimeout = 30 * time.Minute
+
+// defaultMaxItemsPerCall 单次 parallel() 调用默认条目上限（对齐 DSH 4096）。
+const defaultMaxItemsPerCall = 4096
 
 // Run 持有方负责的一次工作流运行。result 不拒绝：
 // 执行失败以 stopReason=error 兑现，取消以 cancelled 兑现。

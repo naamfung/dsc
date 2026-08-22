@@ -121,7 +121,7 @@ func TestRunAgentHook(t *testing.T) {
 	sink := &recSink{}
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "fanout", Description: "two agents"},
-		Script: `const x = agent("a"); const y = agent("b"); return [x, y];`,
+		Script: `const x = await agent("a"); const y = await agent("b"); return [x, y];`,
 		Runner: fr,
 		Events: sink,
 	})
@@ -146,7 +146,7 @@ func TestRunAgentChildFailureReturnsNull(t *testing.T) {
 	fr := &fakeRunner{errs: map[string]error{"boom": context.Canceled}}
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "fail", Description: "child fails"},
-		Script: `const x = agent("boom"); return x === null;`,
+		Script: `const x = await agent("boom"); return x === null;`,
 		Runner: fr,
 	})
 	if r.StopReason != StopCompleted || r.Value != true {
@@ -158,7 +158,7 @@ func TestRunAgentCap(t *testing.T) {
 	fr := &fakeRunner{resps: map[string]string{"a": "x"}}
 	r := run(t, StartRequest{
 		Meta:           Meta{Name: "cap", Description: "cap test"},
-		Script:         `agent("a"); agent("a"); return 1;`,
+		Script:         `await agent("a"); await agent("a"); return 1;`,
 		Runner:         fr,
 		MaxTotalAgents: 1,
 	})
@@ -242,5 +242,130 @@ func TestRunCancelled(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancelled run did not settle")
+	}
+}
+
+// slowRunner 每个子 agent 固定延迟，用于验证并发扇出的耗时。
+type slowRunner struct {
+	delay time.Duration
+}
+
+func (s *slowRunner) RunAgent(_ context.Context, prompt string) (string, error) {
+	time.Sleep(s.delay)
+	return "ok-" + prompt, nil
+}
+
+// countingRunner 记录同时运行的最大并发数。
+type countingRunner struct {
+	mu     sync.Mutex
+	active int
+	max    int
+}
+
+func (c *countingRunner) RunAgent(_ context.Context, prompt string) (string, error) {
+	c.mu.Lock()
+	c.active++
+	if c.active > c.max {
+		c.max = c.active
+	}
+	c.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	c.mu.Lock()
+	c.active--
+	c.mu.Unlock()
+	return "ok", nil
+}
+
+func TestRunParallel(t *testing.T) {
+	fr := &fakeRunner{resps: map[string]string{"a": "ra", "b": "rb", "c": "rc"}}
+	r := run(t, StartRequest{
+		Meta:   Meta{Name: "para", Description: "concurrent fan-out"},
+		Script: `return await parallel([() => agent("a"), () => agent("b"), () => agent("c")]);`,
+		Runner: fr,
+	})
+	if r.StopReason != StopCompleted {
+		t.Fatalf("stop reason = %q, err = %s", r.StopReason, r.Error)
+	}
+	arr, _ := r.Value.([]any)
+	if len(arr) != 3 || arr[0] != "ra" || arr[1] != "rb" || arr[2] != "rc" {
+		t.Fatalf("value = %+v", r.Value)
+	}
+	if r.AgentsStarted != 3 || len(fr.calls) != 3 {
+		t.Fatalf("agents = %d, calls = %v", r.AgentsStarted, fr.calls)
+	}
+}
+
+// TestRunParallelConcurrency 验证并行扇出真并发：4 个各 60ms 的 agent，
+// 串行需 240ms，并发应明显更快（阈值 3 个延迟）。
+func TestRunParallelConcurrency(t *testing.T) {
+	fr := &slowRunner{delay: 60 * time.Millisecond}
+	start := time.Now()
+	r := run(t, StartRequest{
+		Meta:   Meta{Name: "conc", Description: "concurrency check"},
+		Script: `return await parallel([() => agent("a"), () => agent("b"), () => agent("c"), () => agent("d")]);`,
+		Runner: fr,
+	})
+	elapsed := time.Since(start)
+	if r.StopReason != StopCompleted {
+		t.Fatalf("got %+v", r)
+	}
+	if elapsed > 3*fr.delay {
+		t.Fatalf("parallel took %v, expected concurrent fan-out", elapsed)
+	}
+}
+
+// TestRunParallelConcurrencyLimit 验证 MaxConcurrentAgents 上限：5 个 agent、
+// 并发上限 2 时，同时运行数不得超过 2。
+func TestRunParallelConcurrencyLimit(t *testing.T) {
+	fr := &countingRunner{}
+	r := run(t, StartRequest{
+		Meta:                Meta{Name: "lim", Description: "concurrency limit"},
+		Script:              `return await parallel([() => agent("a"), () => agent("b"), () => agent("c"), () => agent("d"), () => agent("e")]);`,
+		Runner:              fr,
+		MaxConcurrentAgents: 2,
+	})
+	if r.StopReason != StopCompleted || r.AgentsStarted != 5 {
+		t.Fatalf("got %+v", r)
+	}
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	if fr.max > 2 {
+		t.Fatalf("max concurrent = %d, want <= 2", fr.max)
+	}
+}
+
+// TestRunParallelValidation 校验 parallel 参数契约：非数组、非函数条目、超单次条目上限。
+func TestRunParallelValidation(t *testing.T) {
+	fr := &fakeRunner{}
+	cases := []struct{ script, code, want string }{
+		{`return await parallel("no");`, ErrInvalidArgument, "requires an array"},
+		{`return await parallel([3]);`, ErrInvalidArgument, "item 0 is not a function"},
+		{`return await parallel([() => 1, () => 2, () => 3]);`, ErrItemCap, "maxItemsPerCall"},
+	}
+	for _, c := range cases {
+		r := run(t, StartRequest{
+			Meta:            Meta{Name: "pv", Description: "x"},
+			Script:          c.script,
+			Runner:          fr,
+			MaxItemsPerCall: 2,
+		})
+		if r.StopReason != StopError || !strings.Contains(r.Error, c.code) || !strings.Contains(r.Error, c.want) {
+			t.Fatalf("%q = %+v", c.script, r)
+		}
+	}
+}
+
+// TestRunParallelFatalEscapes 验证致命错误逸出 parallel（不会变成逐项 null）：
+// parallel 内 agent 超总量上限 → AGENT_CAP 以 stopReason=error 结算。
+func TestRunParallelFatalEscapes(t *testing.T) {
+	fr := &fakeRunner{resps: map[string]string{"a": "x"}}
+	r := run(t, StartRequest{
+		Meta:           Meta{Name: "pe", Description: "x"},
+		Script:         `return await parallel([() => agent("a"), () => agent("a")]);`,
+		Runner:         fr,
+		MaxTotalAgents: 1,
+	})
+	if r.StopReason != StopError || !strings.Contains(r.Error, ErrAgentCap) {
+		t.Fatalf("AGENT_CAP should escape parallel, got %+v", r)
 	}
 }

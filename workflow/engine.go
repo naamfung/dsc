@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,9 +19,21 @@ func newID() string {
 	return fmt.Sprintf("wf-%d", time.Now().UnixMilli())
 }
 
+// emptyProgram 用于在事件循环中触发 goja job queue（leave() drain），
+// 使 promise resolve 后的 await 续行得以执行。
+var emptyProgram = goja.MustCompile("drain.js", "", false)
+
+// agentJob agent goroutine → VM goroutine 的结果回传。
+// resolve 由 goja.NewPromise 返回，必须仅在 VM goroutine 上调用（非 goroutine-safe）。
+type agentJob struct {
+	resolve func(interface{}) error
+	result  string
+	err     error
+}
+
 // checkScriptSyntax 语法预检（Start 同步执行）：只编译包装后的脚本，不运行。
 func checkScriptSyntax(script string) error {
-	wrapped := "(function(){\n" + script + "\n})()"
+	wrapped := "(async function(){\n" + script + "\n})()"
 	_, err := goja.Compile("workflow.js", wrapped, false)
 	return err
 }
@@ -39,8 +53,10 @@ func execute(ctx context.Context, req StartRequest, id string, timeout time.Dura
 	ch <- r
 }
 
-// settle 执行脚本并结算：脚本语法已在 Start 校验；此处运行包装后的同步
-// IIFE（agent() 同步阻塞，脚本无需 await），取消/超时经 vm.Interrupt 中断。
+// settle 执行脚本并结算。脚本以 async IIFE 包装：agent()/parallel() 返回
+// Promise，await 时脚本挂起。取消/超时经 vm.Interrupt 中断同步段；脚本挂起
+// 期间由事件循环驱动——agent goroutine 完成经 channel 回传，VM goroutine 内
+// resolve 并用空 program 触发 job queue（leave() drain）推进 await 链。
 func settle(ctx context.Context, req StartRequest, id string) Result {
 	vm := goja.New()
 
@@ -58,8 +74,17 @@ func settle(ctx context.Context, req StartRequest, id string) Result {
 		panic(vm.ToValue(&RunError{Code: code, Err: err}))
 	}
 
-	// agent(prompt, options?)：同步执行一个子 agent，返回其结果文本；
-	// 子 agent 失败返回 null（对齐 DSH：非基础设施失败脚本侧可见 null）。
+	// agent 并发上限：<=0 按可用 CPU 并行度解析；信号量在 agent goroutine
+	// 中获取，不阻塞 VM 线程（并发打满时若在 VM 线程获取会死锁）。
+	concurrency := req.MaxConcurrentAgents
+	if concurrency <= 0 {
+		concurrency = runtime.GOMAXPROCS(0)
+	}
+	sem := make(chan struct{}, concurrency)
+	jobs := make(chan agentJob, concurrency)
+
+	// agent(prompt, options?)：异步执行一个子 agent，返回 Promise；
+	// 子 agent 失败 resolve null（对齐 DSH：非基础设施失败脚本侧可见 null）。
 	vm.Set("agent", func(call goja.FunctionCall) goja.Value {
 		prompt := call.Argument(0).String()
 		if strings.TrimSpace(prompt) == "" {
@@ -83,16 +108,71 @@ func settle(ctx context.Context, req StartRequest, id string) Result {
 		atomic.StoreInt32(&agentsCount, int32(seq))
 		emit(func(s EventSink) { s.OnAgentStart(id, seq, label) })
 
-		result, err := req.Runner.RunAgent(ctx, prompt)
-		outcome := "completed"
-		if err != nil {
-			outcome = "failed"
+		p, resolve, _ := vm.NewPromise()
+		go func() {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				result, err := req.Runner.RunAgent(ctx, prompt)
+				outcome := "completed"
+				if err != nil {
+					outcome = "failed"
+				}
+				emit(func(s EventSink) { s.OnAgentEnd(id, seq, outcome) })
+				jobs <- agentJob{resolve: resolve, result: result, err: err}
+			case <-ctx.Done():
+				// 取消/超时：子 agent 未启动视为失败（事件循环按 ctx 退出）
+				emit(func(s EventSink) { s.OnAgentEnd(id, seq, "failed") })
+				jobs <- agentJob{resolve: resolve, err: ctx.Err()}
+			}
+		}()
+		return vm.ToValue(p) // *Promise 经 valueContainer 转回其底层 Object
+	})
+
+	// parallel(thunks)：在并发上限内扇出 thunk（对齐 DSH）。thunk 通常为
+	// () => agent(...)，同步执行收集其 promise 后经 Promise.all 聚合，子
+	// agent 底层并发运行。致命错误（INVALID_ARGUMENT / ITEM_CAP / AGENT_CAP）
+	// 逸出调用，不会变成逐项 null。
+	vm.Set("parallel", func(call goja.FunctionCall) goja.Value {
+		v := call.Argument(0)
+		if v == nil || goja.IsUndefined(v) || goja.IsNull(v) || v.ToObject(vm).ClassName() != "Array" {
+			panicErr(ErrInvalidArgument, fmt.Errorf("parallel() requires an array"))
 		}
-		emit(func(s EventSink) { s.OnAgentEnd(id, seq, outcome) })
-		if err != nil {
-			return goja.Null()
+		arr := v.ToObject(vm)
+		length := int(arr.Get("length").ToInteger())
+		maxItems := req.MaxItemsPerCall
+		if maxItems <= 0 {
+			maxItems = defaultMaxItemsPerCall
 		}
-		return vm.ToValue(result)
+		if length > maxItems {
+			panicErr(ErrItemCap, fmt.Errorf("parallel() exceeds maxItemsPerCall (%d)", maxItems))
+		}
+		promises := vm.NewArray()
+		for i := 0; i < length; i++ {
+			thunk := arr.Get(strconv.Itoa(i))
+			fn, ok := goja.AssertFunction(thunk)
+			if !ok {
+				panicErr(ErrInvalidArgument, fmt.Errorf("parallel() item %d is not a function", i))
+			}
+			ret, err := fn(goja.Undefined())
+			if err != nil {
+				if re := unwrapRunError(err); re != nil {
+					panic(vm.ToValue(re)) // 致命错误原样逸出（如 AGENT_CAP）
+				}
+				panicErr("SCRIPT_RUNTIME", err)
+			}
+			promises.Set(strconv.Itoa(i), ret)
+		}
+		all, ok := goja.AssertFunction(vm.Get("Promise").ToObject(vm).Get("all"))
+		if !ok {
+			panicErr("SCRIPT_RUNTIME", fmt.Errorf("Promise.all unavailable"))
+		}
+		// this 必须指向 Promise 构造器（Promise.all 内部经 speciesConstructor 取 this）
+		res, err := all(vm.Get("Promise"), promises)
+		if err != nil {
+			panicErr("SCRIPT_RUNTIME", err)
+		}
+		return res
 	})
 
 	// phase(title)：声明了 meta.phases 时须精确匹配，否则报错。
@@ -130,27 +210,72 @@ func settle(ctx context.Context, req StartRequest, id string) Result {
 		vm.Set("args", vm.ToValue(map[string]any{}))
 	}
 
-	// 取消/超时：中断脚本执行。
+	// 取消/超时：中断脚本执行（同步段生效；脚本挂起时事件循环按 ctx 退出）。
 	interrupt := &RunError{Code: ErrCancelled, Err: fmt.Errorf("workflow run cancelled")}
 	stopInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(interrupt) })
 	defer stopInterrupt()
 
-	wrapped := "(function(){\n" + req.Script + "\n})()"
+	wrapped := "(async function(){\n" + req.Script + "\n})()"
 	val, err := vm.RunString(wrapped)
 	if err != nil {
 		return classifyError(err, agentsCount)
 	}
-	value, merr := materialize(val)
-	if merr != nil {
-		return Result{StopReason: StopError, Error: merr.Error(), AgentsStarted: int(agentsCount)}
+	promise, ok := val.Export().(*goja.Promise)
+	if !ok {
+		// 理论不发生（async IIFE 恒返回 Promise），兜底直接物化
+		value, merr := materialize(val)
+		if merr != nil {
+			return Result{StopReason: StopError, Error: merr.Error(), AgentsStarted: int(agentsCount)}
+		}
+		return Result{Value: value, StopReason: StopCompleted, AgentsStarted: int(agentsCount)}
 	}
-	return Result{Value: value, StopReason: StopCompleted, AgentsStarted: int(agentsCount)}
+	// 事件循环：驱动 agent 结果回传与 goja job queue（await 续行）。
+	for promise.State() == goja.PromiseStatePending {
+		select {
+		case <-ctx.Done():
+			return Result{StopReason: StopCancelled, Error: interrupt.Error(), AgentsStarted: int(agentsCount)}
+		case j := <-jobs:
+			if j.err != nil {
+				_ = j.resolve(nil) // 子 agent 失败 → null（对齐 DSH）
+			} else {
+				_ = j.resolve(j.result)
+			}
+			// resolve 后 promise 链 job 入队，用空 program 触发 leave() drain；
+			// drain 过程中可能发起新的 agent()，产生新的 job 继续循环。
+			if _, derr := vm.RunProgram(emptyProgram); derr != nil {
+				return classifyError(derr, agentsCount)
+			}
+		}
+	}
+	switch promise.State() {
+	case goja.PromiseStateFulfilled:
+		value, merr := materialize(promise.Result())
+		if merr != nil {
+			return Result{StopReason: StopError, Error: merr.Error(), AgentsStarted: int(agentsCount)}
+		}
+		return Result{Value: value, StopReason: StopCompleted, AgentsStarted: int(agentsCount)}
+	default: // Rejected（Rejected 时 Result() 即 rejection 值）
+		if re := valueToRunError(promise.Result()); re != nil {
+			return classifyError(re, agentsCount)
+		}
+		msg := ""
+		if r := promise.Result(); r != nil {
+			msg = r.ToString().String()
+		}
+		return classifyError(fmt.Errorf("%s", msg), agentsCount)
+	}
 }
 
 // classifyError 把脚本抛错/中断归类为运行结果：
-// 钩子 panic 的 *RunError 原样保留其 code；取消/超时中断按 CANCELLED 归类。
+// 钩子 panic 的 *RunError（或经 Exception 包装）原样保留其 code；
+// 取消/超时中断按 CANCELLED 归类，其余为 SCRIPT_RUNTIME。
 func classifyError(err error, agents int32) Result {
 	re := unwrapRunError(err)
+	if re == nil {
+		if e, ok := err.(*RunError); ok {
+			re = e
+		}
+	}
 	if re == nil {
 		// goja 中断（vm.Interrupt）把错误包成带位置后缀的异常，按 code 前缀识别
 		if strings.Contains(err.Error(), ErrCancelled) {
@@ -174,6 +299,17 @@ func unwrapRunError(err error) *RunError {
 				return re
 			}
 		}
+	}
+	return nil
+}
+
+// valueToRunError 从 goja 值还原 *RunError（promise rejection 值）。
+func valueToRunError(v goja.Value) *RunError {
+	if v == nil || goja.IsNull(v) || goja.IsUndefined(v) {
+		return nil
+	}
+	if re, ok := v.Export().(*RunError); ok {
+		return re
 	}
 	return nil
 }
