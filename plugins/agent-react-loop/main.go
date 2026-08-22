@@ -71,6 +71,18 @@ type ReactLoopAgent struct {
 	// persona "你是一個…助手" 身份句，由宿主透過 DSC_PRESET_PERSONA 傳入（預設可配）；
 	// 空則回退 DeepSeek 官方默認
 	persona string
+
+	// plan/goal 宿主工具状态（对齐 DSH plan-mode + goal 领域）：
+	// planSection 为 plan 模式激活时注入 system prompt 的部署方引导文案（DSC_PLAN_SECTION，
+	// 缺省 DSH 示例文案）；planActive 为当前会话的 plan 模式（每次 Run 从事件日志折叠）。
+	// goalActivation 是进程本地续行启用状态（绝不持久化：恢复/fork 后停用，需显式 resume
+	// 重新启用）；goalRounds 为已准入 Goal Round 数（v1 恒 0，jobs/workflow 落地后推进）。
+	planSection                 string
+	defaultMaxGoalRounds        int
+	blockedAfterConsecutiveRounds int
+	planActive                  bool
+	goalActivation              bool
+	goalRounds                  int
 }
 
 func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error {
@@ -209,15 +221,21 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				restored.Len(), a.turnCounter)
 		}
 		a.sess = restored
+		a.goalActivation = false // 恢复/切换后停用续行（对齐 DSH session-start disarm）
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 	} else if sysPromptChanged || a.sysPromptNeedsUpdate {
 		a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
 		a.sysPromptNeedsUpdate = false
 	}
+	// plan 模式每次 Run 从事件日志折叠（SetPlanMode/exit_plan_mode 已提交的变更即时生效）
+	a.planActive = session.FoldPlanMode(a.sess.Events())
 	a.turnCounter++
 	turnNo := a.turnCounter
 	sess := a.sess
 	a.sessMu.Unlock()
+
+	// 宿主托管的 plan/goal 工具追加进模型可见目录（执行时拦截，见下方工具循环）
+	availableTools = append(availableTools, planGoalTools()...)
 
 	// 每次 Run 结束（含错误路径）将事件日志落盘（多会话 Store）
 	defer func() {
@@ -399,6 +417,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 
 		// 执行每个工具并追加结果
+		concludeTurn := false // 宿主 goal 工具 complete/blocked 后结束物理轮次（对齐 DSH concludeTurn）
 		for _, tc := range toolCalls {
 			// 检查 ctx.Done()
 			select {
@@ -420,21 +439,32 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson})
 			}
 
-			// 执行工具
-			toolReq := &proto.ExecuteToolRequest{
-				ToolName:      tc.Name,
-				ArgumentsJson: tc.ArgumentsJson,
-				ToolCallId:    tc.Id,
-			}
-			toolResp, err := toolClient.ExecuteTool(ctx, toolReq)
-			if err != nil {
-				// 错误也作为 tool/result 记入（surface）
-				sess.Append(session.ToolResult, &session.ToolResultData{
-					Turn: turnNo, Step: stepNo, CallID: tc.Id,
-					Content: fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
-					Error:   err.Error(),
-				}, &session.SurfaceOp{Op: session.SurfaceAppend})
-				continue
+			// 宿主托管的 plan/goal 工具直接本地执行（状态读写会话事件日志），
+			// 其余工具经聚合 ToolService 转发到工具插件
+			var toolResp *proto.ExecuteToolResponse
+			if isLocalTool(tc.Name) {
+				var concluded bool
+				toolResp, concluded = a.executeLocalTool(ctx, tc)
+				if concluded {
+					concludeTurn = true
+				}
+			} else {
+				toolReq := &proto.ExecuteToolRequest{
+					ToolName:      tc.Name,
+					ArgumentsJson: tc.ArgumentsJson,
+					ToolCallId:    tc.Id,
+				}
+				var err error
+				toolResp, err = toolClient.ExecuteTool(ctx, toolReq)
+				if err != nil {
+					// 错误也作为 tool/result 记入（surface）
+					sess.Append(session.ToolResult, &session.ToolResultData{
+						Turn: turnNo, Step: stepNo, CallID: tc.Id,
+						Content: fmt.Sprintf("Error executing tool %s: %v", tc.Name, err),
+						Error:   err.Error(),
+					}, &session.SurfaceOp{Op: session.SurfaceAppend})
+					continue
+				}
 			}
 			if toolResp.Error != "" {
 				sess.Append(session.ToolResult, &session.ToolResultData{
@@ -463,6 +493,22 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 		// 步骤结束（log-only）
 		sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+
+		// 宿主 goal 工具标记 complete/blocked：物理轮次在本步骤后停止（对齐 DSH concludeTurn）
+		if concludeTurn {
+			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "goal-concluded"}, nil)
+			if emit != nil {
+				usage := &plugin.Usage{PromptTokens: a.lastPromptTokens}
+				if a.lastUsage != nil {
+					usage.CompletionTokens = a.lastUsage.CompletionTokens
+					usage.TotalTokens = a.lastUsage.TotalTokens
+				} else {
+					usage.TotalTokens = a.lastPromptTokens
+				}
+				emit(&plugin.RunStreamResponse{Status: "success", Usage: usage})
+			}
+			return &plugin.AgentResult{Output: content, Status: "success"}, nil
+		}
 	}
 	// 超过最大迭代次数：轮次以 max-iterations 关闭（不再持久化独立消息数组，session 即历史）
 	sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "max-iterations"}, nil)
@@ -513,6 +559,16 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	}
 	// 工具指引（DSC 是工具型 agent，需提示模型按任务选用工具）
 	parts = append(parts, "根据任务选择合适的工具，逐步完成用户的请求。")
+
+	// plan 模式引导（仅激活时注入；对齐 DSH plan:policy 段落，软引导不强制任何限制）
+	if a.planActive {
+		if s := strings.TrimSpace(a.planSection); s != "" {
+			parts = append(parts, s)
+		}
+	}
+
+	// goal 策略指引（对齐 DSH tool-goal 固定提示词段；goal 状态本身不注入模型上下文）
+	parts = append(parts, fmt.Sprintf(goalPolicyPrompt, a.blockedAfterConsecutiveRounds))
 
 	// 聚合各工具插件貢獻的上下文片段（如技能索引），失敗或為空則跳過
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -720,6 +776,25 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	}
 	// 讀取宿主傳入的 preset persona（DSC_PRESET_PERSONA，「你是一個…助手」身份句）
 	agent.persona = os.Getenv("DSC_PRESET_PERSONA")
+	// plan 模式引导文案（DSC_PLAN_SECTION，缺省 DSH 示例文案）
+	agent.planSection = os.Getenv("DSC_PLAN_SECTION")
+	if agent.planSection == "" {
+		agent.planSection = defaultPlanSection
+	}
+	// goal 部署默认 Round 上限（DSC_GOAL_MAX_ROUNDS，缺省 256 对齐 DSH）
+	agent.defaultMaxGoalRounds = 256
+	if v := os.Getenv("DSC_GOAL_MAX_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			agent.defaultMaxGoalRounds = n
+		}
+	}
+	// goal 阻塞判定阈值（DSC_GOAL_BLOCKED_AFTER，缺省 3 对齐 DSH；写入策略提示词）
+	agent.blockedAfterConsecutiveRounds = 3
+	if v := os.Getenv("DSC_GOAL_BLOCKED_AFTER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			agent.blockedAfterConsecutiveRounds = n
+		}
+	}
 	// 多会话事件日志存储（DSC_SESSION_DIR，缺省落在插件工作目录下的 sessions/）
 	dir := os.Getenv("DSC_SESSION_DIR")
 	if dir == "" {
