@@ -41,6 +41,14 @@ func (m *Manager) StartAdmin(addr string) {
 	admin.Get("/events", m.handleEvents)
 	admin.Post("/metadata", m.handleMetadata)
 
+	// 定时任务管理（认证与 /plugins 一致）
+	jobs := e.Group("/jobs")
+	jobs.Use(adminAuth)
+	jobs.Get("/list", m.handleJobsList)
+	jobs.Post("/add", m.handleJobsAdd)
+	jobs.Post("/remove", m.handleJobsRemove)
+	jobs.Post("/enable", m.handleJobsEnable)
+
 	go func() {
 		m.logger.Info("admin api listening", "addr", addr)
 		e.Server.Addr = addr
