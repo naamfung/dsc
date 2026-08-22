@@ -779,6 +779,55 @@ func (a *ReactLoopAgent) ensureConnected(llmID, toolID uint32) (proto.LLMService
 func (a *ReactLoopAgent) Name(ctx context.Context) string    { return "react-agent" }
 func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
 
+// InjectMessage 将一条用户消息实时注入到当前运行中会话的历史末端。
+// 运行中的 runLoop 每步都从会话 surface 重新派生请求历史（DeriveMessages），
+// 因此这里追加的 UserMessage 表面事件会在下一次 LLM 迭代即被模型看到——
+// 无需停止或等待本轮完成（对齐 TUI 正在工作中的实时输入）。
+func (a *ReactLoopAgent) InjectMessage(ctx context.Context, content string) error {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sess == nil {
+		return fmt.Errorf("inject message: session not loaded")
+	}
+	a.sess.Append(session.UserMessage,
+		&session.UserMessageData{Content: content, Source: "user"},
+		&session.SurfaceOp{Op: session.SurfaceAppend})
+	fmt.Printf("[Agent Loop] injected user message (%d chars) into running session\n", len(content))
+	return nil
+}
+
+// DebugSnapshot 返回 agent 当前运行时的调试快照，供 ADMIN API 的 DEBUGGER 端点
+// 与自动化测试观察代理内部状态：会话历史（含实时注入的消息）、token 用量、
+// turn 计数与 plan/goal 状态。
+func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*plugin.AgentDebugSnapshot, error) {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sess == nil {
+		return nil, fmt.Errorf("debug snapshot: session not loaded")
+	}
+
+	snap := &plugin.AgentDebugSnapshot{
+		SessionID:        a.sess.ID(),
+		TurnCount:        a.turnCounter,
+		PlanActive:       a.planActive,
+		LastPromptTokens: a.lastPromptTokens,
+	}
+
+	// goal 状态由事件日志折叠
+	if g := session.FoldGoal(a.sess.Events()); g != nil {
+		snap.Goal = &plugin.AgentGoalDebugInfo{
+			Phase: g.Phase, Revision: g.Revision,
+			MaxRounds: g.MaxGoalRounds, Objective: g.Objective,
+		}
+	}
+
+	// 派生的请求历史（与下次 LLM 请求一致，含实时注入的用户消息）
+	for _, m := range a.sess.DeriveMessages(a.sysPrompt) {
+		snap.Messages = append(snap.Messages, &plugin.AgentDebugMessage{Role: m.Role, Content: m.Content})
+	}
+	return snap, nil
+}
+
 func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 	a.shutdownMu.Lock()
 	defer a.shutdownMu.Unlock()
@@ -1003,6 +1052,21 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 		}
 	}
 	return nil
+}
+
+func (s *agentGRPCServer) InjectMessage(ctx context.Context, req *proto.InjectMessageRequest) (*proto.InjectMessageResponse, error) {
+	if err := s.impl.InjectMessage(ctx, req.Content); err != nil {
+		return nil, err
+	}
+	return &proto.InjectMessageResponse{}, nil
+}
+
+func (s *agentGRPCServer) DebugSnapshot(ctx context.Context, req *proto.DebugSnapshotRequest) (*proto.DebugSnapshotResponse, error) {
+	snap, err := s.impl.DebugSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return plugin.SnapshotToProto(snap), nil
 }
 
 func main() {

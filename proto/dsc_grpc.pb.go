@@ -244,6 +244,8 @@ const (
 	AgentService_SetPlanMode_FullMethodName             = "/dsc.AgentService/SetPlanMode"
 	AgentService_SetUserQuestionsService_FullMethodName = "/dsc.AgentService/SetUserQuestionsService"
 	AgentService_Shutdown_FullMethodName                = "/dsc.AgentService/Shutdown"
+	AgentService_InjectMessage_FullMethodName           = "/dsc.AgentService/InjectMessage"
+	AgentService_DebugSnapshot_FullMethodName           = "/dsc.AgentService/DebugSnapshot"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -259,6 +261,12 @@ type AgentServiceClient interface {
 	SetPlanMode(ctx context.Context, in *SetPlanModeRequest, opts ...grpc.CallOption) (*SetPlanModeResponse, error)
 	SetUserQuestionsService(ctx context.Context, in *SetUserQuestionsServiceRequest, opts ...grpc.CallOption) (*SetUserQuestionsServiceResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
+	// InjectMessage 将一条用户消息实时注入到当前运行的会话历史末端：
+	// 模型在下一次 LLM 迭代即可看到，无需停止或等待本轮完成。
+	InjectMessage(ctx context.Context, in *InjectMessageRequest, opts ...grpc.CallOption) (*InjectMessageResponse, error)
+	// DebugSnapshot 返回 agent 当前运行时的调试快照：会话历史（含实时注入的消息）、
+	// token 用量、turn 计数与 plan/goal 状态。供 ADMIN API DEBUGGER 端点与自动化测试观察。
+	DebugSnapshot(ctx context.Context, in *DebugSnapshotRequest, opts ...grpc.CallOption) (*DebugSnapshotResponse, error)
 }
 
 type agentServiceClient struct {
@@ -368,6 +376,26 @@ func (c *agentServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, 
 	return out, nil
 }
 
+func (c *agentServiceClient) InjectMessage(ctx context.Context, in *InjectMessageRequest, opts ...grpc.CallOption) (*InjectMessageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InjectMessageResponse)
+	err := c.cc.Invoke(ctx, AgentService_InjectMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) DebugSnapshot(ctx context.Context, in *DebugSnapshotRequest, opts ...grpc.CallOption) (*DebugSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DebugSnapshotResponse)
+	err := c.cc.Invoke(ctx, AgentService_DebugSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -381,6 +409,12 @@ type AgentServiceServer interface {
 	SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error)
 	SetUserQuestionsService(context.Context, *SetUserQuestionsServiceRequest) (*SetUserQuestionsServiceResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
+	// InjectMessage 将一条用户消息实时注入到当前运行的会话历史末端：
+	// 模型在下一次 LLM 迭代即可看到，无需停止或等待本轮完成。
+	InjectMessage(context.Context, *InjectMessageRequest) (*InjectMessageResponse, error)
+	// DebugSnapshot 返回 agent 当前运行时的调试快照：会话历史（含实时注入的消息）、
+	// token 用量、turn 计数与 plan/goal 状态。供 ADMIN API DEBUGGER 端点与自动化测试观察。
+	DebugSnapshot(context.Context, *DebugSnapshotRequest) (*DebugSnapshotResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -417,6 +451,12 @@ func (UnimplementedAgentServiceServer) SetUserQuestionsService(context.Context, 
 }
 func (UnimplementedAgentServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
+}
+func (UnimplementedAgentServiceServer) InjectMessage(context.Context, *InjectMessageRequest) (*InjectMessageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InjectMessage not implemented")
+}
+func (UnimplementedAgentServiceServer) DebugSnapshot(context.Context, *DebugSnapshotRequest) (*DebugSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DebugSnapshot not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -594,6 +634,42 @@ func _AgentService_Shutdown_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_InjectMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InjectMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).InjectMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_InjectMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).InjectMessage(ctx, req.(*InjectMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_DebugSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DebugSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).DebugSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_DebugSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).DebugSnapshot(ctx, req.(*DebugSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -632,6 +708,14 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Shutdown",
 			Handler:    _AgentService_Shutdown_Handler,
+		},
+		{
+			MethodName: "InjectMessage",
+			Handler:    _AgentService_InjectMessage_Handler,
+		},
+		{
+			MethodName: "DebugSnapshot",
+			Handler:    _AgentService_DebugSnapshot_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

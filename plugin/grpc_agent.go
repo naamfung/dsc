@@ -96,6 +96,48 @@ func (s *agentGRPCServer) SetUserQuestionsService(ctx context.Context, req *prot
 	return &proto.SetUserQuestionsServiceResponse{Success: true}, nil
 }
 
+func (s *agentGRPCServer) InjectMessage(ctx context.Context, req *proto.InjectMessageRequest) (*proto.InjectMessageResponse, error) {
+	if err := s.impl.InjectMessage(ctx, req.Content); err != nil {
+		return nil, err
+	}
+	return &proto.InjectMessageResponse{}, nil
+}
+
+func (s *agentGRPCServer) DebugSnapshot(ctx context.Context, req *proto.DebugSnapshotRequest) (*proto.DebugSnapshotResponse, error) {
+	snap, err := s.impl.DebugSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return SnapshotToProto(snap), nil
+}
+
+// SnapshotToProto 把 agent 侧的调试快照转换为跨进程 proto 消息（导出供各 agent 插件复用）。
+func SnapshotToProto(snap *AgentDebugSnapshot) *proto.DebugSnapshotResponse {
+	if snap == nil {
+		return &proto.DebugSnapshotResponse{}
+	}
+	out := &proto.DebugSnapshotResponse{
+		SessionId:        snap.SessionID,
+		TurnCount:        int32(snap.TurnCount),
+		PlanActive:       snap.PlanActive,
+		LastPromptTokens: snap.LastPromptTokens,
+	}
+	if snap.Goal != nil {
+		out.Goal = &proto.GoalDebugInfo{
+			Phase:          snap.Goal.Phase,
+			Revision:       int32(snap.Goal.Revision),
+			MaxRounds:      int32(snap.Goal.MaxRounds),
+			Activation:     snap.Goal.Activation,
+			Objective:      snap.Goal.Objective,
+			CompletedSteps: int32(snap.Goal.CompletedSteps),
+		}
+	}
+	for _, msg := range snap.Messages {
+		out.Messages = append(out.Messages, &proto.DebugMessage{Role: msg.Role, Content: msg.Content})
+	}
+	return out
+}
+
 // agentGRPCClient 是 gRPC 客户端代理
 type agentGRPCClient struct {
 	client proto.AgentServiceClient
@@ -175,4 +217,36 @@ func (c *agentGRPCClient) SetUserQuestionsService(ctx context.Context, serviceID
 func (c *agentGRPCClient) Shutdown(ctx context.Context, force bool) error {
 	_, err := c.client.Shutdown(ctx, &proto.ShutdownRequest{Force: force})
 	return err
+}
+
+func (c *agentGRPCClient) InjectMessage(ctx context.Context, content string) error {
+	_, err := c.client.InjectMessage(ctx, &proto.InjectMessageRequest{Content: content})
+	return err
+}
+
+func (c *agentGRPCClient) DebugSnapshot(ctx context.Context) (*AgentDebugSnapshot, error) {
+	resp, err := c.client.DebugSnapshot(ctx, &proto.DebugSnapshotRequest{})
+	if err != nil {
+		return nil, err
+	}
+	snap := &AgentDebugSnapshot{
+		SessionID:        resp.SessionId,
+		TurnCount:        int(resp.TurnCount),
+		PlanActive:       resp.PlanActive,
+		LastPromptTokens: resp.LastPromptTokens,
+	}
+	if resp.Goal != nil {
+		snap.Goal = &AgentGoalDebugInfo{
+			Phase:          resp.Goal.Phase,
+			Revision:       int(resp.Goal.Revision),
+			MaxRounds:      int(resp.Goal.MaxRounds),
+			Activation:     resp.Goal.Activation,
+			Objective:      resp.Goal.Objective,
+			CompletedSteps: int(resp.Goal.CompletedSteps),
+		}
+	}
+	for _, msg := range resp.Messages {
+		snap.Messages = append(snap.Messages, &AgentDebugMessage{Role: msg.Role, Content: msg.Content})
+	}
+	return snap, nil
 }

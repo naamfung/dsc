@@ -38,8 +38,8 @@ type ToolDef struct {
 
 // loadScript 读取并加载一个脚本目录（<dir>/<name>/main.lua）。
 // 语法错误阻止加载；类型诊断仅告警（类型系统 pre-convergence，避免误杀）。
-func (h *Host) loadScript(name string) (*Script, error) {
-	path := filepath.Join(h.dir, name, "main.lua")
+func (h *Host) loadScript(dir, name string) (*Script, error) {
+	path := filepath.Join(dir, name, "main.lua")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

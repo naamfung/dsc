@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -106,11 +107,9 @@ func loadBinaryPath(cfgPath string, defaultRel string) string {
 	return defaultRel
 }
 
-// runInputMode 以一次性模式运行 agent（-input 启动时使用）：
-// 与 TUI 内部一致地走 RunStream（保持数据交互环节一致），但不渲染 TUI，
+// runOneTurn 以与 TUI 内部一致的 RunStream 方式运行一组输入（不渲染 TUI），
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
-// 代理循环仅运行一次（一个输入），方便完成自动化测试后程序自然退出。
-func runInputMode(agent plugin.Agent, ctx context.Context, input string) int {
+func runOneTurn(agent plugin.Agent, ctx context.Context, input string) int {
 	ch, err := agent.RunStream(ctx, input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
@@ -142,6 +141,50 @@ func runInputMode(agent plugin.Agent, ctx context.Context, input string) int {
 	return exitCode
 }
 
+// stdinIsRedirected 报告 stdin 是否为非终端（管道/文件重定向），
+// 这是多轮 stdin 驱动的判定依据：只有重定向输入才触发多轮，避免终端手动单轮被阻塞。
+func stdinIsRedirected() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice == 0
+}
+
+// runStdinLoop 从 stdin 逐行读取作为后续每一轮输入，逐轮调用 runOneTurn，
+// 直到 EOF；会话事件溯源在 agent 内累积，故多轮天然共享上下文。
+func runStdinLoop(agent plugin.Agent, ctx context.Context) int {
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	exitCode := 0
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "\n>>> %s\n", line)
+		if code := runOneTurn(agent, ctx, line); code != 0 {
+			exitCode = code
+		}
+	}
+	return exitCode
+}
+
+// runInputMode 以非 TUI 模式运行 agent（-input 启动时使用）：
+// 首轮跑 -input 传入的文本；随后若 stdin 为重定向输入（管道/文件），
+// 则继续逐行驱动多轮，直到 EOF。始终不进入 TUI 事件循环，故 ADMIN API / DEBUGGER
+// 端点可在进程存活期间持续观察。
+func runInputMode(agent plugin.Agent, ctx context.Context, input string) int {
+	if code := runOneTurn(agent, ctx, input); code != 0 {
+		return code
+	}
+	if !stdinIsRedirected() {
+		// 终端手动单轮：跑完 -input 即退出，维持原来的便利行为
+		return 0
+	}
+	return runStdinLoop(agent, ctx)
+}
+
 func main() {
 	// 捕獲 panic 並輸出到 stderr，以便在日誌靜默時能調試啟動失敗原因
 	defer func() {
@@ -160,8 +203,10 @@ func main() {
 	// 解析啟動參數
 	logToScreen := false
 	logToFile := ""
-	mode := "standard" // 默認標準模式
-	inputText := ""    // -input：一次性提示文本（自動化測試入口，不經 TUI）
+	mode := "standard"    // 默認標準模式
+	inputText := ""       // -input：一次性提示文本（自動化測試入口，不經 TUI）
+	debuggerOpen := false // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
+	adminAddr := ""       // -admin：管理 API 監聽地址（默認取環境變量 DSC_ADMIN_ADDR，缺省 :9999）
 
 	for i, arg := range os.Args {
 		if arg == "-log" {
@@ -188,6 +233,13 @@ func main() {
 			// -input 後跟提示文本作為參數值（以 - 開頭的視為缺失，避免吞掉後續選項）
 			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 				inputText = os.Args[i+1]
+			}
+		} else if arg == "-debugger" {
+			// 顯式開放 /debugger 觀察路由（含完整會話歷史，屬敏感信息，默認不開放）
+			debuggerOpen = true
+		} else if arg == "-admin" {
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				adminAddr = os.Args[i+1]
 			}
 		}
 	}
@@ -282,11 +334,12 @@ func main() {
 	logger.Info("workspace protection enabled", "enabled", plugin.WorkspaceProtectionEnabled)
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
-		PluginDir:    filepath.Join(execDir, "plugins"),
-		ExecDir:      execDir,
-		Handshake:    plugin.Handshake,
-		Logger:       logger,
-		PluginLogger: pluginLogger,
+		PluginDir:       filepath.Join(execDir, "plugins"),
+		ExecDir:         execDir,
+		Handshake:       plugin.Handshake,
+		Logger:          logger,
+		PluginLogger:    pluginLogger,
+		DebuggerEnabled: debuggerOpen,
 	})
 	defer mgr.Shutdown()
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
@@ -419,7 +472,9 @@ func main() {
 		if presetCfg != nil && presetCfg.PlanSection != "" {
 			agentEnv["DSC_PLAN_SECTION"] = presetCfg.PlanSection
 		}
-		if inputText != "" {
+		// -input 且 stdin 为终端时锁定单轮（单发测试后自然退出）；
+		// 管道/文件重定向时走多轮 stdin 驱动，不锁单轮，让每一轮都能完整执行工具循环
+		if inputText != "" && !stdinIsRedirected() {
 			agentEnv["DSC_SINGLE_TURN"] = "1"
 		}
 		for k, v := range agentEntry.Env {
@@ -459,8 +514,10 @@ func main() {
 		logger.Info("cron scheduler started")
 	}
 
-	// 启动管理 API
-	adminAddr := os.Getenv("DSC_ADMIN_ADDR")
+	// 启动管理 API：监听地址取 -admin 旗标，未指定则回退环境变量 DSC_ADMIN_ADDR，再默认 :9999
+	if adminAddr == "" {
+		adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+	}
 	if adminAddr == "" {
 		adminAddr = ":9999"
 	}

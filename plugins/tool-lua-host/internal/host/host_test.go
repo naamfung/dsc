@@ -13,7 +13,7 @@ import (
 
 // TestHostLoadsExample 验证 example 脚本被加载且工具注册到工具表。
 func TestHostLoadsExample(t *testing.T) {
-	h := New("../../scripts", &bindings.Services{}, true, t.Logf)
+	h := New([]string{"../../scripts"}, &bindings.Services{}, true, t.Logf)
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)
@@ -57,7 +57,7 @@ func TestHotReload(t *testing.T) {
 	}
 	write(`dsc.register_tool("hello", { description = "hello tool" }, function() return "hello" end)`)
 
-	h := New(dir, &bindings.Services{}, true, t.Logf)
+	h := New([]string{dir}, &bindings.Services{}, true, t.Logf)
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)
@@ -139,7 +139,7 @@ end)`
 		t.Fatal(err)
 	}
 
-	h := New(dir, &bindings.Services{}, true, t.Logf)
+	h := New([]string{dir}, &bindings.Services{}, true, t.Logf)
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)
@@ -225,7 +225,7 @@ func TestRunOnlyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := New(dir, &bindings.Services{}, false, t.Logf) // 非创造模式
+	h := New([]string{dir}, &bindings.Services{}, false, t.Logf) // 非创造模式
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)

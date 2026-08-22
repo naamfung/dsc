@@ -21,8 +21,10 @@ import (
 	"tool-lua-host/internal/host"
 )
 
-// scriptsDir LUA 脚本目录（相对宿主 ExecDir；脚本以 <dir>/<name>/main.lua 组织）。
-const scriptsDir = "./plugins/tool-lua-host/scripts"
+// scriptsDirs LUA 脚本目录列表（相对宿主 ExecDir；脚本以 <dir>/<name>/main.lua 组织）。
+// 两处目录等价：插件内置目录承载随宿主分发的示例脚本，顶层 scripts/ 承载模型在
+// 创造模式中创建的插件，均会被扫描与热加载。
+var scriptsDirs = []string{"./scripts", "./plugins/tool-lua-host/scripts"}
 
 // ToolServiceServer 空壳工具插件：内部业务为空，启动后加载 LUA 脚本
 // （脚本经 dsc.register_tool 注册工具，本服务汇总转发）。
@@ -74,16 +76,19 @@ func (s *ToolServiceServer) SetInterconnect(ctx context.Context, req *proto.Inte
 	if s.host != nil {
 		s.host.Stop()
 	}
-	dir := filepath.FromSlash(scriptsDir)
-	s.host = host.New(dir, services, creation, func(format string, args ...any) {
+	dirs := make([]string, 0, len(scriptsDirs))
+	for _, d := range scriptsDirs {
+		dirs = append(dirs, filepath.FromSlash(d))
+	}
+	s.host = host.New(dirs, services, creation, func(format string, args ...any) {
 		fmt.Printf("[tool-lua-host] "+format+"\n", args...)
 	})
 	// 同步加载脚本（创造模式下含热加载轮询），确保握手返回时宿主 ListTools 能取到全部工具
 	if err := s.host.Start(); err != nil {
 		return nil, err
 	}
-	fmt.Printf("[tool-lua-host] interconnect ready: llm=%v tool=%v notify=%v, mode=%q creation=%v, scripts dir=%s\n",
-		llmC != nil, toolC != nil, notifier != nil, mode, creation, dir)
+	fmt.Printf("[tool-lua-host] interconnect ready: llm=%v tool=%v notify=%v, mode=%q creation=%v, scripts dirs=%v\n",
+		llmC != nil, toolC != nil, notifier != nil, mode, creation, dirs)
 	return &proto.InterconnectResponse{}, nil
 }
 

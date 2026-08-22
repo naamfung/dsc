@@ -41,6 +41,16 @@ func (m *Manager) StartAdmin(addr string) {
 	admin.Get("/events", m.handleEvents)
 	admin.Post("/metadata", m.handleMetadata)
 
+	// DEBUGGER 观察渠道：读取 agent 插件当前运行时的调试快照（会话历史、token 用量、
+	// turn 与 plan/goal 状态）。为自动化测试提供无障碍观察代理运行内部状态的端点。
+	// 现有 /plugins/* 均为宿主侧（插件生命周期）观测，缺 agent 运行时内部视角。
+	// 因快照含完整会话历史（隐私敏感），此路由仅在显式启用（-debugger）时开放。
+	if m.config != nil && m.config.DebuggerEnabled {
+		debugger := e.Group("/debugger")
+		debugger.Use(adminAuth)
+		debugger.Get("/agent", m.handleDebuggerAgent)
+	}
+
 	// 定时任务管理（认证与 /plugins 一致）
 	crons := e.Group("/cron")
 	crons.Use(adminAuth)
@@ -180,6 +190,42 @@ func (m *Manager) handleMetadata(c *vodka.Context) error {
 			"name":        info.Name,
 			"version":     info.Version,
 			"api_version": info.ApiVersion,
+		},
+	})
+}
+
+// handleDebuggerAgent 转发 DEBUGGER 快照查询到 agent 插件：读取其当前运行时的
+// 调试快照（会话历史含实时注入的消息、token 用量、turn 计数与 plan/goal 状态）。
+// 用于自动化测试无障碍观察代理运行内部状态；未指定 agent 时使用主 agent。
+func (m *Manager) handleDebuggerAgent(c *vodka.Context) error {
+	name := c.Query("name")
+	if name == "" {
+		name = m.GetMainAgentName()
+	}
+	if name == "" {
+		return vodka.NewHTTPError(http.StatusNotFound, "no agent configured")
+	}
+
+	agent, ok := m.GetAgent(name)
+	if !ok {
+		return vodka.NewHTTPError(http.StatusNotFound, fmt.Sprintf("agent '%s' not found", name))
+	}
+
+	snap, err := agent.DebugSnapshot(c.Request.Context())
+	if err != nil {
+		return vodka.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("debug snapshot failed: %v", err))
+	}
+
+	return c.JSON(vodka.Map{
+		"status": "success",
+		"agent":  name,
+		"snapshot": map[string]interface{}{
+			"session_id":         snap.SessionID,
+			"turn_count":         snap.TurnCount,
+			"plan_active":        snap.PlanActive,
+			"goal":               snap.Goal,
+			"last_prompt_tokens": snap.LastPromptTokens,
+			"messages":           snap.Messages,
 		},
 	})
 }

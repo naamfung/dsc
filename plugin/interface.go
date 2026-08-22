@@ -55,6 +55,39 @@ type Agent interface {
 	SetUserQuestionsService(ctx context.Context, serviceID uint32) error
 	// Shutdown 优雅关闭 Agent（用于热加载前）
 	Shutdown(ctx context.Context, force bool) error
+	// InjectMessage 将一条用户消息实时注入到当前运行中的会话历史末端，
+	// 使模型在下一次 LLM 迭代即可看到（无需停止或等待本轮完成）。
+	InjectMessage(ctx context.Context, content string) error
+	// DebugSnapshot 返回 agent 当前运行时的调试快照（会话历史、token 用量、
+	// turn 与 plan/goal 状态）。供 ADMIN API DEBUGGER 端点与自动化测试观察。
+	DebugSnapshot(ctx context.Context) (*AgentDebugSnapshot, error)
+}
+
+// AgentDebugMessage 调试快照中派生历史里的一条消息。
+type AgentDebugMessage struct {
+	Role    string `json:"role"` // "system" | "user" | "assistant" | "tool"
+	Content string `json:"content"`
+}
+
+// AgentGoalDebugInfo 目标的调试信息（对齐 session.Goal 的可观察字段）。
+type AgentGoalDebugInfo struct {
+	Phase          string `json:"phase"`
+	Revision       int    `json:"revision"`
+	MaxRounds      int    `json:"max_rounds"`
+	Activation     string `json:"activation"`
+	Objective      string `json:"objective"`
+	CompletedSteps int    `json:"completed_steps"`
+}
+
+// AgentDebugSnapshot 是 agent 运行时的调试快照，由 DebugSnapshot RPC 返回，
+// 供 ADMIN API 的 DEBUGGER 端点与自动化测试读取 agent 内部运行状态。
+type AgentDebugSnapshot struct {
+	SessionID        string               `json:"session_id"`
+	TurnCount        int                  `json:"turn_count"`
+	PlanActive       bool                 `json:"plan_active"`
+	Goal             *AgentGoalDebugInfo  `json:"goal,omitempty"`
+	LastPromptTokens int32                `json:"last_prompt_tokens"`
+	Messages         []*AgentDebugMessage `json:"messages"`
 }
 
 // AgentResult 是 Agent 执行后的结果

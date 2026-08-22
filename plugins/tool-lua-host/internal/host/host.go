@@ -29,7 +29,7 @@ type JobEntry struct {
 // Host LUA 脚本宿主：加载/热加载脚本，汇总脚本注册的工具。
 type Host struct {
 	mu       sync.Mutex
-	dir      string
+	dirs     []string // 脚本目录列表（LUA 脚本以 <dir>/<name>/main.lua 组织，多个目录等价）
 	services *bindings.Services
 	scripts  map[string]*Script
 	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 lua_ 前缀）
@@ -37,20 +37,21 @@ type Host struct {
 	logf     func(string, ...any)
 	creation bool // 创造模式：允许热加载新增/变更脚本；否则只运行启动时已存在的脚本
 
-	store *bindings.Store        // 进程内 KV（脚本间共享）
-	hook  *bindings.HookRegistry // 脚本注册的宿主钩子
-	jobs  map[string]*JobEntry   // 后台任务表
+	store  *bindings.Store        // 进程内 KV（脚本间共享）
+	hook   *bindings.HookRegistry // 脚本注册的宿主钩子
+	jobs   map[string]*JobEntry   // 后台任务表
 	jobSeq int
 }
 
-// New 创建宿主（dir 为脚本目录，services 为宿主互通服务，creation 表示是否
-// 创造模式——仅创造模式允许热加载新增/变更脚本，非创造模式只运行已有脚本）。
-func New(dir string, services *bindings.Services, creation bool, logf func(string, ...any)) *Host {
+// New 创建宿主（dirs 为脚本目录列表，均可承载脚本且等价；services 为宿主互通
+// 服务，creation 表示是否创造模式——仅创造模式允许热加载新增/变更脚本，
+// 非创造模式只运行已有脚本）。
+func New(dirs []string, services *bindings.Services, creation bool, logf func(string, ...any)) *Host {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	h := &Host{
-		dir:      dir,
+		dirs:     dirs,
 		services: services,
 		scripts:  make(map[string]*Script),
 		tools:    make(map[string]*ToolDef),
@@ -71,10 +72,12 @@ func New(dir string, services *bindings.Services, creation bool, logf func(strin
 	return h
 }
 
-// Start 初始加载脚本目录并（创造模式下）启动热加载轮询。
+// Start 初始加载各脚本目录并（创造模式下）启动热加载轮询。
 func (h *Host) Start() error {
-	if err := os.MkdirAll(h.dir, 0755); err != nil {
-		return fmt.Errorf("lua-host: create scripts dir: %w", err)
+	for _, d := range h.dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			return fmt.Errorf("lua-host: create scripts dir %s: %w", d, err)
+		}
 	}
 	h.scan()
 	if h.creation {
@@ -102,25 +105,31 @@ func (h *Host) poll() {
 	}
 }
 
-// scan 扫描脚本目录并增量加载/重载/卸载。
+// scan 扫描所有脚本目录并增量加载/重载/卸载。
+// 同一脚本名在不同目录以先出现者为准，避免同名冲突时后者覆盖前者。
 func (h *Host) scan() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	dirs := map[string]bool{}
-	entries, err := os.ReadDir(h.dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			dirs[e.Name()] = true
+	// 汇总每个目录下可见的脚本目录：name -> 所在顶层目录（脚本以大目录下 <name>/main.lua 组织）
+	seen := map[string]string{}
+	for _, d := range h.dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				if _, exists := seen[e.Name()]; !exists {
+					seen[e.Name()] = d
+				}
+			}
 		}
 	}
 
 	// 新增/变更
-	for name := range dirs {
-		path := filepath.Join(h.dir, name, "main.lua")
+	for name, d := range seen {
+		path := filepath.Join(d, name, "main.lua")
 		src, err := os.ReadFile(path)
 		if err != nil {
 			continue
@@ -130,25 +139,32 @@ func (h *Host) scan() {
 			if s.hash != cur {
 				h.logf("lua 脚本 %s 已变更，重载", name)
 				h.unloadLocked(name)
-				h.loadLocked(name)
+				h.loadLocked(name, d)
 			}
 		} else {
-			h.loadLocked(name)
+			h.loadLocked(name, d)
 		}
 	}
 
 	// 删除
 	for name := range h.scripts {
-		if !dirs[name] {
+		if !seenExisted(seen, name) {
 			h.logf("lua 脚本 %s 已删除，卸载", name)
 			h.unloadLocked(name)
 		}
 	}
 }
 
-// loadLocked 加载脚本（需已持有 h.mu）。
-func (h *Host) loadLocked(name string) {
-	s, err := h.loadScript(name)
+// seenExisted 判断 name 是否仍存在于任何脚本目录（含同名但暂无法读取 main.lua 的情形，
+// 避免删除目录瞬间因 main.lua 读取失败而误判为已删除）。
+func seenExisted(seen map[string]string, name string) bool {
+	_, ok := seen[name]
+	return ok
+}
+
+// loadLocked 加载脚本（需已持有 h.mu）。dir 为脚本所在顶层目录。
+func (h *Host) loadLocked(name, dir string) {
+	s, err := h.loadScript(dir, name)
 	if err != nil {
 		h.logf("加载 lua 脚本 %s 失败: %v", name, err)
 		return

@@ -115,6 +115,9 @@ type ManagerConfig struct {
 	Handshake    goplugin.HandshakeConfig
 	Logger       hclog.Logger
 	PluginLogger hclog.Logger // logger for go-plugin internal logs (e.g., plugin process exited)
+	// DebuggerEnabled 控制是否开放 /debugger/* 观察路由（默认关闭）。
+	// DEBUGGER 快照含完整会话历史，属敏感信息，仅在显式以 -debugger 启动时开放。
+	DebuggerEnabled bool
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {

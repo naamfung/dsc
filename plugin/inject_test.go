@@ -31,6 +31,10 @@ func (a *mockAgent) SwitchSession(context.Context, string) error           { ret
 func (a *mockAgent) SetPlanMode(context.Context, bool) error               { return nil }
 func (a *mockAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
 func (a *mockAgent) Shutdown(context.Context, bool) error                  { return nil }
+func (a *mockAgent) InjectMessage(context.Context, string) error           { return nil }
+func (a *mockAgent) DebugSnapshot(context.Context) (*AgentDebugSnapshot, error) {
+	return &AgentDebugSnapshot{SessionID: "mock"}, nil
+}
 
 func (a *mockAgent) calls() int {
 	a.mu.Lock()

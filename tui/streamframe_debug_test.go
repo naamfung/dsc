@@ -44,6 +44,10 @@ func (s *stubAgent) SetPlanMode(_ context.Context, active bool) error {
 }
 func (s *stubAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
 func (s *stubAgent) Shutdown(context.Context, bool) error                  { return nil }
+func (s *stubAgent) InjectMessage(context.Context, string) error           { return nil }
+func (s *stubAgent) DebugSnapshot(context.Context) (*plugin.AgentDebugSnapshot, error) {
+	return &plugin.AgentDebugSnapshot{SessionID: "stub"}, nil
+}
 
 func TestPumpLoopRealFlow(t *testing.T) {
 	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{

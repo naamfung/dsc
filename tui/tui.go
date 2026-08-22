@@ -159,6 +159,11 @@ type streamFrame struct {
 	err   error
 }
 
+// injectedMsg 实时注入完成的消息（仅用于错误回显；成功注入无需额外 UI 动作）。
+type injectedMsg struct {
+	err error
+}
+
 // compItem 是斜杠命令菜单的一行：label 是完整命令，hint 是右侧提示。
 type compItem struct {
 	label  string
@@ -216,6 +221,10 @@ type Model struct {
 	streamBuffer string
 	streamOpen   bool
 	streamMsgIdx int
+
+	// 当前一轮的流式通道暂存：供运行中输入（注入）时维持泵取，避免流式流停滞
+	streamInput string
+	streamCh    <-chan *plugin.RunStreamResponse
 
 	// 思考过程（reasoning）渲染状态：reasoningBuffer 累积增量，
 	// reasoningOpen 标记当前正文块是否处于思考状态；transition 到答案时
@@ -306,6 +315,8 @@ func (m *Model) submitCmd(input string) tea.Cmd {
 		}
 		m.turnCancel = cancel
 		m.streamCancelled = false
+		m.streamInput = input
+		m.streamCh = ch
 		return streamFrame{input: input, ch: ch, first: true}
 	}
 }
@@ -318,6 +329,30 @@ func (m *Model) pumpStream(input string, ch <-chan *plugin.RunStreamResponse) te
 			return streamFrame{input: input, done: true}
 		}
 		return streamFrame{input: input, frame: frame, ch: ch}
+	}
+}
+
+// clearStream 清空本轮暂存的流式通道（一轮结束时调用）。
+func (m *Model) clearStream() {
+	m.streamInput = ""
+	m.streamCh = nil
+}
+
+// pumpStreamIfOpen 若当前存在进行中的流式通道，返回继续泵取的命令；
+// 否则返回 nil。用于运行中输入（注入/编辑）时维持流式流不断。
+func (m *Model) pumpStreamIfOpen() tea.Cmd {
+	if m.streamCh != nil && m.streamInput != "" {
+		return m.pumpStream(m.streamInput, m.streamCh)
+	}
+	return nil
+}
+
+// injectCmd 将用户输入实时注入到运行中 agent 的会话历史（跨进程 RPC）。
+// 成功注入无需额外 UI 动作（气泡已在上游同步渲染）；失败仅回显错误，不中断当前流。
+func (m *Model) injectCmd(text string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.agent.InjectMessage(m.ctx, text)
+		return injectedMsg{err: err}
 	}
 }
 
@@ -346,6 +381,7 @@ func (m *Model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.thinking = false
 	m.streaming = false
 	m.streamOpen = false
+	m.clearStream()
 	m.viewport.SetHeight(m.vpHeight())
 	m.render()
 	m.input.Focus()
@@ -493,17 +529,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.question != nil {
 			return m.handleQuestionKey(msg)
 		}
-		if m.thinking || m.streaming {
-			// 响应/流式输出期间不处理输入：Ctrl+Q 退出；Ctrl+C 中断当前操作（参考 rex）
-			switch msg.String() {
-			case "ctrl+q":
-				return m, tea.Quit
-			case "ctrl+c":
-				return m.interruptTurn()
-			}
-			return m, nil
-		}
-		// 命令补全菜单打开时，导航/补全键由菜单接管
+		// 运行/流式期间同样允许输入：打字回车走「实时注入」，不打扰当前工作（参考 rex，
+		// 但注入无需等本轮完成——追加到历史末端的用户消息会在下一次 LLM 迭代被模型看到）。
+		// Ctrl+Q 退出；Ctrl+C 中断当前操作。
+		inRunning := m.thinking || m.streaming
+		// 命令补全菜单打开时，导航/补全键由菜单接管（运行中输入时同样可用）
 		if m.completion.active {
 			switch msg.String() {
 			case "up", "ctrl+p":
@@ -528,6 +558,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+q":
 			return m, tea.Quit
 		case "ctrl+c":
+			if inRunning {
+				return m.interruptTurn()
+			}
 			// 恢复复制语义（参考 rex）：有选区则复制；否则清空输入；都无则忽略（退出已移交给 Ctrl+Q）
 			if m.sel.active {
 				return m, m.copySelected()
@@ -544,21 +577,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.navigateHistory(msg.String() == "up")
 				m.syncInputHeight()
 				m.updateCompletion()
-				return m, nil
+				return m, m.pumpStreamIfOpen()
 			}
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.pumpStreamIfOpen())
 		case "ctrl+v":
 			// 某些终端不把 Ctrl+V 当成括号粘贴，而是交回应用处理，此时手动读剪贴板。
+			if inRunning {
+				return m, tea.Batch(readClipboardPaste(), m.pumpStreamIfOpen())
+			}
 			return m, readClipboardPaste()
 		case "enter":
 			text := strings.TrimSpace(m.input.Value())
 			if handled, cmd := m.runSlashCommand(text); handled {
-				return m, cmd
+				return m, tea.Batch(cmd, m.pumpStreamIfOpen())
 			}
 			if text == "" {
-				return m, nil
+				return m, m.pumpStreamIfOpen()
 			}
 			// 排队中的完成通知注入本轮输入（对齐 DSH：忙碌 owner 的通知进入 next-step inbox）
 			sendText := text
@@ -573,13 +609,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.completion = completion{}
 			m.wakeBudget = maxConsecutiveWakes // 用户消息恢复唤醒预算（对齐 DSH）
+			if inRunning {
+				// 正在工作：不作为新轮，而是把消息实时注入会话历史（不停止当前工作），
+				// 本地即刻渲染用户气泡；流式通道继续保持泵取。
+				m.appendMessage(renderUserBubble(text, m.width-4))
+				m.turnCount++
+				m.syncInputHeight()
+				m.render()
+				m.viewport.GotoBottom()
+				return m, tea.Batch(m.injectCmd(sendText), m.pumpStreamIfOpen(), m.input.Focus())
+			}
 			return m, m.startTurn(sendText, renderUserBubble(text, m.width-4))
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			m.syncInputHeight() // 新增/删除换行后同步输入框高度
 			m.updateCompletion()
-			return m, cmd
+			return m, tea.Batch(cmd, m.pumpStreamIfOpen())
 		}
 
 	case spinner.TickMsg:
@@ -606,6 +652,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.ch == nil {
 				m.streaming = false
 				m.streamOpen = false
+				m.clearStream()
 				if msg.err != nil {
 					m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
 				}
@@ -619,6 +666,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = false
 			m.streamOpen = false
+			m.clearStream()
 			if msg.err != nil {
 				m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
 			} else {
@@ -637,6 +685,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = false
 			m.streamOpen = false
+			m.clearStream()
 			m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
 			m.viewport.SetHeight(m.vpHeight())
 			m.render()
@@ -732,6 +781,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.pumpStream(msg.input, msg.ch)
+
+	case injectedMsg:
+		// 实时注入完成：仅失败时回显错误；成功无需动作（气泡已上游渲染）。
+		if msg.err != nil {
+			m.appendMessage(errorSty.Render("注入失败: ") + msg.err.Error())
+			m.render()
+			m.viewport.GotoBottom()
+		}
+		// 注入不应打断当前流；若有进行中的流式通道则继续保持泵取。
+		return m, m.pumpStreamIfOpen()
 
 	case submitResult:
 		m.thinking = false

@@ -32,7 +32,7 @@ type Services struct {
 	// Register 脚本注册工具的回调（由 host 提供）：script 为脚本名（去重命名空间）。
 	Register func(script, name, desc, paramsJSON string, fn *lua.LFunction) error
 	// HookRun 执行脚本钩子（由 host 提供，含 VM 串行化与回调）。
-	HookRun  HookRunner
+	HookRun HookRunner
 	// SpawnJob 启动脚本后台任务（由 host 提供，含 VM 串行化）。
 	SpawnJob func(script string, fn *lua.LFunction) (string, error)
 	// JobStatus 查询后台任务状态（由 host 提供）。
