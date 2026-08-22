@@ -1,0 +1,9 @@
+{
+  "description": "Field-defined wrapper functions should track dominating visible captured field writes",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Explicit cast on an imported field should satisfy the expected record field type",
+  "files": [
+    "page_registry.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

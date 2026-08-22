@@ -1,0 +1,17 @@
+{
+  "description": "Soundness counterpart for tenant policy runtime, pinning unsafe optional cache, evaluator registry, tag, union-field, and time uses in the same multi-module application shape.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "policy_store.lua",
+    "validator_builder.lua",
+    "rule_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 8
+  }
+}

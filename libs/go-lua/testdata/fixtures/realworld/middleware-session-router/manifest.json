@@ -1,0 +1,16 @@
+{
+  "description": "Application-shaped router mixing fluent middleware and route builders, nested closures, metatable-backed router/store objects, dynamic registries, optional session state, maps, callbacks, and time-based dispatch.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "session_store.lua",
+    "middleware_builder.lua",
+    "route_builder.lua",
+    "router.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

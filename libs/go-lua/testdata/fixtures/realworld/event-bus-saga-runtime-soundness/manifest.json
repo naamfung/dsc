@@ -1,0 +1,14 @@
+{
+  "description": "Soundness checks for the event bus saga domain: unsafe optional projection, map, tag, and time uses must be rejected.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "checkpoint_store.lua",
+    "subscriber_builder.lua",
+    "projector_builder.lua",
+    "bus.lua",
+    "main.lua"
+  ],
+  "packages": ["time"]
+}

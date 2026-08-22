@@ -1,0 +1,2 @@
+::dup::
+::dup:: -- expect-error

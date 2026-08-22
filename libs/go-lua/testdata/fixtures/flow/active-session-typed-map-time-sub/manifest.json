@@ -1,0 +1,5 @@
+{
+  "description": "Annotating the active_sessions map preserves ActiveSession values through pairs iteration",
+  "packages": ["time"],
+  "check": {"errors": 0}
+}

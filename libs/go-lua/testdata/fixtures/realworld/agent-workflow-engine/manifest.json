@@ -1,0 +1,16 @@
+{
+  "description": "Application-shaped workflow engine mixing generic results, discriminated unions, metatable-backed shared-self objects, callback listeners, dynamic map lookups, and time-based state.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "session_store.lua",
+    "tool_builder.lua",
+    "tools.lua",
+    "engine.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

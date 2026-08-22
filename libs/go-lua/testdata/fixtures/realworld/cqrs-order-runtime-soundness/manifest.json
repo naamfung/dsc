@@ -1,0 +1,14 @@
+{
+  "description": "Soundness checks for the CQRS order runtime domain: unsafe optional state, view, tag, and time uses must be rejected.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "order_store.lua",
+    "validator_builder.lua",
+    "handler_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"]
+}

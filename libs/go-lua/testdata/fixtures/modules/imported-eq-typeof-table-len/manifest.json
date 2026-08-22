@@ -1,0 +1,7 @@
+{
+  "description": "Imported eq summary narrows type(x) == 'table' for length and indexing",
+  "files": [
+    "test.lua",
+    "main.lua"
+  ]
+}

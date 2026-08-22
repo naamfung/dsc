@@ -1,0 +1,10 @@
+{
+  "description": "Imported not_nil on nested field path plus imported eq(type(x), 'table') preserves len and indexing",
+  "files": [
+    "test.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "description": "Imported builder chain preserves captured retry options through not_nil guards",
+  "files": [
+    "test.lua",
+    "contract.lua",
+    "providers.lua",
+    "main.lua"
+  ]
+}

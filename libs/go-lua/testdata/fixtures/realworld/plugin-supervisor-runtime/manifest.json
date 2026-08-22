@@ -1,0 +1,18 @@
+{
+  "description": "Application-shaped plugin supervisor runtime mixing generic envelopes and cached receipts, staged validators, closure-built handlers and fallback policies, metatable-backed store/runtime objects, dynamic registries, callbacks, optional maps, cache hits, and time-based summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "plugin_store.lua",
+    "validator_builder.lua",
+    "handler_builder.lua",
+    "fallback_builder.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

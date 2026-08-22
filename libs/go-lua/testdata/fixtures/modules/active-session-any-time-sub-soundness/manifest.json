@@ -1,0 +1,9 @@
+{
+  "description": "Using any-typed session timestamps in time.Time:sub is a sound checker error",
+  "packages": ["time"],
+  "check": {"errors": 1},
+  "files": [
+    "session_state.lua",
+    "main.lua"
+  ]
+}

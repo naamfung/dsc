@@ -1,0 +1,14 @@
+{
+  "description": "Soundness guard for the plugin runtime pipeline domain: unsafe optional handler calls, unchecked optional cache reads, optional time arithmetic, and unchecked optional tag-map reads must be rejected.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "runtime_store.lua",
+    "runtime.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 4
+  }
+}

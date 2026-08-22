@@ -1,0 +1,11 @@
+{
+  "description": "Imported record aliases used as map values inside exported self-method store objects should preserve value types on put/get.",
+  "files": [
+    "protocol.lua",
+    "store.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

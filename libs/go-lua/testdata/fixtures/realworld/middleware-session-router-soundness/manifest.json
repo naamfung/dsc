@@ -1,0 +1,13 @@
+{
+  "description": "Soundness checks for the middleware session router domain: unsafe optional session, map, header, and time uses must be rejected.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "session_store.lua",
+    "middleware_builder.lua",
+    "route_builder.lua",
+    "router.lua",
+    "main.lua"
+  ],
+  "packages": ["time"]
+}

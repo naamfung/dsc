@@ -1,0 +1,5 @@
+{
+  "description": "Iterating an untyped active_sessions map yields any-typed values, so time.Time:sub must reject them",
+  "packages": ["time"],
+  "check": {"errors": 1}
+}

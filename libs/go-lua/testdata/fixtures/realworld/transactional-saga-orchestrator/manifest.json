@@ -1,0 +1,17 @@
+{
+  "description": "Application-shaped saga orchestrator mixing staged validation, fluent action handlers, compensation records, rollback emission, metatable-backed stores, discriminated actions, dynamic registries, optional saga/view fields, callbacks, and time-based summaries.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "saga_store.lua",
+    "validator_builder.lua",
+    "action_builder.lua",
+    "orchestrator.lua",
+    "main.lua"
+  ],
+  "packages": ["time"],
+  "check": {
+    "errors": 0
+  }
+}

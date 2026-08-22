@@ -1,0 +1,14 @@
+{
+  "description": "Soundness checks for the transactional saga domain: unsafe optional saga, view, compensation, tag, and time uses must be rejected.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "helpers.lua",
+    "saga_store.lua",
+    "validator_builder.lua",
+    "action_builder.lua",
+    "orchestrator.lua",
+    "main.lua"
+  ],
+  "packages": ["time"]
+}

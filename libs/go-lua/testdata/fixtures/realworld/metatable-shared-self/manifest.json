@@ -1,0 +1,4 @@
+{
+  "files": ["builder.lua", "main.lua"],
+  "check": {"errors": 0}
+}

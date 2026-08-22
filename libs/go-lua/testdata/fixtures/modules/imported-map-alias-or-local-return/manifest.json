@@ -1,0 +1,7 @@
+{
+  "description": "Imported map alias survives or-fallback when stored in an untyped local before return",
+  "files": [
+    "context.lua",
+    "main.lua"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Reduced google client path: decoding optional http response body without a guard is a sound checker error",
+  "check": {"errors": 1},
+  "files": [
+    "json.lua",
+    "http_client.lua",
+    "output.lua",
+    "tests.lua",
+    "client.lua",
+    "main.lua"
+  ]
+}

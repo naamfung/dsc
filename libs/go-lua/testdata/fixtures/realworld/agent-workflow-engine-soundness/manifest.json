@@ -1,0 +1,12 @@
+{
+  "description": "Soundness companion for the agent workflow engine: realistic unsafe uses of optional map entries and optional timestamps must be rejected.",
+  "files": [
+    "result.lua",
+    "protocol.lua",
+    "session_store.lua",
+    "tools.lua",
+    "engine.lua",
+    "main.lua"
+  ],
+  "packages": ["time"]
+}

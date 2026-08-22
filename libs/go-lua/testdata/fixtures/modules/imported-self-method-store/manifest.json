@@ -1,0 +1,10 @@
+{
+  "description": "Cross-module exported object types with self-referential methods should preserve identity for constructor results and method calls.",
+  "files": [
+    "store.lua",
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}

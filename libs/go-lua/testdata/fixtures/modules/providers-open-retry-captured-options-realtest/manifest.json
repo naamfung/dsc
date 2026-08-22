@@ -1,0 +1,10 @@
+{
+  "description": "Actual providers.open retry path preserves captured retry options under raw go-lua checking",
+  "files": [
+    "test.lua",
+    "registry.lua",
+    "contract.lua",
+    "providers.lua",
+    "main.lua"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "description": "Stable local-function facts must dominate weaker bound-expression re-synthesis",
+  "files": [
+    "main.lua"
+  ],
+  "check": {
+    "errors": 0
+  }
+}
