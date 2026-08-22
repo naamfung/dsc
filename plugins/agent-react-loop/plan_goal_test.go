@@ -129,8 +129,8 @@ func TestGoalLifecycle(t *testing.T) {
 // fakeUQClient 评审通道假客户端：返回预设回答。
 type fakeUQClient struct {
 	proto.UserQuestionsServiceClient // 嵌入接口以满足 mustEmbed（Ask 被覆盖）
-	resp *proto.AskResponse
-	err  error
+	resp                             *proto.AskResponse
+	err                              error
 }
 
 func (f *fakeUQClient) Ask(_ context.Context, _ *proto.AskRequest, _ ...grpc.CallOption) (*proto.AskResponse, error) {
@@ -204,7 +204,7 @@ func TestExitPlanMode(t *testing.T) {
 }
 
 func TestLocalToolRouting(t *testing.T) {
-	for _, name := range []string{toolGetGoal, toolUpdateGoal, toolCreateGoal, toolExitPlanMode} {
+	for _, name := range []string{toolGetGoal, toolUpdateGoal, toolCreateGoal, toolExitPlanMode, toolAskUserQuestion} {
 		if !isLocalTool(name) {
 			t.Fatalf("%s should route locally", name)
 		}
@@ -213,6 +213,69 @@ func TestLocalToolRouting(t *testing.T) {
 		if isLocalTool(name) {
 			t.Fatalf("%s should route remotely", name)
 		}
+	}
+}
+
+func TestAskUserQuestion(t *testing.T) {
+	with := func(resp *proto.AskResponse) *ReactLoopAgent {
+		a := newTestAgent(t)
+		a.uqServiceID = 1 // 声明有通道，ensureUserQuestionsClient 直接返回预设 uqClient
+		a.uqClient = &fakeUQClient{resp: resp}
+		return a
+	}
+	args := `{"questions":[{"id":"q1","question":"which one?","options":[{"label":"Option A (Recommended)"},{"label":"Option B"}]},{"id":"q2","question":"pick any","multi_select":true,"options":[{"label":"a"},{"label":"b"}]}]}`
+
+	// 无通道 → 报错引导（headless 场景）
+	a := newTestAgent(t)
+	resp, _ := callTool(t, a, toolAskUserQuestion, args)
+	if resp.Error == "" || !strings.Contains(resp.Error, "no user-questions channel") {
+		t.Fatalf("no-channel should fail with guidance, got %q", resp.Error)
+	}
+	// 空 questions → 报错
+	a = with(&proto.AskResponse{})
+	resp, _ = callTool(t, a, toolAskUserQuestion, `{"questions":[]}`)
+	if resp.Error == "" || !strings.Contains(resp.Error, "non-empty questions") {
+		t.Fatalf("empty questions should fail, got %q", resp.Error)
+	}
+	// 参数非法 JSON → 报错
+	a = with(&proto.AskResponse{})
+	resp, _ = callTool(t, a, toolAskUserQuestion, `{"questions":`)
+	if resp.Error == "" {
+		t.Fatal("bad arguments should fail")
+	}
+
+	// 成功：规范紧凑 JSON，保留 id/selected/custom，多问题原样透传
+	a = with(&proto.AskResponse{Answers: []*proto.AskAnswer{
+		{Id: "q1", Selected: []string{"Option A (Recommended)"}},
+		{Id: "q2", Selected: []string{"a", "b"}, Custom: "notes"},
+	}})
+	resp, concluded := callTool(t, a, toolAskUserQuestion, args)
+	if resp.Error != "" || concluded {
+		t.Fatalf("ask = %+v (concluded=%v)", resp, concluded)
+	}
+	if !strings.Contains(resp.Content, `"id":"q1"`) || !strings.Contains(resp.Content, "Option A (Recommended)") ||
+		!strings.Contains(resp.Content, `"id":"q2"`) || !strings.Contains(resp.Content, `"custom":"notes"`) {
+		t.Fatalf("ask content = %s", resp.Content)
+	}
+
+	// 零选择：selected 恒存在为 []
+	a = with(&proto.AskResponse{Answers: []*proto.AskAnswer{{Id: "q1", Selected: nil}}})
+	resp, _ = callTool(t, a, toolAskUserQuestion, args)
+	if resp.Error != "" || !strings.Contains(resp.Content, `"selected":[]`) {
+		t.Fatalf("zero selection = %s (err=%v)", resp.Content, resp.Error)
+	}
+
+	// 用户放弃（CANCELLED）→ 停下等待消息
+	a = with(&proto.AskResponse{Error: "CANCELLED", Message: "dismissed"})
+	resp, _ = callTool(t, a, toolAskUserQuestion, args)
+	if resp.Error == "" || !strings.Contains(resp.Error, "dismissed") {
+		t.Fatalf("dismissed = %q", resp.Error)
+	}
+	// 无 provider（NO_PROVIDER）→ 引导切换会话模式
+	a = with(&proto.AskResponse{Error: "NO_PROVIDER"})
+	resp, _ = callTool(t, a, toolAskUserQuestion, args)
+	if resp.Error == "" || !strings.Contains(resp.Error, "no user-questions channel") {
+		t.Fatalf("no-provider = %q", resp.Error)
 	}
 }
 

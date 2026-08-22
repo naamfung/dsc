@@ -241,8 +241,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	sess := a.sess
 	a.sessMu.Unlock()
 
-	// 宿主托管的 plan/goal 工具追加进模型可见目录（执行时拦截，见下方工具循环）
-	availableTools = append(availableTools, planGoalTools()...)
+	// 宿主托管的工具（plan/goal + ask_user_question）追加进模型可见目录（执行时拦截，见下方工具循环）
+	availableTools = append(availableTools, hostTools()...)
 
 	// 每次 Run 结束（含错误路径）将事件日志落盘（多会话 Store）
 	defer func() {

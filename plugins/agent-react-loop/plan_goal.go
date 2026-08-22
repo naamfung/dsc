@@ -11,17 +11,19 @@ import (
 	"dsc/session"
 )
 
-// plan/goal 宿主工具：对齐 DSH plan-mode + goal/tool-goal 设计。
+// 宿主工具：对齐 DSH plan-mode + goal/tool-goal + tool-ask-user 设计。
 //
-// 这些工具由 react-loop 直接托管（模型可见、执行时拦截），状态读写当前会话的
-// 事件溯源日志（plan/mode 与 goal/change），无需经过工具插件进程——
-// 与 DSH 中 plan-mode / goal 服务注册 ctx.tools 等价。
+// 这些工具由 react-loop 直接托管（模型可见、执行时拦截）：plan/goal 状态读写
+// 当前会话的事件溯源日志（plan/mode 与 goal/change），ask_user_question 经宿主
+// 挂载的 UserQuestionsService 向用户提问。均无需经过工具插件进程——
+// 与 DSH 中 plan-mode / goal 服务 / ctx.userQuestions 注册等价。
 
 const (
-	toolExitPlanMode = "exit_plan_mode"
-	toolGetGoal      = "get_goal"
-	toolCreateGoal   = "create_goal"
-	toolUpdateGoal   = "update_goal"
+	toolExitPlanMode    = "exit_plan_mode"
+	toolGetGoal         = "get_goal"
+	toolCreateGoal      = "create_goal"
+	toolUpdateGoal      = "update_goal"
+	toolAskUserQuestion = "ask_user_question"
 )
 
 // plan 模式激活时注入 system prompt 的部署方引导文案（可由 DSC_PLAN_SECTION 覆盖）。
@@ -36,18 +38,18 @@ const goalPolicyPrompt = "Use goal tools for one long-running completion objecti
 	"Mark blocked only after the same blocking condition persists for at least %d consecutive goal rounds, " +
 	"and report that concrete condition in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked."
 
-// isLocalTool 判断工具名是否为宿主托管的 plan/goal 工具（执行时拦截，不走工具插件）。
+// isLocalTool 判断工具名是否为宿主托管的工具（执行时拦截，不走工具插件）。
 func isLocalTool(name string) bool {
 	switch name {
-	case toolExitPlanMode, toolGetGoal, toolCreateGoal, toolUpdateGoal:
+	case toolExitPlanMode, toolGetGoal, toolCreateGoal, toolUpdateGoal, toolAskUserQuestion:
 		return true
 	}
 	return false
 }
 
-// planGoalTools 返回宿主托管的 plan/goal 工具定义，追加进模型可见的工具目录
+// hostTools 返回宿主托管的工具定义，追加进模型可见的工具目录
 // （对齐 DSH：exit_plan_mode 始终注册，plan 模式转换只改变提示词段，不改变工具目录）。
-func planGoalTools() []*proto.Tool {
+func hostTools() []*proto.Tool {
 	return []*proto.Tool{
 		{
 			Name:           toolExitPlanMode,
@@ -69,10 +71,17 @@ func planGoalTools() []*proto.Tool {
 			Description:    "Update the current goal: edit its objective or max_goal_rounds, pause, resume, complete, or mark blocked (blocked requires blocked_reason). Copy goal_id and revision exactly from get_goal.",
 			ParametersJson: `{"type":"object","properties":{"goal_id":{"type":"string"},"revision":{"type":"integer"},"action":{"type":"string","enum":["edit","pause","resume","complete","blocked"]},"objective":{"type":"string"},"max_goal_rounds":{"type":"integer"},"blocked_reason":{"type":"string"}},"required":["goal_id","revision","action"],"additionalProperties":false}`,
 		},
+		{
+			Name: toolAskUserQuestion,
+			Description: "Ask the user a concise question when you need confirmation, a choice, or missing information to continue. " +
+				"Pass a non-empty questions array; each question needs a stable id and text, and may carry a short header, options (label with optional description), and multi_select. " +
+				"To recommend an option, put it first and append \"(Recommended)\" to its label.",
+			ParametersJson: `{"type":"object","properties":{"questions":{"type":"array","minItems":1,"items":{"type":"object","properties":{"id":{"type":"string"},"question":{"type":"string"},"header":{"type":"string"},"options":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label"]}},"multi_select":{"type":"boolean"}},"required":["id","question"]}}},"required":["questions"],"additionalProperties":false}`,
+		},
 	}
 }
 
-// executeLocalTool 执行宿主托管的 plan/goal 工具。第二个返回值表示是否需要在
+// executeLocalTool 执行宿主托管的工具。第二个返回值表示是否需要在
 // 本步骤后结束物理轮次（对齐 DSH concludeTurn：complete/blocked 后停止）。
 func (a *ReactLoopAgent) executeLocalTool(ctx context.Context, tc *proto.ToolCall) (*proto.ExecuteToolResponse, bool) {
 	switch tc.Name {
@@ -84,6 +93,8 @@ func (a *ReactLoopAgent) executeLocalTool(ctx context.Context, tc *proto.ToolCal
 		return a.execCreateGoal(tc)
 	case toolUpdateGoal:
 		return a.execUpdateGoal(tc)
+	case toolAskUserQuestion:
+		return a.execAskUserQuestion(ctx, tc)
 	}
 	return &proto.ExecuteToolResponse{Error: "unknown local tool " + tc.Name}, false
 }
@@ -138,7 +149,7 @@ func (a *ReactLoopAgent) execExitPlanMode(ctx context.Context, tc *proto.ToolCal
 		return &proto.ExecuteToolResponse{Error: "exit_plan_mode review failed: " + err.Error()}, false
 	}
 	if resp.GetError() != "" {
-		return &proto.ExecuteToolResponse{Error: mapReviewError(resp.GetError(), resp.GetMessage())}, false
+		return &proto.ExecuteToolResponse{Error: mapAskError(resp.GetError(), resp.GetMessage())}, false
 	}
 
 	approved, feedback := parseReview(resp)
@@ -177,19 +188,70 @@ func parseReview(resp *proto.AskResponse) (approved bool, feedback string) {
 	return false, ""
 }
 
-// mapReviewError 把宿主评审通道错误码转成对模型可行动的提示（对齐 DSH 的评审失败措辞）。
-func mapReviewError(code, message string) string {
+// mapAskError 把宿主评审通道错误码转成对模型可行动的提示（对齐 DSH 的提问失败措辞，
+// exit_plan_mode 评审与 ask_user_question 共用）。
+func mapAskError(code, message string) string {
 	switch code {
 	case "ASK_ABORTED", "CANCELLED":
-		return "The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message."
+		return "The user dismissed the question to speak instead; stop here and wait for their message."
+	case "EMPTY_QUESTIONS":
+		return "ask_user_question requires a non-empty questions array"
 	case "NO_PROVIDER":
-		return "no user-questions channel is available to review the plan; ask the user to switch the session mode instead"
+		return "no user-questions channel is available; ask the user to switch the session mode instead"
 	default:
 		if message != "" {
 			return message
 		}
-		return "exit_plan_mode review failed with code " + code
+		return "ask_user_question failed with code " + code
 	}
+}
+
+// execAskUserQuestion 向用户提出简明问题并等待回答（对齐 DSH tool-ask-user）：
+// 参数 questions[] 原样经 UserQuestionsService 交给宿主 UI，回答以规范紧凑 JSON
+// {answers:[{id,selected,custom?}]} 返回（custom 为空时省略；selected 可含零至多个标签，
+// 单选时取唯一选中项，多选时含全部勾选项）。
+func (a *ReactLoopAgent) execAskUserQuestion(ctx context.Context, tc *proto.ToolCall) (*proto.ExecuteToolResponse, bool) {
+	var args struct {
+		Questions []*proto.AskQuestion `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(tc.ArgumentsJson), &args); err != nil {
+		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("ask_user_question: %v", err)}, false
+	}
+	if len(args.Questions) == 0 {
+		return &proto.ExecuteToolResponse{Error: "ask_user_question requires a non-empty questions array"}, false
+	}
+	client := a.ensureUserQuestionsClient()
+	if client == nil {
+		return &proto.ExecuteToolResponse{
+			Error: "no user-questions channel is available; ask the user to switch the session mode instead",
+		}, false
+	}
+	resp, err := client.Ask(ctx, &proto.AskRequest{Questions: args.Questions})
+	if err != nil {
+		return &proto.ExecuteToolResponse{Error: "ask_user_question failed: " + err.Error()}, false
+	}
+	if resp.GetError() != "" {
+		return &proto.ExecuteToolResponse{Error: mapAskError(resp.GetError(), resp.GetMessage())}, false
+	}
+	// 规范紧凑 JSON：selected 恒存在（零选择为 []），custom 为空时省略（对齐 DSH）
+	type answerView struct {
+		ID       string   `json:"id"`
+		Selected []string `json:"selected"`
+		Custom   string   `json:"custom,omitempty"`
+	}
+	var views []answerView
+	for _, ans := range resp.GetAnswers() {
+		sel := ans.GetSelected()
+		if sel == nil {
+			sel = []string{}
+		}
+		views = append(views, answerView{ID: ans.GetId(), Selected: sel, Custom: ans.GetCustom()})
+	}
+	b, err := json.Marshal(map[string]any{"answers": views})
+	if err != nil {
+		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("ask_user_question: encode answers: %v", err)}, false
+	}
+	return &proto.ExecuteToolResponse{Content: string(b)}, false
 }
 
 // execGetGoal 返回当前目标视图或 null（对齐 DSH get_goal）。
