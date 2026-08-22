@@ -1187,6 +1187,8 @@ var slashCommands = []compItem{
 	{label: "/sandbox on", insert: "/sandbox on", hint: "启用沙箱保护（只读，拒绝一切文件写）"},
 	{label: "/sandbox off", insert: "/sandbox off", hint: "关闭沙箱保护（不额外拦截）"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
+	{label: "/plan", insert: "/plan", hint: "进入 plan 模式（先探索设计，再经 exit_plan_mode 呈现计划）"},
+	{label: "/plan off", insert: "/plan off", hint: "退出 plan 模式"},
 	{label: "/session new", insert: "/session new", hint: "新建会话并切换"},
 	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
 	{label: "/session delete", insert: "/session delete ", hint: "删除指定会话（如 /session delete session-3）"},
@@ -1316,6 +1318,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /sandbox on   启用沙箱保护（只读策略，拒绝一切文件写操作）",
 			"  /sandbox off  关闭沙箱保护（full 策略，不再额外拦截文件写）",
 			"  /sessions    列出所有会话",
+			"  /plan       进入 plan 模式（先探索与设计，再经 exit_plan_mode 呈现完整计划）",
+			"  /plan off   退出 plan 模式",
 			"  /session <id>  切换到指定会话（如 /session session-3）",
 			"  /session new  新建会话并切换",
 			"  /session delete <id>  删除指定会话",
@@ -1471,6 +1475,30 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			}
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/plan":
+		if err := m.agent.SetPlanMode(m.ctx, true); err != nil {
+			m.appendMessage(errorSty.Render("进入 plan 模式失败: ") + err.Error())
+		} else {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · Plan") + "\n已进入 plan 模式：先探索与设计，再经 exit_plan_mode 呈现完整计划。")
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/plan off":
+		if err := m.agent.SetPlanMode(m.ctx, false); err != nil {
+			m.appendMessage(errorSty.Render("退出 plan 模式失败: ") + err.Error())
+		} else {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · Plan") + "\n已退出 plan 模式。")
 		}
 		m.input.SetValue("")
 		m.completion = completion{}

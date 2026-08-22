@@ -1,6 +1,7 @@
 name: 标准模式
 description: 包含所有可用工具，支持完整的 Agent 能力。
 persona: "You are a helpful software engineer assistant."
+plan_section: "You are in plan mode. Explore and design before presenting the complete plan through exit_plan_mode."
 plugins:
   - name: policy-fs-observation
     type: policy

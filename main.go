@@ -85,7 +85,7 @@ func getExecutableDir() (string, error) {
 	return filepath.Dir(exePath), nil
 }
 
-// statBinaryPath 根據 execDir 和可能的相對/絕對 binaryPath，返回用於 os.Stat 檢查的絕對路徑
+// statBinaryPath 根據 execDir 与可能的相對/絕對 binaryPath，返回用於 os.Stat 檢查的絕對路徑
 func statBinaryPath(execDir, cfgPath string, defaultRel string) string {
 	p := cfgPath
 	if p == "" {
@@ -198,7 +198,7 @@ func main() {
 		Output: os.Stderr,
 	})
 
-	// 初始化 logger 和 pluginLogger (根據 logToFile 和 logToScreen 調整)
+	// 初始化 logger 与 pluginLogger (根據 logToFile 与 logToScreen 調整)
 	var pluginLogger hclog.Logger
 	var logOutput io.Writer
 
@@ -415,6 +415,9 @@ func main() {
 		}
 		if presetCfg != nil && presetCfg.Persona != "" {
 			agentEnv["DSC_PRESET_PERSONA"] = presetCfg.Persona
+		}
+		if presetCfg != nil && presetCfg.PlanSection != "" {
+			agentEnv["DSC_PLAN_SECTION"] = presetCfg.PlanSection
 		}
 		if inputText != "" {
 			agentEnv["DSC_SINGLE_TURN"] = "1"
