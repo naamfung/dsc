@@ -443,10 +443,10 @@ func main() {
 	}
 
 	// 启动 cron 定时任务调度器（失败仅告警，不阻塞主流程）
-	if err := mgr.StartJobs(); err != nil {
-		logger.Warn("failed to start jobs scheduler", "err", err)
+	if err := mgr.StartCron(); err != nil {
+		logger.Warn("failed to start cron scheduler", "err", err)
 	} else {
-		logger.Info("jobs scheduler started")
+		logger.Info("cron scheduler started")
 	}
 
 	// 启动管理 API

@@ -1,8 +1,8 @@
-// Package jobs 提供 cron 定时任务：任务定义、JSON 持久化与 robfig/cron 调度。
+// Package cron 提供 cron 定时任务：任务定义、JSON 持久化与 robfig/cron 调度。
 //
 // 触发时由宿主注入的执行器（Manager.RunSubagent）执行，走宿主侧 LLM + 工具
 // 流水线，不占用主 agent 的交互会话。
-package jobs
+package cron
 
 import (
 	"encoding/json"
@@ -29,21 +29,21 @@ type Job struct {
 	LastError     string `json:"last_error,omitempty"`
 }
 
-// Store 任务定义的 JSON 持久化（单文件 jobs.json，原子写：临时文件 + 重命名）。
+// Store 任务定义的 JSON 持久化（单文件 cron.json，原子写：临时文件 + 重命名）。
 type Store struct {
 	mu   sync.Mutex
 	path string
 	jobs map[string]*Job
 }
 
-// NewStore 打开（必要时创建）jobs.json 存储。返回 nil 表示目录不可用？不——
+// NewStore 打开（必要时创建）cron.json 存储。返回 nil 表示目录不可用？不——
 // 出错即返回错误，任务持久化是功能前提。
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("jobs: create dir: %w", err)
+		return nil, fmt.Errorf("cron: create dir: %w", err)
 	}
 	s := &Store{
-		path: filepath.Join(dir, "jobs.json"),
+		path: filepath.Join(dir, "cron.json"),
 		jobs: make(map[string]*Job),
 	}
 	if err := s.load(); err != nil {
@@ -58,11 +58,11 @@ func (s *Store) load() error {
 		if os.IsNotExist(err) {
 			return nil // 首次使用，无历史任务
 		}
-		return fmt.Errorf("jobs: read %s: %w", s.path, err)
+		return fmt.Errorf("cron: read %s: %w", s.path, err)
 	}
 	var list []*Job
 	if err := json.Unmarshal(data, &list); err != nil {
-		return fmt.Errorf("jobs: parse %s: %w", s.path, err)
+		return fmt.Errorf("cron: parse %s: %w", s.path, err)
 	}
 	for _, j := range list {
 		if j.ID != "" {
@@ -126,19 +126,19 @@ func (s *Store) writeLocked() error {
 	}
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		return fmt.Errorf("jobs: marshal: %w", err)
+		return fmt.Errorf("cron: marshal: %w", err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("jobs: write %s: %w", tmp, err)
+		return fmt.Errorf("cron: write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("jobs: rename %s -> %s: %w", tmp, s.path, err)
+		return fmt.Errorf("cron: rename %s -> %s: %w", tmp, s.path, err)
 	}
 	return nil
 }
 
 // newID 生成任务 id：时间戳毫秒（调用方保证单进程内唯一）。
 func newID() string {
-	return fmt.Sprintf("job-%d", time.Now().UnixMilli())
+	return fmt.Sprintf("cron-%d", time.Now().UnixMilli())
 }

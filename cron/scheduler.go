@@ -1,4 +1,4 @@
-package jobs
+package cron
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/robfig/cron/v3"
+	robfigcron "github.com/robfig/cron/v3"
 )
 
 // Runner 任务执行器（宿主注入：Manager.RunSubagent 执行 prompt）。
@@ -23,11 +23,11 @@ const maxOutputLen = 4096
 // 同一任务上次未跑完时跳过本次触发（SkipIfStillRunning，防重入）。
 type Scheduler struct {
 	mu      sync.Mutex
-	cron    *cron.Cron
+	cron    *robfigcron.Cron
 	store   *Store
 	runner  Runner
 	timeout time.Duration
-	entries map[string]cron.EntryID // 任务 id -> 调度条目（启用且已注册时存在）
+	entries map[string]robfigcron.EntryID // 任务 id -> 调度条目（启用且已注册时存在）
 }
 
 // NewScheduler 创建调度器。runner 为任务执行回调；timeout 为单次执行超时
@@ -40,7 +40,7 @@ func NewScheduler(store *Store, runner Runner, timeout time.Duration) *Scheduler
 		store:   store,
 		runner:  runner,
 		timeout: timeout,
-		entries: make(map[string]cron.EntryID),
+		entries: make(map[string]robfigcron.EntryID),
 	}
 }
 
@@ -50,9 +50,9 @@ func (s *Scheduler) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cron != nil {
-		return fmt.Errorf("jobs: scheduler already started")
+		return fmt.Errorf("cron: scheduler already started")
 	}
-	s.cron = cron.New(cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)))
+	s.cron = robfigcron.New(robfigcron.WithChain(robfigcron.SkipIfStillRunning(robfigcron.DefaultLogger)))
 	for _, j := range s.store.List() {
 		if !j.Enabled {
 			continue
@@ -74,15 +74,15 @@ func (s *Scheduler) Stop() {
 	}
 	s.cron.Stop()
 	s.cron = nil
-	s.entries = make(map[string]cron.EntryID)
+	s.entries = make(map[string]robfigcron.EntryID)
 }
 
 // Add 新增任务：校验 cron 表达式并持久化；调度器运行中且任务启用时立即注册。
 func (s *Scheduler) Add(j *Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := cron.ParseStandard(j.Cron); err != nil {
-		return fmt.Errorf("jobs: invalid cron %q: %w", j.Cron, err)
+	if _, err := robfigcron.ParseStandard(j.Cron); err != nil {
+		return fmt.Errorf("cron: invalid cron %q: %w", j.Cron, err)
 	}
 	if j.ID == "" {
 		j.ID = newID()
@@ -96,7 +96,7 @@ func (s *Scheduler) Add(j *Job) error {
 	if j.Enabled && s.cron != nil {
 		eid, err := s.cron.AddFunc(j.Cron, func() { s.fire(j.ID) })
 		if err != nil {
-			return fmt.Errorf("jobs: schedule %q: %w", j.ID, err)
+			return fmt.Errorf("cron: schedule %q: %w", j.ID, err)
 		}
 		s.entries[j.ID] = eid
 	}
@@ -108,7 +108,7 @@ func (s *Scheduler) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.store.Remove(id) {
-		return fmt.Errorf("jobs: job %q not found", id)
+		return fmt.Errorf("cron: job %q not found", id)
 	}
 	if eid, ok := s.entries[id]; ok {
 		s.cron.Remove(eid)
@@ -123,7 +123,7 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) error {
 	defer s.mu.Unlock()
 	job, ok := s.store.Get(id)
 	if !ok {
-		return fmt.Errorf("jobs: job %q not found", id)
+		return fmt.Errorf("cron: job %q not found", id)
 	}
 	job.Enabled = enabled
 	if err := s.store.Save(job); err != nil {
@@ -136,7 +136,7 @@ func (s *Scheduler) SetEnabled(id string, enabled bool) error {
 		if _, exists := s.entries[id]; !exists {
 			eid, err := s.cron.AddFunc(job.Cron, func() { s.fire(id) })
 			if err != nil {
-				return fmt.Errorf("jobs: schedule %q: %w", id, err)
+				return fmt.Errorf("cron: schedule %q: %w", id, err)
 			}
 			s.entries[id] = eid
 		}
