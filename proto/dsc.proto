@@ -19,6 +19,7 @@ service AgentService {
   rpc RegisterServices(RegisterServicesRequest) returns (RegisterServicesResponse);
   rpc SwitchSession(SwitchSessionRequest) returns (SwitchSessionResponse);
   rpc SetPlanMode(SetPlanModeRequest) returns (SetPlanModeResponse);
+  rpc SetUserQuestionsService(SetUserQuestionsServiceRequest) returns (SetUserQuestionsServiceResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -155,6 +156,56 @@ message SetPlanModeRequest {
 message SetPlanModeResponse {
   bool success = 1;
   string message = 2; // 错误信息（设置失败时）
+}
+
+message SetUserQuestionsServiceRequest {
+  uint32 service_id = 1; // 宿主挂载在 broker 上的 UserQuestionsService ID（0 = 无通道）
+}
+
+message SetUserQuestionsServiceResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// UserQuestionsService 评审通道：agent 向宿主询问用户并阻塞等待回答（对齐 DSH user-questions）。
+service UserQuestionsService {
+  rpc Ask(AskRequest) returns (AskResponse);
+}
+
+message AskRequest {
+  repeated AskQuestion questions = 1;
+}
+
+message AskQuestion {
+  string id = 1;
+  string question = 2;
+  string detail = 3;   // 补充说明（如计划 markdown）
+  string header = 4;   // 短标题/分组标签
+  repeated AskOption options = 5;
+  bool multi_select = 6;
+  AskIntent intent = 7; // 呈现意图（如 plan-review），不影响回答编码
+}
+
+message AskOption {
+  string label = 1;
+  string description = 2;
+}
+
+message AskIntent {
+  string kind = 1;     // "plan-review"
+  string approve = 2;  // 批准计划的选项标签
+}
+
+message AskResponse {
+  repeated AskAnswer answers = 1;
+  string error = 2;    // 错误码（EMPTY_QUESTIONS/NO_PROVIDER/ASK_ABORTED 等）；空表示成功
+  string message = 3;  // 错误详情
+}
+
+message AskAnswer {
+  string id = 1;
+  repeated string selected = 2; // 选中的选项标签
+  string custom = 3;            // 自由文本 "Other" 回答
 }
 
 message ShutdownRequest {

@@ -50,6 +50,9 @@ type Agent interface {
 	// 用于 TUI /plan 命令；激活时在 system prompt 注入部署方配置的 section，
 	// 供模型先探索与设计，再通过 exit_plan_mode 工具呈现完整计划并退出。
 	SetPlanMode(ctx context.Context, active bool) error
+	// SetUserQuestionsService 注入宿主挂载在 broker 上的 UserQuestionsService ID
+	// （0 = 无通道）。agent 的工具（如 exit_plan_mode）据此向用户提问并等待回答。
+	SetUserQuestionsService(ctx context.Context, serviceID uint32) error
 	// Shutdown 优雅关闭 Agent（用于热加载前）
 	Shutdown(ctx context.Context, force bool) error
 }

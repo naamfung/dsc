@@ -42,7 +42,8 @@ func (s *stubAgent) SetPlanMode(_ context.Context, active bool) error {
 	s.planCalls = append(s.planCalls, active)
 	return nil
 }
-func (s *stubAgent) Shutdown(context.Context, bool) error { return nil }
+func (s *stubAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
+func (s *stubAgent) Shutdown(context.Context, bool) error                  { return nil }
 
 func TestPumpLoopRealFlow(t *testing.T) {
 	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
