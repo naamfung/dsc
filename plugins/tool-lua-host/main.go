@@ -25,8 +25,11 @@ const scriptsDir = "./plugins/tool-lua-host/scripts"
 
 // ToolServiceServer 空壳工具插件：内部业务为空，启动后加载 LUA 脚本
 // （脚本经 dsc.register_tool 注册工具，本服务汇总转发）。
+// 同时实现 PluginHookService（互通机制 3）：脚本经 dsc.hook 注册的
+// BeforeTool/AfterTool/OnEvent 钩子在此处响应宿主调用。
 type ToolServiceServer struct {
 	proto.UnimplementedToolServiceServer
+	proto.UnimplementedPluginHookServiceServer
 	broker *goplugin.GRPCBroker // 互通：llmclient/toolclient/notify Dial 宿主服务
 	mu     sync.Mutex
 	host   *host.Host // 脚本宿主（SetInterconnect 后创建）
@@ -107,6 +110,98 @@ func (s *ToolServiceServer) ListContext(ctx context.Context, req *proto.ListCont
 	return &proto.ListContextResponse{}, nil
 }
 
+// ==================== PluginHookService（互通机制 3） ====================
+
+// BeforeTool 响应宿主工具执行前钩子：脚本 handler 返回 (veto, error, new_args)。
+func (s *ToolServiceServer) BeforeTool(ctx context.Context, req *proto.BeforeToolRequest) (*proto.BeforeToolResponse, error) {
+	h := s.hostSnapshot()
+	if h == nil {
+		return &proto.BeforeToolResponse{}, nil
+	}
+	before, _, _ := h.HookSnapshots()
+	if len(before) == 0 {
+		return &proto.BeforeToolResponse{}, nil
+	}
+	var args any
+	if req.GetArgumentsJson() != "" {
+		_ = json.Unmarshal([]byte(req.GetArgumentsJson()), &args)
+	}
+	results := h.RunHooks("before_tool", before, req.GetToolName(), args)
+	for _, r := range results {
+		vals, _ := r.([]any)
+		if len(vals) == 0 {
+			continue
+		}
+		if veto, ok := vals[0].(bool); ok && veto {
+			errMsg := ""
+			if len(vals) > 1 {
+				errMsg, _ = vals[1].(string)
+			}
+			return &proto.BeforeToolResponse{Veto: true, Error: errMsg}, nil
+		}
+		if len(vals) > 2 {
+			if newArgs, ok := vals[2].(map[string]any); ok {
+				if b, err := json.Marshal(newArgs); err == nil {
+					return &proto.BeforeToolResponse{ArgumentsJson: string(b)}, nil
+				}
+			}
+		}
+	}
+	return &proto.BeforeToolResponse{}, nil
+}
+
+// AfterTool 响应宿主工具执行后钩子：脚本 handler 返回 (new_result, new_error)。
+func (s *ToolServiceServer) AfterTool(ctx context.Context, req *proto.AfterToolRequest) (*proto.AfterToolResponse, error) {
+	h := s.hostSnapshot()
+	if h == nil {
+		return &proto.AfterToolResponse{}, nil
+	}
+	_, after, _ := h.HookSnapshots()
+	if len(after) == 0 {
+		return &proto.AfterToolResponse{}, nil
+	}
+	var args any
+	if req.GetArgumentsJson() != "" {
+		_ = json.Unmarshal([]byte(req.GetArgumentsJson()), &args)
+	}
+	results := h.RunHooks("after_tool", after, req.GetToolName(), args, req.GetResult(), req.GetError())
+	for _, r := range results {
+		vals, _ := r.([]any)
+		if len(vals) == 0 {
+			continue
+		}
+		resp := &proto.AfterToolResponse{}
+		if newResult, ok := vals[0].(string); ok {
+			resp.Result = newResult
+		}
+		if len(vals) > 1 {
+			if newErr, ok := vals[1].(string); ok {
+				resp.Error = newErr
+			}
+		}
+		return resp, nil
+	}
+	return &proto.AfterToolResponse{}, nil
+}
+
+// OnEvent 响应宿主事件广播：脚本 handler fn(name, data) 无返回值。
+func (s *ToolServiceServer) OnEvent(ctx context.Context, req *proto.OnEventRequest) (*proto.OnEventResponse, error) {
+	h := s.hostSnapshot()
+	if h == nil {
+		return &proto.OnEventResponse{}, nil
+	}
+	_, _, onEvent := h.HookSnapshots()
+	if len(onEvent) == 0 {
+		return &proto.OnEventResponse{}, nil
+	}
+	var data any
+	if req.GetDataJson() != "" {
+		_ = json.Unmarshal([]byte(req.GetDataJson()), &data)
+	}
+	h.RunHooks("on_event", onEvent, req.GetName(), data)
+	return &proto.OnEventResponse{}, nil
+}
+
 // MetadataServer 插件元数据。
 type MetadataServer struct {
 	metadata.UnimplementedPluginMetadataServer
@@ -133,6 +228,7 @@ func (p *ToolMetadataGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc
 		p.ToolImpl.broker = broker // 互通：供 llmclient/toolclient/notify Dial 宿主服务
 	}
 	proto.RegisterToolServiceServer(s, p.ToolImpl)
+	proto.RegisterPluginHookServiceServer(s, p.ToolImpl)
 	metadata.RegisterPluginMetadataServer(s, p.MetadataImpl)
 	return nil
 }

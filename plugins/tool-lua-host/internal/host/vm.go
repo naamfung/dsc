@@ -60,6 +60,7 @@ func (h *Host) loadScript(name string) (*Script, error) {
 	lua.OpenString(L)
 	lua.OpenTable(L)
 	lua.OpenMath(L)
+	L.SetTop(0) // 清理 Open 系列压入的库表，保证后续 GetTop/Get 语义从干净栈开始
 	// 沙箱：go-lua 无 os/io 库，脚本无法访问宿主文件系统/进程
 
 	// 标记脚本名（供 bindings.scriptName 取用）

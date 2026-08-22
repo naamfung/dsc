@@ -17,6 +17,15 @@ import (
 // pollInterval 脚本目录轮询间隔（热加载）。
 const pollInterval = 2 * time.Second
 
+// JobEntry 脚本后台任务的状态。
+type JobEntry struct {
+	ID     string
+	Script string
+	Status string // running | completed | failed
+	Result string
+	Error  string
+}
+
 // Host LUA 脚本宿主：加载/热加载脚本，汇总脚本注册的工具。
 type Host struct {
 	mu       sync.Mutex
@@ -26,6 +35,11 @@ type Host struct {
 	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 lua_ 前缀）
 	stop     chan struct{}
 	logf     func(string, ...any)
+
+	store *bindings.Store        // 进程内 KV（脚本间共享）
+	hook  *bindings.HookRegistry // 脚本注册的宿主钩子
+	jobs  map[string]*JobEntry   // 后台任务表
+	jobSeq int
 }
 
 // New 创建宿主（dir 为脚本目录，services 为宿主互通服务）。
@@ -33,14 +47,25 @@ func New(dir string, services *bindings.Services, logf func(string, ...any)) *Ho
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Host{
+	h := &Host{
 		dir:      dir,
 		services: services,
 		scripts:  make(map[string]*Script),
 		tools:    make(map[string]*ToolDef),
 		stop:     make(chan struct{}),
 		logf:     logf,
+		store:    bindings.NewStore(),
+		hook:     bindings.NewHookRegistry(),
+		jobs:     make(map[string]*JobEntry),
 	}
+	// 宿主内建（KV/钩子/后台任务）由 host 提供实现
+	services.Store = h.store
+	services.Hook = h.hook
+	services.HookRun = h.hookRun
+	services.SpawnJob = h.spawnJob
+	services.JobStatus = h.jobStatus
+	services.JobList = h.jobList
+	return h
 }
 
 // Start 初始加载脚本目录并启动热加载轮询。
@@ -189,13 +214,185 @@ func (h *Host) ExecuteTool(name string, args json.RawMessage) (string, error) {
 	script.mu.Lock()
 	defer script.mu.Unlock()
 	L := script.L
+	top := L.GetTop()
+	defer L.SetTop(top) // 恢复栈，避免污染后续执行
 	argVal := jsonToLua(L, args)
 	if err := L.CallByParam(lua.P{Fn: t.Handler, NRet: 1, Protect: true}, argVal); err != nil {
 		return "", fmt.Errorf("lua 工具 %s 执行失败: %w", name, err)
 	}
 	ret := L.Get(-1)
-	L.Pop(1)
 	return luaResultToString(L, ret), nil
+}
+
+// ==================== 钩子执行（dsc.hook） ====================
+
+// HookSnapshots 返回三类钩子 handler 的快照（供 PluginHookService 实现使用）。
+func (h *Host) HookSnapshots() (before, after, onEvent []bindings.HookHandler) {
+	return h.hook.Snapshots()
+}
+
+// RunHooks 在对应脚本 VM 上执行钩子集合（供 PluginHookService 实现使用）。
+func (h *Host) RunHooks(kind string, handlers []bindings.HookHandler, args ...any) []any {
+	return h.hookRun(kind, handlers, args...)
+}
+
+// hookRun 在对应脚本的 VM 上执行一批钩子 handler（按注册顺序），返回每个
+// handler 的返回值（转 any）。kind 决定调用签名：
+//   - "before_tool": fn(tool_name, args_table) → (veto, error, new_args)
+//   - "after_tool":  fn(tool_name, args_table, result, error) → (new_result, new_error)
+//   - "on_event":    fn(name, data) → 无
+func (h *Host) hookRun(kind string, handlers []bindings.HookHandler, args ...any) []any {
+	out := make([]any, 0, len(handlers))
+	for _, hd := range handlers {
+		h.mu.Lock()
+		script, ok := h.scripts[hd.Script]
+		h.mu.Unlock()
+		if !ok {
+			continue // 脚本已卸载
+		}
+		// TryLock：VM 忙（该脚本工具/任务正持锁执行，如嵌套 dsc.tool.call 触发
+		// 宿主钩子回调）时跳过，避免同一 VM 重入死锁
+		if !script.mu.TryLock() {
+			h.logf("lua 钩子 %s（%s）跳过：VM 忙", kind, hd.Script)
+			continue
+		}
+		L := script.L
+		// 压入 handler 与参数（转 LUA 值）
+		pushed := []lua.LValue{hd.Fn}
+		for _, a := range args {
+			pushed = append(pushed, anyToLua(L, a))
+		}
+		if err := L.CallByParam(lua.P{Fn: hd.Fn, NRet: lua.MultRet, Protect: true}, pushed[1:]...); err != nil {
+			h.logf("lua 钩子 %s（%s）执行失败: %v", kind, hd.Script, err)
+			script.mu.Unlock()
+			continue
+		}
+		n := L.GetTop()
+		var results []any
+		for i := 1; i <= n; i++ {
+			results = append(results, luaToAnySafeDepth(L.Get(i), 0))
+		}
+		L.SetTop(0)
+		script.mu.Unlock()
+		out = append(out, results)
+	}
+	return out
+}
+
+// luaToAnySafe 把 LUA 值转 any（table 递归；带深度限制防自引用环）。
+func luaToAnySafe(v lua.LValue) any {
+	return luaToAnySafeDepth(v, 0)
+}
+
+func luaToAnySafeDepth(v lua.LValue, depth int) any {
+	if depth > 16 {
+		return "<cycle>"
+	}
+	switch t := v.(type) {
+	case *lua.LTable:
+		var arr []any
+		for i := 1; ; i++ {
+			item := t.RawGetInt(i)
+			if item == lua.LNil {
+				break
+			}
+			arr = append(arr, luaToAnySafeDepth(item, depth+1))
+		}
+		if arr != nil {
+			return arr
+		}
+		out := map[string]any{}
+		t.ForEach(func(k, val lua.LValue) {
+			out[k.String()] = luaToAnySafeDepth(val, depth+1)
+		})
+		return out
+	case lua.LString:
+		return string(t)
+	case lua.LNumber:
+		return float64(t)
+	case lua.LInteger:
+		return int64(t)
+	case lua.LBool:
+		return bool(t)
+	case nil:
+		return nil
+	default:
+		// 不调 v.String()：LGoFunc.String 内部 fmt 打印指针可能触发栈溢出
+		return "<" + v.Type().String() + ">"
+	}
+}
+
+// ==================== 后台任务（dsc.job） ====================
+
+// spawnJob 在脚本的 VM 上后台执行 fn（goroutine；VM 由脚本锁串行化）。
+func (h *Host) spawnJob(script string, fn *lua.LFunction) (string, error) {
+	h.mu.Lock()
+	h.jobSeq++
+	id := fmt.Sprintf("job-%d", h.jobSeq)
+	entry := &JobEntry{ID: id, Script: script, Status: "running"}
+	h.jobs[id] = entry
+	h.mu.Unlock()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				entry.Status = "failed"
+				entry.Error = fmt.Sprintf("panic: %v", r)
+				h.logf("lua job %s panic: %v", id, r)
+			}
+		}()
+		h.mu.Lock()
+		s, ok := h.scripts[script]
+		h.mu.Unlock()
+		if !ok {
+			entry.Status = "failed"
+			entry.Error = "script unloaded"
+			return
+		}
+		s.mu.Lock()
+		top := s.L.GetTop()
+		defer func() {
+			s.L.SetTop(top) // 恢复栈，避免污染其他工具/钩子执行
+			s.mu.Unlock()
+		}()
+		if err := s.L.CallByParam(lua.P{Fn: fn, NRet: 1, Protect: true}); err != nil {
+			entry.Status = "failed"
+			entry.Error = err.Error()
+			return
+		}
+		ret := s.L.Get(-1)
+		entry.Status = "completed"
+		entry.Result = luaResultToString(s.L, ret)
+	}()
+	return id, nil
+}
+
+// jobStatus 查询后台任务状态。
+func (h *Host) jobStatus(id string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	e, ok := h.jobs[id]
+	if !ok {
+		return "", fmt.Errorf("lua-host: no such job %q", id)
+	}
+	if e.Status == "completed" {
+		return fmt.Sprintf("completed: %s", e.Result), nil
+	}
+	if e.Status == "failed" {
+		return fmt.Sprintf("failed: %s", e.Error), nil
+	}
+	return "running", nil
+}
+
+// jobList 列出全部后台任务。
+func (h *Host) jobList() (map[string]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]string, len(h.jobs))
+	for id, e := range h.jobs {
+		out[id] = e.Status
+	}
+	return out, nil
 }
 
 // jsonToLua 把 JSON 参数转成 LUA 值。
@@ -282,9 +479,12 @@ func luaValueToAny(L *lua.LState, v lua.LValue) any {
 		return string(t)
 	case lua.LNumber:
 		return float64(t)
+	case lua.LInteger:
+		return int64(t)
 	case lua.LBool:
 		return bool(t)
 	default:
-		return v.String()
+		// 不调 v.String()：LGoFunc.String 内部 fmt 打印指针可能触发栈溢出
+		return "<" + v.Type().String() + ">"
 	}
 }
