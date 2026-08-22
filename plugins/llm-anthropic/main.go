@@ -19,7 +19,7 @@ type AnthropicProvider struct {
 	model  string
 	// thinking 是否启用扩展思考（extended thinking）。默认开启（DeepSeek anthropic 接口
 	// 支持并返回 thinking 块）；ANTHROPIC_THINKING=0 可关闭。
-	thinking      bool
+	thinking       bool
 	thinkingBudget int64
 	// maxTokens 单轮输出上限。为「不应人为限制」起见默认取较大值，仅当显式配置时才收紧；
 	// 流式路径（TUI / -input）以该值为准，非流式 Chat 则在其 >0 时覆盖。

@@ -404,14 +404,14 @@ func fetchUrlImpl(sessionID, url string) (string, error) {
 
 // WebSearchResult 搜索結果
 type WebSearchResult struct {
-	Success bool     `json:"success"`
-	Query   string   `json:"query"`
+	Success bool               `json:"success"`
+	Query   string             `json:"query"`
 	Results []SearchResultItem `json:"results"`
 }
 
 type SearchResultItem struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
 	Description string `json:"description"`
 }
 
@@ -857,7 +857,7 @@ func main() {
 		HandshakeConfig: plugin.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"tool": &ToolMetadataGRPCPlugin{
-				ToolImpl:   toolServer,
+				ToolImpl:     toolServer,
 				MetadataImpl: metadataServer,
 			},
 		},

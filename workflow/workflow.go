@@ -28,8 +28,8 @@ const (
 
 // Meta 脚本身份块（对齐 DSH WorkflowMeta）。
 type Meta struct {
-	Name        string  `json:"name"`          // 短 kebab-case 名称（必填）
-	Description string  `json:"description"`   // 一句话描述（必填）
+	Name        string  `json:"name"`        // 短 kebab-case 名称（必填）
+	Description string  `json:"description"` // 一句话描述（必填）
 	WhenToUse   string  `json:"when_to_use,omitempty"`
 	Phases      []Phase `json:"phases,omitempty"`
 }
@@ -91,8 +91,8 @@ type EventSink interface {
 type StartRequest struct {
 	Meta           Meta
 	Script         string
-	Args           any    // 以全局变量 args 暴露给脚本
-	MaxTotalAgents int    // 本次运行子 agent 总数上限；<=0 不设限
+	Args           any // 以全局变量 args 暴露给脚本
+	MaxTotalAgents int // 本次运行子 agent 总数上限；<=0 不设限
 	Runner         AgentRunner
 	Events         EventSink
 	Timeout        time.Duration // 单次运行上限；<=0 用默认 30 分钟

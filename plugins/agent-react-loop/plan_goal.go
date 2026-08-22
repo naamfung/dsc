@@ -50,23 +50,23 @@ func isLocalTool(name string) bool {
 func planGoalTools() []*proto.Tool {
 	return []*proto.Tool{
 		{
-			Name:        toolExitPlanMode,
-			Description: "Use only in plan mode. Present your COMPLETE plan as markdown, starting with a # heading that names it, then leave plan mode to carry it out.",
+			Name:           toolExitPlanMode,
+			Description:    "Use only in plan mode. Present your COMPLETE plan as markdown, starting with a # heading that names it, then leave plan mode to carry it out.",
 			ParametersJson: `{"type":"object","properties":{"plan":{"type":"string","description":"The complete plan, as markdown, starting with a # heading that names it."}},"required":["plan"],"additionalProperties":false}`,
 		},
 		{
-			Name:        toolGetGoal,
-			Description: "Return the current goal or null, including its id, revision, durable phase, admitted/limit goal rounds, any blocker reason, and the current process-local continuation state.",
+			Name:           toolGetGoal,
+			Description:    "Return the current goal or null, including its id, revision, durable phase, admitted/limit goal rounds, any blocker reason, and the current process-local continuation state.",
 			ParametersJson: `{"type":"object","properties":{},"additionalProperties":false}`,
 		},
 		{
-			Name:        toolCreateGoal,
-			Description: "Create a goal for one long-running completion objective in the current session, inferred from a direct human request in any language; do not create a goal for routine single-turn work.",
+			Name:           toolCreateGoal,
+			Description:    "Create a goal for one long-running completion objective in the current session, inferred from a direct human request in any language; do not create a goal for routine single-turn work.",
 			ParametersJson: `{"type":"object","properties":{"objective":{"type":"string","description":"The long-running completion objective."},"max_goal_rounds":{"type":"integer","description":"Optional cap on total admitted goal rounds; defaults to the deployment value."}},"required":["objective"],"additionalProperties":false}`,
 		},
 		{
-			Name:        toolUpdateGoal,
-			Description: "Update the current goal: edit its objective or max_goal_rounds, pause, resume, complete, or mark blocked (blocked requires blocked_reason). Copy goal_id and revision exactly from get_goal.",
+			Name:           toolUpdateGoal,
+			Description:    "Update the current goal: edit its objective or max_goal_rounds, pause, resume, complete, or mark blocked (blocked requires blocked_reason). Copy goal_id and revision exactly from get_goal.",
 			ParametersJson: `{"type":"object","properties":{"goal_id":{"type":"string"},"revision":{"type":"integer"},"action":{"type":"string","enum":["edit","pause","resume","complete","blocked"]},"objective":{"type":"string"},"max_goal_rounds":{"type":"integer"},"blocked_reason":{"type":"string"}},"required":["goal_id","revision","action"],"additionalProperties":false}`,
 		},
 	}

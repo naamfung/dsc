@@ -45,9 +45,9 @@ func settle(ctx context.Context, req StartRequest, id string) Result {
 	vm := goja.New()
 
 	var (
-		mu           sync.Mutex
-		agentsCount  int32
-		agentSeq     int
+		mu          sync.Mutex
+		agentsCount int32
+		agentSeq    int
 	)
 	emit := func(f func(EventSink)) {
 		if req.Events != nil {

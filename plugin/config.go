@@ -25,9 +25,9 @@ type Config struct {
 	WorkspaceRoot string `json:"workspace_root" yaml:"workspace_root"`
 	// WorkspaceProtectionEnabled 工作空間保護開關，三值：0=缺省（默認啟用）、-1=顯式關閉、+1=顯式啟用。
 	// 缺省值置 0，因此無需指針即可區分「未聲明」與「顯式聲明」。
-	WorkspaceProtectionEnabled int            `json:"workspace_protection_enabled" yaml:"workspace_protection_enabled"`
-	Mode                       string         `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
-	Plugins                    []PluginEntry  `json:"plugins" yaml:"plugins"`
+	WorkspaceProtectionEnabled int           `json:"workspace_protection_enabled" yaml:"workspace_protection_enabled"`
+	Mode                       string        `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
+	Plugins                    []PluginEntry `json:"plugins" yaml:"plugins"`
 	// 可保留舊的 LLM 字段便於過渡，但推薦統一使用 Plugins
 	DefaultLLM string `json:"default_llm" yaml:"default_llm"`
 	// ContextWindow 上下文窗口大小（token 数）；0 表示未配置，
@@ -41,12 +41,12 @@ type Config struct {
 }
 
 type PluginEntry struct {
-	Name       string         `json:"name" yaml:"name"`
-	Type       string         `json:"type" yaml:"type"` // "llm", "agent", "tool", "dsc"
-	BinaryPath string         `json:"binary_path" yaml:"binary_path"`
+	Name       string `json:"name" yaml:"name"`
+	Type       string `json:"type" yaml:"type"` // "llm", "agent", "tool", "dsc"
+	BinaryPath string `json:"binary_path" yaml:"binary_path"`
 	// 可選：是否啟用、參數等
-	Enabled   bool            `json:"enabled" yaml:"enabled" default:"true"`
-	DependsOn *PluginDepends  `json:"depends_on" yaml:"depends_on"`
+	Enabled   bool           `json:"enabled" yaml:"enabled" default:"true"`
+	DependsOn *PluginDepends `json:"depends_on" yaml:"depends_on"`
 	// 可選：傳遞給插件子進程的額外環境變量（合併宿主環境，插件值優先）
 	Env map[string]string `json:"env" yaml:"env"`
 }

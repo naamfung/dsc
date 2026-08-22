@@ -21,9 +21,9 @@ const Language = "Language"
 //
 // In a handler, you can access the chosen language through vodka.Context like the following:
 //
-//     func(c *vodka.Context) error {
-//         language := c.Get(content.Language).(string)
-//     }
+//	func(c *vodka.Context) error {
+//	    language := c.Get(content.Language).(string)
+//	}
 //
 // If you do not specify languages, the negotiator will set the language to be "en-US".
 func LanguageNegotiator(languages ...string) vodka.Handler {

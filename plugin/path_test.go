@@ -50,7 +50,7 @@ func TestResolveRelativeBinaryPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		absPath = "C:\\path\\to\\plugins\\llm-anthropic\\llm-anthropic.exe"
 	}
-	
+
 	// 模擬 main.go 中的邏輯：
 	absBinaryPath := absPath
 	if !filepath.IsAbs(absBinaryPath) {

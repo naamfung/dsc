@@ -23,13 +23,13 @@ func (p *ToolMetadataGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.S
 
 func (p *ToolMetadataGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
 	return &ToolMetadataGRPCClient{
-		ToolClient:   proto.NewToolServiceClient(c),
+		ToolClient:     proto.NewToolServiceClient(c),
 		MetadataClient: metadata.NewPluginMetadataClient(c),
 	}, nil
 }
 
 type ToolMetadataGRPCClient struct {
-	ToolClient   proto.ToolServiceClient
+	ToolClient     proto.ToolServiceClient
 	MetadataClient metadata.PluginMetadataClient
 }
 

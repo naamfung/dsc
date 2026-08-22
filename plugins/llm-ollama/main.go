@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"dsc/plugin"
-	"github.com/ollama/ollama/api"
 	gp "github.com/hashicorp/go-plugin"
+	"github.com/ollama/ollama/api"
 )
 
 func boolPtr(b bool) *bool {
@@ -138,8 +138,8 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, to
 	}, nil
 }
 
-func (p *OllamaProvider) Name(ctx context.Context) string { return "ollama" }
-func (p *OllamaProvider) Version(ctx context.Context) string { return "1.0.0" }
+func (p *OllamaProvider) Name(ctx context.Context) string       { return "ollama" }
+func (p *OllamaProvider) Version(ctx context.Context) string    { return "1.0.0" }
 func (p *OllamaProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口

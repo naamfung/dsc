@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"dsc/plugin"
-	openai "github.com/sashabaranov/go-openai"
 	gp "github.com/hashicorp/go-plugin"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 type OpenAIProvider struct {
@@ -116,8 +116,8 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, to
 	return result, nil
 }
 
-func (p *OpenAIProvider) Name(ctx context.Context) string { return "openai" }
-func (p *OpenAIProvider) Version(ctx context.Context) string { return "1.0.0" }
+func (p *OpenAIProvider) Name(ctx context.Context) string       { return "openai" }
+func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.0.0" }
 func (p *OpenAIProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口

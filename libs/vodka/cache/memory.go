@@ -211,7 +211,7 @@ func (c *MemoryCacher) startGC() {
 			keys = append(keys, key)
 		}
 		c.lock.RUnlock()
-		
+
 		for _, key := range keys {
 			c.checkExpiration(key)
 		}

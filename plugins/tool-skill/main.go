@@ -179,8 +179,10 @@ type ReadSkillTool struct {
 	store *SkillStore
 }
 
-func (t *ReadSkillTool) Name() string        { return "read_skill" }
-func (t *ReadSkillTool) Description() string { return "读取一个技能（skill）的完整正文，按其指示执行；参数 name 为技能名。" }
+func (t *ReadSkillTool) Name() string { return "read_skill" }
+func (t *ReadSkillTool) Description() string {
+	return "读取一个技能（skill）的完整正文，按其指示执行；参数 name 为技能名。"
+}
 func (t *ReadSkillTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"要读取的技能名"}},"required":["name"]}`)
 }
@@ -205,8 +207,8 @@ func (t *ReadSkillTool) Execute(ctx context.Context, args json.RawMessage) (stri
 // ---------- install_skill：按路径自动安装技能包 ----------
 
 const (
-	maxSkillScanDepth = 3   // 平级遍历目录的最大深度
-	maxSkillScanCount = 200 // 一次扫描最多发现的技能数
+	maxSkillScanDepth = 3        // 平级遍历目录的最大深度
+	maxSkillScanCount = 200      // 一次扫描最多发现的技能数
 	maxSkillCopyBytes = 20 << 20 // 单技能包拷贝上限（20MB）
 )
 
@@ -281,10 +283,10 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args json.RawMessage) (s
 	t.store.load()
 
 	res, _ := json.Marshal(map[string]any{
-		"ok":          true,
-		"installed":   installed,
+		"ok":           true,
+		"installed":    installed,
 		"installedDir": t.installedDir,
-		"note":        "已安装为外置技能，重启后出现在 /skills 命令与 system prompt 技能索引中；当前会话可用 read_skill 直接读取，可用 uninstall_skill 卸载。",
+		"note":         "已安装为外置技能，重启后出现在 /skills 命令与 system prompt 技能索引中；当前会话可用 read_skill 直接读取，可用 uninstall_skill 卸载。",
 	})
 	return string(res), nil
 }

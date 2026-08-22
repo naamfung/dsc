@@ -16,15 +16,15 @@ import (
 // A log function can be provided to log the panic call stack information. If the log function is nil,
 // no message will be logged.
 //
-//     import (
-//         "log"
-//         "dsc/libs/vodka"
-//         "dsc/libs/vodka/fault"
-//     )
+//	import (
+//	    "log"
+//	    "dsc/libs/vodka"
+//	    "dsc/libs/vodka/fault"
+//	)
 //
-//     r := vodka.New()
-//     r.Use(fault.ErrorHandler(log.Printf))
-//     r.Use(fault.PanicHandler(log.Printf))
+//	r := vodka.New()
+//	r.Use(fault.ErrorHandler(log.Printf))
+//	r.Use(fault.PanicHandler(log.Printf))
 func PanicHandler(logf LogFunc) vodka.Handler {
 	return func(c *vodka.Context) (err error) {
 		defer func() {

@@ -17,15 +17,15 @@ import (
 // An optional error conversion function can also be provided to convert an error into a normalized one
 // before sending it to the response.
 //
-//     import (
-//         "log"
-//         "dsc/libs/vodka"
-//         "dsc/libs/vodka/fault"
-//     )
+//	import (
+//	    "log"
+//	    "dsc/libs/vodka"
+//	    "dsc/libs/vodka/fault"
+//	)
 //
-//     r := vodka.New()
-//     r.Use(fault.ErrorHandler(log.Printf))
-//     r.Use(fault.PanicHandler(log.Printf))
+//	r := vodka.New()
+//	r.Use(fault.ErrorHandler(log.Printf))
+//	r.Use(fault.PanicHandler(log.Printf))
 func ErrorHandler(logf LogFunc, errorf ...ConvertErrorFunc) vodka.Handler {
 	return func(c *vodka.Context) error {
 		err := c.Next()

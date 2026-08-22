@@ -36,16 +36,16 @@ type Message struct {
 
 // Tool 工具结构体
 type Tool struct {
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	ParametersJSON   string `json:"parameters_json"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	ParametersJSON string `json:"parameters_json"`
 }
 
 // ChatResponse 聊天响应结构体
 type ChatResponse struct {
-	Content      string      `json:"content"`
-	FinishReason string      `json:"finish_reason"`
-	ToolCalls    []ToolCall  `json:"tool_calls"`
+	Content      string     `json:"content"`
+	FinishReason string     `json:"finish_reason"`
+	ToolCalls    []ToolCall `json:"tool_calls"`
 }
 
 // ChatStreamResponse 是 LLM 流式响应中的一帧增量内容
@@ -54,7 +54,7 @@ type ChatStreamResponse struct {
 	FinishReason string     `json:"finish_reason"` // 非空表示该轮结束
 	ToolCalls    []ToolCall `json:"tool_calls"`
 	Error        string     `json:"error,omitempty"`
-	Usage        *Usage     `json:"usage,omitempty"` // 本轮 token 用量（finish_reason 帧携带）
+	Usage        *Usage     `json:"usage,omitempty"`     // 本轮 token 用量（finish_reason 帧携带）
 	Reasoning    string     `json:"reasoning,omitempty"` // 思考过程增量文本（DeepSeek reasoning_content / Anthropic thinking 等）
 }
 

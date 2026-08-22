@@ -1,9 +1,9 @@
 package bauth
 
 import (
-	"encoding/base64"
 	"dsc/libs/vodka"
 	"dsc/libs/vodka/skipper"
+	"encoding/base64"
 )
 
 type (

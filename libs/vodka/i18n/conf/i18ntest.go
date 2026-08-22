@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"dsc/libs/vodka"
 	"dsc/libs/vodka/i18n"
+	"fmt"
 )
 
 func main() {

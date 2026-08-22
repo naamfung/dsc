@@ -30,26 +30,26 @@ type BasicAuthFunc func(c *vodka.Context, username, password string) (Identity, 
 // Basic returns a vodka.Handler that performs HTTP basic authentication.
 // It can be used like the following:
 //
-//   import (
-//     "errors"
-//     "fmt"
-//     "net/http"
-//     "dsc/libs/vodka"
-//     "dsc/libs/vodka/auth"
-//   )
-//   func main() {
-//     r := vodka.New()
-//     r.Use(auth.Basic(func(c *vodka.Context, username, password string) (auth.Identity, error) {
-//       if username == "demo" && password == "foo" {
-//         return auth.Identity(username), nil
-//       }
-//       return nil, errors.New("invalid credential")
-//     }))
-//     r.Get("/demo", func(c *vodka.Context) error {
-//       fmt.Fprintf(res, "Hello, %v", c.Get(auth.User))
-//       return nil
-//     })
-//   }
+//	import (
+//	  "errors"
+//	  "fmt"
+//	  "net/http"
+//	  "dsc/libs/vodka"
+//	  "dsc/libs/vodka/auth"
+//	)
+//	func main() {
+//	  r := vodka.New()
+//	  r.Use(auth.Basic(func(c *vodka.Context, username, password string) (auth.Identity, error) {
+//	    if username == "demo" && password == "foo" {
+//	      return auth.Identity(username), nil
+//	    }
+//	    return nil, errors.New("invalid credential")
+//	  }))
+//	  r.Get("/demo", func(c *vodka.Context) error {
+//	    fmt.Fprintf(res, "Hello, %v", c.Get(auth.User))
+//	    return nil
+//	  })
+//	}
 //
 // By default, the auth realm is named as "API". You may customize it by specifying the realm parameter.
 //
@@ -90,26 +90,26 @@ type TokenAuthFunc func(c *vodka.Context, token string) (Identity, error)
 // Bearer returns a vodka.Handler that performs HTTP authentication based on bearer token.
 // It can be used like the following:
 //
-//   import (
-//     "errors"
-//     "fmt"
-//     "net/http"
-//     "dsc/libs/vodka"
-//     "dsc/libs/vodka/auth"
-//   )
-//   func main() {
-//     r := vodka.New()
-//     r.Use(auth.Bearer(func(c *vodka.Context, token string) (auth.Identity, error) {
-//       if token == "secret" {
-//         return auth.Identity("demo"), nil
-//       }
-//       return nil, errors.New("invalid credential")
-//     }))
-//     r.Get("/demo", func(c *vodka.Context) error {
-//       fmt.Fprintf(res, "Hello, %v", c.Get(auth.User))
-//       return nil
-//     })
-//   }
+//	import (
+//	  "errors"
+//	  "fmt"
+//	  "net/http"
+//	  "dsc/libs/vodka"
+//	  "dsc/libs/vodka/auth"
+//	)
+//	func main() {
+//	  r := vodka.New()
+//	  r.Use(auth.Bearer(func(c *vodka.Context, token string) (auth.Identity, error) {
+//	    if token == "secret" {
+//	      return auth.Identity("demo"), nil
+//	    }
+//	    return nil, errors.New("invalid credential")
+//	  }))
+//	  r.Get("/demo", func(c *vodka.Context) error {
+//	    fmt.Fprintf(res, "Hello, %v", c.Get(auth.User))
+//	    return nil
+//	  })
+//	}
 //
 // By default, the auth realm is named as "API". You may customize it by specifying the realm parameter.
 //
@@ -147,26 +147,26 @@ var TokenName = "access-token"
 // Query returns a vodka.Handler that performs authentication based on a token passed via a query parameter.
 // It can be used like the following:
 //
-//   import (
-//     "errors"
-//     "fmt"
-//     "net/http"
-//     "dsc/libs/vodka"
-//     "dsc/libs/vodka/auth"
-//   )
-//   func main() {
-//     r := vodka.New()
-//     r.Use(auth.Query(func(token string) (auth.Identity, error) {
-//       if token == "secret" {
-//         return auth.Identity("demo"), nil
-//       }
-//       return nil, errors.New("invalid credential")
-//     }))
-//     r.Get("/demo", func(c *vodka.Context) error {
-//       fmt.Fprintf(res, "Hello, %v", c.Get(auth.User))
-//       return nil
-//     })
-//   }
+//	import (
+//	  "errors"
+//	  "fmt"
+//	  "net/http"
+//	  "dsc/libs/vodka"
+//	  "dsc/libs/vodka/auth"
+//	)
+//	func main() {
+//	  r := vodka.New()
+//	  r.Use(auth.Query(func(token string) (auth.Identity, error) {
+//	    if token == "secret" {
+//	      return auth.Identity("demo"), nil
+//	    }
+//	    return nil, errors.New("invalid credential")
+//	  }))
+//	  r.Get("/demo", func(c *vodka.Context) error {
+//	    fmt.Fprintf(res, "Hello, %v", c.Get(auth.User))
+//	    return nil
+//	  })
+//	}
 //
 // When authentication fails, an http.StatusUnauthorized error will be returned.
 func Query(fn TokenAuthFunc, tokenName ...string) vodka.Handler {
@@ -188,7 +188,7 @@ func Query(fn TokenAuthFunc, tokenName ...string) vodka.Handler {
 // JWTTokenHandler handles the parsed JWT token.
 type JWTTokenHandler func(*vodka.Context, *jwt.Token) error
 
-//Get a dynamic VerificationKey
+// Get a dynamic VerificationKey
 type VerificationKeyHandler func(*vodka.Context) string
 
 // JWTOptions represents the options that can be used with the JWT handler.
@@ -218,38 +218,38 @@ func DefaultJWTTokenHandler(c *vodka.Context, token *jwt.Token) error {
 //
 // JWT can be used like the following:
 //
-//   import (
-//     "errors"
-//     "fmt"
-//     "net/http"
-//     "github.com/dgrijalva/jwt-go"
-//     "dsc/libs/vodka"
-//     "dsc/libs/vodka/auth"
-//   )
-//   func main() {
-//     signingKey := "secret-key"
-//     r := vodka.New()
+//	import (
+//	  "errors"
+//	  "fmt"
+//	  "net/http"
+//	  "github.com/dgrijalva/jwt-go"
+//	  "dsc/libs/vodka"
+//	  "dsc/libs/vodka/auth"
+//	)
+//	func main() {
+//	  signingKey := "secret-key"
+//	  r := vodka.New()
 //
-//     r.Get("/login", func(c *vodka.Context) error {
-//       id, err := authenticate(c)
-//       if err != nil {
-//         return err
-//       }
-//       token, err := auth.NewJWT(jwt.MapClaims{
-//         "id": id
-//       }, signingKey)
-//       if err != nil {
-//         return err
-//       }
-//       return c.Write(token)
-//     })
+//	  r.Get("/login", func(c *vodka.Context) error {
+//	    id, err := authenticate(c)
+//	    if err != nil {
+//	      return err
+//	    }
+//	    token, err := auth.NewJWT(jwt.MapClaims{
+//	      "id": id
+//	    }, signingKey)
+//	    if err != nil {
+//	      return err
+//	    }
+//	    return c.Write(token)
+//	  })
 //
-//     r.Use(auth.JWT(signingKey))
-//     r.Get("/restricted", func(c *vodka.Context) error {
-//       claims := c.Get("JWT").(*jwt.Token).Claims.(jwt.MapClaims)
-//       return c.Write(fmt.Sprint("Welcome, %v!", claims["id"]))
-//     })
-//   }
+//	  r.Use(auth.JWT(signingKey))
+//	  r.Get("/restricted", func(c *vodka.Context) error {
+//	    claims := c.Get("JWT").(*jwt.Token).Claims.(jwt.MapClaims)
+//	    return c.Write(fmt.Sprint("Welcome, %v!", claims["id"]))
+//	  })
+//	}
 func JWT(verificationKey string, options ...JWTOptions) vodka.Handler {
 	var opt JWTOptions
 	if len(options) > 0 {

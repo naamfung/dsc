@@ -87,8 +87,8 @@ func main() {
 		HandshakeConfig: plugin.Handshake,
 		Plugins: map[string]goplugin.Plugin{
 			"fs_observation_policy": &FsObservationPolicyGRPCPlugin{
-				PolicyImpl:     policyServer,
-				MetadataImpl:   metadataServer,
+				PolicyImpl:   policyServer,
+				MetadataImpl: metadataServer,
 			},
 		},
 		GRPCServer: goplugin.DefaultGRPCServer,

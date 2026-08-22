@@ -77,12 +77,12 @@ type ReactLoopAgent struct {
 	// 缺省 DSH 示例文案）；planActive 为当前会话的 plan 模式（每次 Run 从事件日志折叠）。
 	// goalActivation 是进程本地续行启用状态（绝不持久化：恢复/fork 后停用，需显式 resume
 	// 重新启用）；goalRounds 为已准入 Goal Round 数（v1 恒 0，jobs/workflow 落地后推进）。
-	planSection                 string
-	defaultMaxGoalRounds        int
+	planSection                   string
+	defaultMaxGoalRounds          int
 	blockedAfterConsecutiveRounds int
-	planActive                  bool
-	goalActivation              bool
-	goalRounds                  int
+	planActive                    bool
+	goalActivation                bool
+	goalRounds                    int
 }
 
 func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error {

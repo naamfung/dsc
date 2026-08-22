@@ -11,8 +11,8 @@ import (
 
 type FsObservationPolicyGRPCPlugin struct {
 	plugin.NetRPCUnsupportedPlugin
-	PolicyImpl     proto.FsObservationPolicyServiceServer
-	MetadataImpl   metadata.PluginMetadataServer
+	PolicyImpl   proto.FsObservationPolicyServiceServer
+	MetadataImpl metadata.PluginMetadataServer
 }
 
 func (p *FsObservationPolicyGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {

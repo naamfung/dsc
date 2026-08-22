@@ -1,4 +1,4 @@
-﻿// Package tui 提供基于 Bubble Tea 的终端聊天界面。
+// Package tui 提供基于 Bubble Tea 的终端聊天界面。
 // 该界面运行在宿主进程中（不通过 go-plugin 子进程），
 // 因为 TUI 需要直接操作终端 raw mode 和 stdout，而插件子进程的 stdout 会被 go-plugin 捕获。
 package tui

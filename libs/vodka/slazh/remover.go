@@ -15,14 +15,14 @@ import (
 // be used for redirecting GET requests. For other requests, the status code will be http.StatusTemporaryRedirect (307).
 // If the original URL has no trailing slazh, the handler will do nothing. For example,
 //
-//     import (
-//         "net/http"
-//         "dsc/libs/vodka"
-//         "dsc/libs/vodka/slazh"
-//     )
+//	import (
+//	    "net/http"
+//	    "dsc/libs/vodka"
+//	    "dsc/libs/vodka/slazh"
+//	)
 //
-//     r := vodka.New()
-//     r.Use(slazh.Remover(http.StatusMovedPermanently))
+//	r := vodka.New()
+//	r.Use(slazh.Remover(http.StatusMovedPermanently))
 //
 // Note that Remover relies on HTTP redirection to remove the trailing slazhes.
 // If you do not want redirection, please set `Router.IgnoreTrailingslazh` to be true without using Remover.
