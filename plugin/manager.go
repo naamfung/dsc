@@ -1824,7 +1824,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *goplugin.GRPCB
 	if m.config.ExecDir != "" {
 		cmd.Dir = m.config.ExecDir
 	}
-	cmd.Env = buildEnv(entry.Env)
+	cmd.Env = m.pluginEnv(entry)
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]goplugin.Plugin{
@@ -1999,6 +1999,20 @@ func buildEnv(custom map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// pluginEnv 计算插件进程 env：宿主环境 + 插件自定义 env + 互通服务注入。
+// 注入 DSC_LLM_SERVICE_ID（聚合 LLM 服务 ID）：工具/策略插件经 broker.Dial
+// 即可复用宿主三个 LLM 插件（llm-openai/anthropic/ollama），无需自带 LLM。
+func (m *Manager) pluginEnv(entry PluginEntry) []string {
+	env := make(map[string]string, len(entry.Env)+1)
+	for k, v := range entry.Env {
+		env[k] = v
+	}
+	if m.agentLLMServiceID != 0 {
+		env["DSC_LLM_SERVICE_ID"] = strconv.FormatUint(uint64(m.agentLLMServiceID), 10)
+	}
+	return buildEnv(env)
 }
 
 // LoadToolsAndPoliciesFromConfig 從配置加載 tool 和 policy 插件

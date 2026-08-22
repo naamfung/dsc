@@ -167,7 +167,10 @@ func TestJobToolsOwnerIsolation(t *testing.T) {
 			return jobs.JobHooks{Done: done}, nil
 		},
 	})
-	// owner 可读
+	// owner 可读（先等落定，避免立即完成竞态）
+	if _, err := m.jobs.Wait(id, 2*time.Second, "sess-a"); err != nil {
+		t.Fatalf("owner wait: %v", err)
+	}
 	out, err := get("job_output").Execute(WithCaller(context.Background(), "sess-a"), []byte(`{"job_id":"`+id+`"}`))
 	if err != nil || !strings.Contains(out, "secret") {
 		t.Fatalf("owner read = %q, %v", out, err)
