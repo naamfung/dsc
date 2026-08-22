@@ -27,9 +27,22 @@ type Services struct {
 	LLM    *llmclient.Client
 	Tool   *toolclient.Client
 	Notify *notify.Notifier
+	Store  *Store        // 插件进程内 KV（脚本间共享）
+	Hook   *HookRegistry // 脚本注册的宿主钩子
 	// Register 脚本注册工具的回调（由 host 提供）：script 为脚本名（去重命名空间）。
 	Register func(script, name, desc, paramsJSON string, fn *lua.LFunction) error
+	// HookRun 执行脚本钩子（由 host 提供，含 VM 串行化与回调）。
+	HookRun  HookRunner
+	// SpawnJob 启动脚本后台任务（由 host 提供，含 VM 串行化）。
+	SpawnJob func(script string, fn *lua.LFunction) (string, error)
+	// JobStatus 查询后台任务状态（由 host 提供）。
+	JobStatus func(id string) (string, error)
+	// JobList 列出后台任务（由 host 提供）。
+	JobList func() (map[string]string, error)
 }
+
+// HookRunner 执行某脚本钩子集合的回调（由 host 实现，保证 VM 串行）。
+type HookRunner func(kind string, handlers []HookHandler, args ...any) []any
 
 // Install 把 dsc.* 内建注入 LState。
 func Install(L *lua.LState, s *Services) {
@@ -48,6 +61,24 @@ func Install(L *lua.LState, s *Services) {
 	notifyT := L.NewTable()
 	L.SetField(notifyT, "emit", L.NewFunction(dscNotifyEmit(s)))
 	L.SetField(dsc, "notify", notifyT)
+
+	storeT := L.NewTable()
+	L.SetField(storeT, "get", L.NewFunction(dscStoreGet(s)))
+	L.SetField(storeT, "set", L.NewFunction(dscStoreSet(s)))
+	L.SetField(storeT, "delete", L.NewFunction(dscStoreDelete(s)))
+	L.SetField(dsc, "store", storeT)
+
+	hookT := L.NewTable()
+	L.SetField(hookT, "before_tool", L.NewFunction(dscHookBeforeTool(s)))
+	L.SetField(hookT, "after_tool", L.NewFunction(dscHookAfterTool(s)))
+	L.SetField(hookT, "on_event", L.NewFunction(dscHookOnEvent(s)))
+	L.SetField(dsc, "hook", hookT)
+
+	jobT := L.NewTable()
+	L.SetField(jobT, "spawn", L.NewFunction(dscJobSpawn(s)))
+	L.SetField(jobT, "status", L.NewFunction(dscJobStatus(s)))
+	L.SetField(jobT, "list", L.NewFunction(dscJobList(s)))
+	L.SetField(dsc, "job", jobT)
 
 	L.SetField(dsc, "register_tool", L.NewFunction(dscRegisterTool(s)))
 }
@@ -197,6 +228,160 @@ func dscRegisterTool(s *Services) lua.LGFunction {
 	}
 }
 
+// ==================== dsc.store（进程内 KV，脚本间共享） ====================
+
+func dscStoreGet(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.Store == nil {
+			L.RaiseError("dsc.store.get: store not available")
+		}
+		key := L.CheckString(1)
+		v, ok := s.Store.Get(key)
+		if !ok {
+			L.Push(lua.LNil)
+			return 1
+		}
+		L.Push(anyToLuaAny(L, v))
+		return 1
+	}
+}
+
+func dscStoreSet(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.Store == nil {
+			L.RaiseError("dsc.store.set: store not available")
+		}
+		key := L.CheckString(1)
+		var v any
+		if L.GetTop() >= 2 {
+			v = luaToAny(L.Get(2))
+		}
+		s.Store.Set(key, v)
+		return 0
+	}
+}
+
+func dscStoreDelete(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.Store == nil {
+			L.RaiseError("dsc.store.delete: store not available")
+		}
+		s.Store.Delete(L.CheckString(1))
+		return 0
+	}
+}
+
+// anyToLuaAny 把 Go any 转回 LUA 值（供 store.get 使用；与 host.jsonToLua 同构）。
+func anyToLuaAny(L *lua.LState, v any) lua.LValue {
+	switch t := v.(type) {
+	case nil:
+		return lua.LNil
+	case string:
+		return lua.LString(t)
+	case float64:
+		return lua.LNumber(t)
+	case int64:
+		return lua.LInteger(t)
+	case bool:
+		return lua.LBool(t)
+	case []any:
+		tbl := L.NewTable()
+		for i, item := range t {
+			L.RawSetInt(tbl, i+1, anyToLuaAny(L, item))
+		}
+		return tbl
+	case map[string]any:
+		tbl := L.NewTable()
+		for k, item := range t {
+			L.SetField(tbl, k, anyToLuaAny(L, item))
+		}
+		return tbl
+	default:
+		return lua.LString(fmt.Sprintf("%v", t))
+	}
+}
+
+// ==================== dsc.hook（脚本注册宿主钩子） ====================
+
+func dscHookBeforeTool(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.Hook == nil {
+			L.RaiseError("dsc.hook.before_tool: hooks not available")
+		}
+		s.Hook.AddBefore(HookHandler{Script: scriptName(L), Fn: L.CheckFunction(1)})
+		return 0
+	}
+}
+
+func dscHookAfterTool(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.Hook == nil {
+			L.RaiseError("dsc.hook.after_tool: hooks not available")
+		}
+		s.Hook.AddAfter(HookHandler{Script: scriptName(L), Fn: L.CheckFunction(1)})
+		return 0
+	}
+}
+
+func dscHookOnEvent(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.Hook == nil {
+			L.RaiseError("dsc.hook.on_event: hooks not available")
+		}
+		s.Hook.AddOnEvent(HookHandler{Script: scriptName(L), Fn: L.CheckFunction(1)})
+		return 0
+	}
+}
+
+// ==================== dsc.job（脚本后台任务） ====================
+
+func dscJobSpawn(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.SpawnJob == nil {
+			L.RaiseError("dsc.job.spawn: host not ready")
+		}
+		fn := L.CheckFunction(1)
+		id, err := s.SpawnJob(scriptName(L), fn)
+		if err != nil {
+			L.RaiseError("dsc.job.spawn failed: %v", err)
+		}
+		L.Push(lua.LString(id))
+		return 1
+	}
+}
+
+func dscJobStatus(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.JobStatus == nil {
+			L.RaiseError("dsc.job.status: host not ready")
+		}
+		st, err := s.JobStatus(L.CheckString(1))
+		if err != nil {
+			L.RaiseError("dsc.job.status failed: %v", err)
+		}
+		L.Push(lua.LString(st))
+		return 1
+	}
+}
+
+func dscJobList(s *Services) lua.LGFunction {
+	return func(L *lua.LState) int {
+		if s == nil || s.JobList == nil {
+			L.RaiseError("dsc.job.list: host not ready")
+		}
+		jobs, err := s.JobList()
+		if err != nil {
+			L.RaiseError("dsc.job.list failed: %v", err)
+		}
+		tbl := L.NewTable()
+		for id, st := range jobs {
+			L.SetField(tbl, id, lua.LString(st))
+		}
+		L.Push(tbl)
+		return 1
+	}
+}
+
 // ==================== helpers ====================
 
 // scriptName 从 registry 取当前脚本名（由 host 在加载脚本前注入）。
@@ -265,13 +450,16 @@ func luaToAny(v lua.LValue) any {
 		return string(t)
 	case lua.LNumber:
 		return float64(t)
+	case lua.LInteger:
+		return int64(t)
 	case lua.LBool:
 		return bool(t)
 	case *lua.LFunction:
-		return fmt.Sprintf("<function %s>", t.String())
+		return fmt.Sprintf("<function>")
 	case nil:
 		return nil
 	default:
-		return t.String()
+		// 不调 t.String()：LGoFunc.String 内部 fmt 打印指针可能触发栈溢出
+		return "<" + v.Type().String() + ">"
 	}
 }
