@@ -21,12 +21,14 @@ func (t *workflowTool) Description() string {
 		"subagents with phases and structured results. Use ONLY when the user explicitly asks " +
 		"for a workflow or for large multi-agent orchestration; for one or two delegations, " +
 		"prefer the subagent tool.\n" +
-		"Script conventions: the script is plain JavaScript, executed synchronously. " +
+		"Script conventions: the script is async JavaScript (await supported). " +
 		"Globals: args (the JSON input object passed as `args`); agent(prompt, options?) runs " +
-		"one subagent synchronously and returns its result text, or null if the subagent failed " +
-		"(options may include `label`); phase(title) and log(msg) record progress (phase titles " +
-		"must match the declared meta.phases). The script ends with `return <json-value>`, which " +
-		"becomes the workflow result."
+		"one subagent and returns a Promise resolving to its result text, or null if the subagent " +
+		"failed (await it; options may include `label`); parallel(thunks) runs thunks concurrently " +
+		"under the configured agent concurrency limit and resolves to an array of their results in " +
+		"order (each thunk is typically () => agent(prompt)); phase(title) and log(msg) record " +
+		"progress (phase titles must match the declared meta.phases). The script ends with " +
+		"`return <json-value>`, which becomes the workflow result."
 }
 
 func (t *workflowTool) ParametersSchema() json.RawMessage {
