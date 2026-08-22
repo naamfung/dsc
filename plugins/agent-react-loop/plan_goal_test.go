@@ -170,3 +170,36 @@ func TestLocalToolRouting(t *testing.T) {
 		}
 	}
 }
+
+// TestGoalRoundDriver 校验续行驱动判定与 goal_round 提示词。
+func TestGoalRoundDriver(t *testing.T) {
+	active := &session.GoalSnapshot{ID: session.GoalID, Revision: 1, Objective: "build x", Phase: session.GoalPhaseActive, MaxGoalRounds: 3}
+
+	// active + armed + 未耗尽 → 续行
+	if !goalRoundDriver(active, true, 0) {
+		t.Fatal("active+armed with budget should continue")
+	}
+	// 预算耗尽 → 停止
+	if goalRoundDriver(active, true, 3) {
+		t.Fatal("exhausted budget should stop")
+	}
+	// 未 armed（disarmed）→ 停止
+	if goalRoundDriver(active, false, 0) {
+		t.Fatal("disarmed goal should stop")
+	}
+	// 非 active phase → 停止
+	if goalRoundDriver(&session.GoalSnapshot{ID: session.GoalID, Revision: 1, Objective: "x", Phase: session.GoalPhasePaused, MaxGoalRounds: 3}, true, 0) {
+		t.Fatal("paused goal should stop")
+	}
+	// 无目标 → 停止
+	if goalRoundDriver(nil, true, 0) {
+		t.Fatal("no goal should stop")
+	}
+
+	// 提示词含 JSON 引用的目标与轮次编号
+	p := goalRoundPrompt(active, 2)
+	if !strings.Contains(p, "<goal_round>") || !strings.Contains(p, `"build x"`) ||
+		!strings.Contains(p, "Round: 2/3") || !strings.Contains(p, "</goal_round>") {
+		t.Fatalf("prompt = %q", p)
+	}
+}
