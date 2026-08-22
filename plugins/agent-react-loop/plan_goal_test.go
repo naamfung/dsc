@@ -7,6 +7,7 @@ import (
 
 	"dsc/proto"
 	"dsc/session"
+	"google.golang.org/grpc"
 )
 
 // newTestAgent 创建带临时 store 与已加载 default 会话的测试 agent。
@@ -125,36 +126,80 @@ func TestGoalLifecycle(t *testing.T) {
 	}
 }
 
+// fakeUQClient 评审通道假客户端：返回预设回答。
+type fakeUQClient struct {
+	proto.UserQuestionsServiceClient // 嵌入接口以满足 mustEmbed（Ask 被覆盖）
+	resp *proto.AskResponse
+	err  error
+}
+
+func (f *fakeUQClient) Ask(_ context.Context, _ *proto.AskRequest, _ ...grpc.CallOption) (*proto.AskResponse, error) {
+	return f.resp, f.err
+}
+
 func TestExitPlanMode(t *testing.T) {
-	a := newTestAgent(t)
+	review := func(resp *proto.AskResponse) *ReactLoopAgent {
+		a := newTestAgent(t)
+		a.uqServiceID = 1 // 声明有通道，ensureUserQuestionsClient 直接返回预设 uqClient
+		a.uqClient = &fakeUQClient{resp: resp}
+		if err := a.SetPlanMode(context.Background(), true); err != nil {
+			t.Fatalf("set plan mode: %v", err)
+		}
+		return a
+	}
+	plan := `{"plan":"# My Plan\n\n1. explore\n2. implement"}`
 
 	// plan 模式外调用被拒绝
-	resp, _ := callTool(t, a, toolExitPlanMode, `{"plan":"# My Plan\n\nstep 1"}`)
+	a := newTestAgent(t)
+	resp, _ := callTool(t, a, toolExitPlanMode, plan)
 	if resp.Error == "" {
 		t.Fatal("exit_plan_mode outside plan mode should fail")
 	}
-
-	// 进入 plan 模式（RPC 语义：追加 plan/mode 事件并落盘）
+	// 无评审通道 → 报错（headless 场景）
+	a = newTestAgent(t)
 	if err := a.SetPlanMode(context.Background(), true); err != nil {
 		t.Fatalf("set plan mode: %v", err)
 	}
-	if !session.FoldPlanMode(a.sess.Events()) {
-		t.Fatal("plan mode should be active after SetPlanMode")
+	resp, _ = callTool(t, a, toolExitPlanMode, plan)
+	if resp.Error == "" || !strings.Contains(resp.Error, "no user-questions channel") {
+		t.Fatalf("no-channel should fail with guidance, got %q", resp.Error)
 	}
-
 	// 计划必须以 # 标题开头
+	a = review(&proto.AskResponse{})
 	resp, _ = callTool(t, a, toolExitPlanMode, `{"plan":"no heading"}`)
 	if resp.Error == "" {
 		t.Fatal("plan without # heading should fail")
 	}
 
-	// 合法计划 → approved，退出 plan 模式
-	resp, concluded := callTool(t, a, toolExitPlanMode, `{"plan":"# My Plan\n\n1. explore\n2. implement"}`)
+	// 批准 → approved，退出 plan 模式
+	a = review(&proto.AskResponse{Answers: []*proto.AskAnswer{{Id: reviewID, Selected: []string{approveLabel}}}})
+	resp, concluded := callTool(t, a, toolExitPlanMode, plan)
 	if resp.Error != "" || concluded || resp.Content != `{"approved":true}` {
-		t.Fatalf("exit_plan_mode = %+v (concluded=%v)", resp, concluded)
+		t.Fatalf("approve = %+v (concluded=%v)", resp, concluded)
 	}
 	if session.FoldPlanMode(a.sess.Events()) {
-		t.Fatal("plan mode should be inactive after exit_plan_mode")
+		t.Fatal("plan mode should be inactive after approval")
+	}
+
+	// Keep planning → 留在 plan 模式并带反馈
+	a = review(&proto.AskResponse{Answers: []*proto.AskAnswer{{Id: reviewID, Selected: []string{keepPlanningLabel}, Custom: "需要更多细节"}}})
+	resp, _ = callTool(t, a, toolExitPlanMode, plan)
+	if resp.Error == "" || !strings.Contains(resp.Error, keepPlanningMessage) ||
+		!strings.Contains(resp.Error, "需要更多细节") {
+		t.Fatalf("keep planning = %q", resp.Error)
+	}
+	if !session.FoldPlanMode(a.sess.Events()) {
+		t.Fatal("plan mode should stay active after keep planning")
+	}
+
+	// 用户放弃评审（ASK_ABORTED）→ 停下等待消息，plan 模式保持
+	a = review(&proto.AskResponse{Error: "ASK_ABORTED", Message: "dismissed"})
+	resp, _ = callTool(t, a, toolExitPlanMode, plan)
+	if resp.Error == "" || !strings.Contains(resp.Error, "dismissed") {
+		t.Fatalf("dismissed = %q", resp.Error)
+	}
+	if !session.FoldPlanMode(a.sess.Events()) {
+		t.Fatal("plan mode should stay active after dismiss")
 	}
 }
 
