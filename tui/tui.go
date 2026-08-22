@@ -233,6 +233,10 @@ type Model struct {
 
 	// 当前会话 id（初始 default；/session 切换或新建时更新，供 /export 使用）
 	currentSessionID string
+
+	// 用户评审通道：program 供 askProvider 把问题送进事件循环；question 为待回答的问题
+	program  *tea.Program
+	question *pendingQuestion
 }
 
 // New 创建一个聊天界面模型
@@ -461,7 +465,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case questionMsg:
+		if msg.request == nil {
+			m.question = nil
+		} else {
+			m.question = &pendingQuestion{request: msg.request, answer: msg.answer, err: msg.err}
+		}
+		m.render()
+		return m, nil
+
 	case tea.KeyPressMsg:
+		// 问题覆盖层激活时，按键只用于选择/确认/放弃
+		if m.question != nil {
+			return m.handleQuestionKey(msg)
+		}
 		if m.thinking || m.streaming {
 			// 响应/流式输出期间不处理输入：Ctrl+Q 退出；Ctrl+C 中断当前操作（参考 rex）
 			switch msg.String() {
@@ -1912,6 +1929,9 @@ func (m *Model) View() tea.View {
 	var parts []string
 	parts = append(parts, title)
 	parts = append(parts, m.viewport.View())
+	if q := m.questionView(); q != "" {
+		parts = append(parts, q)
+	}
 	if m.thinking || m.streaming {
 		parts = append(parts, dimSty.Render("  "+m.spinner.View()+" 思考中..."))
 	}
@@ -1938,6 +1958,14 @@ func (m *Model) viewOf(content string) tea.View {
 func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) error {
 	m := New(agent, manager, ctx, modelName, mode, contextWindow)
 	p := tea.NewProgram(m)
+	m.program = p
+	// 注册用户评审 provider：agent 侧 exit_plan_mode 等经宿主向 TUI 提问
+	if manager != nil {
+		if err := manager.RegisterUserQuestionProvider(m.askProvider); err != nil {
+			// 已有 provider（重复注册）仅记录，不阻塞启动
+			_ = err
+		}
+	}
 	_, err := p.Run()
 	return err
 }
