@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"dsc/jobs"
 	"dsc/plugin"
 )
 
@@ -73,6 +74,39 @@ func TestPlanCommandToggle(t *testing.T) {
 	}
 	if len(ag.planCalls) != 2 || ag.planCalls[0] != true || ag.planCalls[1] != false {
 		t.Fatalf("planCalls = %v, want [true false]", ag.planCalls)
+	}
+}
+
+// TestJobCommandAddAndList 校验 /job add 添加任务、/jobs 列出任务。
+func TestJobCommandAddAndList(t *testing.T) {
+	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	if err := mgr.StartJobs(); err != nil {
+		t.Fatalf("start jobs: %v", err)
+	}
+	defer mgr.StopJobs()
+	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
+
+	handled, _ := m.runSlashCommand("/job add 0 8 * * * 写今日日报")
+	if !handled {
+		t.Fatal("/job add should be handled")
+	}
+	list := mgr.ListJobs()
+	if len(list) != 1 || list[0].Cron != "0 8 * * *" || list[0].Prompt != "写今日日报" || !list[0].Enabled {
+		t.Fatalf("jobs = %+v", list)
+	}
+
+	handled, _ = m.runSlashCommand("/jobs")
+	if !handled {
+		t.Fatal("/jobs should be handled")
+	}
+	full := strings.Join(m.lines, "\n")
+	if !strings.Contains(full, list[0].ID) {
+		t.Fatalf("should list job, got: %q", full)
+	}
+
+	// 无效 cron 应报错且不落盘
+	if err := mgr.AddJob(&jobs.Job{Name: "bad", Cron: "nope", Prompt: "x"}); err == nil {
+		t.Fatal("invalid cron should fail")
 	}
 }
 
