@@ -147,6 +147,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// 後續可註冊更多工具
 	// 内建 subagent 工具（宿主侧子代理，委派任务给独立小循环）
 	_ = m.toolRegistry.Register(&subagentTool{m: m})
+	// 内建 workflow 工具（宿主侧 JS 编排脚本，可扇出 subagent）
+	_ = m.toolRegistry.Register(&workflowTool{m: m})
 	// spill：超长工具结果外置（阈值 4000 字符，目录可经 DSC_SPILL_DIR 配置）；
 	// post-execute 策略 + read_spill 取回工具
 	spillDir := os.Getenv("DSC_SPILL_DIR")
