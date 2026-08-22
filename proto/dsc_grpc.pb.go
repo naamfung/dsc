@@ -1191,6 +1191,114 @@ var UserQuestionsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	PluginNotifyService_Notify_FullMethodName = "/dsc.PluginNotifyService/Notify"
+)
+
+// PluginNotifyServiceClient is the client API for PluginNotifyService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// PluginNotifyService 插件→宿主事件通知（互通机制 2）：插件进程经 broker
+// 连接，把事件（含后台任务完成通知）发布到宿主事件总线，供 TUI/其他插件订阅。
+type PluginNotifyServiceClient interface {
+	Notify(ctx context.Context, in *NotifyRequest, opts ...grpc.CallOption) (*NotifyResponse, error)
+}
+
+type pluginNotifyServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewPluginNotifyServiceClient(cc grpc.ClientConnInterface) PluginNotifyServiceClient {
+	return &pluginNotifyServiceClient{cc}
+}
+
+func (c *pluginNotifyServiceClient) Notify(ctx context.Context, in *NotifyRequest, opts ...grpc.CallOption) (*NotifyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NotifyResponse)
+	err := c.cc.Invoke(ctx, PluginNotifyService_Notify_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PluginNotifyServiceServer is the server API for PluginNotifyService service.
+// All implementations must embed UnimplementedPluginNotifyServiceServer
+// for forward compatibility.
+//
+// PluginNotifyService 插件→宿主事件通知（互通机制 2）：插件进程经 broker
+// 连接，把事件（含后台任务完成通知）发布到宿主事件总线，供 TUI/其他插件订阅。
+type PluginNotifyServiceServer interface {
+	Notify(context.Context, *NotifyRequest) (*NotifyResponse, error)
+	mustEmbedUnimplementedPluginNotifyServiceServer()
+}
+
+// UnimplementedPluginNotifyServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedPluginNotifyServiceServer struct{}
+
+func (UnimplementedPluginNotifyServiceServer) Notify(context.Context, *NotifyRequest) (*NotifyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Notify not implemented")
+}
+func (UnimplementedPluginNotifyServiceServer) mustEmbedUnimplementedPluginNotifyServiceServer() {}
+func (UnimplementedPluginNotifyServiceServer) testEmbeddedByValue()                             {}
+
+// UnsafePluginNotifyServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to PluginNotifyServiceServer will
+// result in compilation errors.
+type UnsafePluginNotifyServiceServer interface {
+	mustEmbedUnimplementedPluginNotifyServiceServer()
+}
+
+func RegisterPluginNotifyServiceServer(s grpc.ServiceRegistrar, srv PluginNotifyServiceServer) {
+	// If the following call panics, it indicates UnimplementedPluginNotifyServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&PluginNotifyService_ServiceDesc, srv)
+}
+
+func _PluginNotifyService_Notify_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NotifyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginNotifyServiceServer).Notify(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginNotifyService_Notify_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginNotifyServiceServer).Notify(ctx, req.(*NotifyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// PluginNotifyService_ServiceDesc is the grpc.ServiceDesc for PluginNotifyService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var PluginNotifyService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dsc.PluginNotifyService",
+	HandlerType: (*PluginNotifyServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Notify",
+			Handler:    _PluginNotifyService_Notify_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dsc.proto",
+}
+
+const (
 	FsObservationPolicyService_GetObservation_FullMethodName    = "/dsc.FsObservationPolicyService/GetObservation"
 	FsObservationPolicyService_UpdateObservation_FullMethodName = "/dsc.FsObservationPolicyService/UpdateObservation"
 )

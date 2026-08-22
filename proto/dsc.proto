@@ -172,6 +172,20 @@ service UserQuestionsService {
   rpc Ask(AskRequest) returns (AskResponse);
 }
 
+// PluginNotifyService 插件→宿主事件通知（互通机制 2）：插件进程经 broker
+// 连接，把事件（含后台任务完成通知）发布到宿主事件总线，供 TUI/其他插件订阅。
+service PluginNotifyService {
+  rpc Notify(NotifyRequest) returns (NotifyResponse);
+}
+
+message NotifyRequest {
+  string owner = 1; // 调用方会话标识（空 = 无 owner）
+  string name = 2;  // 宿主事件名（如 "job/done"；其余为插件自定义事件名）
+  string data = 3;  // 事件数据（JSON 字符串；name 为 job/done 时须为任务快照）
+}
+
+message NotifyResponse {}
+
 message AskRequest {
   repeated AskQuestion questions = 1;
 }

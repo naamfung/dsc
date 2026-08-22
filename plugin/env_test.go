@@ -3,6 +3,9 @@ package plugin
 import (
 	"strings"
 	"testing"
+
+	"dsc/plugin/llmclient"
+	"dsc/plugin/notify"
 )
 
 // TestPluginEnvInjectsLLMServiceID 验证互通注入：聚合 LLM 服务 ID 经 env
@@ -21,12 +24,19 @@ func TestPluginEnvInjectsLLMServiceID(t *testing.T) {
 
 	// 就绪后注入 ID，且原 entry.Env 不被污染
 	m.agentLLMServiceID = 42
+	m.pluginNotifyServiceID = 7
 	entryEnv := map[string]string{"A": "1"}
 	env = m.pluginEnv(PluginEntry{Env: entryEnv})
-	if !containsEnv(env, "DSC_LLM_SERVICE_ID", "42") {
+	if !containsEnv(env, llmclient.EnvServiceID, "42") {
 		t.Fatalf("should inject LLM service id, got %v", env)
 	}
-	if _, ok := entryEnv["DSC_LLM_SERVICE_ID"]; ok {
+	if !containsEnv(env, notify.EnvServiceID, "7") {
+		t.Fatalf("should inject notify service id, got %v", env)
+	}
+	if _, ok := entryEnv[llmclient.EnvServiceID]; ok {
+		t.Fatal("pluginEnv must not mutate the entry env map")
+	}
+	if _, ok := entryEnv[notify.EnvServiceID]; ok {
 		t.Fatal("pluginEnv must not mutate the entry env map")
 	}
 }

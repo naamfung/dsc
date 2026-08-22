@@ -18,6 +18,8 @@ import (
 
 	"dsc/cron"
 	"dsc/jobs"
+	"dsc/plugin/llmclient"
+	"dsc/plugin/notify"
 	"dsc/proto"
 	"dsc/proto/metadata"
 	"dsc/session"
@@ -83,6 +85,9 @@ type Manager struct {
 	// userQuestionsServiceID 为挂载在 broker 上的 UserQuestionsService ID（注入 agent）。
 	userQuestionProvider   UserQuestionProvider
 	userQuestionsServiceID uint32
+	// pluginNotifyServiceID 挂载在 broker 上的 PluginNotifyService ID
+	// （互通机制 2：插件进程经它向宿主事件总线发布事件）。
+	pluginNotifyServiceID uint32
 
 	// policyClients 已加载 policy 插件的策略服务客户端（按插件名），
 	// 由桥接逻辑包装为工具流水线监听器（替代旁路）。
@@ -1576,6 +1581,12 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		m.logger.Warn("user-questions service unavailable", "error", err)
 	}
 
+	// 挂载插件通知服务（PluginNotifyService）：插件进程经 broker 发布事件
+	// 到宿主事件总线（互通机制 2），serviceID 随 pluginEnv 注入插件进程。
+	if _, err := m.servePluginNotifyLocked(); err != nil {
+		m.logger.Warn("plugin notify service unavailable", "error", err)
+	}
+
 	if hasLLM {
 		agent, ok := m.agents[agentEntry.Name]
 		if !ok {
@@ -2002,15 +2013,19 @@ func buildEnv(custom map[string]string) []string {
 }
 
 // pluginEnv 计算插件进程 env：宿主环境 + 插件自定义 env + 互通服务注入。
-// 注入 DSC_LLM_SERVICE_ID（聚合 LLM 服务 ID）：工具/策略插件经 broker.Dial
-// 即可复用宿主三个 LLM 插件（llm-openai/anthropic/ollama），无需自带 LLM。
+// 注入聚合 LLM 服务 ID（DSC_LLM_SERVICE_ID）与插件通知服务 ID
+// （DSC_NOTIFY_SERVICE_ID）：工具/策略插件经 broker.Dial 复用宿主三个 LLM
+// 插件（llm-openai/anthropic/ollama）与宿主事件总线，无需自带 LLM。
 func (m *Manager) pluginEnv(entry PluginEntry) []string {
-	env := make(map[string]string, len(entry.Env)+1)
+	env := make(map[string]string, len(entry.Env)+2)
 	for k, v := range entry.Env {
 		env[k] = v
 	}
 	if m.agentLLMServiceID != 0 {
-		env["DSC_LLM_SERVICE_ID"] = strconv.FormatUint(uint64(m.agentLLMServiceID), 10)
+		env[llmclient.EnvServiceID] = strconv.FormatUint(uint64(m.agentLLMServiceID), 10)
+	}
+	if m.pluginNotifyServiceID != 0 {
+		env[notify.EnvServiceID] = strconv.FormatUint(uint64(m.pluginNotifyServiceID), 10)
 	}
 	return buildEnv(env)
 }
