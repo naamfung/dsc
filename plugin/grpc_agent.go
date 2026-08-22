@@ -89,6 +89,13 @@ func (s *agentGRPCServer) SetPlanMode(ctx context.Context, req *proto.SetPlanMod
 	return &proto.SetPlanModeResponse{Success: true}, nil
 }
 
+func (s *agentGRPCServer) SetUserQuestionsService(ctx context.Context, req *proto.SetUserQuestionsServiceRequest) (*proto.SetUserQuestionsServiceResponse, error) {
+	if err := s.impl.SetUserQuestionsService(ctx, req.ServiceId); err != nil {
+		return &proto.SetUserQuestionsServiceResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SetUserQuestionsServiceResponse{Success: true}, nil
+}
+
 // agentGRPCClient 是 gRPC 客户端代理
 type agentGRPCClient struct {
 	client proto.AgentServiceClient
@@ -157,6 +164,11 @@ func (c *agentGRPCClient) SwitchSession(ctx context.Context, sessionID string) e
 
 func (c *agentGRPCClient) SetPlanMode(ctx context.Context, active bool) error {
 	_, err := c.client.SetPlanMode(ctx, &proto.SetPlanModeRequest{Active: active})
+	return err
+}
+
+func (c *agentGRPCClient) SetUserQuestionsService(ctx context.Context, serviceID uint32) error {
+	_, err := c.client.SetUserQuestionsService(ctx, &proto.SetUserQuestionsServiceRequest{ServiceId: serviceID})
 	return err
 }
 

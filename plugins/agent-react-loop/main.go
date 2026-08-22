@@ -31,6 +31,13 @@ type ReactLoopAgent struct {
 	llmClient  proto.LLMServiceClient
 	toolClient proto.ToolServiceClient
 
+	// 用户评审通道（宿主挂载的 UserQuestionsService）：exit_plan_mode 等工具
+	// 向宿主询问用户并等待回答；serviceID 由宿主经 SetUserQuestionsService 注入。
+	uqServiceID uint32
+	uqMu        sync.Mutex
+	uqConn      *grpc.ClientConn
+	uqClient    proto.UserQuestionsServiceClient
+
 	// 新增字段
 	cancelFunc context.CancelFunc // 用於取消當前 Run
 	runWg      sync.WaitGroup     // 等待 Run 完成
@@ -645,6 +652,36 @@ func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLM
 	return summary, nil
 }
 
+// SetUserQuestionsService 注入宿主挂载在 broker 上的 UserQuestionsService ID。
+// exit_plan_mode 评审等场景经 ensureUserQuestionsClient 惰性连接并调用。
+func (a *ReactLoopAgent) SetUserQuestionsService(ctx context.Context, serviceID uint32) error {
+	a.uqMu.Lock()
+	defer a.uqMu.Unlock()
+	a.uqServiceID = serviceID
+	fmt.Printf("[Agent Loop] user-questions service set (id=%d)\n", serviceID)
+	return nil
+}
+
+// ensureUserQuestionsClient 惰性建立 UserQuestionsService 连接（返回 nil 表示无通道）。
+func (a *ReactLoopAgent) ensureUserQuestionsClient() proto.UserQuestionsServiceClient {
+	a.uqMu.Lock()
+	defer a.uqMu.Unlock()
+	if a.uqServiceID == 0 {
+		return nil
+	}
+	if a.uqClient != nil {
+		return a.uqClient
+	}
+	conn, err := a.broker.Dial(a.uqServiceID)
+	if err != nil {
+		fmt.Printf("[Agent Loop] dial user-questions service failed: %v\n", err)
+		return nil
+	}
+	a.uqConn = conn
+	a.uqClient = proto.NewUserQuestionsServiceClient(conn)
+	return a.uqClient
+}
+
 // SwitchSession 切换当前会话：从 store 按 id 加载并接管（事件溯源日志）。
 // 下一次 Run 将基于目标会话继续；当前轮次若在进行中由调用方负责确保已结束。
 func (a *ReactLoopAgent) SwitchSession(ctx context.Context, sessionID string) error {
@@ -761,6 +798,13 @@ func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 		a.toolConn = nil
 		a.toolClient = nil
 	}
+	a.uqMu.Lock()
+	if a.uqConn != nil {
+		_ = a.uqConn.Close()
+		a.uqConn = nil
+		a.uqClient = nil
+	}
+	a.uqMu.Unlock()
 	a.connMu.Unlock()
 
 	return nil
@@ -872,6 +916,13 @@ func (s *agentGRPCServer) SetPlanMode(ctx context.Context, req *proto.SetPlanMod
 		return &proto.SetPlanModeResponse{Success: false, Message: err.Error()}, nil
 	}
 	return &proto.SetPlanModeResponse{Success: true}, nil
+}
+
+func (s *agentGRPCServer) SetUserQuestionsService(ctx context.Context, req *proto.SetUserQuestionsServiceRequest) (*proto.SetUserQuestionsServiceResponse, error) {
+	if err := s.impl.SetUserQuestionsService(ctx, req.ServiceId); err != nil {
+		return &proto.SetUserQuestionsServiceResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SetUserQuestionsServiceResponse{Success: true}, nil
 }
 
 func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {

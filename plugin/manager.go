@@ -79,6 +79,11 @@ type Manager struct {
 	// cronScheduler cron 定时任务调度器（StartCron 启动，Shutdown 停止）。
 	cronScheduler *cron.Scheduler
 
+	// 用户评审通道：userQuestionProvider 为 UI provider（TUI 注册）；
+	// userQuestionsServiceID 为挂载在 broker 上的 UserQuestionsService ID（注入 agent）。
+	userQuestionProvider   UserQuestionProvider
+	userQuestionsServiceID uint32
+
 	// policyClients 已加载 policy 插件的策略服务客户端（按插件名），
 	// 由桥接逻辑包装为工具流水线监听器（替代旁路）。
 	policyClients map[string]proto.FsObservationPolicyServiceClient
@@ -824,6 +829,10 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 		m.transitionLocked(name, StateFailed, err.Error())
 		return fmt.Errorf("failed to register service IDs on agent: %w", err)
 	}
+	// 重新注入用户评审通道 serviceID（同一 broker，沿用挂载的服务）
+	if m.userQuestionsServiceID != 0 {
+		_, _ = agentClient.SetUserQuestionsService(context.Background(), &proto.SetUserQuestionsServiceRequest{ServiceId: m.userQuestionsServiceID})
+	}
 
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
@@ -1542,6 +1551,16 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		} else {
 			m.logger.Warn("aggregate tool service unavailable", "error", err)
 		}
+	}
+
+	// 挂载用户评审通道（UserQuestionsService）并注入 agent，
+	// 供 exit_plan_mode 等宿主工具向用户提问并等待回答。
+	if uqID, err := m.serveUserQuestionsLocked(); err == nil {
+		if agent, ok := m.agents[agentEntry.Name]; ok {
+			_ = agent.SetUserQuestionsService(context.Background(), uqID)
+		}
+	} else {
+		m.logger.Warn("user-questions service unavailable", "error", err)
 	}
 
 	if hasLLM {

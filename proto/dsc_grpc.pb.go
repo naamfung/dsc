@@ -235,14 +235,15 @@ var DSCPluginService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentService_Run_FullMethodName              = "/dsc.AgentService/Run"
-	AgentService_RunStream_FullMethodName        = "/dsc.AgentService/RunStream"
-	AgentService_Name_FullMethodName             = "/dsc.AgentService/Name"
-	AgentService_Version_FullMethodName          = "/dsc.AgentService/Version"
-	AgentService_RegisterServices_FullMethodName = "/dsc.AgentService/RegisterServices"
-	AgentService_SwitchSession_FullMethodName    = "/dsc.AgentService/SwitchSession"
-	AgentService_SetPlanMode_FullMethodName      = "/dsc.AgentService/SetPlanMode"
-	AgentService_Shutdown_FullMethodName         = "/dsc.AgentService/Shutdown"
+	AgentService_Run_FullMethodName                     = "/dsc.AgentService/Run"
+	AgentService_RunStream_FullMethodName               = "/dsc.AgentService/RunStream"
+	AgentService_Name_FullMethodName                    = "/dsc.AgentService/Name"
+	AgentService_Version_FullMethodName                 = "/dsc.AgentService/Version"
+	AgentService_RegisterServices_FullMethodName        = "/dsc.AgentService/RegisterServices"
+	AgentService_SwitchSession_FullMethodName           = "/dsc.AgentService/SwitchSession"
+	AgentService_SetPlanMode_FullMethodName             = "/dsc.AgentService/SetPlanMode"
+	AgentService_SetUserQuestionsService_FullMethodName = "/dsc.AgentService/SetUserQuestionsService"
+	AgentService_Shutdown_FullMethodName                = "/dsc.AgentService/Shutdown"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -256,6 +257,7 @@ type AgentServiceClient interface {
 	RegisterServices(ctx context.Context, in *RegisterServicesRequest, opts ...grpc.CallOption) (*RegisterServicesResponse, error)
 	SwitchSession(ctx context.Context, in *SwitchSessionRequest, opts ...grpc.CallOption) (*SwitchSessionResponse, error)
 	SetPlanMode(ctx context.Context, in *SetPlanModeRequest, opts ...grpc.CallOption) (*SetPlanModeResponse, error)
+	SetUserQuestionsService(ctx context.Context, in *SetUserQuestionsServiceRequest, opts ...grpc.CallOption) (*SetUserQuestionsServiceResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
@@ -346,6 +348,16 @@ func (c *agentServiceClient) SetPlanMode(ctx context.Context, in *SetPlanModeReq
 	return out, nil
 }
 
+func (c *agentServiceClient) SetUserQuestionsService(ctx context.Context, in *SetUserQuestionsServiceRequest, opts ...grpc.CallOption) (*SetUserQuestionsServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetUserQuestionsServiceResponse)
+	err := c.cc.Invoke(ctx, AgentService_SetUserQuestionsService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ShutdownResponse)
@@ -367,6 +379,7 @@ type AgentServiceServer interface {
 	RegisterServices(context.Context, *RegisterServicesRequest) (*RegisterServicesResponse, error)
 	SwitchSession(context.Context, *SwitchSessionRequest) (*SwitchSessionResponse, error)
 	SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error)
+	SetUserQuestionsService(context.Context, *SetUserQuestionsServiceRequest) (*SetUserQuestionsServiceResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
@@ -398,6 +411,9 @@ func (UnimplementedAgentServiceServer) SwitchSession(context.Context, *SwitchSes
 }
 func (UnimplementedAgentServiceServer) SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetPlanMode not implemented")
+}
+func (UnimplementedAgentServiceServer) SetUserQuestionsService(context.Context, *SetUserQuestionsServiceRequest) (*SetUserQuestionsServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetUserQuestionsService not implemented")
 }
 func (UnimplementedAgentServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
@@ -542,6 +558,24 @@ func _AgentService_SetPlanMode_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_SetUserQuestionsService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetUserQuestionsServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).SetUserQuestionsService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_SetUserQuestionsService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).SetUserQuestionsService(ctx, req.(*SetUserQuestionsServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ShutdownRequest)
 	if err := dec(in); err != nil {
@@ -590,6 +624,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPlanMode",
 			Handler:    _AgentService_SetPlanMode_Handler,
+		},
+		{
+			MethodName: "SetUserQuestionsService",
+			Handler:    _AgentService_SetUserQuestionsService_Handler,
 		},
 		{
 			MethodName: "Shutdown",
@@ -1040,6 +1078,112 @@ var ToolService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListContext",
 			Handler:    _ToolService_ListContext_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "dsc.proto",
+}
+
+const (
+	UserQuestionsService_Ask_FullMethodName = "/dsc.UserQuestionsService/Ask"
+)
+
+// UserQuestionsServiceClient is the client API for UserQuestionsService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// UserQuestionsService 评审通道：agent 向宿主询问用户并阻塞等待回答（对齐 DSH user-questions）。
+type UserQuestionsServiceClient interface {
+	Ask(ctx context.Context, in *AskRequest, opts ...grpc.CallOption) (*AskResponse, error)
+}
+
+type userQuestionsServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewUserQuestionsServiceClient(cc grpc.ClientConnInterface) UserQuestionsServiceClient {
+	return &userQuestionsServiceClient{cc}
+}
+
+func (c *userQuestionsServiceClient) Ask(ctx context.Context, in *AskRequest, opts ...grpc.CallOption) (*AskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AskResponse)
+	err := c.cc.Invoke(ctx, UserQuestionsService_Ask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UserQuestionsServiceServer is the server API for UserQuestionsService service.
+// All implementations must embed UnimplementedUserQuestionsServiceServer
+// for forward compatibility.
+//
+// UserQuestionsService 评审通道：agent 向宿主询问用户并阻塞等待回答（对齐 DSH user-questions）。
+type UserQuestionsServiceServer interface {
+	Ask(context.Context, *AskRequest) (*AskResponse, error)
+	mustEmbedUnimplementedUserQuestionsServiceServer()
+}
+
+// UnimplementedUserQuestionsServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedUserQuestionsServiceServer struct{}
+
+func (UnimplementedUserQuestionsServiceServer) Ask(context.Context, *AskRequest) (*AskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Ask not implemented")
+}
+func (UnimplementedUserQuestionsServiceServer) mustEmbedUnimplementedUserQuestionsServiceServer() {}
+func (UnimplementedUserQuestionsServiceServer) testEmbeddedByValue()                              {}
+
+// UnsafeUserQuestionsServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to UserQuestionsServiceServer will
+// result in compilation errors.
+type UnsafeUserQuestionsServiceServer interface {
+	mustEmbedUnimplementedUserQuestionsServiceServer()
+}
+
+func RegisterUserQuestionsServiceServer(s grpc.ServiceRegistrar, srv UserQuestionsServiceServer) {
+	// If the following call panics, it indicates UnimplementedUserQuestionsServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&UserQuestionsService_ServiceDesc, srv)
+}
+
+func _UserQuestionsService_Ask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserQuestionsServiceServer).Ask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserQuestionsService_Ask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserQuestionsServiceServer).Ask(ctx, req.(*AskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// UserQuestionsService_ServiceDesc is the grpc.ServiceDesc for UserQuestionsService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var UserQuestionsService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "dsc.UserQuestionsService",
+	HandlerType: (*UserQuestionsServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Ask",
+			Handler:    _UserQuestionsService_Ask_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
