@@ -35,6 +35,7 @@ type Host struct {
 	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 lua_ 前缀）
 	stop     chan struct{}
 	logf     func(string, ...any)
+	creation bool // 创造模式：允许热加载新增/变更脚本；否则只运行启动时已存在的脚本
 
 	store *bindings.Store        // 进程内 KV（脚本间共享）
 	hook  *bindings.HookRegistry // 脚本注册的宿主钩子
@@ -42,8 +43,9 @@ type Host struct {
 	jobSeq int
 }
 
-// New 创建宿主（dir 为脚本目录，services 为宿主互通服务）。
-func New(dir string, services *bindings.Services, logf func(string, ...any)) *Host {
+// New 创建宿主（dir 为脚本目录，services 为宿主互通服务，creation 表示是否
+// 创造模式——仅创造模式允许热加载新增/变更脚本，非创造模式只运行已有脚本）。
+func New(dir string, services *bindings.Services, creation bool, logf func(string, ...any)) *Host {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -54,6 +56,7 @@ func New(dir string, services *bindings.Services, logf func(string, ...any)) *Ho
 		tools:    make(map[string]*ToolDef),
 		stop:     make(chan struct{}),
 		logf:     logf,
+		creation: creation,
 		store:    bindings.NewStore(),
 		hook:     bindings.NewHookRegistry(),
 		jobs:     make(map[string]*JobEntry),
@@ -68,13 +71,15 @@ func New(dir string, services *bindings.Services, logf func(string, ...any)) *Ho
 	return h
 }
 
-// Start 初始加载脚本目录并启动热加载轮询。
+// Start 初始加载脚本目录并（创造模式下）启动热加载轮询。
 func (h *Host) Start() error {
 	if err := os.MkdirAll(h.dir, 0755); err != nil {
 		return fmt.Errorf("lua-host: create scripts dir: %w", err)
 	}
 	h.scan()
-	go h.poll()
+	if h.creation {
+		go h.poll()
+	}
 	return nil
 }
 

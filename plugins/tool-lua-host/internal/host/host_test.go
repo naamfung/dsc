@@ -13,7 +13,7 @@ import (
 
 // TestHostLoadsExample 验证 example 脚本被加载且工具注册到工具表。
 func TestHostLoadsExample(t *testing.T) {
-	h := New("../../scripts", &bindings.Services{}, t.Logf)
+	h := New("../../scripts", &bindings.Services{}, true, t.Logf)
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)
@@ -57,7 +57,7 @@ func TestHotReload(t *testing.T) {
 	}
 	write(`dsc.register_tool("hello", { description = "hello tool" }, function() return "hello" end)`)
 
-	h := New(dir, &bindings.Services{}, t.Logf)
+	h := New(dir, &bindings.Services{}, true, t.Logf)
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)
@@ -139,7 +139,7 @@ end)`
 		t.Fatal(err)
 	}
 
-	h := New(dir, &bindings.Services{}, t.Logf)
+	h := New(dir, &bindings.Services{}, true, t.Logf)
 	defer h.Stop()
 	if err := h.Start(); err != nil {
 		t.Fatalf("host start: %v", err)
@@ -209,5 +209,48 @@ end)`
 	vals, _ = results[0].([]any)
 	if len(vals) < 1 || vals[0] != "ok!" {
 		t.Fatalf("after_tool result = %v, want ok!", vals)
+	}
+}
+
+// TestRunOnlyMode 验证非创造模式（creation=false）约束：
+// 启动时已有脚本被加载（可运行），期间新增/修改脚本不生效（热加载轮询被禁用）。
+func TestRunOnlyMode(t *testing.T) {
+	dir := t.TempDir()
+	demoDir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(demoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	existing := `dsc.register_tool("existing", { description = "e" }, function() return "ok" end)`
+	if err := os.WriteFile(filepath.Join(demoDir, "main.lua"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(dir, &bindings.Services{}, false, t.Logf) // 非创造模式
+	defer h.Stop()
+	if err := h.Start(); err != nil {
+		t.Fatalf("host start: %v", err)
+	}
+	// 已有脚本被加载，工具可运行
+	assertHasTool(t, h, "lua_existing", true)
+	if out, err := h.ExecuteTool("lua_existing", json.RawMessage(`{}`)); err != nil || out != "ok" {
+		t.Fatalf("lua_existing = %q/%v, want ok", out, err)
+	}
+
+	// 期间新增脚本：非创造模式不生效（无热加载轮询）
+	newDir := filepath.Join(dir, "newone")
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(newDir, "main.lua"),
+		[]byte(`dsc.register_tool("brandnew", { description = "n" }, function() return "new" end)`), 0644)
+	time.Sleep(3 * time.Second) // 超过 pollInterval
+	assertHasTool(t, h, "lua_brandnew", false)
+
+	// 修改已有脚本：非创造模式同样不生效
+	os.WriteFile(filepath.Join(demoDir, "main.lua"),
+		[]byte(`dsc.register_tool("existing", { description = "e" }, function() return "changed" end)`), 0644)
+	time.Sleep(3 * time.Second)
+	if out, _ := h.ExecuteTool("lua_existing", json.RawMessage(`{}`)); out != "ok" {
+		t.Fatalf("lua_existing after edit = %q, want ok (unchanged)", out)
 	}
 }

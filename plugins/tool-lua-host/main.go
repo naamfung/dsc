@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -39,6 +40,12 @@ type ToolServiceServer struct {
 // 聚合 LLM / 聚合 Tool / 插件通知服务 ID 传入。宿主在调用本 RPC 前已 AcceptAndServe
 // 完毕（ConnInfo 5s 内有效），此处立即 eager Dial 并创建脚本宿主。
 func (s *ToolServiceServer) SetInterconnect(ctx context.Context, req *proto.InterconnectRequest) (*proto.InterconnectResponse, error) {
+	// 约束：插件创造（新增/修改脚本）仅在创造模式（creation）下允许。
+	// 非创造模式仍加载启动时已存在的脚本（运行已创建的工具），但禁用热加载
+	// 轮询——期间写入的新脚本不会生效，需重启宿主后才作为"已有脚本"加载。
+	mode := os.Getenv("DSC_MODE")
+	creation := mode == "" || mode == "creation" // 未设置（旧宿主）默认允许创造
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -68,15 +75,15 @@ func (s *ToolServiceServer) SetInterconnect(ctx context.Context, req *proto.Inte
 		s.host.Stop()
 	}
 	dir := filepath.FromSlash(scriptsDir)
-	s.host = host.New(dir, services, func(format string, args ...any) {
+	s.host = host.New(dir, services, creation, func(format string, args ...any) {
 		fmt.Printf("[tool-lua-host] "+format+"\n", args...)
 	})
-	// 同步加载脚本（含类型检查/热加载轮询），确保握手返回时宿主 ListTools 能取到全部工具
+	// 同步加载脚本（创造模式下含热加载轮询），确保握手返回时宿主 ListTools 能取到全部工具
 	if err := s.host.Start(); err != nil {
 		return nil, err
 	}
-	fmt.Printf("[tool-lua-host] interconnect ready: llm=%v tool=%v notify=%v, scripts dir=%s\n",
-		llmC != nil, toolC != nil, notifier != nil, dir)
+	fmt.Printf("[tool-lua-host] interconnect ready: llm=%v tool=%v notify=%v, mode=%q creation=%v, scripts dir=%s\n",
+		llmC != nil, toolC != nil, notifier != nil, mode, creation, dir)
 	return &proto.InterconnectResponse{}, nil
 }
 
