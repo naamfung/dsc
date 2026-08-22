@@ -27,6 +27,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/ollama/ollama v0.32.13
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.42.0
 	github.com/smartystreets/goconvey v1.8.1
 	github.com/stretchr/testify v1.11.1
@@ -80,7 +81,6 @@ require (
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/smarty/assertions v1.15.0 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
@@ -113,3 +113,6 @@ replace github.com/anthropics/anthropic-sdk-go => ./libs/anthropic-sdk-go
 replace github.com/sashabaranov/go-openai => ./libs/go-openai
 
 replace github.com/ollama/ollama => ./libs/ollama
+
+// cron 久未维护，改放本地（libs/）便于发现问题直接改源码
+replace github.com/robfig/cron/v3 => ./libs/cron
