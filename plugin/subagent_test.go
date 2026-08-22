@@ -10,14 +10,16 @@ import (
 
 // scriptedLLM 按脚本逐步返回响应的 LLM provider（测试子代理循环）。
 type scriptedLLM struct {
-	mu        sync.Mutex
-	steps     []*ChatResponse
-	chatCalls int
+	mu            sync.Mutex
+	steps         []*ChatResponse
+	chatCalls     int
+	toolsCaptured []string // 记录最近一次调用收到的工具名
 }
 
-func (p *scriptedLLM) Chat(context.Context, []Message, []Tool, int) (*ChatResponse, error) {
+func (p *scriptedLLM) Chat(_ context.Context, _ []Message, tools []Tool, _ int) (*ChatResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.captureToolsLocked(tools)
 	if p.chatCalls >= len(p.steps) {
 		return nil, errors.New("no more scripted steps")
 	}
@@ -26,9 +28,18 @@ func (p *scriptedLLM) Chat(context.Context, []Message, []Tool, int) (*ChatRespon
 	return r, nil
 }
 
-func (p *scriptedLLM) ChatStream(_ context.Context, _ []Message, _ []Tool) (<-chan *ChatStreamResponse, error) {
+// captureToolsLocked 记录本次调用收到的工具名（需已持有 p.mu）。
+func (p *scriptedLLM) captureToolsLocked(tools []Tool) {
+	p.toolsCaptured = make([]string, 0, len(tools))
+	for _, t := range tools {
+		p.toolsCaptured = append(p.toolsCaptured, t.Name)
+	}
+}
+
+func (p *scriptedLLM) ChatStream(_ context.Context, _ []Message, tools []Tool) (<-chan *ChatStreamResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.captureToolsLocked(tools)
 	if p.chatCalls >= len(p.steps) {
 		return nil, errors.New("no more scripted steps")
 	}
@@ -76,6 +87,34 @@ func TestSubagentToolLoop(t *testing.T) {
 	// 两步：工具调用 + 最终结果
 	if llm.chatCalls != 2 {
 		t.Fatalf("llm calls = %d, want 2", llm.chatCalls)
+	}
+}
+
+func TestSubagentPassesTools(t *testing.T) {
+	m := newSubagentManager()
+	llm := &scriptedLLM{steps: []*ChatResponse{
+		{ToolCalls: []ToolCall{{ID: "c1", Name: "plain-tool", Arguments: map[string]any{}}}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+	m.llms["p"] = llm
+	m.llmOrder = []string{"p"}
+	m.agentLLMName = "p"
+
+	if _, err := m.RunSubagent(context.Background(), &SubagentRequest{Prompt: "do it"}); err != nil {
+		t.Fatalf("RunSubagent: %v", err)
+	}
+	// 子代理的 LLM 请求必须携带宿主聚合工具目录（否则无法真正发出工具调用）
+	llm.mu.Lock()
+	defer llm.mu.Unlock()
+	found := false
+	for _, n := range llm.toolsCaptured {
+		if n == "plain-tool" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("subagent llm received tools %v, want plain-tool included", llm.toolsCaptured)
 	}
 }
 

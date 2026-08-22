@@ -24,6 +24,19 @@ type Client struct {
 	conn *grpc.ClientConn
 }
 
+// Dial 按 serviceID 建立连接（ID 由宿主经 ToolService.SetInterconnect 传入，
+// 挂载在本插件 client 的 broker 上）；broker 为空或 id 为 0 返回 (nil, nil)。
+func Dial(broker *goplugin.GRPCBroker, id uint32) (*Client, error) {
+	if broker == nil || id == 0 {
+		return nil, nil
+	}
+	conn, err := broker.Dial(id)
+	if err != nil {
+		return nil, fmt.Errorf("llmclient: dial LLM service %d: %w", id, err)
+	}
+	return &Client{c: proto.NewLLMServiceClient(conn), conn: conn}, nil
+}
+
 // DialFromEnv 读 DSC_LLM_SERVICE_ID 并经 broker 建立连接；宿主未注入该环境
 // 变量时返回 (nil, nil)（插件可自行降级）。
 func DialFromEnv(broker *goplugin.GRPCBroker) (*Client, error) {
@@ -35,11 +48,7 @@ func DialFromEnv(broker *goplugin.GRPCBroker) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("llmclient: invalid %s %q: %w", EnvServiceID, v, err)
 	}
-	conn, err := broker.Dial(uint32(id))
-	if err != nil {
-		return nil, fmt.Errorf("llmclient: dial LLM service %d: %w", id, err)
-	}
-	return &Client{c: proto.NewLLMServiceClient(conn), conn: conn}, nil
+	return Dial(broker, uint32(id))
 }
 
 // Close 关闭底层连接。

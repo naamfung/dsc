@@ -8,6 +8,7 @@ import (
 
 	"dsc/jobs"
 	"dsc/proto"
+	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
 
@@ -15,18 +16,28 @@ import (
 // 把事件（含后台任务完成通知）发布到宿主事件总线，供 TUI/其他插件订阅。
 // 宿主在 broker 挂载并注入 serviceID（DSC_NOTIFY_SERVICE_ID）到插件进程 env。
 
-// servePluginNotifyLocked 在 broker 上挂载 PluginNotifyService（需已持有 m.mu）。
+// servePluginNotifyLocked 在 agent broker 上挂载 PluginNotifyService（需已持有 m.mu）。
 func (m *Manager) servePluginNotifyLocked() (uint32, error) {
-	if m.broker == nil {
+	id, err := m.servePluginNotifyOnBroker(m.broker)
+	if err == nil {
+		m.pluginNotifyServiceID = id
+	}
+	return id, err
+}
+
+// servePluginNotifyOnBroker 在指定 broker 上挂载 PluginNotifyService；返回
+// serviceID。互通机制 2 中，该服务须挂在本插件 client 的 broker 上（插件
+// 进程经自身 broker.Dial 访问），而不仅是 agent broker。
+func (m *Manager) servePluginNotifyOnBroker(broker *goplugin.GRPCBroker) (uint32, error) {
+	if broker == nil {
 		return 0, fmt.Errorf("broker not available, cannot serve plugin notify service")
 	}
-	serviceID := m.broker.NextId()
-	go m.broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+	serviceID := broker.NextId()
+	go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
 		s := grpc.NewServer(opts...)
 		proto.RegisterPluginNotifyServiceServer(s, &pluginNotifyServer{m: m})
 		return s
 	})
-	m.pluginNotifyServiceID = serviceID
 	return serviceID, nil
 }
 

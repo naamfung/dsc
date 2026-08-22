@@ -903,9 +903,10 @@ var LLMService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ToolService_ExecuteTool_FullMethodName = "/dsc.ToolService/ExecuteTool"
-	ToolService_ListTools_FullMethodName   = "/dsc.ToolService/ListTools"
-	ToolService_ListContext_FullMethodName = "/dsc.ToolService/ListContext"
+	ToolService_ExecuteTool_FullMethodName     = "/dsc.ToolService/ExecuteTool"
+	ToolService_ListTools_FullMethodName       = "/dsc.ToolService/ListTools"
+	ToolService_ListContext_FullMethodName     = "/dsc.ToolService/ListContext"
+	ToolService_SetInterconnect_FullMethodName = "/dsc.ToolService/SetInterconnect"
 )
 
 // ToolServiceClient is the client API for ToolService service.
@@ -917,6 +918,11 @@ type ToolServiceClient interface {
 	// ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
 	// content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
 	ListContext(ctx context.Context, in *ListContextRequest, opts ...grpc.CallOption) (*ListContextResponse, error)
+	// SetInterconnect 互通握手（机制 1/2）：宿主把挂载在本插件 client broker 上的
+	// 聚合 LLM 服务与插件通知服务的 serviceID 传给插件进程——插件经自身 broker.Dial
+	// 即可复用宿主 LLM 插件与事件总线，无需在插件启动时注入 env（避开握手时序）。
+	// 旧插件未实现时返回 Unimplemented，宿主应跳过。
+	SetInterconnect(ctx context.Context, in *InterconnectRequest, opts ...grpc.CallOption) (*InterconnectResponse, error)
 }
 
 type toolServiceClient struct {
@@ -957,6 +963,16 @@ func (c *toolServiceClient) ListContext(ctx context.Context, in *ListContextRequ
 	return out, nil
 }
 
+func (c *toolServiceClient) SetInterconnect(ctx context.Context, in *InterconnectRequest, opts ...grpc.CallOption) (*InterconnectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InterconnectResponse)
+	err := c.cc.Invoke(ctx, ToolService_SetInterconnect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ToolServiceServer is the server API for ToolService service.
 // All implementations must embed UnimplementedToolServiceServer
 // for forward compatibility.
@@ -966,6 +982,11 @@ type ToolServiceServer interface {
 	// ListContext 返回插件贡献的上下文片段（如技能索引），宿主将其拼接到 agent 的 system prompt；
 	// content 为空表示该插件无贡献。旧插件未实现时返回 Unimplemented，宿主应跳过。
 	ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error)
+	// SetInterconnect 互通握手（机制 1/2）：宿主把挂载在本插件 client broker 上的
+	// 聚合 LLM 服务与插件通知服务的 serviceID 传给插件进程——插件经自身 broker.Dial
+	// 即可复用宿主 LLM 插件与事件总线，无需在插件启动时注入 env（避开握手时序）。
+	// 旧插件未实现时返回 Unimplemented，宿主应跳过。
+	SetInterconnect(context.Context, *InterconnectRequest) (*InterconnectResponse, error)
 	mustEmbedUnimplementedToolServiceServer()
 }
 
@@ -984,6 +1005,9 @@ func (UnimplementedToolServiceServer) ListTools(context.Context, *ListToolsReque
 }
 func (UnimplementedToolServiceServer) ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListContext not implemented")
+}
+func (UnimplementedToolServiceServer) SetInterconnect(context.Context, *InterconnectRequest) (*InterconnectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetInterconnect not implemented")
 }
 func (UnimplementedToolServiceServer) mustEmbedUnimplementedToolServiceServer() {}
 func (UnimplementedToolServiceServer) testEmbeddedByValue()                     {}
@@ -1060,6 +1084,24 @@ func _ToolService_ListContext_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ToolService_SetInterconnect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InterconnectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolServiceServer).SetInterconnect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolService_SetInterconnect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolServiceServer).SetInterconnect(ctx, req.(*InterconnectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ToolService_ServiceDesc is the grpc.ServiceDesc for ToolService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1078,6 +1120,10 @@ var ToolService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListContext",
 			Handler:    _ToolService_ListContext_Handler,
+		},
+		{
+			MethodName: "SetInterconnect",
+			Handler:    _ToolService_SetInterconnect_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
