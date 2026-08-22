@@ -25,4 +25,4 @@ plugins:
   - name: tool-lua-host
     type: tool
     enabled: true
-    binary_path: ./plugins/tool-lua-host/lua-host.exe
+    binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
