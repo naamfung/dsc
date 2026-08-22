@@ -37,6 +37,12 @@ plugins:
     binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
     enabled: true
 
+  # WEB UI：独立工具插件，SvelteKit 前端（bun 构建后 go:embed 嵌入），独立 HTTP 端口代理宿主 admin
+  - name: tool-harness-webui
+    type: tool
+    binary_path: ./plugins/tool-harness-webui/tool-harness-webui.exe
+    enabled: true
+
   - name: agent-react-loop
     type: agent
     binary_path: ./plugins/agent-react-loop/agent-react-loop.exe

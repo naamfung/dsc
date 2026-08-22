@@ -61,6 +61,10 @@ go build -o plugins/tool-skill/tool-skill.exe ./plugins/tool-skill
 echo "Building tool-lua-host plugin..."
 cd ./plugins/tool-lua-host && go build && cd ../../
 
+# 构建 tool-harness-webui 插件（先 bun 构建前端再编译 Go）
+echo "Building tool-harness-webui plugin..."
+cd ./plugins/tool-harness-webui && bash ./build.sh && cd ../../
+
 # 构建 policy-fs-observation 插件
 echo "Building policy-fs-observation plugin..."
 go build -o plugins/policy-fs-observation/policy-fs-observation.exe ./plugins/policy-fs-observation

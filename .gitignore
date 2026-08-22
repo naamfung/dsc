@@ -1,4 +1,5 @@
 !build.sh
+!plugins/*/build.sh
 
 # Executables
 *.exe~

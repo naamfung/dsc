@@ -26,3 +26,8 @@ plugins:
     type: tool
     enabled: true
     binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
+  # WEB UI：独立工具插件，自带 SvelteKit 前端（bun 构建后 go:embed 嵌入），独立 HTTP 端口代理宿主 admin
+  - name: tool-harness-webui
+    type: tool
+    enabled: true
+    binary_path: ./plugins/tool-harness-webui/tool-harness-webui.exe

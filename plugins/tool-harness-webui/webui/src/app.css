@@ -1,0 +1,37 @@
+:root {
+	--bg: #0f1117;
+	--panel: #171923;
+	--panel-2: #1e2230;
+	--border: #2a2f3d;
+	--text: #e6e9ef;
+	--text-dim: #9aa3b2;
+	--accent: #4f8cff;
+	--chat-bg: #10131c;
+	--ok: #5dd49f;
+	--warn: #d9b25a;
+	--err: #e0816e;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	font-family:
+		-apple-system,
+		BlinkMacSystemFont,
+		'Segoe UI',
+		'PingFang SC',
+		sans-serif;
+	background: var(--bg);
+	color: var(--text);
+	display: flex;
+	height: 100vh;
+	overflow: hidden;
+}
