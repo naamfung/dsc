@@ -16,7 +16,7 @@ import (
 var WorkspaceRoot string
 
 // WorkspaceProtectionEnabled 工作空間保護開關
-var WorkspaceProtectionEnabled = false // 默認關閉工作空間機制保護，允許模型訪問整個文件系統而不作限制
+var WorkspaceProtectionEnabled = true // 默認啟用工作空間機制保護，限制模型文件操作在 ./workspace 目錄內
 
 func init() {
 	// 初始化 WorkspaceRoot 為基於程序可執行文件所在目錄的 workspace 目錄
