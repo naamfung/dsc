@@ -16,7 +16,6 @@ package com_test
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/http"
 
 	"dsc/libs/vodka/libraries/com"
@@ -27,7 +26,7 @@ import (
 // ------------------------------
 
 func ExampleColorLogS() {
-	coloredLog := com.ColorLogS(fmt.Sprintf(
+	coloredLog := com.ColorLogS("%s", fmt.Sprintf(
 		"[WARN] This is a tesing log that should be colored, path( %s ),"+
 			" highlight # %s #, error [ %s ].",
 		"path to somewhere", "highlighted content", "tesing error"))
@@ -35,7 +34,7 @@ func ExampleColorLogS() {
 }
 
 func ExampleColorLog() {
-	com.ColorLog(fmt.Sprintf(
+	com.ColorLog("%s", fmt.Sprintf(
 		"[WARN] This is a tesing log that should be colored, path( %s ),"+
 			" highlight # %s #, error [ %s ].",
 		"path to somewhere", "highlighted content", "tesing error"))
@@ -153,26 +152,6 @@ func ExampleExpand() {
 // ------------------------------
 // http.go
 // ------------------------------
-
-func ExampleHttpGet() ([]byte, error) {
-	rc, err := com.HttpGet(&http.Client{}, "http://gowalker.org", nil)
-	if err != nil {
-		return nil, err
-	}
-	p, err := ioutil.ReadAll(rc)
-	rc.Close()
-	return p, err
-}
-
-func ExampleHttpGetBytes() ([]byte, error) {
-	p, err := com.HttpGetBytes(&http.Client{}, "http://gowalker.org", nil)
-	return p, err
-}
-
-func ExampleHttpGetJSON() interface{} {
-	j := com.HttpGetJSON(&http.Client{}, "http://gowalker.org", nil)
-	return j
-}
 
 type rawFile struct {
 	name   string

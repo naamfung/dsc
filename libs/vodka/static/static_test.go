@@ -40,14 +40,15 @@ func TestStatic(t *testing.T) {
 	}
 
 	// File not found
+	// 本地改动（对齐 dsc）：文件不存在时直接写 404 并 Abort，不返回 HTTPError，
+	// 避免继续处理导致异常响应；这里按该行为断言。
 	req = httptest.NewRequest(vodka.GET, "/none", nil)
 	rec = httptest.NewRecorder()
 	c = e.NewContext(req, rec, vodka.NotFoundHandler)
 	err := h(c)
-	assert.Error(t, err)
-	he, ok := err.(*vodka.HTTPError)
-	assert.True(t, ok)
-	assert.Equal(t, http.StatusNotFound, he.StatusCode())
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), "404 Not Found")
 
 	// HTML5
 	req = httptest.NewRequest(vodka.GET, "/random", nil)
