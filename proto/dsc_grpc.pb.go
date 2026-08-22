@@ -241,6 +241,7 @@ const (
 	AgentService_Version_FullMethodName          = "/dsc.AgentService/Version"
 	AgentService_RegisterServices_FullMethodName = "/dsc.AgentService/RegisterServices"
 	AgentService_SwitchSession_FullMethodName    = "/dsc.AgentService/SwitchSession"
+	AgentService_SetPlanMode_FullMethodName      = "/dsc.AgentService/SetPlanMode"
 	AgentService_Shutdown_FullMethodName         = "/dsc.AgentService/Shutdown"
 )
 
@@ -254,6 +255,7 @@ type AgentServiceClient interface {
 	Version(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error)
 	RegisterServices(ctx context.Context, in *RegisterServicesRequest, opts ...grpc.CallOption) (*RegisterServicesResponse, error)
 	SwitchSession(ctx context.Context, in *SwitchSessionRequest, opts ...grpc.CallOption) (*SwitchSessionResponse, error)
+	SetPlanMode(ctx context.Context, in *SetPlanModeRequest, opts ...grpc.CallOption) (*SetPlanModeResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
@@ -334,6 +336,16 @@ func (c *agentServiceClient) SwitchSession(ctx context.Context, in *SwitchSessio
 	return out, nil
 }
 
+func (c *agentServiceClient) SetPlanMode(ctx context.Context, in *SetPlanModeRequest, opts ...grpc.CallOption) (*SetPlanModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetPlanModeResponse)
+	err := c.cc.Invoke(ctx, AgentService_SetPlanMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ShutdownResponse)
@@ -354,6 +366,7 @@ type AgentServiceServer interface {
 	Version(context.Context, *VersionRequest) (*VersionResponse, error)
 	RegisterServices(context.Context, *RegisterServicesRequest) (*RegisterServicesResponse, error)
 	SwitchSession(context.Context, *SwitchSessionRequest) (*SwitchSessionResponse, error)
+	SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
@@ -382,6 +395,9 @@ func (UnimplementedAgentServiceServer) RegisterServices(context.Context, *Regist
 }
 func (UnimplementedAgentServiceServer) SwitchSession(context.Context, *SwitchSessionRequest) (*SwitchSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SwitchSession not implemented")
+}
+func (UnimplementedAgentServiceServer) SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetPlanMode not implemented")
 }
 func (UnimplementedAgentServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
@@ -508,6 +524,24 @@ func _AgentService_SwitchSession_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_SetPlanMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPlanModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).SetPlanMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_SetPlanMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).SetPlanMode(ctx, req.(*SetPlanModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ShutdownRequest)
 	if err := dec(in); err != nil {
@@ -552,6 +586,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SwitchSession",
 			Handler:    _AgentService_SwitchSession_Handler,
+		},
+		{
+			MethodName: "SetPlanMode",
+			Handler:    _AgentService_SetPlanMode_Handler,
 		},
 		{
 			MethodName: "Shutdown",

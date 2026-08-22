@@ -18,6 +18,7 @@ service AgentService {
   rpc Version(VersionRequest) returns (VersionResponse);
   rpc RegisterServices(RegisterServicesRequest) returns (RegisterServicesResponse);
   rpc SwitchSession(SwitchSessionRequest) returns (SwitchSessionResponse);
+  rpc SetPlanMode(SetPlanModeRequest) returns (SetPlanModeResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -145,6 +146,15 @@ message SwitchSessionRequest {
 message SwitchSessionResponse {
   bool success = 1;
   string message = 2; // 错误信息（切换失败时）
+}
+
+message SetPlanModeRequest {
+  bool active = 1; // 目标 plan 模式状态（true=进入 plan 模式，false=退出）
+}
+
+message SetPlanModeResponse {
+  bool success = 1;
+  string message = 2; // 错误信息（设置失败时）
 }
 
 message ShutdownRequest {

@@ -28,7 +28,8 @@ func (a *mockAgent) RegisterServices(_ context.Context, llm, tool uint32) error 
 	return nil
 }
 func (a *mockAgent) SwitchSession(context.Context, string) error { return nil }
-func (a *mockAgent) Shutdown(context.Context, bool) error        { return nil }
+func (a *mockAgent) SetPlanMode(context.Context, bool) error      { return nil }
+func (a *mockAgent) Shutdown(context.Context, bool) error         { return nil }
 
 func (a *mockAgent) calls() int {
 	a.mu.Lock()

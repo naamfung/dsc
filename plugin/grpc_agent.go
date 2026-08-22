@@ -82,6 +82,13 @@ func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownReque
 	return &proto.ShutdownResponse{Success: true, Message: "shutdown successful"}, nil
 }
 
+func (s *agentGRPCServer) SetPlanMode(ctx context.Context, req *proto.SetPlanModeRequest) (*proto.SetPlanModeResponse, error) {
+	if err := s.impl.SetPlanMode(ctx, req.Active); err != nil {
+		return &proto.SetPlanModeResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SetPlanModeResponse{Success: true}, nil
+}
+
 // agentGRPCClient 是 gRPC 客户端代理
 type agentGRPCClient struct {
 	client proto.AgentServiceClient
@@ -145,6 +152,11 @@ func (c *agentGRPCClient) RegisterServices(ctx context.Context, llmServiceID, to
 
 func (c *agentGRPCClient) SwitchSession(ctx context.Context, sessionID string) error {
 	_, err := c.client.SwitchSession(ctx, &proto.SwitchSessionRequest{SessionId: sessionID})
+	return err
+}
+
+func (c *agentGRPCClient) SetPlanMode(ctx context.Context, active bool) error {
+	_, err := c.client.SetPlanMode(ctx, &proto.SetPlanModeRequest{Active: active})
 	return err
 }
 
