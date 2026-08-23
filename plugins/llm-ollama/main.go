@@ -226,7 +226,8 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		defer close(ch)
 
 		var textAccumulator strings.Builder
-		var toolCallAccums map[int]*toolCallDeltaAccumulatorOllama
+		var toolCallAccums map[string]*toolCallDeltaAccumulatorOllama
+		var toolCallOrder []string
 
 		streamErr := p.client.Chat(ctx, &req, func(resp api.ChatResponse) error {
 			// 處理思考過程增量（Message.Thinking；OLLAMA_THINKING=0 時不會出現，
@@ -249,21 +250,24 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 			// 處理工具調用增量
 			if len(resp.Message.ToolCalls) > 0 {
 				if toolCallAccums == nil {
-					toolCallAccums = make(map[int]*toolCallDeltaAccumulatorOllama)
+					toolCallAccums = make(map[string]*toolCallDeltaAccumulatorOllama)
 				}
 				for _, tc := range resp.Message.ToolCalls {
-					idx := 0
-					// Ollama 的 ToolCall 沒有 Index 字段，使用固定索引或根據 ID 區分
-					if tc.ID != "" {
-						// 簡化處理：將所有 tool call 累積到同一個索引
-						idx = 0
+					// Ollama 的 ToolCallFunction 带 Index（服务端按工具解析序号分配，跨帧稳定）：
+					// 以 Index 为主键分桶，同一调用跨帧去重；Index 与 ID 均缺失时按出现顺序
+					// 分配键，避免多个工具调用合并到同一桶导致 Name 互相覆盖、Arguments
+					// JSON 拼接后解析失败。
+					key := fmt.Sprintf("tool_%d_%s", tc.Function.Index, tc.ID)
+					if tc.Function.Index == 0 && tc.ID == "" {
+						key = fmt.Sprintf("tool_anon_%d", len(toolCallAccums))
 					}
-					if toolCallAccums[idx] == nil {
-						toolCallAccums[idx] = &toolCallDeltaAccumulatorOllama{
+					if _, ok := toolCallAccums[key]; !ok {
+						toolCallOrder = append(toolCallOrder, key)
+						toolCallAccums[key] = &toolCallDeltaAccumulatorOllama{
 							ID: tc.ID,
 						}
 					}
-					acc := toolCallAccums[idx]
+					acc := toolCallAccums[key]
 					if tc.Function.Name != "" {
 						acc.Name = tc.Function.Name
 					}
@@ -277,7 +281,8 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 			// 處理完成原因
 			if resp.Done {
 				var toolCalls []plugin.ToolCall
-				for _, acc := range toolCallAccums {
+				for _, key := range toolCallOrder {
+					acc := toolCallAccums[key]
 					var args map[string]interface{}
 					if acc.ArgumentsStr != "" {
 						json.Unmarshal([]byte(acc.ArgumentsStr), &args)

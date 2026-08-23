@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"dsc/plugin"
@@ -242,6 +243,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 						}
 					}
 					acc := toolCallAccums[idx]
+					// 部分服务端（如 llama.cpp）在后续分片才携带 ID，迟到时补上，
+					// 避免工具调用 ID 为空导致 agent 无法关联 tool result。
+					if acc.ID == "" && tc.ID != "" {
+						acc.ID = tc.ID
+					}
 					if tc.Function.Name != "" {
 						acc.Name = tc.Function.Name
 					}
@@ -258,9 +264,16 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				}
 				streamFinished = true
 
-				// 轉換工具調用為 plugin.ToolCall
+				// 轉換工具調用為 plugin.ToolCall：按 index 排序，保证多工具调用顺序稳定
+				// （map 遍历顺序随机，直接遍历会让同一流在不同运行下顺序漂移）。
+				idxList := make([]int, 0, len(toolCallAccums))
+				for idx := range toolCallAccums {
+					idxList = append(idxList, idx)
+				}
+				sort.Ints(idxList)
 				var toolCalls []plugin.ToolCall
-				for _, acc := range toolCallAccums {
+				for _, idx := range idxList {
+					acc := toolCallAccums[idx]
 					var args map[string]interface{}
 					json.Unmarshal([]byte(acc.ArgumentsStr), &args)
 					toolCalls = append(toolCalls, plugin.ToolCall{
