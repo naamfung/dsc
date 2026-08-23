@@ -1322,21 +1322,31 @@ func renderToolResult(result string, isErr bool) string {
 	}
 
 	lines := strings.Split(formattedResult, "\n")
+	// 定位写工具返回的 unified diff 块（说明文本 + diff），diff 行彩色渲染
+	diffStart := -1
+	if !isErr {
+		diffStart = diffBlockStart(lines)
+	}
 	indent := strings.Repeat(" ", len(connector))
 	var b strings.Builder
 	b.WriteString(dimSty.Render(connector))
 	if isErr {
 		b.WriteString(errorSty.Render(lines[0]))
+	} else if diffStart == 0 {
+		b.WriteString(renderDiffLine(lines[0]))
 	} else {
 		b.WriteString(lines[0])
 	}
-	for _, ln := range lines[1:] {
+	for i, ln := range lines[1:] {
+		idx := i + 1
 		b.WriteString("\n" + indent)
 		if strings.TrimSpace(ln) == "" {
 			continue
 		}
 		if isErr {
 			b.WriteString(errorSty.Render(ln))
+		} else if diffStart >= 0 && idx >= diffStart {
+			b.WriteString(renderDiffLine(ln))
 		} else {
 			b.WriteString(ln)
 		}

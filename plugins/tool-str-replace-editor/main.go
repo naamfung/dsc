@@ -14,6 +14,7 @@ import (
 	"dsc/plugin"
 	"dsc/proto"
 	"dsc/proto/metadata"
+	"github.com/aymanbagabas/go-udiff"
 	goplugin "github.com/hashicorp/go-plugin"
 )
 
@@ -287,6 +288,9 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 	if err != nil {
 		return "", err
 	}
+	// diff 标签用相对 workspace 的路径（对齐 REX 的 a/path b/path），
+	// ToSlash 统一为正斜杠，避免 Windows 绝对路径标签含反斜杠
+	relPath := filepath.ToSlash(normalizeWorkspacePath(args.Path))
 
 	switch args.Command {
 	case "view":
@@ -314,7 +318,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		version := computeHash(args.FileText)
 		// 更新觀測狀態
 		server.updateObservation(reqPath, "present", version, args.FileText)
-		return "File created successfully.", nil
+		return appendDiff("File created successfully.", relPath, "", args.FileText), nil
 
 	case "str_replace":
 		if args.OldStr == "" {
@@ -353,7 +357,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		newVersion := computeHash(newContentStr)
 		server.updateObservation(reqPath, "present", newVersion, newContentStr)
 
-		return "File replaced successfully.", nil
+		return appendDiff("File replaced successfully.", relPath, contentStr, newContentStr), nil
 
 	case "insert":
 		if args.NewStr == "" {
@@ -401,11 +405,21 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		newVersion := computeHash(newContent)
 		server.updateObservation(reqPath, "present", newVersion, newContent)
 
-		return "File inserted successfully.", nil
+		return appendDiff("File inserted successfully.", relPath, contentStr, newContent), nil
 
 	default:
 		return "", fmt.Errorf("unsupported command: %s", args.Command)
 	}
+}
+
+// appendDiff 生成 old→new 的 unified diff（带 a/ b/ 文件头，对齐 REX 的 writer 预览）
+// 并附加到写操作结果文本；无变化时原样返回。TUI 侧识别 diff 块并彩色渲染。
+func appendDiff(msg, path, oldContent, newContent string) string {
+	if oldContent == newContent {
+		return msg
+	}
+	diff := udiff.Unified("a/"+path, "b/"+path, oldContent, newContent)
+	return msg + "\n\n" + diff
 }
 
 func main() {

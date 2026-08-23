@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"dsc/plugin"
@@ -56,8 +57,12 @@ func TestCreateView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
-	if res != "File created successfully." {
+	if !strings.HasPrefix(res, "File created successfully.") {
 		t.Fatalf("unexpected create result: %q", res)
+	}
+	// 写操作结果应附带 unified diff（相对路径文件头 + hunk + 全新增行）
+	if !strings.Contains(res, "--- a/test/fib.go") || !strings.Contains(res, "+++ b/test/fib.go") || !strings.Contains(res, "@@") || !strings.Contains(res, "+package main") {
+		t.Fatalf("create 结果应含 unified diff: %q", res)
 	}
 
 	// 文件應存在於 workspace/test/fib.go
@@ -103,8 +108,12 @@ func TestStrReplace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("str_replace failed: %v", err)
 	}
-	if res != "File replaced successfully." {
+	if !strings.HasPrefix(res, "File replaced successfully.") {
 		t.Fatalf("unexpected str_replace result: %q", res)
+	}
+	// 应附 diff：删行 -println、加行 +fmt.Println
+	if !strings.Contains(res, "-\tprintln(\"hi\")") || !strings.Contains(res, "+\tfmt.Println(\"hi\")") {
+		t.Fatalf("str_replace 结果应含 unified diff: %q", res)
 	}
 
 	content, _ := os.ReadFile(filepath.Join("workspace", "test", "fib.go"))
@@ -149,8 +158,12 @@ func TestInsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert failed: %v", err)
 	}
-	if res != "File inserted successfully." {
+	if !strings.HasPrefix(res, "File inserted successfully.") {
 		t.Fatalf("unexpected insert result: %q", res)
+	}
+	// 应附 diff：新增行 +// inserted
+	if !strings.Contains(res, "+// inserted") {
+		t.Fatalf("insert 结果应含 unified diff: %q", res)
 	}
 
 	content, _ := os.ReadFile(filepath.Join("workspace", "test", "fib.go"))
