@@ -93,7 +93,7 @@ func UpdateWorkspaceProtectionEnabled(enabled bool, configPath string) error {
 	if err != nil {
 		// 如果配置文件不存在或加載失敗，創建一個新的配置
 		cfg = &Config{
-			WorkspaceRoot:              "./workspace",
+			WorkspaceRoot:              "",
 			WorkspaceProtectionEnabled: v,
 			Mode:                       "standard",
 			Plugins:                    nil,
@@ -113,7 +113,7 @@ func UpdateMode(mode string, configPath string) error {
 	if err != nil {
 		// 如果配置文件不存在或加載失敗，創建一個新的配置
 		cfg = &Config{
-			WorkspaceRoot:              "./workspace",
+			WorkspaceRoot:              "",
 			WorkspaceProtectionEnabled: 0, // 缺省：默認啟用
 			Mode:                       mode,
 			Plugins:                    nil,

@@ -78,6 +78,23 @@ func loadConfig(path string) (*plugin.Config, error) {
 }
 
 // getExecutableDir 獲取可執行文件所在目錄的絕對路徑
+// resolveWorkspaceRoot 解析統一 workspace 根：
+// 僅當配置提供絕對路徑時以其覆蓋（用戶顯式指定工作區）；
+// 否則默認以啟動目錄 cwd 為根——在哪个目录启动 dsc，就以哪个目录为工作区
+// （对齐 REX/Claude Code 的「以启动目录为工作区」直觉）。相對路徑配置不再
+// 参与決定根（避免 ./workspace 把根推到子目錄）。
+func resolveWorkspaceRoot(cwd, cfgRoot string) string {
+	if filepath.IsAbs(cfgRoot) {
+		return filepath.Clean(cfgRoot)
+	}
+	if cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = wd
+		}
+	}
+	return cwd
+}
+
 func getExecutableDir() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -198,6 +215,13 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to get executable directory: %v\n", err)
 		os.Exit(1)
+	}
+
+	// 啟動目錄（cwd）：默認 workspace 根。用戶在哪个目录启动 dsc，
+	// 就以哪个目录为工作区（对齐 REX/Claude Code）；獲取失敗時退化為可執行目錄。
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = execDir
 	}
 
 	// 解析啟動參數
@@ -325,18 +349,14 @@ func main() {
 
 	// 從主配置 config/config.yaml 讀取工作空間根與保護狀態。
 	// workspace_root 為統一工作空間根（對齊 DSH ctx.sandboxPolicy 的單一根來源），
-	// 同時供 sandbox 判定與注入給各工具插件進程；相對路徑基於 execDir 解析。
+	// 同時供 sandbox 判定與注入給各工具插件進程。默認以啟動目錄（cwd）為根——
+	// 在哪个目录启动 dsc，就以哪个目录为工作区（对齐 REX/Claude Code）；
+	// 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
 	// 工作區保護默認啟用，防止路徑遍歷攻擊；僅當配置顯式聲明 -1（關閉）時禁用（三值：0=缺省、-1=關閉、+1=啟用）。
 	plugin.WorkspaceProtectionEnabled = true
 	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
 	if err == nil && mainCfg != nil {
-		if mainCfg.WorkspaceRoot != "" {
-			if filepath.IsAbs(mainCfg.WorkspaceRoot) {
-				plugin.WorkspaceRoot = filepath.Clean(mainCfg.WorkspaceRoot)
-			} else {
-				plugin.WorkspaceRoot = filepath.Join(execDir, mainCfg.WorkspaceRoot)
-			}
-		}
+		plugin.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
 		if mainCfg.WorkspaceProtectionEnabled == -1 {
 			plugin.WorkspaceProtectionEnabled = false
 		}

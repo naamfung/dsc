@@ -2182,11 +2182,19 @@ func (m *Manager) SwitchMode(mode string) error {
 	for _, entry := range cfg.Plugins {
 		if (entry.Type == "tool" || entry.Type == "policy") && entry.Enabled {
 			if !currentTools[entry.Name] {
-				// 注入当前模式（DSC_MODE）：tool-lua-host 据此限制插件创造仅在创造模式下允许
+				// 注入当前模式（DSC_MODE）：tool-lua-host 据此限制插件创造仅在创造模式下允许；
+				// 同时注入統一工作空間根與保護狀態（对齐 main.go 启动路径，避免运行期
+				// /mode 切换加载的插件与宿主沙箱边界漂移）。
 				if entry.Env == nil {
 					entry.Env = map[string]string{}
 				}
 				entry.Env["DSC_MODE"] = mode
+				entry.Env["DSC_WORKSPACE_ROOT"] = WorkspaceRoot
+				if WorkspaceProtectionEnabled {
+					entry.Env["DSC_WORKSPACE_PROTECTION_ENABLED"] = "1"
+				} else {
+					entry.Env["DSC_WORKSPACE_PROTECTION_ENABLED"] = "0"
+				}
 				if err := m.loadPluginWithBroker(entry, m.broker); err != nil {
 					return fmt.Errorf("failed to load plugin %s: %w", entry.Name, err)
 				}

@@ -1,8 +1,10 @@
 # DSC 絕對插件化配置文件示例
 # 此文件展示了如何配置 LLM、Agent 和 Tool 插件
 
-# 工作區根目錄（可選）
-workspace_root: ./workspace
+# 工作區根目錄（可選）：默認以啟動 dsc 的目錄為根（在哪个目录启动，就以哪个目录
+# 为工作区，对齐 REX/Claude Code）。如需覆盖，请配置为绝对路径，例如
+# workspace_root: D:/work/project（相对路径配置不再参与决定根）。
+# workspace_root: ./workspace
 
 # 默認 LLM 提供者（兼容舊配置）
 default_llm: llm-openai

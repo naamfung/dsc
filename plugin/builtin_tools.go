@@ -23,12 +23,15 @@ func init() {
 		WorkspaceProtectionEnabled = false
 	}
 	if WorkspaceRoot == "" {
-		// 無注入時，基於程序可執行文件所在目錄的 workspace 目錄
-		if exePath, err := os.Executable(); err == nil {
-			WorkspaceRoot = filepath.Join(filepath.Dir(exePath), "workspace")
+		// 無注入時，默認以啟動目錄為根（與宿主 resolveWorkspaceRoot 一致：
+		// 在哪个目录启动，就以哪个目录为工作区）。
+		if cwd, err := os.Getwd(); err == nil {
+			WorkspaceRoot = cwd
+		} else if exePath, err := os.Executable(); err == nil {
+			// 無法獲取 cwd 時以可執行文件所在目錄為根（与宿主 Getwd 失败退化一致）
+			WorkspaceRoot = filepath.Dir(exePath)
 		} else {
-			// 若無法獲取可執行文件路徑，則回退到相對路徑 ./workspace
-			WorkspaceRoot = "./workspace"
+			WorkspaceRoot = "."
 		}
 	}
 }
