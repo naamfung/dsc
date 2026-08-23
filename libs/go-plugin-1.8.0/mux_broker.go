@@ -34,6 +34,10 @@ type MuxBroker struct {
 	session *yamux.Session
 	streams map[uint32]*muxBrokerPending
 
+	// connTimeout 是等待 Accept 取走连接 / 等待连接到达的超时，
+	// 替代原先硬编码的 5 秒窗口（见 DefaultConnTimeout / EnvConnTimeout）。
+	connTimeout time.Duration
+
 	sync.Mutex
 }
 
@@ -44,8 +48,9 @@ type muxBrokerPending struct {
 
 func newMuxBroker(s *yamux.Session) *MuxBroker {
 	return &MuxBroker{
-		session: s,
-		streams: make(map[uint32]*muxBrokerPending),
+		session:     s,
+		streams:     make(map[uint32]*muxBrokerPending),
+		connTimeout: brokerConnTimeout(),
 	}
 }
 
@@ -58,7 +63,7 @@ func (m *MuxBroker) Accept(id uint32) (net.Conn, error) {
 	select {
 	case c = <-p.ch:
 		close(p.doneCh)
-	case <-time.After(5 * time.Second):
+	case <-time.After(m.connTimeout):
 		m.Lock()
 		defer m.Unlock()
 		delete(m.streams, id)
@@ -186,7 +191,7 @@ func (m *MuxBroker) timeoutWait(id uint32, p *muxBrokerPending) {
 	timeout := false
 	select {
 	case <-p.doneCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(m.connTimeout):
 		timeout = true
 	}
 

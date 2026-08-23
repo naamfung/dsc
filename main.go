@@ -323,15 +323,34 @@ func main() {
 		presetCfg = nil
 	}
 
-	// 從主配置 config/config.yaml 讀取工作空間保護狀態
-	// 默認啟用工作區保護，防止路徑遍歷攻擊；僅當配置顯式聲明 -1（關閉）時禁用。
-	// 字段三值：0=缺省（默認啟用）、-1=顯式關閉、+1=顯式啟用。
+	// 從主配置 config/config.yaml 讀取工作空間根與保護狀態。
+	// workspace_root 為統一工作空間根（對齊 DSH ctx.sandboxPolicy 的單一根來源），
+	// 同時供 sandbox 判定與注入給各工具插件進程；相對路徑基於 execDir 解析。
+	// 工作區保護默認啟用，防止路徑遍歷攻擊；僅當配置顯式聲明 -1（關閉）時禁用（三值：0=缺省、-1=關閉、+1=啟用）。
 	plugin.WorkspaceProtectionEnabled = true
 	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
-	if err == nil && mainCfg != nil && mainCfg.WorkspaceProtectionEnabled == -1 {
-		plugin.WorkspaceProtectionEnabled = false
+	if err == nil && mainCfg != nil {
+		if mainCfg.WorkspaceRoot != "" {
+			if filepath.IsAbs(mainCfg.WorkspaceRoot) {
+				plugin.WorkspaceRoot = filepath.Clean(mainCfg.WorkspaceRoot)
+			} else {
+				plugin.WorkspaceRoot = filepath.Join(execDir, mainCfg.WorkspaceRoot)
+			}
+		}
+		if mainCfg.WorkspaceProtectionEnabled == -1 {
+			plugin.WorkspaceProtectionEnabled = false
+		}
 	}
-	logger.Info("workspace protection enabled", "enabled", plugin.WorkspaceProtectionEnabled)
+	logger.Info("workspace root & protection", "root", plugin.WorkspaceRoot, "protection", plugin.WorkspaceProtectionEnabled)
+
+	// 放大 go-plugin GRPCBroker 的连接超时（库默认 5 秒，见 EnvConnTimeout）：
+	// 宿主与插件进程同时加载超大本地模型、传输通道被挤占时，接收方收到 ConnInfo
+	// 后可能未能及时 Dial，一旦超过一次性窗口即被丢弃且无法重连。统一经环境变量
+	// 下发，所有插件子进程（buildEnv 继承宿主环境）同样生效；外部已显式设置时尊重之。
+	if os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT") == "" {
+		os.Setenv("PLUGIN_BROKER_CONN_TIMEOUT", "5m")
+	}
+	logger.Info("plugin broker conn timeout", "timeout", os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT"))
 
 	mgr := plugin.NewManager(&plugin.ManagerConfig{
 		PluginDir:       filepath.Join(execDir, "plugins"),
@@ -499,6 +518,13 @@ func main() {
 			e.Env = map[string]string{}
 		}
 		e.Env["DSC_MODE"] = mode
+		// 注入統一工作空間根與保護狀態（對齊 DSH 單一策略歸屬：各能力族消費同一根）
+		e.Env["DSC_WORKSPACE_ROOT"] = plugin.WorkspaceRoot
+		if plugin.WorkspaceProtectionEnabled {
+			e.Env["DSC_WORKSPACE_PROTECTION_ENABLED"] = "1"
+		} else {
+			e.Env["DSC_WORKSPACE_PROTECTION_ENABLED"] = "0"
+		}
 	}
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices，

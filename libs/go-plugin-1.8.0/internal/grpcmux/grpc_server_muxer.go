@@ -7,12 +7,32 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/yamux"
 )
+
+// DefaultSessionTimeout 是等待 multiplexing yamux 会话建立（首条连接）的默认超时。
+// 与 plugin 包 GRPCBroker 的连接超时同一隐患语义：宿主与插件同时加载超大本地模型、
+// 传输通道被挤占时首条连接可能迟到。受同一环境变量 PLUGIN_BROKER_CONN_TIMEOUT 控制。
+var DefaultSessionTimeout = 5 * time.Second
+
+// envConnTimeout 与 plugin.EnvConnTimeout 指向同一环境变量；
+// grpcmux 为 internal 子包无法反向引用 plugin 包，故在此重复定义。
+const envConnTimeout = "PLUGIN_BROKER_CONN_TIMEOUT"
+
+// sessionTimeout 解析会话建立超时：环境变量优先，缺省取 DefaultSessionTimeout。
+func sessionTimeout() time.Duration {
+	if v := os.Getenv(envConnTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return DefaultSessionTimeout
+}
 
 var _ GRPCMuxer = (*GRPCServerMuxer)(nil)
 var _ net.Listener = (*GRPCServerMuxer)(nil)
@@ -39,6 +59,10 @@ type GRPCServerMuxer struct {
 	sessionErrCh chan error
 	sess         *yamux.Session
 
+	// sessionTimeout 是等待 yamux 会话建立（首条连接）的超时，
+	// 替代原先硬编码的 5 秒窗口（见 DefaultSessionTimeout / envConnTimeout）。
+	sessionTimeout time.Duration
+
 	knockCh chan uint32
 
 	acceptMutex    sync.Mutex
@@ -50,7 +74,8 @@ func NewGRPCServerMuxer(logger hclog.Logger, ln net.Listener) *GRPCServerMuxer {
 		addr:   ln.Addr(),
 		logger: logger,
 
-		sessionErrCh: make(chan error),
+		sessionErrCh:   make(chan error),
+		sessionTimeout: sessionTimeout(),
 
 		knockCh:        make(chan uint32, 1),
 		acceptChannels: make(map[uint32]chan acceptResult),
@@ -92,7 +117,7 @@ func (m *GRPCServerMuxer) session() (*yamux.Session, error) {
 		if err != nil {
 			return nil, err
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(m.sessionTimeout):
 		return nil, errors.New("timed out waiting for connection to be established")
 	}
 

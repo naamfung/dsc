@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,29 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
+
+// DefaultConnTimeout 是 GRPCBroker 等待 Dial 取走连接信息的默认超时。
+// 连接信息（ConnInfo）是一次性发送：接收方在超时内未 Dial 该条目即被丢弃，
+// 之后即使再 Dial 也永远等不到（不可恢复）。
+//
+// 在宿主与插件进程同时加载超大本地模型、传输通道被挤占的边缘场景下，
+// 5 秒默认窗口可能不够，可通过环境变量 EnvConnTimeout 放大（或经
+// newGRPCBroker 在构造时覆盖）。
+var DefaultConnTimeout = 5 * time.Second
+
+// EnvConnTimeout 是控制 GRPCBroker 连接超时的环境变量名（Go time.Duration
+// 字符串，如 "30s"、"5m"）。未设置或解析失败时回退到 DefaultConnTimeout。
+const EnvConnTimeout = "PLUGIN_BROKER_CONN_TIMEOUT"
+
+// brokerConnTimeout 解析 broker 连接超时：环境变量优先，缺省取 DefaultConnTimeout。
+func brokerConnTimeout() time.Duration {
+	if v := os.Getenv(EnvConnTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return DefaultConnTimeout
+}
 
 // streamer interface is used in the broker to send/receive connection
 // information.
@@ -266,6 +290,10 @@ type GRPCBroker struct {
 	doneCh   chan struct{}
 	o        sync.Once
 
+	// connTimeout 是等待 Dial 取走连接信息 / 等待连接信息到达的超时，
+	// 替代原先硬编码的 5 秒窗口（见 DefaultConnTimeout / EnvConnTimeout）。
+	connTimeout time.Duration
+
 	clientStreams map[uint32]*gRPCBrokerPending
 	serverStreams map[uint32]*gRPCBrokerPending
 
@@ -287,9 +315,10 @@ type gRPCBrokerPending struct {
 
 func newGRPCBroker(s streamer, tls *tls.Config, unixSocketCfg UnixSocketConfig, addrTranslator runner.AddrTranslator, muxer grpcmux.GRPCMuxer) *GRPCBroker {
 	return &GRPCBroker{
-		streamer: s,
-		tls:      tls,
-		doneCh:   make(chan struct{}),
+		streamer:    s,
+		tls:         tls,
+		doneCh:      make(chan struct{}),
+		connTimeout: brokerConnTimeout(),
 
 		clientStreams: make(map[uint32]*gRPCBrokerPending),
 		serverStreams: make(map[uint32]*gRPCBrokerPending),
@@ -491,7 +520,7 @@ func (b *GRPCBroker) knock(id uint32) error {
 		if msg.Knock.Error != "" {
 			return fmt.Errorf("failed to knock for id %d: %s", id, msg.Knock.Error)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(b.connTimeout):
 		return fmt.Errorf("timeout waiting for multiplexing knock handshake on id %d", id)
 	}
 
@@ -534,7 +563,7 @@ func (b *GRPCBroker) DialWithOptions(id uint32, opts ...grpc.DialOption) (conn *
 	select {
 	case c = <-p.ch:
 		close(p.doneCh)
-	case <-time.After(5 * time.Second):
+	case <-time.After(b.connTimeout):
 		return nil, fmt.Errorf("timeout waiting for connection info")
 	}
 
@@ -642,7 +671,7 @@ func (m *GRPCBroker) timeoutWait(id uint32, p *gRPCBrokerPending) {
 	// for a timeout.
 	select {
 	case <-p.doneCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(m.connTimeout):
 	}
 
 	m.Lock()

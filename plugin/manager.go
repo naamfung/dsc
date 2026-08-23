@@ -1546,29 +1546,13 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.broker = broker
 	m.mainAgentName = agentEntry.Name
 
-	// 互通服务先行挂载：聚合 LLM / 插件通知 / 用户评审通道的 serviceID 需在
-	// provider 加载前确定，pluginEnv 才会把 ID 注入插件进程——工具插件（如
-	// novelforge）加载时即可经互通机制 1/2 复用宿主 LLM 与事件总线。聚合
-	// LLM 服务在请求时动态路由 provider，提前挂载安全。
-	hasLLM := false
-	llmID := uint32(0)
-	toolID := uint32(0)
+	// 预置 agent 聚合 LLM 的 primary 名称（tool 插件互通经 serveAggregateLLMOnBroker
+	// 路由 primary 时需要），但暂不挂载服务。服务挂载统一推迟到 provider 全部就绪后
+	// （见下）：go-plugin broker 的 ConnInfo 是一次性发送且 5 秒后即被 timeoutWait
+	// 丢弃，若在 provider（尤其本地超大模型）加载前就挂载并发 ConnInfo，agent 要等
+	// 模型加载完才在 RegisterServices 中 Dial，远超 5 秒窗口即连不上 RPC。
 	if agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
-		if id, err := m.serveAggregateLLMLocked(agentEntry.DependsOn.LLM); err == nil {
-			llmID = id
-		} else {
-			m.logger.Warn("aggregate llm service unavailable", "error", err)
-		}
-	}
-	if _, err := m.servePluginNotifyLocked(); err != nil {
-		m.logger.Warn("plugin notify service unavailable", "error", err)
-	}
-	if uqID, err := m.serveUserQuestionsLocked(); err == nil {
-		if agent, ok := m.agents[agentEntry.Name]; ok {
-			_ = agent.SetUserQuestionsService(context.Background(), uqID)
-		}
-	} else {
-		m.logger.Warn("user-questions service unavailable", "error", err)
+		m.agentLLMName = agentEntry.DependsOn.LLM
 	}
 
 	// 按 DependsOn 对 provider 做拓扑排序；未能满足依赖的进入 PENDING
@@ -1584,11 +1568,28 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		}
 	}
 
-	// provider 就绪后：确认 LLM、挂载聚合 Tool 服务并一次性注入 agent。
+	// provider 就绪后：确认 LLM、挂载聚合服务并一次性注入 agent。
+	// 聚合 LLM / 聚合 Tool / 插件通知 / 用户评审服务统一在此挂载，而非 provider 加载前：
+	// go-plugin broker 的 ConnInfo 是一次性发送且 5 秒后即被 timeoutWait 丢弃，若在
+	// provider（尤其本地超大模型）加载前就挂载并发 ConnInfo，agent 要等模型加载完才在
+	// RegisterServices 中 Dial，远超 5 秒窗口即连不上 RPC。推迟到 provider 全部就绪后再
+	// 挂载并随即 RegisterServices，把 ConnInfo 发送到 agent Dial 的间隔压缩到毫秒级，彻底
+	// 避开超时窗口——与 PENDING 的「依赖就绪才激活」语义一致：agent 在 LLM 就绪前保持等待。
+	hasLLM := false
+	llmID := uint32(0)
+	toolID := uint32(0)
+
 	// LLM 走多 provider 路由：agent 连接聚合 LLM 服务，primary 为声明的 provider。
 	if agentEntry.DependsOn != nil {
 		if _, ok := m.llms[agentEntry.DependsOn.LLM]; ok {
 			hasLLM = true
+		}
+	}
+	if hasLLM {
+		if id, err := m.serveAggregateLLMLocked(agentEntry.DependsOn.LLM); err == nil {
+			llmID = id
+		} else {
+			m.logger.Warn("aggregate llm service unavailable", "error", err)
 		}
 	}
 	// 有工具插件加载或 agent 声明了工具依赖时，才提供聚合 Tool 服务
@@ -1598,6 +1599,17 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		} else {
 			m.logger.Warn("aggregate tool service unavailable", "error", err)
 		}
+	}
+	// 插件通知 / 用户评审通道：provider 就绪后统一挂载（避免提前发 ConnInfo 超时）
+	if _, err := m.servePluginNotifyLocked(); err != nil {
+		m.logger.Warn("plugin notify service unavailable", "error", err)
+	}
+	if uqID, err := m.serveUserQuestionsLocked(); err == nil {
+		if agent, ok := m.agents[agentEntry.Name]; ok {
+			_ = agent.SetUserQuestionsService(context.Background(), uqID)
+		}
+	} else {
+		m.logger.Warn("user-questions service unavailable", "error", err)
 	}
 
 	if hasLLM {
