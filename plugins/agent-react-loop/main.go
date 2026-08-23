@@ -290,6 +290,17 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	executedTools := false    // 記錄本輪是否執行了工具（單輪模式下視為正常完成）
 	executedToolsErr := false // 記錄本輪執行的工具是否出現錯誤（單輪模式下據此判定退出碼）
 	stepNo := 0
+	// 包装 emit：为每帧自动填充对齐 DSH 的轮/步编号（轮=一次受理输入的排空，
+	// 步=一次模型请求及其引发的工具执行），供 TUI 状态行实时显示当前进度。
+	// 闭包按引用捕获 turnNo/stepNo，故每次发射都取当前步。
+	if emit != nil {
+		baseEmit := emit
+		emit = func(f *plugin.RunStreamResponse) {
+			f.Turn = int32(turnNo)
+			f.Step = int32(stepNo)
+			baseEmit(f)
+		}
+	}
 	// maxIterations == 0 表示不設上限，僅靠 ctx 取消（用戶 Ctrl+C / Shutdown）與模型自然收尾結束
 	for i := 0; maxIterations == 0 || i < maxIterations; i++ {
 		// 检查 ctx.Done()
@@ -534,8 +545,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			}, nil)
 
 			// 向客户端提示正在调用工具（携带工具名与参数 JSON，供 TUI 渲染 REX 式卡片）
+			// Usage 随帧携带：本步模型请求完成后即可刷新容量，不必等轮末 success 帧。
 			if emit != nil {
-				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson})
+				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, Usage: a.usageSnapshot()})
 			}
 
 			// 宿主托管的 plan/goal 工具直接本地执行（状态读写会话事件日志），
@@ -583,7 +595,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				}
 				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
 				if emit != nil {
-					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error})
+					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error, Usage: a.usageSnapshot()})
 				}
 			} else {
 				sess.Append(session.ToolResult, &session.ToolResultData{
@@ -592,7 +604,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				}, &session.SurfaceOp{Op: session.SurfaceAppend})
 				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
 				if emit != nil {
-					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Content})
+					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Content, Usage: a.usageSnapshot()})
 				}
 			}
 			// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链检测在每次调用后，
@@ -653,6 +665,20 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		Output: "Max iterations reached",
 		Status: "error",
 	}, nil
+}
+
+// usageSnapshot 生成当前步骤请求的用量快照：优先取服务端返回的 lastUsage，
+// 否则退化为仅携带最近一次 prompt 用量。随工具帧携带，供 TUI 在每步工具调用
+// 后实时刷新容量显示（对齐 REX 每步 usage 事件即时更新统计行的观感）。
+func (a *ReactLoopAgent) usageSnapshot() *plugin.Usage {
+	usage := &plugin.Usage{PromptTokens: a.lastPromptTokens}
+	if a.lastUsage != nil {
+		usage.CompletionTokens = a.lastUsage.CompletionTokens
+		usage.TotalTokens = a.lastUsage.TotalTokens
+	} else {
+		usage.TotalTokens = a.lastPromptTokens
+	}
+	return usage
 }
 
 // buildSystemPrompt 構建完整 system prompt，采用 DSH 的分层结构：

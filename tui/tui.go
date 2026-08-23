@@ -29,12 +29,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 布局尺寸常量：标题栏一行；状态栏两行（含分隔线）；指标行一行；输入区内部 3 行 + 上下边框 2 行。
+// 布局尺寸常量：标题栏一行；状态栏两行（含分隔线）；指标行一行；输入区动态高度（1~composerMax 行）+ 上下边框 2 行。
 const (
 	titleRows   = 1
 	statusRows  = 2
 	infoRows    = 1
-	composerMin = 3
+	composerMax = 8
 	boxBorder   = 2
 	thinkingRow = 1
 )
@@ -241,9 +241,11 @@ type Model struct {
 	turnCancel      context.CancelFunc
 	streamCancelled bool // 中断标记：置位后丢弃后续 streamFrame，停止本轮泵取
 
-	// 会话运行指标：turnCount 累计用户提交轮次；stepCount 累计工具调用步数（tool 帧）。
-	turnCount int
-	stepCount int
+	// 会话运行指标（对齐 DSH 定义）：curTurn 为当前轮次编号（一次受理输入的排空），
+	// curStep 为当前步编号（一次模型请求及其引发的工具执行）。由 agent 发射的流帧
+	// 携带的 Turn/Step 实时更新，避免本地计数与 agent 侧（含运行中注入）不一致。
+	curTurn int32
+	curStep int32
 
 	// 当前会话 id（初始 default；/session 切换或新建时更新，供 /export 使用）
 	currentSessionID string
@@ -262,9 +264,18 @@ type Model struct {
 // New 创建一个聊天界面模型
 func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) *Model {
 	input := textarea.New()
-	input.Placeholder = "输入消息，回车发送，Ctrl+J 换行，Ctrl+Q 退出"
+	input.Placeholder = "输入消息，回车发送，Shift+Enter/Ctrl+J 换行，Ctrl+Q 退出"
 	input.CharLimit = 4096
 	input.ShowLineNumbers = false
+	// 对齐 REX：关闭虚拟光标，改用真实终端光标。虚拟光标在消息区动态重排时无法
+	// 稳定跟随输入位置，会导致中文输入法候选窗/文字光标随上方输出横向漂移；
+	// 真实光标由 View 显式锚定到输入插入点（见 View 末尾的 v.Cursor 设置）。
+	input.SetVirtualCursor(false)
+	// 对齐 REX：动态高度让输入区随内容自动增长（1~composerMax 行），多行输入不再被
+	// 压扁到固定 3 行；回车在宿主层拦截用于发送，换行交给 Shift+Enter/Ctrl+J/Alt+Enter。
+	input.DynamicHeight = true
+	input.MinHeight = 1
+	input.MaxHeight = composerMax
 	input.SetHeight(1)
 	// 仅首行显示提示符「❯ 」，续行留空；高度随内容行数变化（见 syncInputHeight）
 	input.SetPromptFunc(2, func(info textarea.PromptInfo) string {
@@ -274,11 +285,11 @@ func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 		return "❯ "
 	})
 	// 回车在宿主层拦截用于发送，这里仅兜底新增换行键位。
-	// 终端协议里 Enter/Ctrl+Enter 都发送相同的 CR 字节（Bubble Tea v1 无法区分），
-	// Alt+Enter 又被 Windows Terminal 占用为全屏切换，因此统一用 Ctrl+J（LF）作为换行键。
+	// 终端协议里 Enter/Ctrl+Enter 都发送相同的 CR 字节（Bubble Tea v2 无法区分），
+	// 因此统一用 Ctrl+J（LF）/Shift+Enter/Alt+Enter 作为换行键（对齐 REX 键位）。
 	input.KeyMap.InsertNewline = key.NewBinding(
-		key.WithKeys("ctrl+j"),
-		key.WithHelp("ctrl+j", "换行"),
+		key.WithKeys("ctrl+j", "shift+enter", "alt+enter"),
+		key.WithHelp("ctrl+j/shift+enter", "换行"),
 	)
 
 	s := spinner.New()
@@ -410,19 +421,10 @@ func (m *Model) vpHeight() int {
 	return h
 }
 
-// syncInputHeight 让输入框高度跟随内容行数：空/单行时 1 行，最多 composerMin 行。
-// 高度变化会占用/释放一行的消息区，需同步重算 viewport 高度并滚到底部。
+// syncInputHeight 同步消息区高度：DynamicHeight 模式下 textarea 在内容变化时自动
+// 调整自身高度（clamp 在 MinHeight~composerMax），这里只需据当前输入框高度重算
+// viewport 高度并滚到底部，避免内容行变化后消息区多占/少占一行。
 func (m *Model) syncInputHeight() {
-	n := m.input.LineCount()
-	if n < 1 {
-		n = 1
-	}
-	if n > composerMin {
-		n = composerMin
-	}
-	if n != m.input.Height() {
-		m.input.SetHeight(n)
-	}
 	// 总是同步 viewport 高度，以应对 thinking 等状态变化导致的高度重算
 	m.viewport.SetHeight(m.vpHeight())
 	m.viewport.GotoBottom()
@@ -615,9 +617,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.wakeBudget = maxConsecutiveWakes // 用户消息恢复唤醒预算（对齐 DSH）
 			if inRunning {
 				// 正在工作：不作为新轮，而是把消息实时注入会话历史（不停止当前工作），
-				// 本地即刻渲染用户气泡；流式通道继续保持泵取。
+				// 本地即刻渲染用户气泡；流式通道继续保持泵取。轮次编号由 agent 流帧
+				// 携带的 Turn 维护（注入不新开物理轮次，对齐 DSH turn 定义）。
 				m.appendMessage(renderUserBubble(text, m.width-4))
-				m.turnCount++
 				m.syncInputHeight()
 				m.render()
 				m.viewport.GotoBottom()
@@ -644,6 +646,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 已被 Ctrl+C 中断本轮的残留帧直接丢弃，停止泵取
 		if m.streamCancelled {
 			return m, nil
+		}
+		// 跟踪 agent 发射的轮/步编号（对齐 DSH 定义），用于状态行实时显示。
+		// 帧携带的编号是权威值（含运行中注入的续步），本地不做推算。
+		if msg.frame != nil {
+			if msg.frame.Turn > 0 {
+				m.curTurn = msg.frame.Turn
+			}
+			if msg.frame.Step > 0 {
+				m.curStep = msg.frame.Step
+			}
 		}
 		if msg.first {
 			m.thinking = false
@@ -745,7 +757,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "tool":
 			m.streamOpen = false
-			m.stepCount++
+			// 工具帧随帧携带本步请求的 usage：每步工具调用后即刷新容量（对齐 REX
+			// 每步 usage 事件即时更新统计行），不必等轮末 success 帧。
+			if f.Usage != nil && f.Usage.TotalTokens > 0 {
+				m.usedTokens = int(f.Usage.TotalTokens)
+			}
 			// 工具结果帧（ToolResult 非空）以「└」gutter 缩进展示，错误时用错误色；
 			// 调用帧（ToolName 非空）以「● Verb(arg)」卡片展示；均无结构化信息时回退原文。
 			toolLine := ""
@@ -2005,10 +2021,11 @@ func (m *Model) composerView() string {
 	return composerBoxSty.Render(b.String())
 }
 
-// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次 + 工具调用步数 + 已用容量。
+// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次 + 步 + 已用容量。
 // 填在两条平行线（输入框下边框与状态栏分隔线）之间，避免双线紧贴，参考 REX 的指标带布局。
+// 轮/步编号对齐 DSH 定义：轮为一次受理输入的排空，步为一次模型请求及其引发的工具执行。
 func (m *Model) runInfoLine() string {
-	info := fmt.Sprintf("轮次 %d · 工具调用 %d", m.turnCount, m.stepCount)
+	info := fmt.Sprintf("轮次 %d · 步 %d", m.curTurn, m.curStep)
 	if m.usedTokens > 0 {
 		if m.contextWindow > 0 {
 			// 已知总容量时显示已用百分比；小于 1% 也至少显示 1，避免 0% 误导

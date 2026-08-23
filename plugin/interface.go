@@ -111,6 +111,10 @@ type RunStreamResponse struct {
 	ToolArgs string `json:"tool_args,omitempty"`
 	// ToolResult 是工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示。
 	ToolResult string `json:"tool_result,omitempty"`
+	// Turn/Step 是对齐 DSH 的轮/步编号：轮为一次受理输入的排空，步为一次模型请求
+	// 及其引发的工具执行。随每帧携带，供 TUI 状态行实时显示。
+	Turn int32 `json:"turn,omitempty"`
+	Step int32 `json:"step,omitempty"`
 }
 
 // Usage 是一次 LLM 调用的 token 用量统计

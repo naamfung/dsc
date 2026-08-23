@@ -584,6 +584,8 @@ type RunStreamResponse struct {
 	ToolName      string                 `protobuf:"bytes,6,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`       // 工具调用帧（status="tool"）携带的工具名
 	ToolArgs      string                 `protobuf:"bytes,7,opt,name=tool_args,json=toolArgs,proto3" json:"tool_args,omitempty"`       // 工具调用帧携带的参数 JSON，供 TUI 渲染「● Verb(arg)」卡片
 	ToolResult    string                 `protobuf:"bytes,8,opt,name=tool_result,json=toolResult,proto3" json:"tool_result,omitempty"` // 工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示
+	Turn          int32                  `protobuf:"varint,9,opt,name=turn,proto3" json:"turn,omitempty"`                              // 轮次编号（对齐 DSH：一次受理输入的排空）；随帧携带，供 TUI 显示
+	Step          int32                  `protobuf:"varint,10,opt,name=step,proto3" json:"step,omitempty"`                             // 步编号（对齐 DSH：一次模型请求及其引发的工具执行）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -672,6 +674,20 @@ func (x *RunStreamResponse) GetToolResult() string {
 		return x.ToolResult
 	}
 	return ""
+}
+
+func (x *RunStreamResponse) GetTurn() int32 {
+	if x != nil {
+		return x.Turn
+	}
+	return 0
+}
+
+func (x *RunStreamResponse) GetStep() int32 {
+	if x != nil {
+		return x.Step
+	}
+	return 0
 }
 
 // token 用量统计（与 OpenAI usage 字段对应）
@@ -3308,7 +3324,7 @@ const file_dsc_proto_rawDesc = "" +
 	"\x05input\x18\x01 \x01(\tR\x05input\"=\n" +
 	"\vRunResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\"\xf4\x01\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\x9c\x02\n" +
 	"\x11RunStreamResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
@@ -3319,7 +3335,10 @@ const file_dsc_proto_rawDesc = "" +
 	"\ttool_name\x18\x06 \x01(\tR\btoolName\x12\x1b\n" +
 	"\ttool_args\x18\a \x01(\tR\btoolArgs\x12\x1f\n" +
 	"\vtool_result\x18\b \x01(\tR\n" +
-	"toolResult\"|\n" +
+	"toolResult\x12\x12\n" +
+	"\x04turn\x18\t \x01(\x05R\x04turn\x12\x12\n" +
+	"\x04step\x18\n" +
+	" \x01(\x05R\x04step\"|\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\x12!\n" +

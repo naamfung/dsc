@@ -101,6 +101,8 @@ message RunStreamResponse {
   string tool_name = 6; // 工具调用帧（status="tool"）携带的工具名
   string tool_args = 7; // 工具调用帧携带的参数 JSON，供 TUI 渲染「● Verb(arg)」卡片
   string tool_result = 8; // 工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示
+  int32 turn = 9; // 轮次编号（对齐 DSH：一次受理输入的排空）；随帧携带，供 TUI 显示
+  int32 step = 10; // 步编号（对齐 DSH：一次模型请求及其引发的工具执行）
 }
 
 // token 用量统计（与 OpenAI usage 字段对应）

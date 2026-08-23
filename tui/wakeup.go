@@ -38,7 +38,6 @@ func noticeBubble(text string) string {
 func (m *Model) startTurn(text, rendered string) tea.Cmd {
 	m.appendMessage(rendered)
 	m.thinking = true
-	m.turnCount++
 	m.syncInputHeight()
 	m.render()
 	m.viewport.GotoBottom()

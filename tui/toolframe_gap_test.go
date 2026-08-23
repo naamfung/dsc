@@ -48,7 +48,7 @@ func TestToolFrameGapVisual(t *testing.T) {
 	for i, r := range rows {
 		b.WriteString(fmt.Sprintf("%2d | %s\n", i, ansi.Strip(r)))
 	}
-	if err := os.WriteFile("tui/toolframe_gap_visual.txt", []byte(b.String()), 0644); err != nil {
+	if err := os.WriteFile("toolframe_gap_visual.txt", []byte(b.String()), 0644); err != nil {
 		t.Fatalf("写视觉文件失败: %v", err)
 	}
 }
