@@ -49,6 +49,11 @@ type ReactLoopAgent struct {
 	sess        *session.Session
 	turnCounter int // 轮次编号（跨 Run 递增，对齐 DSH 的 turn 概念）
 
+	// 运行中注入计数：TUI 在模型输出期间经 InjectMessage 实时注入的新用户消息数
+	// （sessMu 保护）。runLoop 每轮派生请求历史时快照消费；模型无工具调用收尾前若发现
+	// 快照后有新注入，说明存在尚未发送给模型的新消息，须继续下一轮而不是结束本轮。
+	pendingInjects int
+
 	// 多会话事件日志存储（DSC_SESSION_DIR，缺省 ./sessions）；固定使用 default 会话
 	store *session.Store
 
@@ -333,8 +338,14 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			a.lastPromptTokens = 0
 		}
 
-		// 请求历史由会话 surface 派生（system prompt 前置），不再依赖独立消息数组
+		// 请求历史由会话 surface 派生（system prompt 前置），不再依赖独立消息数组。
+		// 派生与注入计数快照在同一 sessMu 临界区内完成（与 InjectMessage 互斥），
+		// 保证「已发送给模型的消息」与「已消费的注入」原子一致，避免注入恰好落在
+		// 两者之间被漏检。
+		a.sessMu.Lock()
 		msgs := sess.DeriveMessages(a.sysPrompt)
+		iterPendingInjects := a.pendingInjects
+		a.sessMu.Unlock()
 
 		// 调用 LLM（流式或非流式）
 		req := &proto.ChatRequest{
@@ -426,6 +437,19 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					if emit != nil {
 						emit(&plugin.RunStreamResponse{
 							Output: fmt.Sprintf("\n[Goal Round %d/%d]\n", a.goalRounds, g.MaxGoalRounds),
+							Status: "tool",
+						})
+					}
+					continue
+				}
+				// 竞态修复：模型最后一次输出期间 TUI 实时注入了新用户消息（尚未进入本轮
+				// 派生的请求历史）。若就此收尾，会出现「消息已发出但工作停止」：消息已写入
+				// 会话 surface，却没有任何一轮再去发送给模型。检测到快照后有新注入则继续
+				// 下一轮（消息已被下轮派生，不会重复触发，也不会死循环）。
+				if a.hasNewInjectedSince(iterPendingInjects) {
+					if emit != nil {
+						emit(&plugin.RunStreamResponse{
+							Output: "\n[已收到新消息，继续处理]\n",
 							Status: "tool",
 						})
 					}
@@ -792,8 +816,18 @@ func (a *ReactLoopAgent) InjectMessage(ctx context.Context, content string) erro
 	a.sess.Append(session.UserMessage,
 		&session.UserMessageData{Content: content, Source: "user"},
 		&session.SurfaceOp{Op: session.SurfaceAppend})
+	a.pendingInjects++ // 记录一次尚未被 runLoop 消费的注入（收尾前据此检测是否继续）
 	fmt.Printf("[Agent Loop] injected user message (%d chars) into running session\n", len(content))
 	return nil
+}
+
+// hasNewInjectedSince 返回是否自注入基线（iterInjects，本迭代派生请求历史时快照的
+// pendingInjects）之后又有新的 InjectMessage 注入。runLoop 在模型无工具调用收尾前调用：
+// 命中说明模型输出期间 TUI 注入了新用户消息，本轮不得结束，须继续下一轮处理。
+func (a *ReactLoopAgent) hasNewInjectedSince(iterInjects int) bool {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	return a.pendingInjects > iterInjects
 }
 
 // DebugSnapshot 返回 agent 当前运行时的调试快照，供 ADMIN API 的 DEBUGGER 端点
