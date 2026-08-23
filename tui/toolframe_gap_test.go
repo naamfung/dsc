@@ -53,7 +53,7 @@ func TestToolFrameGapVisual(t *testing.T) {
 	}
 }
 
-// TestToolFrameGapStructural 结构断言：两个连续工具结果帧之间必须有双空行分隔（\n\n）。
+// TestToolFrameGapStructural 结构断言：两个连续工具结果帧之间以单空行分隔（紧凑展示）。
 func TestToolFrameGapStructural(t *testing.T) {
 	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
 		{Status: "streaming", Output: "助手正文第一行"},
@@ -76,10 +76,10 @@ func TestToolFrameGapStructural(t *testing.T) {
 	m2 := model.(*Model)
 	full := strings.Join(m2.lines, "\n")
 
-	// 两个连续工具结果帧之间必须有双空行（\n\n\n：帧尾换行 + 双空行）。
+	// 两个连续工具结果帧之间以单空行分隔（帧尾换行 + 帧间空行，共 \n\n）。
 	// 使用 ansi.Strip 移除 ANSI 控制码后再进行结构断言。
 	stripFull := ansi.Strip(full)
-	if !strings.Contains(stripFull, "A结果行2\n\n\n  └ B结果行1") {
-		t.Fatalf("两个连续工具结果帧之间应有双空行分隔，实际:\n%q", stripFull)
+	if !strings.Contains(stripFull, "A结果行2\n\n  └ B结果行1") {
+		t.Fatalf("两个连续工具结果帧之间应为单空行分隔，实际:\n%q", stripFull)
 	}
 }

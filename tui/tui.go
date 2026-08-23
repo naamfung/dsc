@@ -220,11 +220,7 @@ type Model struct {
 	// 流式渲染状态
 	streamBuffer string
 	streamOpen   bool
-
-	// lastToolFrame 記錄上一條追加的是否為工具结果/调用帧；供 appendToolFrame 判斷
-	// 是否以雙空行分隔連續工具结果块。
-	lastToolFrame bool
-	streamMsgIdx  int
+	streamMsgIdx int
 
 	// 当前一轮的流式通道暂存：供运行中输入（注入）时维持泵取，避免流式流停滞
 	streamInput string
@@ -246,6 +242,11 @@ type Model struct {
 	// 携带的 Turn/Step 实时更新，避免本地计数与 agent 侧（含运行中注入）不一致。
 	curTurn int32
 	curStep int32
+
+	// mouseCaptureOff 为 true 时释放鼠标给终端（MouseModeNone），恢复终端原生
+	// 文字选中/复制（模型工作期间也可用）；由 /mouse 命令或 DSC_DISABLE_MOUSE
+	// 切换，代价是应用内滚轮滚动与正文拖选复制暂时失效。
+	mouseCaptureOff bool
 
 	// 当前会话 id（初始 default；/session 切换或新建时更新，供 /export 使用）
 	currentSessionID string
@@ -307,7 +308,15 @@ func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 		spinner:          s,
 		currentSessionID: "default",
 		wakeBudget:       maxConsecutiveWakes,
+		mouseCaptureOff:  mouseCaptureOffByDefault(),
 	}
+}
+
+// mouseCaptureOffByDefault 允许用户通过 DSC_DISABLE_MOUSE 环境变量在启动时默认
+// 释放鼠标（对齐 REX 的 REX_DISABLE_MOUSE），免去每次会话敲 /mouse。
+func mouseCaptureOffByDefault() bool {
+	v := strings.TrimSpace(os.Getenv("DSC_DISABLE_MOUSE"))
+	return v != "" && v != "0"
 }
 
 // Init 返回初始化命令
@@ -650,10 +659,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 跟踪 agent 发射的轮/步编号（对齐 DSH 定义），用于状态行实时显示。
 		// 帧携带的编号是权威值（含运行中注入的续步），本地不做推算。
 		if msg.frame != nil {
-			if msg.frame.Turn > 0 {
+			if msg.frame.Turn != 0 {
 				m.curTurn = msg.frame.Turn
 			}
-			if msg.frame.Step > 0 {
+			if msg.frame.Step != 0 {
 				m.curStep = msg.frame.Step
 			}
 		}
@@ -1023,25 +1032,13 @@ func (m *Model) appendMessage(rendered string) {
 	m.lines = append(m.lines, rendered)
 }
 
-// appendToolFrame 追加工具結果/調用帧：連續工具結果塊之間以雙空行分隔，
-// 強化工具輸出之間的分组感與呼吸版面（REX 式）。首個工具帧（緊接助手正文）
-// 保持與其它消息一致的單空行，避免正文與工具塊間隔過大。
-// lastToolFrame 記錄上一條追加的是否為工具帧。
+// appendToolFrame 追加工具结果/调用帧：工具调用与结果帧之间无空行，紧凑展示。
 func (m *Model) appendToolFrame(rendered string) {
 	if len(m.lines) > 0 {
-		if m.lastToolFrame {
-			// 連續工具结果块：rendered 末尾已有換行，這裏加雙空行的兩個換行（\n\n）
-			// 與 rendered 末尾的 \n 結合，再與 strings.Join 插入的 \n 結合，形成 \n\n\n 分隔
-			m.lines = append(m.lines, "\n\n"+rendered)
-		} else {
-			// 首個工具帧（緊接助手正文）：單空行，與其它消息一致
-			m.lines = append(m.lines, "\n"+rendered)
-		}
-		m.lastToolFrame = true
-		return
+		m.lines = append(m.lines, "\n"+rendered)
+	} else {
+		m.lines = append(m.lines, rendered)
 	}
-	m.lines = append(m.lines, rendered)
-	m.lastToolFrame = true
 }
 
 // renderAssistant 组装助手回复：缩进身份头（✦ DSC · 模型名）+ markdown 正文。
@@ -1330,6 +1327,7 @@ var slashCommands = []compItem{
 	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
 	{label: "/session delete", insert: "/session delete ", hint: "删除指定会话（如 /session delete session-3）"},
 	{label: "/export", insert: "/export", hint: "导出当前会话为 Markdown 文件"},
+	{label: "/mouse", insert: "/mouse", hint: "切换鼠标捕获（释放鼠标以使用终端原生复制）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
 }
 
@@ -1443,6 +1441,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"",
 			"鼠标:",
 			"  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
+			"  /mouse 可释放鼠标给终端（终端原生选中/复制，模型工作时也可用）；状态栏会显示当前状态。",
 			"",
 			"斜杆命令:",
 			"  /help        显示本帮助",
@@ -1710,6 +1709,19 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		return true, nil
 	case "/cron":
 		m.appendMessage(errorSty.Render("用法: /cron add <cron(5 段)> <prompt>，/cron remove <id>，/cron on|off <id>"))
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/mouse":
+		m.mouseCaptureOff = !m.mouseCaptureOff
+		if m.mouseCaptureOff {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已释放鼠标给终端：终端原生文字选中/复制可用（模型工作期间也可用）；应用内滚轮滚动与拖选复制暂停。")
+		} else {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已恢复应用内鼠标捕获：滚轮滚动与正文拖选复制生效。")
+		}
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
@@ -2021,11 +2033,11 @@ func (m *Model) composerView() string {
 	return composerBoxSty.Render(b.String())
 }
 
-// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次 + 步 + 已用容量。
+// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次 + 步数 + 已用容量。
 // 填在两条平行线（输入框下边框与状态栏分隔线）之间，避免双线紧贴，参考 REX 的指标带布局。
 // 轮/步编号对齐 DSH 定义：轮为一次受理输入的排空，步为一次模型请求及其引发的工具执行。
 func (m *Model) runInfoLine() string {
-	info := fmt.Sprintf("轮次 %d · 步 %d", m.curTurn, m.curStep)
+	info := fmt.Sprintf("轮次 %d · 步数 %d", m.curTurn, m.curStep)
 	if m.usedTokens > 0 {
 		if m.contextWindow > 0 {
 			// 已知总容量时显示已用百分比；小于 1% 也至少显示 1，避免 0% 误导
@@ -2050,7 +2062,10 @@ func (m *Model) statusBar() string {
 		left += " · " + m.copyNotice
 	}
 	left = "  " + left
-	right := "Enter 发送 · Ctrl+J 换行 · 选中复制 · Ctrl+Q 退出"
+	if m.mouseCaptureOff {
+		left += " · " + dimSty.Render("鼠标已释放(/mouse 恢复)")
+	}
+	right := "Enter 发送 · 选中复制 · Ctrl+J 换行 · Ctrl+Q 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if pad < 1 {
 		pad = 1
@@ -2085,14 +2100,53 @@ func (m *Model) View() tea.View {
 	return m.viewOf(strings.Join(parts, "\n"))
 }
 
-// viewOf 把内容包装成视图并声明终端特性：进入备用屏幕并始终保持鼠标捕获。
-// 鼠标捕获开启（CellMotion）后，滚轮滚动、正文拖拽选中自动复制都内建工作，
-// 无需 /mouse 命令；输入框区域不参与正文选区。
+// viewOf 把内容包装成视图并声明终端特性：进入备用屏幕并保持鼠标捕获。
+// 鼠标捕获开启（CellMotion）时滚轮滚动、正文拖拽选中自动复制内建工作；
+// /mouse 或 DSC_DISABLE_MOUSE 可释放鼠标给终端（MouseModeNone），恢复终端
+// 原生文字选中/复制（模型工作期间同样可用）。
+// 真实光标由 View 显式锚定到输入插入点：SetVirtualCursor(false) 后 textarea
+// 不再渲染虚拟光标，若不在此给出位置，输入框光标会丢失。
 func (m *Model) viewOf(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	if m.mouseCaptureOff {
+		v.MouseMode = tea.MouseModeNone
+	} else {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	if cur := m.inputCursorAbs(); cur != nil {
+		v.Cursor = cur
+	}
 	return v
+}
+
+// inputCursorAbs 计算 textarea 真实光标在整屏中的绝对坐标（0-based）。
+// textarea.Cursor() 返回相对输入框视图的坐标（已含 prompt 宽度与 textarea
+// 自身的边框/内边距）；这里叠加外层 composer 的左侧 padding 与上方各部件行数
+// （标题、viewport、问题/思考/补全行），再经 viewOf 赋给 v.Cursor。
+func (m *Model) inputCursorAbs() *tea.Cursor {
+	if !m.ready {
+		return nil
+	}
+	cur := m.input.Cursor()
+	if cur == nil {
+		return nil
+	}
+	// X：外层 composer 左侧 padding 1 列（无左边框线）
+	cur.X += 1
+	// Y：标题(1) + viewport + 中间各部件 + composer 顶边框(1)
+	y := titleRows + m.viewport.Height()
+	if q := m.questionView(); q != "" {
+		y += strings.Count(q, "\n") + 1
+	}
+	if m.thinking || m.streaming {
+		y += thinkingRow
+	}
+	if c := m.completionView(); c != "" {
+		y += strings.Count(c, "\n") + 1
+	}
+	cur.Y += y + 1 // +1 为 composer 顶边框行
+	return cur
 }
 
 // Run 运行聊天界面，阻塞直到退出
