@@ -120,16 +120,6 @@ func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools 
 	return msgParams
 }
 
-// accumulateTolerant 累加流式事件，但对上游（如 DeepSeek anthropic 兼容接口）偶发的
-// 重复 content_block_start 做容错：该事件仅用于在 Content 末尾追加新块，若对应 index
-// 已存在则直接忽略，避免 SDK 严格校验（expected index N）中断整条流、导致对话报错。
-func accumulateTolerant(msg *anthropic.Message, event anthropic.MessageStreamEventUnion) error {
-	if event.Type == "content_block_start" && event.Index < int64(len(msg.Content)) {
-		return nil
-	}
-	return msg.Accumulate(event)
-}
-
 // concatText 拼接消息中所有 text 块的内容
 func concatText(blocks []anthropic.ContentBlockUnion) string {
 	var b strings.Builder
@@ -197,23 +187,23 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 	ch := make(chan *plugin.ChatStreamResponse)
 	go func() {
 		defer close(ch)
-		var msg anthropic.Message
+		acc := newStreamAccumulator()
 		prevLen := 0
 		prevReasonLen := 0
 		for stream.Next() {
 			event := stream.Current()
-			if err := accumulateTolerant(&msg, event); err != nil {
+			if err := acc.accumulate(event); err != nil {
 				ch <- &plugin.ChatStreamResponse{Error: fmt.Sprintf("stream accumulate error: %v", err)}
 				return
 			}
 			// 仅当文本有新增时才发送增量帧
-			text := concatText(msg.Content)
+			text := concatText(acc.msg.Content)
 			if len(text) > prevLen {
 				ch <- &plugin.ChatStreamResponse{Content: text[prevLen:]}
 				prevLen = len(text)
 			}
 			// 思考过程增量（thinking 块）
-			reason := concatReasoning(msg.Content)
+			reason := concatReasoning(acc.msg.Content)
 			if len(reason) > prevReasonLen {
 				// [DEBUG] 打印 reasoning 帧
 				fmt.Fprintf(os.Stderr, "[LLM-ANTHROPIC-REASONING] %s\n", reason[prevReasonLen:])
@@ -227,15 +217,15 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 		}
 		// 流结束：发送最终帧（工具调用与结束原因；文本已增量发送，不再重复）
 		resp := &plugin.ChatStreamResponse{
-			FinishReason: string(msg.StopReason),
-			ToolCalls:    extractToolCalls(msg.Content),
+			FinishReason: string(acc.msg.StopReason),
+			ToolCalls:    extractToolCalls(acc.msg.Content),
 		}
 		// 處理 usage 信息（Anthropic 格式：input_tokens -> prompt_tokens, output_tokens -> completion_tokens）
-		if msg.Usage.InputTokens > 0 || msg.Usage.OutputTokens > 0 {
+		if acc.msg.Usage.InputTokens > 0 || acc.msg.Usage.OutputTokens > 0 {
 			resp.Usage = &plugin.Usage{
-				PromptTokens:     int32(msg.Usage.InputTokens),
-				CompletionTokens: int32(msg.Usage.OutputTokens),
-				TotalTokens:      int32(msg.Usage.InputTokens + msg.Usage.OutputTokens),
+				PromptTokens:     int32(acc.msg.Usage.InputTokens),
+				CompletionTokens: int32(acc.msg.Usage.OutputTokens),
+				TotalTokens:      int32(acc.msg.Usage.InputTokens + acc.msg.Usage.OutputTokens),
 			}
 		}
 		ch <- resp
