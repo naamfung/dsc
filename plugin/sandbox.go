@@ -79,9 +79,25 @@ func writeCallInfo(toolName, argsJSON string) (path string, write bool) {
 	}
 }
 
+// workspacePathToRoot 将模型按工具描述传入的虚拟根前缀 /workspace（或 \workspace）
+// 映射到真实 WorkspaceRoot，使 sandbox 与 tool-str-replace-editor 对同一路径约定
+// 使用同一根目录（对齐 DSH 单一策略归属：fs 围栏与流水线判定不漂移）。
+func workspacePathToRoot(p string) string {
+	for _, prefix := range []string{"/workspace", `\workspace`} {
+		if strings.HasPrefix(p, prefix) {
+			rest := strings.TrimPrefix(p, prefix)
+			if rest == "" {
+				return WorkspaceRoot
+			}
+			return filepath.Join(WorkspaceRoot, strings.TrimLeft(rest, `/\\`))
+		}
+	}
+	return p
+}
+
 // inWorkspace 判断绝对路径是否位于 WorkspaceRoot 之下。
 func inWorkspace(path string) bool {
-	abs, err := filepath.Abs(path)
+	abs, err := filepath.Abs(workspacePathToRoot(path))
 	if err != nil {
 		return false
 	}

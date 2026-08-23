@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"dsc/plugin"
 	"dsc/proto"
 )
 
@@ -18,6 +19,9 @@ func newTestServer(t *testing.T) (*ToolServiceServer, string) {
 	if err := os.MkdirAll(ws, 0755); err != nil {
 		t.Fatal(err)
 	}
+	// 統一工作空間根：handler 現讀 plugin.WorkspaceRoot（宿主經 DSC_WORKSPACE_ROOT 注入），
+	// 測試需將根指到臨時 ws 以便斷言寫入位置。
+	plugin.WorkspaceRoot = ws
 	server := &ToolServiceServer{
 		tools:        nil,
 		observations: make(map[string]*proto.FsObservation),

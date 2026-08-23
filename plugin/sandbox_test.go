@@ -64,6 +64,23 @@ func TestSandboxWorkspaceBlocksOutside(t *testing.T) {
 	}
 }
 
+func TestSandboxWorkspaceAcceptsVirtualPrefix(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir() + "/ws"
+	defer func() { WorkspaceRoot = orig }()
+	m := newRouterManager()
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxWorkspaceWrite)))
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+
+	// 模型按工具描述传入 /workspace/<rel> 虚拟根前缀，应与真实 WorkspaceRoot 等价放行
+	for _, p := range []string{"/workspace/a.txt", `\workspace\b.txt`, "/workspace"} {
+		if _, err := m.ExecuteTool(context.Background(), "str_replace_editor",
+			json.RawMessage(`{"command":"str_replace","path":"`+p+`","old_str":"a","new_str":"b"}`)); err != nil {
+			t.Fatalf("write under virtual /workspace prefix %q should pass: %v", p, err)
+		}
+	}
+}
+
 func TestSandboxFullAllowsWrite(t *testing.T) {
 	m := newRouterManager()
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxFullAccess)))

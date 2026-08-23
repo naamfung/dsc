@@ -211,6 +211,11 @@ func safePath(base, reqPath string) (string, error) {
 	}
 	absReq = filepath.Clean(absReq)
 
+	// 工作空間保護關閉（/workspace off）時不做 base 限制，僅做路徑規範化
+	if !plugin.WorkspaceProtectionEnabled {
+		return absReq, nil
+	}
+
 	// 詞法前綴檢查：確保在 base 目錄內
 	if !withinBase(absReq, realBase) {
 		return "", os.ErrPermission
@@ -272,8 +277,9 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		return "", err
 	}
 
-	// 使用安全路徑檢查，默認 workspace root 為當前目錄
-	workspaceRoot := "./workspace"
+	// 使用安全路徑檢查；workspace 根統一來自 plugin.WorkspaceRoot
+	// （宿主按 config workspace_root 解析並經 DSC_WORKSPACE_ROOT 注入，對齊 DSH 單一策略歸屬）
+	workspaceRoot := plugin.WorkspaceRoot
 
 	// 模型按工具描述會傳入形如 /workspace/test/fib.go 的絕對路徑，
 	// 需剝離 /workspace 前綴後再與 workspaceRoot 拼接，避免變成 workspace/workspace/...
