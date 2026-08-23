@@ -190,6 +190,15 @@ type Model struct {
 	contextWindow int
 	usedTokens    int
 
+	// 当前轮运行指标（对齐 REX working 行）：runStart 记录启动时刻，elapsed 为
+	// 已耗时秒数（每秒 elapsedTick 刷新）；turnTokens 为本轮累计下行生成 token；
+	// cacheHit/cacheMiss 为最近一次请求的 prompt 缓存命中/写入 token。
+	runStart   time.Time
+	elapsed    int
+	turnTokens int
+	cacheHit   int32
+	cacheMiss  int32
+
 	// 正文拖拽选区的实时状态与选中后的宽度对齐渲染行缓存
 	sel          selection
 	wrappedLines []string
@@ -673,6 +682,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case elapsedTickMsg:
+		// 每秒刷新「思考中」行的耗时（对齐 REX elapsed tick）
+		if m.thinking || m.streaming {
+			m.elapsed = int(time.Since(m.runStart).Seconds())
+			m.render()
+			return m, elapsedTick()
+		}
+		return m, nil
+
 	case streamFrame:
 		// 已被 Ctrl+C 中断本轮的残留帧直接丢弃，停止泵取
 		if m.streamCancelled {
@@ -788,10 +806,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "tool":
 			m.streamOpen = false
-			// 工具帧随帧携带本步请求的 usage：每步工具调用后即刷新容量（对齐 REX
-			// 每步 usage 事件即时更新统计行），不必等轮末 success 帧。
-			if f.Usage != nil && f.Usage.TotalTokens > 0 {
-				m.usedTokens = int(f.Usage.TotalTokens)
+			// 工具帧随帧携带本步请求的 usage：每步工具调用后即刷新容量与运行指标
+			// （对齐 REX 每步 usage 事件即时更新统计行），不必等轮末 success 帧。
+			if f.Usage != nil {
+				if f.Usage.TotalTokens > 0 {
+					m.usedTokens = int(f.Usage.TotalTokens)
+				}
+				m.trackTurnUsage(f.Usage)
 			}
 			// 工具结果帧（ToolResult 非空）以「└」gutter 缩进展示，错误时用错误色；
 			// 调用帧（ToolName 非空）以「● Verb(arg)」卡片展示；均无结构化信息时回退原文。
@@ -816,8 +837,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = false
 			m.streamOpen = false
-			if f.Status == "success" && f.Usage != nil && f.Usage.TotalTokens > 0 {
-				m.usedTokens = int(f.Usage.TotalTokens)
+			if f.Status == "success" && f.Usage != nil {
+				if f.Usage.TotalTokens > 0 {
+					m.usedTokens = int(f.Usage.TotalTokens)
+				}
+				m.trackTurnUsage(f.Usage)
 			}
 			if f.Status == "error" && f.Error != "" {
 				m.appendMessage(errorSty.Render("错误: ") + f.Error)
@@ -2073,7 +2097,32 @@ func (m *Model) runInfoLine() string {
 			info += " · 已用 " + shortTokens(m.usedTokens)
 		}
 	}
+	// prompt 缓存命中率（对齐 REX cacheTag）：仅当服务端报告了缓存字段时显示
+	if hit, miss := int64(m.cacheHit), int64(m.cacheMiss); hit+miss > 0 {
+		info += fmt.Sprintf(" · 缓存命中 %d%%", hit*100/(hit+miss))
+	}
 	return "  " + dimSty.Render(info)
+}
+
+// trackTurnUsage 累计当前轮的运行指标：下行生成 token 与 prompt 缓存命中/写入。
+func (m *Model) trackTurnUsage(u *plugin.Usage) {
+	if u == nil {
+		return
+	}
+	if u.CompletionTokens > 0 {
+		m.turnTokens += int(u.CompletionTokens)
+	}
+	if u.CacheReadInputTokens > 0 || u.CacheCreationInputTokens > 0 {
+		m.cacheHit = u.CacheReadInputTokens
+		m.cacheMiss = u.CacheCreationInputTokens
+	}
+}
+
+// elapsedTickMsg 每秒触发一次，驱动「思考中」行耗时刷新（对齐 REX elapsed tick）。
+type elapsedTickMsg struct{}
+
+func elapsedTick() tea.Cmd {
+	return tea.Tick(time.Second, func(_ time.Time) tea.Msg { return elapsedTickMsg{} })
 }
 
 // statusBar 渲染底部状态栏（两行）：首行一条通栏分隔线，次行容纳模型/复制提示与快捷键。
@@ -2112,7 +2161,11 @@ func (m *Model) View() tea.View {
 		parts = append(parts, q)
 	}
 	if m.thinking || m.streaming {
-		parts = append(parts, dimSty.Render("  "+m.spinner.View()+" 思考中..."))
+		line := "  " + m.spinner.View() + fmt.Sprintf(" 思考中... (%d 秒 · Ctrl+C 取消)", m.elapsed)
+		if m.turnTokens > 0 {
+			line += " · ↓" + shortTokens(m.turnTokens)
+		}
+		parts = append(parts, dimSty.Render(line))
 	}
 	if c := m.completionView(); c != "" {
 		parts = append(parts, c)

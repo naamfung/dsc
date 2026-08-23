@@ -457,9 +457,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		lastUsage := &proto.Usage{}
 		if a.lastUsage != nil {
 			lastUsage = &proto.Usage{
-				PromptTokens:     a.lastUsage.PromptTokens,
-				CompletionTokens: a.lastUsage.CompletionTokens,
-				TotalTokens:      a.lastUsage.TotalTokens,
+				PromptTokens:             a.lastUsage.PromptTokens,
+				CompletionTokens:         a.lastUsage.CompletionTokens,
+				TotalTokens:              a.lastUsage.TotalTokens,
+				CacheReadInputTokens:     a.lastUsage.CacheReadInputTokens,
+				CacheCreationInputTokens: a.lastUsage.CacheCreationInputTokens,
 			}
 		}
 		sess.Append(session.AssistantMessage, &session.AssistantMessageData{
@@ -512,6 +514,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				if a.lastUsage != nil {
 					usage.CompletionTokens = a.lastUsage.CompletionTokens
 					usage.TotalTokens = a.lastUsage.TotalTokens
+					usage.CacheReadInputTokens = a.lastUsage.CacheReadInputTokens
+					usage.CacheCreationInputTokens = a.lastUsage.CacheCreationInputTokens
 				} else {
 					usage.TotalTokens = a.lastPromptTokens
 				}
@@ -626,6 +630,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				if a.lastUsage != nil {
 					usage.CompletionTokens = a.lastUsage.CompletionTokens
 					usage.TotalTokens = a.lastUsage.TotalTokens
+					usage.CacheReadInputTokens = a.lastUsage.CacheReadInputTokens
+					usage.CacheCreationInputTokens = a.lastUsage.CacheCreationInputTokens
 				} else {
 					usage.TotalTokens = a.lastPromptTokens
 				}
@@ -675,6 +681,8 @@ func (a *ReactLoopAgent) usageSnapshot() *plugin.Usage {
 	if a.lastUsage != nil {
 		usage.CompletionTokens = a.lastUsage.CompletionTokens
 		usage.TotalTokens = a.lastUsage.TotalTokens
+		usage.CacheReadInputTokens = a.lastUsage.CacheReadInputTokens
+		usage.CacheCreationInputTokens = a.lastUsage.CacheCreationInputTokens
 	} else {
 		usage.TotalTokens = a.lastPromptTokens
 	}

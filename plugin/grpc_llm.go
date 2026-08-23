@@ -142,9 +142,11 @@ func UsageToProto(u *Usage) *proto.Usage {
 		return nil
 	}
 	return &proto.Usage{
-		PromptTokens:     u.PromptTokens,
-		CompletionTokens: u.CompletionTokens,
-		TotalTokens:      u.TotalTokens,
+		PromptTokens:             u.PromptTokens,
+		CompletionTokens:         u.CompletionTokens,
+		TotalTokens:              u.TotalTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
 	}
 }
 
@@ -154,9 +156,11 @@ func UsageFromProto(u *proto.Usage) *Usage {
 		return nil
 	}
 	return &Usage{
-		PromptTokens:     u.PromptTokens,
-		CompletionTokens: u.CompletionTokens,
-		TotalTokens:      u.TotalTokens,
+		PromptTokens:             u.PromptTokens,
+		CompletionTokens:         u.CompletionTokens,
+		TotalTokens:              u.TotalTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
 	}
 }
 

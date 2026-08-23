@@ -118,10 +118,14 @@ type RunStreamResponse struct {
 }
 
 // Usage 是一次 LLM 调用的 token 用量统计
+// CacheReadInputTokens 为命中 prompt 缓存的输入 token（Anthropic cache_read / OpenAI cached_tokens），
+// CacheCreationInputTokens 为写入缓存的输入 token（Anthropic cache_creation）。
 type Usage struct {
-	PromptTokens     int32 `json:"prompt_tokens"`
-	CompletionTokens int32 `json:"completion_tokens"`
-	TotalTokens      int32 `json:"total_tokens"`
+	PromptTokens             int32 `json:"prompt_tokens"`
+	CompletionTokens         int32 `json:"completion_tokens"`
+	TotalTokens              int32 `json:"total_tokens"`
+	CacheReadInputTokens     int32 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int32 `json:"cache_creation_input_tokens"`
 }
 
 // Handshake 是宿主和插件间的握手配置

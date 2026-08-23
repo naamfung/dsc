@@ -692,12 +692,14 @@ func (x *RunStreamResponse) GetStep() int32 {
 
 // token 用量统计（与 OpenAI usage 字段对应）
 type Usage struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	PromptTokens     int32                  `protobuf:"varint,1,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`             // 请求中提示（含历史）token 数
-	CompletionTokens int32                  `protobuf:"varint,2,opt,name=completion_tokens,json=completionTokens,proto3" json:"completion_tokens,omitempty"` // 本轮生成的 token 数
-	TotalTokens      int32                  `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`                // 合计
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	PromptTokens             int32                  `protobuf:"varint,1,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`                                         // 请求中提示（含历史）token 数
+	CompletionTokens         int32                  `protobuf:"varint,2,opt,name=completion_tokens,json=completionTokens,proto3" json:"completion_tokens,omitempty"`                             // 本轮生成的 token 数
+	TotalTokens              int32                  `protobuf:"varint,3,opt,name=total_tokens,json=totalTokens,proto3" json:"total_tokens,omitempty"`                                            // 合计
+	CacheReadInputTokens     int32                  `protobuf:"varint,4,opt,name=cache_read_input_tokens,json=cacheReadInputTokens,proto3" json:"cache_read_input_tokens,omitempty"`             // 命中 prompt 缓存的输入 token 数（Anthropic cache_read / OpenAI cached_tokens）
+	CacheCreationInputTokens int32                  `protobuf:"varint,5,opt,name=cache_creation_input_tokens,json=cacheCreationInputTokens,proto3" json:"cache_creation_input_tokens,omitempty"` // 写入 prompt 缓存的输入 token 数（Anthropic cache_creation）
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *Usage) Reset() {
@@ -747,6 +749,20 @@ func (x *Usage) GetCompletionTokens() int32 {
 func (x *Usage) GetTotalTokens() int32 {
 	if x != nil {
 		return x.TotalTokens
+	}
+	return 0
+}
+
+func (x *Usage) GetCacheReadInputTokens() int32 {
+	if x != nil {
+		return x.CacheReadInputTokens
+	}
+	return 0
+}
+
+func (x *Usage) GetCacheCreationInputTokens() int32 {
+	if x != nil {
+		return x.CacheCreationInputTokens
 	}
 	return 0
 }
@@ -3338,11 +3354,13 @@ const file_dsc_proto_rawDesc = "" +
 	"toolResult\x12\x12\n" +
 	"\x04turn\x18\t \x01(\x05R\x04turn\x12\x12\n" +
 	"\x04step\x18\n" +
-	" \x01(\x05R\x04step\"|\n" +
+	" \x01(\x05R\x04step\"\xf2\x01\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\x12!\n" +
-	"\ftotal_tokens\x18\x03 \x01(\x05R\vtotalTokens\"w\n" +
+	"\ftotal_tokens\x18\x03 \x01(\x05R\vtotalTokens\x125\n" +
+	"\x17cache_read_input_tokens\x18\x04 \x01(\x05R\x14cacheReadInputTokens\x12=\n" +
+	"\x1bcache_creation_input_tokens\x18\x05 \x01(\x05R\x18cacheCreationInputTokens\"w\n" +
 	"\vChatRequest\x12(\n" +
 	"\bmessages\x18\x01 \x03(\v2\f.dsc.MessageR\bmessages\x12\x1f\n" +
 	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\x12\x1d\n" +

@@ -110,6 +110,8 @@ message Usage {
   int32 prompt_tokens = 1;     // 请求中提示（含历史）token 数
   int32 completion_tokens = 2; // 本轮生成的 token 数
   int32 total_tokens = 3;      // 合计
+  int32 cache_read_input_tokens = 4;     // 命中 prompt 缓存的输入 token 数（Anthropic cache_read / OpenAI cached_tokens）
+  int32 cache_creation_input_tokens = 5; // 写入 prompt 缓存的输入 token 数（Anthropic cache_creation）
 }
 
 // --- LLM Service 消息定義 ---

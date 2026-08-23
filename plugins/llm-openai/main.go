@@ -25,15 +25,28 @@ type toolCallDeltaAccumulator struct {
 	ArgumentsStr string
 }
 
-// usageFromOpenAI 將 OpenAI usage 轉換為 plugin.Usage（nil 返回 nil）
+// usageFromOpenAI 將 OpenAI usage 轉換為 plugin.Usage（nil 返回 nil）。
+// cached_tokens（DeepSeek/llama.cpp 的 prompt_tokens_details.cached_tokens）映射为
+// CacheReadInputTokens；命中率计算需要 miss 侧，按 REX 语义以
+// CacheCreationInputTokens = prompt - cached 近似（无缓存报告时保持 0）。
 func usageFromOpenAI(u *openai.Usage) *plugin.Usage {
 	if u == nil {
 		return nil
 	}
+	var cacheRead int32
+	if u.PromptTokensDetails != nil {
+		cacheRead = int32(u.PromptTokensDetails.CachedTokens)
+	}
+	cacheMiss := int32(u.PromptTokens) - cacheRead
+	if cacheMiss < 0 {
+		cacheMiss = 0
+	}
 	return &plugin.Usage{
-		PromptTokens:     int32(u.PromptTokens),
-		CompletionTokens: int32(u.CompletionTokens),
-		TotalTokens:      int32(u.TotalTokens),
+		PromptTokens:             int32(u.PromptTokens),
+		CompletionTokens:         int32(u.CompletionTokens),
+		TotalTokens:              int32(u.TotalTokens),
+		CacheReadInputTokens:     cacheRead,
+		CacheCreationInputTokens: cacheMiss,
 	}
 }
 

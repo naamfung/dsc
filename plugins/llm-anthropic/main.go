@@ -220,12 +220,15 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 			FinishReason: string(acc.msg.StopReason),
 			ToolCalls:    extractToolCalls(acc.msg.Content),
 		}
-		// 處理 usage 信息（Anthropic 格式：input_tokens -> prompt_tokens, output_tokens -> completion_tokens）
+		// 處理 usage 信息（Anthropic 格式：input_tokens -> prompt_tokens, output_tokens -> completion_tokens；
+		// cache_read/cache_creation 直接对应）
 		if acc.msg.Usage.InputTokens > 0 || acc.msg.Usage.OutputTokens > 0 {
 			resp.Usage = &plugin.Usage{
-				PromptTokens:     int32(acc.msg.Usage.InputTokens),
-				CompletionTokens: int32(acc.msg.Usage.OutputTokens),
-				TotalTokens:      int32(acc.msg.Usage.InputTokens + acc.msg.Usage.OutputTokens),
+				PromptTokens:             int32(acc.msg.Usage.InputTokens),
+				CompletionTokens:         int32(acc.msg.Usage.OutputTokens),
+				TotalTokens:              int32(acc.msg.Usage.InputTokens + acc.msg.Usage.OutputTokens),
+				CacheReadInputTokens:     int32(acc.msg.Usage.CacheReadInputTokens),
+				CacheCreationInputTokens: int32(acc.msg.Usage.CacheCreationInputTokens),
 			}
 		}
 		ch <- resp

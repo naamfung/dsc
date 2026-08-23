@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbletea/v2"
 	"dsc/jobs"
@@ -38,10 +39,16 @@ func noticeBubble(text string) string {
 func (m *Model) startTurn(text, rendered string) tea.Cmd {
 	m.appendMessage(rendered)
 	m.thinking = true
+	// 新一轮运行指标重置：耗时计时起点、下行数据、缓存命中
+	m.runStart = time.Now()
+	m.elapsed = 0
+	m.turnTokens = 0
+	m.cacheHit = 0
+	m.cacheMiss = 0
 	m.syncInputHeight()
 	m.render()
 	m.viewport.GotoBottom()
-	return tea.Batch(m.submitCmd(text), m.spinner.Tick)
+	return tea.Batch(m.submitCmd(text), m.spinner.Tick, elapsedTick())
 }
 
 // tryWakeup 空闲且预算未耗尽时，把排队通知作为新轮输入自动发送
