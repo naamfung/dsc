@@ -111,6 +111,54 @@ func TestLoadRejectsUnknownType(t *testing.T) {
 	}
 }
 
+// TestLoadRestoresTodoWrite 回归：todo/write 事件可持久化并恢复。
+// 曾因 unmarshalData 漏注册 TodoWrite 类型，导致任何含 todo/write 的会话
+// 在恢复/导出时报 unknown event type "todo/write"，进程无法开始对话。
+func TestLoadRestoresTodoWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	orig := New()
+	orig.Append(TurnStart, &TurnData{Turn: 1}, nil)
+	appendSurface(t, orig, UserMessage, &UserMessageData{Content: "u", Source: "user"})
+	orig.Append(StepStart, &StepData{Turn: 1, Step: 1}, nil)
+	orig.Append(TodoWrite, &TodoWriteData{Todos: []TodoItem{
+		{Content: "任务 A", Status: TodoInProgress},
+		{Content: "任务 B", Status: TodoPending},
+	}}, nil)
+	appendSurface(t, orig, AssistantMessage, &AssistantMessageData{Turn: 1, Step: 1, Content: "ok"})
+	orig.Append(StepEnd, &StepData{Turn: 1, Step: 1}, nil)
+	orig.Append(TurnEnd, &TurnData{Turn: 1, Reason: "completed"}, nil)
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	restored, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("load returned nil session")
+	}
+	if restored.Len() != orig.Len() {
+		t.Fatalf("restored len = %d, want %d", restored.Len(), orig.Len())
+	}
+	// todo 投影一致（FoldTodos 从恢复事件重建）
+	ot, rt := FoldTodos(orig.Events()), FoldTodos(restored.Events())
+	if len(ot) != len(rt) {
+		t.Fatalf("folded todos %d vs %d", len(ot), len(rt))
+	}
+	for i := range ot {
+		if ot[i] != rt[i] {
+			t.Fatalf("todo %d mismatch: %+v vs %+v", i, ot[i], rt[i])
+		}
+	}
+	// 派生历史一致（todo 为 log-only，不进历史）
+	om, rm := orig.DeriveMessages("sys"), restored.DeriveMessages("sys")
+	if len(om) != len(rm) {
+		t.Fatalf("derived %d vs %d messages", len(om), len(rm))
+	}
+}
+
 func TestForkCopiesPrefix(t *testing.T) {
 	orig := buildSample(t)
 	// boundary = 最后一个事件（完整轮次前缀）→ 可 fork

@@ -116,6 +116,12 @@ func unmarshalData(typ EventType, raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return &d, nil
+	case TodoWrite:
+		var d TodoWriteData
+		if err := decode(&d); err != nil {
+			return nil, err
+		}
+		return &d, nil
 	default:
 		return nil, fmt.Errorf("session: unknown event type %q", typ)
 	}
