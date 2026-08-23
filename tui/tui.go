@@ -164,14 +164,14 @@ type injectedMsg struct {
 	err error
 }
 
-// compItem 是斜杠命令菜单的一行：label 是完整命令，hint 是右侧提示。
+// compItem 是斜杆命令菜单的一行：label 是完整命令，hint 是右侧提示。
 type compItem struct {
 	label  string
 	insert string
 	hint   string
 }
 
-// completion 是斜杠命令补全菜单状态；active 为 false 时菜单关闭。
+// completion 是斜杆命令补全菜单状态；active 为 false 时菜单关闭。
 type completion struct {
 	active bool
 	items  []compItem
@@ -211,7 +211,7 @@ type Model struct {
 	thinking  bool // 正在等待 agent 响应
 	streaming bool // 正在流式输出
 
-	completion completion // 斜杠命令补全菜单
+	completion completion // 斜杆命令补全菜单
 
 	lines []string // 渲染后的历史行
 	width int
@@ -602,7 +602,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				sendText = strings.Join(m.pendingWakeups, "\n\n") + "\n\n" + text
 				m.pendingWakeups = nil
 			}
-			// 记录到历史（仅用户消息，斜杠命令不入历史）
+			// 记录到历史（仅用户消息，斜杆命令不入历史）
 			m.history = append(m.history, text)
 			m.histPos = len(m.history)
 			m.draft = ""
@@ -1265,7 +1265,7 @@ func isJSON(s string) bool {
 	return json.Unmarshal([]byte(s), &js) == nil
 }
 
-// 内置斜杠命令列表（当前为宿主可直接执行的命令）。
+// 内置斜杆命令列表（当前为宿主可直接执行的命令）。
 var slashCommands = []compItem{
 	{label: "/help", insert: "/help", hint: "显示帮助与快捷键"},
 	{label: "/clear", insert: "/clear", hint: "清空聊天记录"},
@@ -1386,7 +1386,7 @@ func scanSkillSection(dir string) []string {
 	return out
 }
 
-// runSlashCommand 处理斜杠命令；返回是否已处理以及要执行的命令。
+// runSlashCommand 处理斜杆命令；返回是否已处理以及要执行的命令。
 func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	switch cmd {
 	case "/help":
@@ -1403,7 +1403,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"鼠标:",
 			"  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
 			"",
-			"斜杠命令:",
+			"斜杆命令:",
 			"  /help        显示本帮助",
 			"  /clear       清空聊天记录",
 			"  /skills      列出所有已安装的技能",
@@ -1606,7 +1606,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.render()
 		m.viewport.GotoBottom()
 		return true, nil
-	case "/plan":
+	case "/plan", "/plan on":
 		if err := m.agent.SetPlanMode(m.ctx, true); err != nil {
 			m.appendMessage(errorSty.Render("进入 plan 模式失败: ") + err.Error())
 		} else {
@@ -1936,6 +1936,8 @@ func (m *Model) displayMode() string {
 		return "Minimal"
 	case "standard":
 		return "Standard"
+	case "creation":
+		return "Creation"
 	}
 	return m.mode
 }

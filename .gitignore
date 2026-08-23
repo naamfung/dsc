@@ -12,7 +12,8 @@ protoc_dir/
 
 *.txt
 
-_shtest/
+plugins/tool-harness-webui/webui/dist/
+plugins/tool-novelforge/
 workspace/
 
 # Agent session event log

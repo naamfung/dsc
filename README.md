@@ -43,7 +43,7 @@
 運行主程序並指定 LLM 提供商（默認為 openai）：
 
 ```bash
-LLM_PROVIDER=openai ./main
+LLM_PROVIDER=openai ./dsc
 ```
 
 ## 許可證
