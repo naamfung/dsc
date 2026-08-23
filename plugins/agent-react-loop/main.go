@@ -303,41 +303,6 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		// 步骤边界（log-only）
 		sess.Append(session.StepStart, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
 
-		// 上下文自動壓縮：已用容量（最近一次請求的 prompt token 數）超過 80% 時，
-		// 先讓模型把歷史壓縮成摘要，再繼續後續請求（保持簡單的 80% 觸發邏輯）
-		if a.contextWindow > 0 && a.lastPromptTokens > 0 &&
-			int(a.lastPromptTokens) >= a.contextWindow*8/10 {
-			if emit != nil {
-				emit(&plugin.RunStreamResponse{
-					Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
-						a.lastPromptTokens*100/int32(a.contextWindow)),
-					Status: "tool",
-				})
-			}
-			summary, err := a.compactHistory(ctx, llmClient, sess.DeriveMessages(a.sysPrompt), availableTools)
-			if err != nil {
-				if emit != nil {
-					emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
-				}
-				return nil, err
-			}
-			// 压缩落地（surface replace）：追加 CompactionSummary 事件遮蔽全部旧 surface
-			// 节点，派生历史退化为 [system, 摘要]，但原事件保留在日志（append-only 无损，
-			// 可回放/恢复）。
-			nodes := sess.SurfaceNodes()
-			if len(nodes) > 0 {
-				sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
-					Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
-				}, &session.SurfaceOp{Op: session.SurfaceReplace, Start: nodes[0], End: nodes[len(nodes)-1]})
-			} else {
-				sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
-					Content: summary,
-				}, &session.SurfaceOp{Op: session.SurfaceAppend})
-			}
-			// 壓縮後已用容量無法從 Chat 精確獲取，重置為 0，下一輪流式調用會更新為真實值
-			a.lastPromptTokens = 0
-		}
-
 		// 请求历史由会话 surface 派生（system prompt 前置），不再依赖独立消息数组。
 		// 派生与注入计数快照在同一 sessMu 临界区内完成（与 InjectMessage 互斥），
 		// 保证「已发送给模型的消息」与「已消费的注入」原子一致，避免注入恰好落在
@@ -346,6 +311,77 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		msgs := sess.DeriveMessages(a.sysPrompt)
 		iterPendingInjects := a.pendingInjects
 		a.sessMu.Unlock()
+
+		// 上下文自动压缩（对齐 DSH compaction-basic 的 pre-step 压力检查）：
+		// - 已用容量优先取上次请求服务端报告的 prompt token（精确）；首次请求（含重启
+		//   恢复历史会话）无该值，退回字符启发式估算（对齐 DSH tokenMeter 的
+		//   "字符数 + 结构开销" 回退），确保重启后第一发请求不会把整段历史直接灌给模型。
+		// - 超过阈值（默认 80% 窗口）时压缩最旧前缀，保留近期尾部（默认 16% 窗口）逐字，
+		//   而非把全部历史折叠成单一摘要。
+		compacted := false
+		promptTokens := int(a.lastPromptTokens)
+		if a.contextWindow > 0 && promptTokens <= 0 {
+			promptTokens = estimatePromptTokens(msgs)
+		}
+		if a.contextWindow > 0 && promptTokens >= a.contextWindow*8/10 {
+			if emit != nil {
+				emit(&plugin.RunStreamResponse{
+					Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
+						promptTokens*100/a.contextWindow),
+					Status: "tool",
+				})
+			}
+			// 计算保留尾部：默认 16% 窗口（对齐 DSH retainRatio 0.16），从末尾向前累积
+			// 直至预算用尽；至少 1024 token，且绝不压缩刚追加的当前用户消息（不可分尾部）。
+			nodes := sess.SurfaceNodes()
+			if len(nodes) >= 2 {
+				retainTokens := a.contextWindow * 16 / 100
+				if retainTokens < 1024 {
+					retainTokens = 1024
+				}
+				// msgs[0] 为 system（若 sysPrompt 非空），其余与 surface 节点一一对应
+				offset := 0
+				if a.sysPrompt != "" {
+					offset = 1
+				}
+				keep := len(nodes) // 首个被逐字保留的节点下标
+				acc := 0
+				for j := len(nodes) - 1; j >= 1; j-- {
+					acc += estimateMessageTokens(msgs[offset+j])
+					if acc > retainTokens {
+						break
+					}
+					keep = j
+				}
+				if keep >= len(nodes) {
+					keep = len(nodes) - 1 // 连最近一条都超预算：压缩到至少保留最后一条
+				}
+				summary, err := a.compactHistory(ctx, llmClient, msgs, availableTools)
+				if err != nil {
+					if emit != nil {
+						emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+					}
+					return nil, err
+				}
+				// 压缩落地（surface replace）：追加 CompactionSummary 事件遮蔽最旧前缀
+				// [0, keep-1]，尾部 [keep, len-1] 保持逐字。原事件保留在日志（append-only
+				// 无损，可回放/恢复）。
+				sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
+					Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
+				}, &session.SurfaceOp{Op: session.SurfaceReplace, Start: nodes[0], End: nodes[keep-1]})
+				// 压缩后已用容量无法精确获取，重置为 0（下一轮服务端 usage 会更新为真实值）
+				a.lastPromptTokens = 0
+				compacted = true
+			}
+		}
+		// 压缩后 surface 已重写，重新派生请求历史（注入计数快照一并刷新，避免已入
+		// 历史的注入在收尾时被误判为新注入而重复发送）
+		if compacted {
+			a.sessMu.Lock()
+			msgs = sess.DeriveMessages(a.sysPrompt)
+			iterPendingInjects = a.pendingInjects
+			a.sessMu.Unlock()
+		}
 
 		// 调用 LLM（流式或非流式）
 		req := &proto.ChatRequest{
@@ -663,15 +699,42 @@ const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史
 	"保留用户意图、已执行的工具调用及其结果、以及所有关键的中间结论，以便在后续对话中无需原始记录也能继续。" +
 	"只输出压缩后的摘要，不要输出任何解释、前言或结尾。"
 
+// estimateMessageTokens 估算单条消息的 token 数（对齐 DSH tokenMeter 的
+// "字符数 + 结构开销" 回退，不依赖精确 tokenizer）：字符数 /4 + 每条消息的固定
+// 结构开销（角色、tool_call_id 等），工具调用额外计入名称与参数。
+func estimateMessageTokens(m *proto.Message) int {
+	toks := len([]rune(m.Content)) / 4
+	if m.Role == "tool" {
+		toks += 6 // tool 角色 + tool_call_id 开销
+	} else {
+		toks += 4
+	}
+	for _, tc := range m.ToolCalls {
+		toks += len([]rune(tc.Name))/4 + len([]rune(tc.ArgumentsJson))/4 + 8
+	}
+	return toks
+}
+
+// estimatePromptTokens 估算整份请求历史（含 system 前缀）的 token 数。
+func estimatePromptTokens(msgs []*proto.Message) int {
+	total := 0
+	for _, m := range msgs {
+		total += estimateMessageTokens(m)
+	}
+	return total
+}
+
 // compactHistory 當上下文已用容量超過 80% 時觸發：讓模型把派生歷史壓縮成摘要。
 // 返回摘要文本（不含 system 消息，避免把基礎指令與技能索引壓進摘要），
 // 由調用方決定落點（重建會話或 surface replace 遮蔽）。
-// max_tokens 設為淨餘（contextWindow - lastPromptTokens）的真實值，保證壓縮結果能放入剩餘空間。
+// max_tokens 設為窗口淨餘（contextWindow - 估算輸入）的真實值，保證壓縮結果能放入
+// 剩餘空間——基於字符估算而非上次請求的 usage，重啟恢復場景同樣成立。
 func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLMServiceClient, msgs []*proto.Message, tools []*proto.Tool) (string, error) {
-	if a.contextWindow <= 0 || a.lastPromptTokens <= 0 {
+	if a.contextWindow <= 0 {
 		return "", nil
 	}
-	remaining := a.contextWindow - int(a.lastPromptTokens)
+	inputTokens := estimatePromptTokens(msgs) + 64 // 压缩指令与结构开销
+	remaining := a.contextWindow - inputTokens
 	if remaining < 1024 {
 		remaining = 1024
 	}
