@@ -1170,6 +1170,8 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 			ToolName:   item.ToolName,
 			ToolArgs:   item.ToolArgs,
 			ToolResult: item.ToolResult,
+			Turn:       item.Turn,
+			Step:       item.Step,
 		}); err != nil {
 			return err
 		}
