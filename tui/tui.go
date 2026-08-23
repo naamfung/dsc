@@ -220,7 +220,11 @@ type Model struct {
 	// 流式渲染状态
 	streamBuffer string
 	streamOpen   bool
-	streamMsgIdx int
+
+	// lastToolFrame 記錄上一條追加的是否為工具结果/调用帧；供 appendToolFrame 判斷
+	// 是否以雙空行分隔連續工具结果块。
+	lastToolFrame bool
+	streamMsgIdx  int
 
 	// 当前一轮的流式通道暂存：供运行中输入（注入）时维持泵取，避免流式流停滞
 	streamInput string
@@ -756,7 +760,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.lines) > 0 && m.lines[len(m.lines)-1] == "\n"+toolLine {
 				// 避免重複追加
 			} else {
-				m.appendMessage(toolLine)
+				m.appendToolFrame(toolLine)
 			}
 			m.render()
 			m.viewport.GotoBottom()
@@ -1001,6 +1005,27 @@ func (m *Model) appendMessage(rendered string) {
 		return
 	}
 	m.lines = append(m.lines, rendered)
+}
+
+// appendToolFrame 追加工具結果/調用帧：連續工具結果塊之間以雙空行分隔，
+// 強化工具輸出之間的分组感與呼吸版面（REX 式）。首個工具帧（緊接助手正文）
+// 保持與其它消息一致的單空行，避免正文與工具塊間隔過大。
+// lastToolFrame 記錄上一條追加的是否為工具帧。
+func (m *Model) appendToolFrame(rendered string) {
+	if len(m.lines) > 0 {
+		if m.lastToolFrame {
+			// 連續工具结果块：rendered 末尾已有換行，這裏加雙空行的兩個換行（\n\n）
+			// 與 rendered 末尾的 \n 結合，再與 strings.Join 插入的 \n 結合，形成 \n\n\n 分隔
+			m.lines = append(m.lines, "\n\n"+rendered)
+		} else {
+			// 首個工具帧（緊接助手正文）：單空行，與其它消息一致
+			m.lines = append(m.lines, "\n"+rendered)
+		}
+		m.lastToolFrame = true
+		return
+	}
+	m.lines = append(m.lines, rendered)
+	m.lastToolFrame = true
 }
 
 // renderAssistant 组装助手回复：缩进身份头（✦ DSC · 模型名）+ markdown 正文。
