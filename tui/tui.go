@@ -222,6 +222,11 @@ type Model struct {
 	streamOpen   bool
 	streamMsgIdx int
 
+	// 滚动条拖拽状态：scrollbarDrag 标记左键按住滚动条列，
+	// scrollbarGrabOffset 为抓取点在滑块内的行偏移（拖拽时保持相对位置）。
+	scrollbarDrag       bool
+	scrollbarGrabOffset int
+
 	// 当前一轮的流式通道暂存：供运行中输入（注入）时维持泵取，避免流式流停滞
 	streamInput string
 	streamCh    <-chan *plugin.RunStreamResponse
@@ -456,11 +461,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.high = msg.Height
 		m.input.SetWidth(max(msg.Width-8, 16))
 		if !m.ready {
-			m.viewport = viewport.New(viewport.WithWidth(msg.Width), viewport.WithHeight(m.vpHeight()))
+			m.viewport = viewport.New(viewport.WithWidth(max(msg.Width-1, 10)), viewport.WithHeight(m.vpHeight()))
 			m.viewport.YPosition = 0
 			m.ready = true
 		} else {
-			m.viewport.SetWidth(msg.Width)
+			m.viewport.SetWidth(max(msg.Width-1, 10))
 			m.viewport.SetHeight(m.vpHeight())
 		}
 		m.render()
@@ -482,7 +487,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		mm := msg.Mouse()
 		if mm.Button == tea.MouseLeft {
-			if m.inBody(mm.X, mm.Y) {
+			if m.inScrollbar(mm.X, mm.Y) {
+				// 按住滚动条列：进入拖拽模式（不产生正文选区）
+				m.sel = selection{}
+				m.scrollbarDrag = true
+				m.scrollbarGrabOffset = m.scrollbarGrabRowOffset(mm.Y - 1)
+				m.dragScrollbar(mm.Y - 1)
+			} else if m.inBody(mm.X, mm.Y) {
 				at := m.transcriptCaret(mm.X, mm.Y)
 				m.sel = selection{active: true, anchor: at, head: at}
 			} else {
@@ -495,8 +506,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMotionMsg:
 		// CellMotion 下仅按住鼠标才会收到移动事件，即拖拽。
+		mm := msg.Mouse()
+		if m.scrollbarDrag {
+			m.dragScrollbar(mm.Y - 1)
+			m.render()
+			return m, nil
+		}
 		if m.sel.active {
-			mm := msg.Mouse()
 			if mm.Button == tea.MouseLeft {
 				m.sel.head = m.transcriptCaret(mm.X, mm.Y)
 				m.render()
@@ -505,7 +521,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseReleaseMsg:
-		// 松开左键：根据拖拽选区复制文本，然后清除选区。
+		// 松开左键：若在滚动条拖拽中则结束拖拽；否则根据拖拽选区复制文本，然后清除选区。
+		if m.scrollbarDrag {
+			m.scrollbarDrag = false
+			m.scrollbarGrabOffset = 0
+			m.render()
+			return m, nil
+		}
 		if m.sel.active {
 			mm := msg.Mouse()
 			if mm.Button == tea.MouseLeft {
@@ -846,8 +868,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // render 将历史行切分成与被选中区域一致的宽对齐渲染行，并把当前选区反色高亮后交给 viewport。
+// 内容宽度取 viewport 宽度（终端宽 -1，末列预留给自定义滚动条）。
 func (m *Model) render() {
-	w := m.width
+	w := m.viewport.Width()
 	if w < 1 {
 		w = 1
 	}
@@ -2084,7 +2107,7 @@ func (m *Model) View() tea.View {
 
 	var parts []string
 	parts = append(parts, title)
-	parts = append(parts, m.viewport.View())
+	parts = append(parts, m.viewportView())
 	if q := m.questionView(); q != "" {
 		parts = append(parts, q)
 	}
