@@ -149,15 +149,40 @@ func TestTodoPanelViewLayout(t *testing.T) {
 	}
 }
 
-// TestTodoCommandClearsPanel /todo 清除待办面板。
-func TestTodoCommandClearsPanel(t *testing.T) {
-	m := New(&stubAgent{}, nil, context.Background(), "m", "minimal", 131072)
-	m.todoArgs = `{"todos":[{"content":"x","status":"in_progress"}]}`
-	handled, _ := m.runSlashCommand("/todo")
-	if !handled {
-		t.Fatal("/todo 应被处理")
+// TestTodoProjectionFrame 待办投影帧（Status "todo"）：新一轮 turn/start 清空面板，
+// 携带 ToolArgs 时填充（对齐 DSH FoldTodos：无需 /todo 手动清理，也不信任模型）。
+func TestTodoProjectionFrame(t *testing.T) {
+	// 清空：上一轮残留的面板在新一轮启动时被投影帧清除
+	frames := []*plugin.RunStreamResponse{
+		{Status: "todo"},
+		{Status: "success"},
 	}
+	m := pumpFrames(t, frames)
 	if m.todoArgs != "" {
-		t.Fatalf("/todo 后 todoArgs 应为空: %q", m.todoArgs)
+		t.Fatalf("todo 投影帧（空）应清空面板: %q", m.todoArgs)
+	}
+
+	// 携带列表时填充（预留：恢复会话展示场景）
+	frames2 := []*plugin.RunStreamResponse{
+		{Status: "todo", ToolArgs: `{"todos":[{"content":"恢复的任务","status":"in_progress"}]}`},
+		{Status: "success"},
+	}
+	m2 := pumpFrames(t, frames2)
+	if m2.todoArgs == "" || !strings.Contains(m2.todoArgs, "恢复的任务") {
+		t.Fatalf("todo 投影帧（带列表）应填充面板: %q", m2.todoArgs)
+	}
+}
+
+// TestTodoPanelRealisticFlow 真实帧序：每轮启动先发 todo 投影帧（清空），
+// 模型随后 todo_write 结果帧填充，success 结束；面板不残留也不需要 /todo。
+func TestTodoPanelRealisticFlow(t *testing.T) {
+	frames := []*plugin.RunStreamResponse{
+		{Status: "todo"},
+		{Status: "tool", ToolName: "todo_write", ToolArgs: `{"todos":[{"content":"任务","status":"in_progress"}]}`, ToolResult: "Updated todo list: 1 in progress"},
+		{Status: "success"},
+	}
+	m := pumpFrames(t, frames)
+	if m.todoArgs == "" || !strings.Contains(m.todoArgs, "任务") {
+		t.Fatalf("真实帧序后应填充面板: %q", m.todoArgs)
 	}
 }

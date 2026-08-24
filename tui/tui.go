@@ -766,6 +766,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		f := msg.frame
 		switch f.Status {
+		case "todo":
+			// 待办投影帧（对齐 DSH FoldTodos）：新一轮 turn/start 使旧计划失效，
+			// 清空面板（ToolArgs 为空即清除）；面板内容由 todo_write 成功结果帧驱动。
+			m.todoArgs = f.ToolArgs
+			m.syncInputHeight()
+			return m, m.pumpStream(msg.input, msg.ch)
 		case "reasoning":
 			// 思考过程增量：新建/追加助手块，以暗色渲染思考文本
 			m.streaming = true
@@ -1384,7 +1390,6 @@ var slashCommands = []compItem{
 	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
 	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
 	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
-	{label: "/todo", insert: "/todo", hint: "清除待办进度面板"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
 	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
 	{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
@@ -1520,7 +1525,6 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
 			"  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-plugin-creator 技能提供指导）",
-			"  /todo            清除输入框上方的待办进度面板（todo_write 成功后自动展示，全部完成自动消失）",
 			"  /sandbox read-only   沙箱只读（拒绝一切文件写操作）",
 			"  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
 			"  /sandbox full-access 沙箱全开（不额外拦截文件写）",
@@ -1628,15 +1632,6 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 		}
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.viewport.GotoBottom()
-		return true, nil
-	case "/todo":
-		m.todoArgs = ""
-		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 待办") + "\n已清除待办进度面板。")
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()

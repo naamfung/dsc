@@ -300,6 +300,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			f.Step = int32(stepNo)
 			baseEmit(f)
 		}
+		// 待办投影帧（对齐 DSH FoldTodos）：turn/start 使上一轮计划失效，
+		// 通知 TUI 清空待办面板；面板内容随后由 todo_write 成功结果帧驱动。
+		// 无需 /todo 手动清理，也不依赖模型主动清空——新一轮即自动让位。
+		emit(&plugin.RunStreamResponse{Status: "todo"})
 	}
 	// maxIterations == 0 表示不設上限，僅靠 ctx 取消（用戶 Ctrl+C / Shutdown）與模型自然收尾結束
 	for i := 0; maxIterations == 0 || i < maxIterations; i++ {
