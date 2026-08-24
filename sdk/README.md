@@ -1,0 +1,139 @@
+# DSC 插件 SDK（dsc-sdk）
+
+独立开发者的 Go 插件开发包：**不需要修改 DSC 主体程序或任何其他插件**，声明式注册
+工具 / LLM / Agent / 钩子 / 互通回调，即可产出宿主零改动即可加载的插件二进制。
+
+## 快速开始（最小工具插件）
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"dsc-sdk"
+)
+
+func main() {
+	sdk := dsc.New(dsc.Config{
+		Name:    "my-tool",   // 与目录名一致：plugins/tool-my-tool/
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+	})
+
+	sdk.Tool(dsc.Tool{
+		Name:        "my_tool",
+		Description: "Do something useful.",
+		Schema:      json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
+		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "result", nil
+		},
+	})
+
+	sdk.Serve() // 启动 gRPC 插件服务（正常永不返回）
+}
+```
+
+构建并部署：
+
+```sh
+# 独立 module（本目录带 go.mod；examples/ 里有完整可构建示例）
+cd examples/tool-simple && go build -o my-tool.exe .
+# 把 my-tool.exe 放进宿主 plugins/tool-my-tool/（目录名 <type>-<name> 是宿主发现规则）
+```
+
+宿主在下次启动（或经 ADMIN API `POST /plugins/load` 动态注入）即可加载，
+**无需改动主体程序、无需任何其他插件作者配合**。
+
+## 支持的插件类型与能力
+
+| 类型 | 注册 API | 能力 |
+|---|---|---|
+| `dsc.TypeTool` | `sdk.Tool(...)` | 注册工具（可多个）；SDK 自动提供 ExecuteTool / ListTools / ListContext / 元数据 / 钩子服务 |
+| `dsc.TypeLLM` | `sdk.LLM(impl)` | 实现 `plugin.LLMProvider`（Chat / ChatStream / Name / Version / HealthCheck） |
+| `dsc.TypeAgent` | `sdk.Agent(impl)` | 实现 `plugin.Agent`（Run / RunStream / RegisterServices / InjectMessage 等 11 个方法） |
+
+所有类型的元数据（Type/Name/Version/APIVersion）由 SDK 自动提供，宿主加载时校验
+`APIVersion ∈ [1.0, 2.0)`。
+
+## 钩子（参与宿主流水线，无需任何插件配合）
+
+```go
+sdk.Hook(dsc.Hook{
+	// 工具执行前：返回改写后的参数 JSON；err 非 nil 表示否决（阻止执行）
+	BeforeTool: func(ctx context.Context, toolName, argumentsJSON string) (string, error) {
+		return argumentsJSON, nil
+	},
+	// 工具执行后：改写结果/错误
+	AfterTool: func(ctx context.Context, toolName, result, toolErr string) (string, string) {
+		return result, toolErr
+	},
+	// 宿主事件订阅（异步广播：turn/start、tool/result 等）
+	OnEvent: func(ctx context.Context, eventType, dataJSON string) {},
+})
+```
+
+宿主在工具流水线 **pre-execute（沙箱策略 → BeforeTool）→ execute → post-execute
+（AfterTool）** 中按插件加载顺序调用钩子，任一插件 veto 即阻止执行。
+
+## 互通（插件间互不感知地调用宿主能力）
+
+```go
+sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
+	// ic.LLM()  —— 宿主聚合 LLM（含多 provider 路由，Thinking/工具调用）
+	// ic.Tool() —— 宿主聚合 Tool（经宿主流水线调用任意工具插件）
+	// ic.Notify(name, dataJSON) —— 发布事件到宿主总线（TUI 唤醒/其他插件订阅）
+	// 在此缓存 ic 供工具 Handler 使用
+	return nil
+})
+```
+
+宿主挂载聚合服务后回调一次；独立插件之间互不感知——经宿主聚合路由调用其他
+插件能力，无需知道对方的存在。
+
+## 进程上下文
+
+```go
+env := dsc.ReadEnv() // Mode / WorkspaceRoot / SessionDir / ContextWindow / ...
+```
+
+宿主统一注入 `DSC_*` 环境变量（workspace 根、模式、会话目录、上下文容量等），
+插件只读即可，无需关心注入细节。
+
+## LUA 插件开发
+
+SDK 面向 Go 插件；**LUA 工具开发走既有的 tool-lua-host 通路**（无需本 SDK）：
+
+- 脚本目录：`plugins/tool-lua-host/scripts/<name>/main.lua`；
+- LUA API：`dsc.register_tool` / `dsc.llm.chat` / `dsc.tool.call` / `dsc.notify.emit`
+  / `dsc.store.*` / `dsc.hook.before_tool|after_tool|on_event` / `dsc.job.*`；
+- 脚本在 `creation` 模式下可热加载；非创造模式仅加载启动时已存在的脚本；
+- 参考样例：`plugins/tool-lua-host/scripts/example/main.lua`。
+
+LUA 适合模型自行开发功能与轻量工具；需要复杂逻辑/依赖/性能时用本 SDK 写 Go 插件。
+
+## 模块结构
+
+```
+sdk/
+  sdk.go           入口：New / Tool / LLM / Agent / Hook / SetInterconnect / OnStart / OnStop / Serve
+  tool.go          工具服务端（ExecuteTool / ListTools / ListContext / SetInterconnect）
+  hook.go          钩子服务端（BeforeTool / AfterTool / OnEvent 的语义化封装）
+  metadata.go      元数据服务
+  interconnect.go  宿主能力客户端集（LLM / Tool / Notify）
+  env.go           进程上下文（DSC_* 环境变量）
+  examples/        可构建示例：tool-simple / hook-tool / llm-proxy
+```
+
+## 依赖说明
+
+`sdk/` 是独立 Go module（`dsc-sdk`），`require dsc` 并通过 `replace` 指向本仓库：
+
+```go
+require dsc v0.0.0
+replace dsc => ../            // SDK 依赖 DSC 契约（plugin/proto）
+replace github.com/hashicorp/go-plugin => ../libs/go-plugin-1.8.0  // 本地定制版（含 Broker 扩展）
+```
+
+独立开发者在自己的仓库里同样声明这三个 replace 即可（examples/ 的 go.mod 是完整
+模板）。未来若将 DSC 发布为远程 module，replace 可去掉。

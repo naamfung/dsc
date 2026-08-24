@@ -1,0 +1,138 @@
+package dsc
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+
+	"dsc/proto"
+	"dsc/proto/metadata"
+	goplugin "github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
+)
+
+// Tool 定义一个工具：名称、描述、JSON Schema 参数与执行处理器。
+// 所有字段导出，跨包可直接以字面量初始化。
+type Tool struct {
+	Name        string
+	Description string
+	Schema      json.RawMessage
+	Handler     func(ctx context.Context, args json.RawMessage) (string, error)
+	// Context 可选：向宿主贡献的 system prompt 片段（ListContext），
+	// 用于向模型说明本工具的使用约定（如沙箱边界）。
+	Context string
+}
+
+// toolGRPCPlugin 是 go-plugin 适配器：注册 ToolService + PluginMetadata +
+// PluginHookService（钩子为可选注册，未设置时为空实现，宿主调用无副作用）。
+type toolGRPCPlugin struct {
+	goplugin.NetRPCUnsupportedPlugin
+	sdk *SDK
+}
+
+func (p *toolGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
+	srv := &toolServiceServer{sdk: p.sdk, broker: broker}
+	proto.RegisterToolServiceServer(s, srv)
+	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg})
+	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})
+	return nil
+}
+
+func (p *toolGRPCPlugin) GRPCClient(context.Context, *goplugin.GRPCBroker, *grpc.ClientConn) (interface{}, error) {
+	return nil, nil
+}
+
+// toolServiceServer 工具服务端：ExecuteTool/ListTools/ListContext/SetInterconnect。
+type toolServiceServer struct {
+	proto.UnimplementedToolServiceServer
+	sdk    *SDK
+	broker *goplugin.GRPCBroker // 互通：Dial 宿主聚合服务（SetInterconnect 时使用）
+
+	mu sync.Mutex
+	ic *Interconnect
+}
+
+func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
+	for _, t := range s.sdk.tools {
+		if t.Name == req.ToolName {
+			res, err := t.Handler(ctx, json.RawMessage(req.ArgumentsJson))
+			if err != nil {
+				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
+			}
+			return &proto.ExecuteToolResponse{Content: res}, nil
+		}
+	}
+	return &proto.ExecuteToolResponse{Error: fmt.Sprintf("tool not found: %s", req.ToolName)}, nil
+}
+
+func (s *toolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
+	var tools []*proto.Tool
+	for _, t := range s.sdk.tools {
+		tools = append(tools, &proto.Tool{
+			Name:           t.Name,
+			Description:    t.Description,
+			ParametersJson: string(t.Schema),
+		})
+	}
+	return &proto.ListToolsResponse{Tools: tools}, nil
+}
+
+// ListContext 贡献 system prompt 片段：把每个工具的 Context 拼成一段（旧宿主可忽略）。
+func (s *toolServiceServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
+	var b strings.Builder
+	for _, t := range s.sdk.tools {
+		if t.Context != "" {
+			b.WriteString(t.Context)
+			b.WriteString("\n")
+		}
+	}
+	return &proto.ListContextResponse{Content: b.String()}, nil
+}
+
+// SetInterconnect 互通握手（机制 1/2/4）：宿主把挂载在本插件 client broker 上的
+// 聚合 LLM / 聚合 Tool / 通知服务 ID 传入。此处立即 Dial 并调用插件注册的
+// InterconnectHandler（若有），供其缓存客户端供后续工具执行使用。
+// dial 失败不中断：ic 中对应客户端保持 nil（插件自行判空），错误一并返回
+// 供宿主记录（宿主仅 Warn，不终止加载）。
+func (s *toolServiceServer) SetInterconnect(ctx context.Context, req *proto.InterconnectRequest) (*proto.InterconnectResponse, error) {
+	ic := &Interconnect{}
+	var dialErr error
+	if s.broker != nil {
+		if id := req.GetLlmServiceId(); id != 0 {
+			if c, err := llmDial(s.broker, id); err == nil {
+				ic.llm = c
+			} else if dialErr == nil {
+				dialErr = err
+			}
+		}
+		if id := req.GetToolServiceId(); id != 0 {
+			if c, err := toolDial(s.broker, id); err == nil {
+				ic.tool = c
+			} else if dialErr == nil {
+				dialErr = err
+			}
+		}
+		if id := req.GetNotifyServiceId(); id != 0 {
+			if n, err := notifyDial(s.broker, id); err == nil {
+				ic.ntf = n
+			} else if dialErr == nil {
+				dialErr = err
+			}
+		}
+	}
+	s.mu.Lock()
+	if old := s.ic; old != nil {
+		_ = old.Close()
+	}
+	s.ic = ic
+	s.mu.Unlock()
+
+	if s.sdk.inter != nil {
+		if err := s.sdk.inter(ctx, ic); err != nil {
+			return &proto.InterconnectResponse{}, err
+		}
+	}
+	return &proto.InterconnectResponse{}, dialErr
+}
