@@ -58,9 +58,11 @@ cd ..\..
 echo Building tool-str-replace-editor plugin...
 go build -o plugins\tool-str-replace-editor\tool-str-replace-editor.exe .\plugins\tool-str-replace-editor
 
-:: 构建 tool-browser-use 插件
+:: 构建 tool-browser-use 插件（独立 module，基于 dsc-sdk）
 echo Building tool-browser-use plugin...
-go build -o plugins\tool-browser-use\tool-browser-use.exe .\plugins\tool-browser-use
+cd plugins\tool-browser-use
+go build -o tool-browser-use.exe .
+cd ..\..
 
 :: 构建 tool-lisp-eval 插件（独立 module，基于 dsc-sdk）
 echo Building tool-lisp-eval plugin...

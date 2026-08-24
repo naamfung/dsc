@@ -12,11 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"dsc-sdk"
 	"dsc/plugin"
-	"dsc/proto"
-	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
@@ -407,30 +404,6 @@ func getOrCreatePage(sessionID, pageID, url string) (*rod.Page, *BrowserSession,
 	return page, sess, nil
 }
 
-// BrowserTool 瀏覽器工具實現
-type BrowserTool struct {
-	name        string
-	description string
-	schema      json.RawMessage
-	handler     func(ctx context.Context, args json.RawMessage) (string, error)
-}
-
-func (b *BrowserTool) Name() string {
-	return b.name
-}
-
-func (b *BrowserTool) Description() string {
-	return b.description
-}
-
-func (b *BrowserTool) ParametersSchema() json.RawMessage {
-	return b.schema
-}
-
-func (b *BrowserTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	return b.handler(ctx, args)
-}
-
 // FetchUrlResult 獲取網頁內容結果
 type FetchUrlResult struct {
 	Success bool   `json:"success"`
@@ -639,319 +612,206 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 }
 
 // ============================================================
-// 插件服務實現
+// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
+// PluginMetadata / PluginHookService 与 go-plugin 组装（重写自旧的
+// ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 // ============================================================
-
-// ToolServiceServer 工具服務服務端實現
-type ToolServiceServer struct {
-	proto.UnimplementedToolServiceServer
-	tools []*BrowserTool
-}
-
-func (s *ToolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
-	for _, t := range s.tools {
-		if t.Name() == req.ToolName {
-			res, err := t.Execute(ctx, json.RawMessage(req.ArgumentsJson))
-			if err != nil {
-				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
-			}
-			return &proto.ExecuteToolResponse{Content: res}, nil
-		}
-	}
-	return &proto.ExecuteToolResponse{Error: "tool not found"}, nil
-}
-
-func (s *ToolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	var tools []*proto.Tool
-	for _, t := range s.tools {
-		tools = append(tools, &proto.Tool{
-			Name:           t.Name(),
-			Description:    t.Description(),
-			ParametersJson: string(t.ParametersSchema()),
-		})
-	}
-	return &proto.ListToolsResponse{Tools: tools}, nil
-}
-
-// MetadataServer 元數據服務服務端實現
-type MetadataServer struct {
-	metadata.UnimplementedPluginMetadataServer
-}
-
-func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
-	return &metadata.PluginInfo{
-		Type:       "tool",
-		Name:       "browser-use",
-		Version:    "1.0.0",
-		ApiVersion: "1.0",
-	}, nil
-}
-
 func main() {
 	// 定義 fetch_url 工具
-	fetchUrlTool := &BrowserTool{
-		name:        "fetch_url",
-		description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"session_id": {
-					"type": "string",
-					"description": "Browser session ID for persistent state"
-				},
-				"url": {
-					"type": "string",
-					"description": "URL to fetch"
-				}
+	fetchUrlSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"session_id": {
+				"type": "string",
+				"description": "Browser session ID for persistent state"
 			},
-			"required": ["url"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				SessionID string `json:"session_id"`
-				URL       string `json:"url"`
+			"url": {
+				"type": "string",
+				"description": "URL to fetch"
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if params.URL == "" {
-				return "", fmt.Errorf("url is required")
-			}
-			sessionID := params.SessionID
-			if sessionID == "" {
-				sessionID = "default-browser-session"
-			}
-			return fetchUrlImpl(sessionID, params.URL)
 		},
+		"required": ["url"]
+	}`)
+	fetchUrlHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		var params struct {
+			SessionID string `json:"session_id"`
+			URL       string `json:"url"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		if params.URL == "" {
+			return "", fmt.Errorf("url is required")
+		}
+		sessionID := params.SessionID
+		if sessionID == "" {
+			sessionID = "default-browser-session"
+		}
+		return fetchUrlImpl(sessionID, params.URL)
 	}
 
 	// 定義 web_search 工具
-	webSearchTool := &BrowserTool{
-		name:        "web_search",
-		description: "Perform a web search using a headless browser and extract search results",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"session_id": {
-					"type": "string",
-					"description": "Browser session ID for persistent state"
-				},
-				"query": {
-					"type": "string",
-					"description": "Search query"
-				}
+	webSearchSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"session_id": {
+				"type": "string",
+				"description": "Browser session ID for persistent state"
 			},
-			"required": ["query"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				SessionID string `json:"session_id"`
-				Query     string `json:"query"`
+			"query": {
+				"type": "string",
+				"description": "Search query"
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if strings.TrimSpace(params.Query) == "" {
-				return "", fmt.Errorf("query is required")
-			}
-			sessionID := params.SessionID
-			if sessionID == "" {
-				sessionID = "default-browser-session"
-			}
-			return webSearchImpl(sessionID, params.Query)
 		},
+		"required": ["query"]
+	}`)
+	webSearchHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		var params struct {
+			SessionID string `json:"session_id"`
+			Query     string `json:"query"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		if strings.TrimSpace(params.Query) == "" {
+			return "", fmt.Errorf("query is required")
+		}
+		sessionID := params.SessionID
+		if sessionID == "" {
+			sessionID = "default-browser-session"
+		}
+		return webSearchImpl(sessionID, params.Query)
 	}
 
 	// 定義 browser_click 工具
-	browserClickTool := &BrowserTool{
-		name:        "browser_click",
-		description: "Click an element on the page by selector",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"session_id": {
-					"type": "string",
-					"description": "Browser session ID for persistent state"
-				},
-				"url": {
-					"type": "string",
-					"description": "Current page URL"
-				},
-				"selector": {
-					"type": "string",
-					"description": "CSS selector of the element to click"
-				}
+	browserClickSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"session_id": {
+				"type": "string",
+				"description": "Browser session ID for persistent state"
 			},
-			"required": ["url", "selector"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				SessionID string `json:"session_id"`
-				URL       string `json:"url"`
-				Selector  string `json:"selector"`
+			"url": {
+				"type": "string",
+				"description": "Current page URL"
+			},
+			"selector": {
+				"type": "string",
+				"description": "CSS selector of the element to click"
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if params.URL == "" || params.Selector == "" {
-				return "", fmt.Errorf("url and selector are required")
-			}
-			sessionID := params.SessionID
-			if sessionID == "" {
-				sessionID = "default-browser-session"
-			}
-			return browserClickImpl(sessionID, params.URL, params.Selector)
 		},
+		"required": ["url", "selector"]
+	}`)
+	browserClickHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		var params struct {
+			SessionID string `json:"session_id"`
+			URL       string `json:"url"`
+			Selector  string `json:"selector"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		if params.URL == "" || params.Selector == "" {
+			return "", fmt.Errorf("url and selector are required")
+		}
+		sessionID := params.SessionID
+		if sessionID == "" {
+			sessionID = "default-browser-session"
+		}
+		return browserClickImpl(sessionID, params.URL, params.Selector)
 	}
 
 	// 定義 browser_type 工具
-	browserTypeTool := &BrowserTool{
-		name:        "browser_type",
-		description: "Type text into an input field",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"session_id": {
-					"type": "string",
-					"description": "Browser session ID for persistent state"
-				},
-				"url": {
-					"type": "string",
-					"description": "Current page URL"
-				},
-				"selector": {
-					"type": "string",
-					"description": "CSS selector of the input field"
-				},
-				"text": {
-					"type": "string",
-					"description": "Text to type"
-				},
-				"submit": {
-					"type": "boolean",
-					"description": "Whether to submit the form after typing"
-				}
+	browserTypeSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"session_id": {
+				"type": "string",
+				"description": "Browser session ID for persistent state"
 			},
-			"required": ["url", "selector", "text"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				SessionID string `json:"session_id"`
-				URL       string `json:"url"`
-				Selector  string `json:"selector"`
-				Text      string `json:"text"`
-				Submit    bool   `json:"submit"`
+			"url": {
+				"type": "string",
+				"description": "Current page URL"
+			},
+			"selector": {
+				"type": "string",
+				"description": "CSS selector of the input field"
+			},
+			"text": {
+				"type": "string",
+				"description": "Text to type"
+			},
+			"submit": {
+				"type": "boolean",
+				"description": "Whether to submit the form after typing"
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if params.URL == "" || params.Selector == "" || params.Text == "" {
-				return "", fmt.Errorf("url, selector, and text are required")
-			}
-			sessionID := params.SessionID
-			if sessionID == "" {
-				sessionID = "default-browser-session"
-			}
-			return browserTypeImpl(sessionID, params.URL, params.Selector, params.Text, params.Submit)
 		},
+		"required": ["url", "selector", "text"]
+	}`)
+	browserTypeHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		var params struct {
+			SessionID string `json:"session_id"`
+			URL       string `json:"url"`
+			Selector  string `json:"selector"`
+			Text      string `json:"text"`
+			Submit    bool   `json:"submit"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		if params.URL == "" || params.Selector == "" || params.Text == "" {
+			return "", fmt.Errorf("url, selector, and text are required")
+		}
+		sessionID := params.SessionID
+		if sessionID == "" {
+			sessionID = "default-browser-session"
+		}
+		return browserTypeImpl(sessionID, params.URL, params.Selector, params.Text, params.Submit)
 	}
 
 	// 定義 browser_screenshot 工具
-	browserScreenshotTool := &BrowserTool{
-		name:        "browser_screenshot",
-		description: "Take a screenshot of the current page or full page",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"session_id": {
-					"type": "string",
-					"description": "Browser session ID for persistent state"
-				},
-				"url": {
-					"type": "string",
-					"description": "Current page URL"
-				},
-				"full_page": {
-					"type": "boolean",
-					"description": "Whether to take a full page screenshot"
-				}
+	browserScreenshotSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"session_id": {
+				"type": "string",
+				"description": "Browser session ID for persistent state"
 			},
-			"required": ["url"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				SessionID string `json:"session_id"`
-				URL       string `json:"url"`
-				FullPage  bool   `json:"full_page"`
+			"url": {
+				"type": "string",
+				"description": "Current page URL"
+			},
+			"full_page": {
+				"type": "boolean",
+				"description": "Whether to take a full page screenshot"
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if params.URL == "" {
-				return "", fmt.Errorf("url is required")
-			}
-			sessionID := params.SessionID
-			if sessionID == "" {
-				sessionID = "default-browser-session"
-			}
-			return browserScreenshotImpl(sessionID, params.URL, params.FullPage)
 		},
+		"required": ["url"]
+	}`)
+	browserScreenshotHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		var params struct {
+			SessionID string `json:"session_id"`
+			URL       string `json:"url"`
+			FullPage  bool   `json:"full_page"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		if params.URL == "" {
+			return "", fmt.Errorf("url is required")
+		}
+		sessionID := params.SessionID
+		if sessionID == "" {
+			sessionID = "default-browser-session"
+		}
+		return browserScreenshotImpl(sessionID, params.URL, params.FullPage)
 	}
 
-	// 創建工具服務服務端
-	toolServer := &ToolServiceServer{
-		tools: []*BrowserTool{fetchUrlTool, webSearchTool, browserClickTool, browserTypeTool, browserScreenshotTool},
-	}
-
-	// 創建元數據服務服務端
-	metadataServer := &MetadataServer{}
-
-	// 啟動插件服務
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"tool": &ToolMetadataGRPCPlugin{
-				ToolImpl:     toolServer,
-				MetadataImpl: metadataServer,
-			},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
-	})
-}
-
-// ToolMetadataGRPCPlugin 是 gRPC 插件的實現
-type ToolMetadataGRPCPlugin struct {
-	goplugin.NetRPCUnsupportedPlugin
-	ToolImpl     proto.ToolServiceServer
-	MetadataImpl metadata.PluginMetadataServer
-}
-
-func (p *ToolMetadataGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
-	proto.RegisterToolServiceServer(s, p.ToolImpl)
-	metadata.RegisterPluginMetadataServer(s, p.MetadataImpl)
-	return nil
-}
-
-func (p *ToolMetadataGRPCPlugin) GRPCClient(ctx context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return &ToolMetadataGRPCClient{
-		ToolClient:     proto.NewToolServiceClient(c),
-		MetadataClient: metadata.NewPluginMetadataClient(c),
-	}, nil
-}
-
-type ToolMetadataGRPCClient struct {
-	ToolClient     proto.ToolServiceClient
-	MetadataClient metadata.PluginMetadataClient
-}
-
-func (c *ToolMetadataGRPCClient) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest, opts ...grpc.CallOption) (*proto.ExecuteToolResponse, error) {
-	return c.ToolClient.ExecuteTool(ctx, req, opts...)
-}
-
-func (c *ToolMetadataGRPCClient) ListTools(ctx context.Context, req *proto.ListToolsRequest, opts ...grpc.CallOption) (*proto.ListToolsResponse, error) {
-	return c.ToolClient.ListTools(ctx, req, opts...)
-}
-
-func (c *ToolMetadataGRPCClient) GetInfo(ctx context.Context, req *metadata.Empty, opts ...grpc.CallOption) (*metadata.PluginInfo, error) {
-	return c.MetadataClient.GetInfo(ctx, req, opts...)
+	sdk := dsc.New(dsc.Config{Name: "browser-use", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk.Tool(dsc.Tool{Name: "fetch_url", Description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering", Schema: fetchUrlSchema, Handler: fetchUrlHandler})
+	sdk.Tool(dsc.Tool{Name: "web_search", Description: "Perform a web search using a headless browser and extract search results", Schema: webSearchSchema, Handler: webSearchHandler})
+	sdk.Tool(dsc.Tool{Name: "browser_click", Description: "Click an element on the page by selector", Schema: browserClickSchema, Handler: browserClickHandler})
+	sdk.Tool(dsc.Tool{Name: "browser_type", Description: "Type text into an input field", Schema: browserTypeSchema, Handler: browserTypeHandler})
+	sdk.Tool(dsc.Tool{Name: "browser_screenshot", Description: "Take a screenshot of the current page or full page", Schema: browserScreenshotSchema, Handler: browserScreenshotHandler})
+	sdk.Serve()
 }

@@ -16,7 +16,6 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/garyburd/redigo v1.6.4
 	github.com/go-playground/validator/v10 v10.30.3
-	github.com/go-rod/rod v0.116.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/gddo v0.0.0-20210115222349-20d68f94ee1f
 	github.com/hashicorp/go-hclog v1.6.3
@@ -75,11 +74,6 @@ require (
 	github.com/smarty/assertions v1.15.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/ysmood/fetchup v0.2.3 // indirect
-	github.com/ysmood/goob v0.4.0 // indirect
-	github.com/ysmood/got v0.40.0 // indirect
-	github.com/ysmood/gson v0.7.3 // indirect
-	github.com/ysmood/leakless v0.9.0 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
 	golang.org/x/net v0.55.0 // indirect
