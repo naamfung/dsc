@@ -42,9 +42,9 @@ go build -o plugins/llm-anthropic/llm-anthropic.exe ./plugins/llm-anthropic
 echo "Building llm-ollama plugin..."
 go build -o plugins/llm-ollama/llm-ollama.exe ./plugins/llm-ollama
 
-# 构建 tool-filesystem 插件
+# 构建 tool-filesystem 插件（独立 module，基于 dsc-sdk）
 echo "Building tool-filesystem plugin..."
-go build -o plugins/tool-filesystem/tool-filesystem.exe ./plugins/tool-filesystem
+(cd plugins/tool-filesystem && go build -o tool-filesystem.exe .)
 
 # 构建 tool-str-replace-editor 插件
 echo "Building tool-str-replace-editor plugin..."
