@@ -42,9 +42,11 @@ cd plugins\llm-anthropic
 go build -o llm-anthropic.exe .
 cd ..\..
 
-:: 构建 llm-ollama 插件
+:: 构建 llm-ollama 插件（独立 module，基于 dsc-sdk）
 echo Building llm-ollama plugin...
-go build -o plugins\llm-ollama\llm-ollama.exe .\plugins\llm-ollama
+cd plugins\llm-ollama
+go build -o llm-ollama.exe .
+cd ..\..
 
 :: 构建 tool-filesystem 插件（独立 module，基于 dsc-sdk）
 echo Building tool-filesystem plugin...

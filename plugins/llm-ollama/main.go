@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
 
+	"dsc-sdk"
 	"dsc/plugin"
-	gp "github.com/hashicorp/go-plugin"
 	"github.com/ollama/ollama/api"
 )
 
@@ -335,16 +336,14 @@ func main() {
 	thinking := os.Getenv("OLLAMA_THINKING") != "0"
 
 	provider := &OllamaProvider{
-		client:   api.NewClient(hostURL, nil),
+		client:   api.NewClient(hostURL, http.DefaultClient),
 		model:    model,
 		thinking: thinking,
 	}
 
-	gp.Serve(&gp.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]gp.Plugin{
-			"llm": &plugin.LLMGRPCPlugin{Impl: provider},
-		},
-		GRPCServer: gp.DefaultGRPCServer,
-	})
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.LLMGRPCPlugin
+	// 自动提供 LLMService + 元数据（重写自旧的 goplugin.Serve 样板）。
+	sdk := dsc.New(dsc.Config{Name: "ollama", Version: "1.0.0", Type: dsc.TypeLLM})
+	sdk.LLM(provider)
+	sdk.Serve()
 }
