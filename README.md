@@ -8,7 +8,7 @@
 - **熱重載（Hot Reload）**：支持 DSCPlugin、Agent、LLM 等類型插件的在線熱重載，無需重啟主程序即可更新插件版本。
 - **多 LLM 支持**：支持 OpenAI、Anthropic、Ollama 等主流 LLM 提供商；其中 `llm-openai` 與 `llm-anthropic` 插件支持本地 LlamaCpp 推理引擎。
 - **ReAct 循環**：實現 Agent 的 Reasoning and Acting 循環，支持多輪推理與工具執行。
-- **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。代碼中提供 `WorkspaceProtectionEnabled` 配置項，啟用時可限制模型文件操作在 workspace 根目錄內（默認即啟動 dsc 的目錄，也可經 `workspace_root` 絕對路徑覆蓋），防止路徑遍歷攻擊；默認情況下保護機制已啟用。
+- **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（不额外拦截）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控。
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
 - **TUI 工具調用顯示增強**：在 TUI 界面中，針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `Edit(View, /root/file/path)`、`Edit(Create, /root/file/path)`、`Edit(StrReplace, /root/file/path)`、`Edit(Insert, /root/file/path)` 等格式，提供更清晰的操作方向性展示。
 

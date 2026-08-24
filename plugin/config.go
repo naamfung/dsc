@@ -22,12 +22,9 @@ func init() {
 }
 
 type Config struct {
-	WorkspaceRoot string `json:"workspace_root" yaml:"workspace_root"`
-	// WorkspaceProtectionEnabled 工作空間保護開關，三值：0=缺省（默認啟用）、-1=顯式關閉、+1=顯式啟用。
-	// 缺省值置 0，因此無需指針即可區分「未聲明」與「顯式聲明」。
-	WorkspaceProtectionEnabled int           `json:"workspace_protection_enabled" yaml:"workspace_protection_enabled"`
-	Mode                       string        `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
-	Plugins                    []PluginEntry `json:"plugins" yaml:"plugins"`
+	WorkspaceRoot string        `json:"workspace_root" yaml:"workspace_root"`
+	Mode          string        `json:"mode" yaml:"mode"` // 默認模式：minimal 或 standard
+	Plugins       []PluginEntry `json:"plugins" yaml:"plugins"`
 	// 可保留舊的 LLM 字段便於過渡，但推薦統一使用 Plugins
 	DefaultLLM string `json:"default_llm" yaml:"default_llm"`
 	// ContextWindow 上下文窗口大小（token 数）；0 表示未配置，
@@ -83,43 +80,18 @@ func SaveConfig(path string, cfg *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// UpdateWorkspaceProtectionEnabled 更新工作空間保護狀態並保存到配置文件
-func UpdateWorkspaceProtectionEnabled(enabled bool, configPath string) error {
-	v := -1
-	if enabled {
-		v = 1
-	}
-	cfg, err := LoadConfig(configPath)
-	if err != nil {
-		// 如果配置文件不存在或加載失敗，創建一個新的配置
-		cfg = &Config{
-			WorkspaceRoot:              "",
-			WorkspaceProtectionEnabled: v,
-			Mode:                       "standard",
-			Plugins:                    nil,
-			DefaultLLM:                 "",
-			ContextWindow:              0,
-			Persona:                    "",
-		}
-	} else {
-		cfg.WorkspaceProtectionEnabled = v
-	}
-	return SaveConfig(configPath, cfg)
-}
-
 // UpdateMode 更新模式狀態並保存到配置文件
 func UpdateMode(mode string, configPath string) error {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		// 如果配置文件不存在或加載失敗，創建一個新的配置
 		cfg = &Config{
-			WorkspaceRoot:              "",
-			WorkspaceProtectionEnabled: 0, // 缺省：默認啟用
-			Mode:                       mode,
-			Plugins:                    nil,
-			DefaultLLM:                 "",
-			ContextWindow:              0,
-			Persona:                    "",
+			WorkspaceRoot: "",
+			Mode:          mode,
+			Plugins:       nil,
+			DefaultLLM:    "",
+			ContextWindow: 0,
+			Persona:       "",
 		}
 	} else {
 		cfg.Mode = mode

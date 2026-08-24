@@ -347,21 +347,18 @@ func main() {
 		presetCfg = nil
 	}
 
-	// 從主配置 config/config.yaml 讀取工作空間根與保護狀態。
+	// 從主配置 config/config.yaml 讀取工作空間根。
 	// workspace_root 為統一工作空間根（對齊 DSH ctx.sandboxPolicy 的單一根來源），
 	// 同時供 sandbox 判定與注入給各工具插件進程。默認以啟動目錄（cwd）為根——
 	// 在哪个目录启动 dsc，就以哪个目录为工作区（对齐 REX/Claude Code）；
 	// 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
-	// 工作區保護默認啟用，防止路徑遍歷攻擊；僅當配置顯式聲明 -1（關閉）時禁用（三值：0=缺省、-1=關閉、+1=啟用）。
-	plugin.WorkspaceProtectionEnabled = true
+	// 沙箱策略（read-only / workspace-write / full-access）由 TUI /sandbox 命令
+	// 运行时切换，见 plugin.Manager.SetSandboxPolicy。
 	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
 	if err == nil && mainCfg != nil {
 		plugin.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
-		if mainCfg.WorkspaceProtectionEnabled == -1 {
-			plugin.WorkspaceProtectionEnabled = false
-		}
 	}
-	logger.Info("workspace root & protection", "root", plugin.WorkspaceRoot, "protection", plugin.WorkspaceProtectionEnabled)
+	logger.Info("workspace root", "root", plugin.WorkspaceRoot)
 
 	// 放大 go-plugin GRPCBroker 的连接超时（库默认 5 秒，见 EnvConnTimeout）：
 	// 宿主与插件进程同时加载超大本地模型、传输通道被挤占时，接收方收到 ConnInfo
@@ -538,13 +535,8 @@ func main() {
 			e.Env = map[string]string{}
 		}
 		e.Env["DSC_MODE"] = mode
-		// 注入統一工作空間根與保護狀態（對齊 DSH 單一策略歸屬：各能力族消費同一根）
+		// 注入統一工作空間根（對齊 DSH 單一策略歸屬：各能力族消費同一根）
 		e.Env["DSC_WORKSPACE_ROOT"] = plugin.WorkspaceRoot
-		if plugin.WorkspaceProtectionEnabled {
-			e.Env["DSC_WORKSPACE_PROTECTION_ENABLED"] = "1"
-		} else {
-			e.Env["DSC_WORKSPACE_PROTECTION_ENABLED"] = "0"
-		}
 	}
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices，

@@ -10,17 +10,10 @@ import (
 // 工具插件等子進程則讀取宿主注入的 DSC_WORKSPACE_ROOT 環境變量。
 var WorkspaceRoot string
 
-// WorkspaceProtectionEnabled 工作空間保護開關
-var WorkspaceProtectionEnabled = true // 默認啟用工作空間機制保護，限制模型文件操作在 workspace 根目錄內
-
 func init() {
-	// 子進程：優先取宿主注入的 DSC_WORKSPACE_ROOT / DSC_WORKSPACE_PROTECTION_ENABLED，
-	// 使宿主與各插件進程對工作空間根與保護狀態保持一致。
+	// 子進程：優先取宿主注入的 DSC_WORKSPACE_ROOT，使宿主與各插件進程對工作空間根保持一致。
 	if root := os.Getenv("DSC_WORKSPACE_ROOT"); root != "" {
 		WorkspaceRoot = root
-	}
-	if v := os.Getenv("DSC_WORKSPACE_PROTECTION_ENABLED"); v == "0" {
-		WorkspaceProtectionEnabled = false
 	}
 	if WorkspaceRoot == "" {
 		// 無注入時，默認以啟動目錄為根（與宿主 resolveWorkspaceRoot 一致：

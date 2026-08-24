@@ -1368,10 +1368,9 @@ var slashCommands = []compItem{
 	{label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
 	{label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
 	{label: "/mode creation", insert: "/mode creation", hint: "切换至创造模式（可经 tool-lua-host 创造 LUA 插件）"},
-	{label: "/workspace on", insert: "/workspace on", hint: "启用工作空间机制保护"},
-	{label: "/workspace off", insert: "/workspace off", hint: "关闭工作空间机制保护"},
-	{label: "/sandbox on", insert: "/sandbox on", hint: "启用沙箱保护（只读，拒绝一切文件写）"},
-	{label: "/sandbox off", insert: "/sandbox off", hint: "关闭沙箱保护（不额外拦截）"},
+	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
+	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
+	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
 	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
 	{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
@@ -1507,10 +1506,10 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
 			"  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-plugin-creator 技能提供指导）",
-			"  /workspace on   启用工作空间机制保护（限制文件操作在工作区目录内）",
-			"  /workspace off  关闭工作空间机制保护（允许模型访问整个文件系统而不作限制）",
-			"  /sandbox on   启用沙箱保护（只读策略，拒绝一切文件写操作）",
-			"  /sandbox off  关闭沙箱保护（full 策略，不再额外拦截文件写）",
+			"  /sandbox read-only   沙箱只读（拒绝一切文件写操作）",
+			"  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
+			"  /sandbox full-access 沙箱全开（不额外拦截文件写）",
+			"  （/sandbox on / off 为 read-only / full-access 的兼容别名）",
 			"  /sessions    列出所有会话",
 			"  /crons       列出所有定时任务",
 			"  /cron add <cron> <prompt>  添加定时任务（cron 为 5 段表达式，如 0 8 * * *）",
@@ -1611,60 +1610,6 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至創造模式 (creation)：可經 tool-lua-host 編寫 LUA 插件（參考 lua-plugin-creator 技能）。")
 				}
 			}
-		} else {
-			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-		}
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.viewport.GotoBottom()
-		return true, nil
-	case "/workspace on":
-		plugin.WorkspaceProtectionEnabled = true
-		err := plugin.UpdateWorkspaceProtectionEnabled(true, plugin.ConfigPath)
-		if err != nil {
-			m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
-		} else {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 工作空間保護") + "\n已啟用工作空間機制保護（限制文件操作在工作區目錄內）。")
-		}
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.viewport.GotoBottom()
-		return true, nil
-	case "/workspace off":
-		plugin.WorkspaceProtectionEnabled = false
-		err := plugin.UpdateWorkspaceProtectionEnabled(false, plugin.ConfigPath)
-		if err != nil {
-			m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
-		} else {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 工作空間保護") + "\n已關閉工作空間機制保護（允許模型訪問整個文件系統而不作限制）。")
-		}
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.viewport.GotoBottom()
-		return true, nil
-	case "/sandbox on":
-		if m.manager != nil {
-			m.manager.SetSandboxPolicy(plugin.SandboxReadOnly)
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已启用沙箱保护（只读策略，拒绝一切文件写操作）。")
-		} else {
-			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-		}
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.viewport.GotoBottom()
-		return true, nil
-	case "/sandbox off":
-		if m.manager != nil {
-			m.manager.SetSandboxPolicy(plugin.SandboxFullAccess)
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已关闭沙箱保护（full 策略，不再额外拦截文件写）。")
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 		}
@@ -1787,6 +1732,43 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		return true, nil
 	case "/quit", "/exit":
 		return true, tea.Quit
+	}
+	// /sandbox <mode>（对齐 DSH sandbox mode 三档；on/off 为 read-only/full-access 兼容别名）
+	if strings.HasPrefix(cmd, "/sandbox") {
+		arg := strings.TrimSpace(strings.TrimPrefix(cmd, "/sandbox"))
+		var policy plugin.SandboxPolicy
+		var label string
+		switch arg {
+		case "", "on", "read-only", "readonly":
+			policy = plugin.SandboxReadOnly
+			label = "read-only（只读，拒绝一切文件写操作）"
+		case "workspace", "workspace-write":
+			policy = plugin.SandboxWorkspaceWrite
+			label = "workspace-write（仅允许 workspace 内写）"
+		case "off", "full-access", "full":
+			policy = plugin.SandboxFullAccess
+			label = "full-access（不额外拦截文件写）"
+		default:
+			m.appendMessage(errorSty.Render("用法: /sandbox read-only | workspace | full-access（on/off 为 read-only/full-access 别名）"))
+			m.input.SetValue("")
+			m.completion = completion{}
+			m.syncInputHeight()
+			m.render()
+			m.viewport.GotoBottom()
+			return true, nil
+		}
+		if m.manager != nil {
+			m.manager.SetSandboxPolicy(policy)
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已切换沙箱策略为 " + label + "。")
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
 	}
 	// /cron add|remove|on|off（前缀匹配）
 	if strings.HasPrefix(cmd, "/cron ") {

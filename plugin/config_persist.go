@@ -15,7 +15,7 @@ import (
 //
 // 写回采用 yaml.Node 文档级操作（而非整体序列化 Config 结构体）：
 // 仅增改 plugins 序列，保留文件其余内容（注释、未声明字段的缺省语义），
-// 避免把 WorkspaceProtectionEnabled 等零值字段补齐进 config.yaml。
+// 避免把零值字段补齐进 config.yaml。
 
 // persistConfigPath 返回动态注入/卸载要写回的 config.yaml 路径：
 // 优先使用 Manager.configPath（由 main 通过 SetConfigPath 注入），退回包级 ConfigPath。

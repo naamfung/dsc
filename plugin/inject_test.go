@@ -79,7 +79,7 @@ func TestPersistInjectionUpsertAndRemoval(t *testing.T) {
 
 // TestPersistInjectionPreservesFile 校验 yaml.Node 保留法：
 // 注入写回只增改 plugins 序列——原文件的注释与未声明字段的缺省语义保留，
-// 不再把 WorkspaceProtectionEnabled 等零值字段补齐进 config.yaml。
+// 不再把零值字段补齐进 config.yaml。
 func TestPersistInjectionPreservesFile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

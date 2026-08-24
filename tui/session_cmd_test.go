@@ -157,15 +157,35 @@ func TestSessionCommandDelete(t *testing.T) {
 	}
 }
 
-// TestSandboxCommandToggle 校验 /sandbox on/off 切换运行时沙箱策略。
+// TestSandboxCommandToggle 校验 /sandbox 三档切换运行时沙箱策略（on/off 为兼容别名）。
 func TestSandboxCommandToggle(t *testing.T) {
 	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
 	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
 
-	// 初始为缺省 workspace
+	// 初始为缺省 workspace-write
 	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxWorkspaceWrite {
 		t.Fatalf("initial policy = %v, want workspace", got)
 	}
+	if handled, _ := m.runSlashCommand("/sandbox read-only"); !handled {
+		t.Fatal("/sandbox read-only should be handled")
+	}
+	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxReadOnly {
+		t.Fatalf("after read-only, policy = %v, want read-only", got)
+	}
+	// 切回 workspace-write 档（此前 TUI 无法切回的缺省档）
+	if handled, _ := m.runSlashCommand("/sandbox workspace"); !handled {
+		t.Fatal("/sandbox workspace should be handled")
+	}
+	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxWorkspaceWrite {
+		t.Fatalf("after workspace, policy = %v, want workspace", got)
+	}
+	if handled, _ := m.runSlashCommand("/sandbox full-access"); !handled {
+		t.Fatal("/sandbox full-access should be handled")
+	}
+	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxFullAccess {
+		t.Fatalf("after full-access, policy = %v, want full", got)
+	}
+	// on/off 兼容别名
 	if handled, _ := m.runSlashCommand("/sandbox on"); !handled {
 		t.Fatal("/sandbox on should be handled")
 	}

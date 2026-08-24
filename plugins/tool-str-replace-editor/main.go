@@ -212,12 +212,9 @@ func safePath(base, reqPath string) (string, error) {
 	}
 	absReq = filepath.Clean(absReq)
 
-	// 工作空間保護關閉（/workspace off）時不做 base 限制，僅做路徑規範化
-	if !plugin.WorkspaceProtectionEnabled {
-		return absReq, nil
-	}
-
-	// 詞法前綴檢查：確保在 base 目錄內
+	// 詞法前綴檢查：確保在 base 目錄內（对齐 DSH：工具层不做独立策略开关，
+	// 相对路径永远以 workspace 为根，防止 ../ 路径穿越；是否允许绝对路径写
+	// workspace 之外由宿主 pipeline 的 sandbox 策略统一判定）。
 	if !withinBase(absReq, realBase) {
 		return "", os.ErrPermission
 	}
