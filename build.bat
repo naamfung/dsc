@@ -36,9 +36,11 @@ cd plugins\llm-openai
 go build -o llm-openai.exe .
 cd ..\..
 
-:: 构建 llm-anthropic 插件
+:: 构建 llm-anthropic 插件（独立 module，基于 dsc-sdk）
 echo Building llm-anthropic plugin...
-go build -o plugins\llm-anthropic\llm-anthropic.exe .\plugins\llm-anthropic
+cd plugins\llm-anthropic
+go build -o llm-anthropic.exe .
+cd ..\..
 
 :: 构建 llm-ollama 插件
 echo Building llm-ollama plugin...

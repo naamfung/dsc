@@ -34,9 +34,9 @@ go build -o plugins/agent-react-loop/agent-react-loop.exe ./plugins/agent-react-
 echo "Building llm-openai plugin..."
 (cd plugins/llm-openai && go build -o llm-openai.exe .)
 
-# 构建 llm-anthropic 插件
+# 构建 llm-anthropic 插件（独立 module，基于 dsc-sdk）
 echo "Building llm-anthropic plugin..."
-go build -o plugins/llm-anthropic/llm-anthropic.exe ./plugins/llm-anthropic
+(cd plugins/llm-anthropic && go build -o llm-anthropic.exe .)
 
 # 构建 llm-ollama 插件
 echo "Building llm-ollama plugin..."

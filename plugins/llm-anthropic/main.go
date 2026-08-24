@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"dsc-sdk"
 	"dsc/plugin"
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	gp "github.com/hashicorp/go-plugin"
 )
 
 type AnthropicProvider struct {
@@ -298,11 +298,9 @@ func main() {
 		maxTokens:      maxTokens,
 	}
 
-	gp.Serve(&gp.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]gp.Plugin{
-			"llm": &plugin.LLMGRPCPlugin{Impl: provider},
-		},
-		GRPCServer: gp.DefaultGRPCServer,
-	})
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.LLMGRPCPlugin
+	// 自动提供 LLMService + 元数据（重写自旧的 goplugin.Serve 样板）。
+	sdk := dsc.New(dsc.Config{Name: "anthropic", Version: "1.1.0", Type: dsc.TypeLLM})
+	sdk.LLM(provider)
+	sdk.Serve()
 }
