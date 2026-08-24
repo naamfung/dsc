@@ -151,12 +151,13 @@ type submitResult struct {
 
 // streamFrame 是流式響應的一幀
 type streamFrame struct {
-	input string
-	frame *plugin.RunStreamResponse
-	ch    <-chan *plugin.RunStreamResponse
-	first bool
-	done  bool
-	err   error
+	input  string
+	frame  *plugin.RunStreamResponse
+	ch     <-chan *plugin.RunStreamResponse
+	first  bool
+	done   bool
+	err    error
+	cancel context.CancelFunc // 取消函數（供事件循環賦值給 m.turnCancel）
 }
 
 // injectedMsg 实时注入完成的消息（仅用于错误回显；成功注入无需额外 UI 动作）。
@@ -198,6 +199,10 @@ type Model struct {
 	turnTokens int
 	cacheHit   int32
 	cacheMiss  int32
+
+	// 记录最后处理的 Usage 的 Turn/Step，用于避免同一 step 的 CompletionTokens 被 tool 调用/结果帧和 success 帧重复累加
+	lastUsageTurn int32
+	lastUsageStep int32
 
 	// 正文拖拽选区的实时状态与选中后的宽度对齐渲染行缓存
 	sel          selection
@@ -355,11 +360,9 @@ func (m *Model) submitCmd(input string) tea.Cmd {
 			cancel()
 			return streamFrame{input: input, err: err, done: true}
 		}
-		m.turnCancel = cancel
-		m.streamCancelled = false
-		m.streamInput = input
-		m.streamCh = ch
-		return streamFrame{input: input, ch: ch, first: true}
+		// 不在 cmd goroutine 中写 Model 字段；把 cancel 和 ch 放到 streamFrame 中，
+		// 由事件循环的 first 分支负责赋值给 m.turnCancel/m.streamCancelled/m.streamInput/m.streamCh
+		return streamFrame{input: input, ch: ch, first: true, cancel: cancel}
 	}
 }
 
@@ -548,7 +551,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if mm.Button == tea.MouseLeft {
 				m.sel.head = m.transcriptCaret(mm.X, mm.Y)
 			}
-			cmd := m.copySelected()
+			// 在 eventLoop 內完成快照提取、清空 sel、寫剪貼板、設置 copyNotice
+			text := m.selectedText()
+			m.sel = selection{}
+			if text != "" {
+				_ = clipboard.WriteAll(text)
+				m.copyNotice = fmt.Sprintf("已复制 %d 字符", runeCount(text))
+				m.copyNoticeSeq++
+			} else {
+				m.copyNotice = ""
+			}
+			cmd := copyNoticeExpire(m.copyNoticeSeq)
 			m.render()
 			return m, cmd
 		}
@@ -731,6 +744,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.GotoBottom()
 				return m, nil
 			}
+			// 由事件循環賦值 Model 字段（避免 cmd goroutine 數據競爭）
+			m.turnCancel = msg.cancel
+			m.streamCancelled = false
+			m.streamInput = msg.input
+			m.streamCh = msg.ch
 			return m, m.pumpStream(msg.input, msg.ch)
 		}
 		if msg.done {
@@ -824,7 +842,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if f.Usage.TotalTokens > 0 {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
-				m.trackTurnUsage(f.Usage)
+				m.trackTurnUsage(f.Usage, msg.frame.Turn, msg.frame.Step)
 			}
 			// 待办面板数据：todo_write 成功结果帧携带整表 ToolArgs（对齐 REX：
 			// 仅成功更新——调用帧（ToolResult 空）与失败帧（Error 非空）都不触碰，
@@ -856,14 +874,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.streaming = false
 			m.streamOpen = false
+			m.clearStream() // 成功/失敗後清理流通道狀態，避免後續 pumpStreamIfOpen 誤判「流進行中」
 			if f.Status == "success" && f.Usage != nil {
 				if f.Usage.TotalTokens > 0 {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
-				m.trackTurnUsage(f.Usage)
+				m.trackTurnUsage(f.Usage, f.Turn, f.Step)
 			}
 			if f.Status == "error" && f.Error != "" {
 				m.appendMessage(errorSty.Render("错误: ") + f.Error)
+			} else if f.Status == "error" && f.Error == "" && f.Output != "" {
+				// agent 發 Error 為空的錯誤幀時，錯誤信息在 Output 裡
+				m.appendMessage(errorSty.Render("错误: ") + strings.TrimSpace(f.Output))
 			}
 			// 流式收尾：无论思考/正文到达顺序如何，都以累积缓冲重渲染最终助手块，
 			// 确保迟到的思考块不会覆盖掉已输出的正文。
@@ -2115,13 +2137,20 @@ func (m *Model) runInfoLine() string {
 	return "  " + dimSty.Render(info)
 }
 
-// trackTurnUsage 累计当前轮的运行指标：下行生成 token 与 prompt 缓存命中/写入。
-func (m *Model) trackTurnUsage(u *plugin.Usage) {
+// trackTurnUsage 累計當前輪的運行指標：下行生成 token 與 prompt 緩存命中/寫入。
+// 避免同一 step 的 CompletionTokens 被 tool 調用/結果幀和 success 幀重複累加：
+// 僅在 Turn/Step 變化時才累加 turnTokens。
+func (m *Model) trackTurnUsage(u *plugin.Usage, turn, step int32) {
 	if u == nil {
 		return
 	}
-	if u.CompletionTokens > 0 {
-		m.turnTokens += int(u.CompletionTokens)
+	// 僅在 Turn/Step 變化時才累加 turnTokens（避免同一 step 的 tool 調用/結果幀和 success 幀重複累加）
+	if turn != 0 && (turn != m.lastUsageTurn || step != m.lastUsageStep) {
+		if u.CompletionTokens > 0 {
+			m.turnTokens += int(u.CompletionTokens)
+		}
+		m.lastUsageTurn = turn
+		m.lastUsageStep = step
 	}
 	if u.CacheReadInputTokens > 0 || u.CacheCreationInputTokens > 0 {
 		m.cacheHit = u.CacheReadInputTokens

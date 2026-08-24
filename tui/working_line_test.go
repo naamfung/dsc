@@ -80,13 +80,13 @@ func TestRunInfoLineCacheRate(t *testing.T) {
 func TestTrackTurnUsage(t *testing.T) {
 	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
 
-	m.trackTurnUsage(&plugin.Usage{CompletionTokens: 100, CacheReadInputTokens: 80, CacheCreationInputTokens: 20})
+	m.trackTurnUsage(&plugin.Usage{CompletionTokens: 100, CacheReadInputTokens: 80, CacheCreationInputTokens: 20}, 1, 0)
 	if m.turnTokens != 100 || m.cacheHit != 80 || m.cacheMiss != 20 {
 		t.Fatalf("trackTurnUsage 后: turn=%d hit=%d miss=%d", m.turnTokens, m.cacheHit, m.cacheMiss)
 	}
 
 	// 第二步：下行累计，缓存覆盖
-	m.trackTurnUsage(&plugin.Usage{CompletionTokens: 50, CacheReadInputTokens: 95, CacheCreationInputTokens: 5})
+	m.trackTurnUsage(&plugin.Usage{CompletionTokens: 50, CacheReadInputTokens: 95, CacheCreationInputTokens: 5}, 2, 0)
 	if m.turnTokens != 150 {
 		t.Fatalf("turnTokens 应累计为 150, got %d", m.turnTokens)
 	}
