@@ -606,9 +606,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					Turn: turnNo, Step: stepNo, CallID: tc.Id,
 					Content: toolResp.Content,
 				}, &session.SurfaceOp{Op: session.SurfaceAppend})
-				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
+				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片；
+				// 成功结果帧附带 ToolArgs，供 TUI 更新待办面板（todo_write 等整表工具）
 				if emit != nil {
-					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Content, Usage: a.usageSnapshot()})
+					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, ToolResult: toolResp.Content, Usage: a.usageSnapshot()})
 				}
 			}
 			// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链检测在每次调用后，

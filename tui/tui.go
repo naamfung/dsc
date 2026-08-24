@@ -257,6 +257,10 @@ type Model struct {
 	curTurn int32
 	curStep int32
 
+	// todoArgs 最近一次成功的 todo_write 工具调用参数（整表 JSON，DSH todo 语义）；
+	// 供输入框上方的待办进度面板渲染（对齐 REX renderTodoPanel），全部完成自动清除。
+	todoArgs string
+
 	// mouseCaptureOff 为 true 时释放鼠标给终端（MouseModeNone），恢复终端原生
 	// 文字选中/复制（模型工作期间也可用）；由 /mouse 命令或 DSC_DISABLE_MOUSE
 	// 切换，代价是应用内滚轮滚动与正文拖选复制暂时失效。
@@ -438,6 +442,8 @@ func (m *Model) vpHeight() int {
 		// 减去补全菜单的高度：items 数量 + 1 行提示
 		h -= (len(m.completion.items) + 1)
 	}
+	// 减去待办进度面板（对齐 REX：输入框上方常驻面板，占动态行数）
+	h -= m.todoPanelRows()
 	if h < 3 {
 		h = 3
 	}
@@ -813,6 +819,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
 				m.trackTurnUsage(f.Usage)
+			}
+			// 待办面板数据：todo_write 成功结果帧携带整表 ToolArgs（对齐 REX：
+			// 仅成功更新——调用帧（ToolResult 空）与失败帧（Error 非空）都不触碰，
+			// 避免展示被拒绝/未执行的清单）
+			if f.ToolName == "todo_write" && f.ToolResult != "" && f.Error == "" && f.ToolArgs != "" {
+				m.todoArgs = f.ToolArgs
+				m.syncInputHeight() // 面板行数变化 → 重算 viewport 高度并滚到底
 			}
 			// 工具结果帧（ToolResult 非空）以「└」gutter 缩进展示，错误时用错误色；
 			// 调用帧（ToolName 非空）以「● Verb(arg)」卡片展示；均无结构化信息时回退原文。
@@ -1371,6 +1384,7 @@ var slashCommands = []compItem{
 	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
 	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
 	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
+	{label: "/todo", insert: "/todo", hint: "清除待办进度面板"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
 	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
 	{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
@@ -1506,6 +1520,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
 			"  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-plugin-creator 技能提供指导）",
+			"  /todo            清除输入框上方的待办进度面板（todo_write 成功后自动展示，全部完成自动消失）",
 			"  /sandbox read-only   沙箱只读（拒绝一切文件写操作）",
 			"  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
 			"  /sandbox full-access 沙箱全开（不额外拦截文件写）",
@@ -1613,6 +1628,15 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	case "/todo":
+		m.todoArgs = ""
+		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 待办") + "\n已清除待办进度面板。")
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
@@ -2159,6 +2183,9 @@ func (m *Model) View() tea.View {
 		}
 		parts = append(parts, dimSty.Render(line))
 	}
+	if tp := m.renderTodoPanel(); tp != "" {
+		parts = append(parts, tp)
+	}
 	if c := m.completionView(); c != "" {
 		parts = append(parts, c)
 	}
@@ -2202,7 +2229,7 @@ func (m *Model) inputCursorAbs() *tea.Cursor {
 	}
 	// X：外层 composer 左侧 padding 1 列（无左边框线）
 	cur.X += 1
-	// Y：标题(1) + viewport + 中间各部件 + composer 顶边框(1)
+	// Y：标题(1) + viewport + 中间各部件（待办面板/思考行/补全菜单）+ composer 顶边框(1)
 	y := titleRows + m.viewport.Height()
 	if q := m.questionView(); q != "" {
 		y += strings.Count(q, "\n") + 1
@@ -2210,6 +2237,7 @@ func (m *Model) inputCursorAbs() *tea.Cursor {
 	if m.thinking || m.streaming {
 		y += thinkingRow
 	}
+	y += m.todoPanelRows()
 	if c := m.completionView(); c != "" {
 		y += strings.Count(c, "\n") + 1
 	}
