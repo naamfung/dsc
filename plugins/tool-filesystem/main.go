@@ -234,10 +234,17 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 	// 創建新 session runner
 	initialEnv := expand.ListEnviron(os.Environ()...)
 	if cwd == "" {
-		var err error
-		cwd, err = os.Getwd()
-		if err != nil {
-			cwd = os.TempDir()
+		// 未显式指定 cwd 时，默认以統一工作空間根（DSC_WORKSPACE_ROOT，即启动 dsc 的
+		// 目录 cwd）为 shell 工作目录，而非插件进程自身的可执行目录。这样模型执行
+		// pwd 得到的是用户的启动目录（workspace 根），而非程序安装目录（execDir）。
+		if ws := os.Getenv("DSC_WORKSPACE_ROOT"); ws != "" {
+			cwd = ws
+		} else {
+			var err error
+			cwd, err = os.Getwd()
+			if err != nil {
+				cwd = os.TempDir()
+			}
 		}
 	}
 

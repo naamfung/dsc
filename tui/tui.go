@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -236,10 +237,20 @@ type Model struct {
 	streamOpen   bool
 	streamMsgIdx int
 
+	// 工具帧布局状态：上一個工具幀是否為「調用標題」幀（ToolResult 為空）。
+	// 當其緊接的結果幀到來時連續追加（兩者間不留空行），對齊「調用標題与
+	// 工具結果之間不另起空行」的緊湊布局；非工具幀處理時復位為 false。
+	toolCallOpen bool
+
 	// 滚动条拖拽状态：scrollbarDrag 标记左键按住滚动条列，
 	// scrollbarGrabOffset 为抓取点在滑块内的行偏移（拖拽时保持相对位置）。
 	scrollbarDrag       bool
 	scrollbarGrabOffset int
+
+	// 是否钉在会话底部（对齐 REX pinnedToBottom）：为 true 时流式新内容自动跟随
+	// 滚到底；用户用鼠标（拖滚动条/滚轮）向上翻阅历史后置为 false，转为「脱离跟随」
+	// 以便在模型工作期间能自由翻阅旧内容；回到底部、点按滚动条或发送消息时重新钉住。
+	pinnedToBottom bool
 
 	// 当前一轮的流式通道暂存：供运行中输入（注入）时维持泵取，避免流式流停滞
 	streamInput string
@@ -332,6 +343,7 @@ func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 		currentSessionID: "default",
 		wakeBudget:       maxConsecutiveWakes,
 		mouseCaptureOff:  mouseCaptureOffByDefault(),
+		pinnedToBottom:   true,
 	}
 }
 
@@ -457,9 +469,10 @@ func (m *Model) vpHeight() int {
 // 调整自身高度（clamp 在 MinHeight~composerMax），这里只需据当前输入框高度重算
 // viewport 高度并滚到底部，避免内容行变化后消息区多占/少占一行。
 func (m *Model) syncInputHeight() {
-	// 总是同步 viewport 高度，以应对 thinking 等状态变化导致的高度重算
+	// 总是同步 viewport 高度，以应对 thinking 等状态变化导致的高度重算；
+	// 滚动跟随由「是否钉在底部」决定（用户在翻阅历史时高度变化不硬拉回底）。
 	m.viewport.SetHeight(m.vpHeight())
-	m.viewport.GotoBottom()
+	m.scrollToBottomIfPinned()
 }
 
 // displayModelName 返回展示用模型名（优先取命令行/配置传入的，其次取 agent 自身名）。
@@ -500,18 +513,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
+		mm := msg.Mouse()
+		// 滚动条拖拽在模型工作期间同样可用（点按滚动条进入拖拽即手动翻阅，
+		// 从「自动跟随底部」脱离）；正文拖选复制仍仅在空闲时生效（避免流式
+		// 渲染期间行号变化导致选区漂移）。
+		if mm.Button == tea.MouseLeft && m.inScrollbar(mm.X, mm.Y) {
+			// 按住滚动条列：进入拖拽模式（不产生正文选区）
+			m.sel = selection{}
+			m.scrollbarDrag = true
+			m.scrollbarGrabOffset = m.scrollbarGrabRowOffset(mm.Y - 1)
+			m.pinnedToBottom = false // 手动拖动滚动条 → 脱离自动跟随
+			m.dragScrollbar(mm.Y - 1)
+			m.render()
+			return m, nil
+		}
 		if m.thinking || m.streaming {
 			return m, nil
 		}
-		mm := msg.Mouse()
 		if mm.Button == tea.MouseLeft {
-			if m.inScrollbar(mm.X, mm.Y) {
-				// 按住滚动条列：进入拖拽模式（不产生正文选区）
-				m.sel = selection{}
-				m.scrollbarDrag = true
-				m.scrollbarGrabOffset = m.scrollbarGrabRowOffset(mm.Y - 1)
-				m.dragScrollbar(mm.Y - 1)
-			} else if m.inBody(mm.X, mm.Y) {
+			if m.inBody(mm.X, mm.Y) {
 				at := m.transcriptCaret(mm.X, mm.Y)
 				m.sel = selection{active: true, anchor: at, head: at}
 			} else {
@@ -527,6 +547,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mm := msg.Mouse()
 		if m.scrollbarDrag {
 			m.dragScrollbar(mm.Y - 1)
+			// 拖拽位置决定是否回到钉底（拖到底部重新跟随，拖离则保持脱离）
+			m.pinnedToBottom = m.viewport.AtBottom()
 			m.render()
 			return m, nil
 		}
@@ -543,6 +565,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scrollbarDrag {
 			m.scrollbarDrag = false
 			m.scrollbarGrabOffset = 0
+			m.pinnedToBottom = m.viewport.AtBottom()
 			m.render()
 			return m, nil
 		}
@@ -565,6 +588,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.render()
 			return m, cmd
 		}
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		// 滚轮：对齐 REX——向上滚（翻阅历史）即脱离底部跟随；是否回到底部由
+		// 滚动后的位置决定。模型工作期间同样允许滚轮翻阅旧内容。
+		m.viewport, _ = m.viewport.Update(msg)
+		m.pinnedToBottom = m.viewport.AtBottom()
+		m.render()
 		return m, nil
 
 	case copyNoticeMsg:
@@ -681,6 +712,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendMessage(renderUserBubble(text, m.width-4))
 				m.syncInputHeight()
 				m.render()
+				m.pinnedToBottom = true // 用户注入新消息 → 重新钉住，以便看到自己的气泡
 				m.viewport.GotoBottom()
 				return m, tea.Batch(m.injectCmd(sendText), m.pumpStreamIfOpen(), m.input.Focus())
 			}
@@ -814,9 +846,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
 			m.render()
-			m.viewport.GotoBottom()
+			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "streaming":
+			m.toolCallOpen = false // 回到助手正文，打断「调用标题→结果」的连续布局
 			m.streaming = true
 			m.thinking = false
 			if !m.streamOpen {
@@ -832,7 +865,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			body := joinReasoningAnswer(m.reasoningCommitted, renderMarkdown(m.streamBuffer, max(m.width-4, 20)))
 			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
 			m.render()
-			m.viewport.GotoBottom()
+			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "tool":
 			m.streamOpen = false
@@ -862,13 +895,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if toolLine == "" {
 				toolLine = dimSty.Render(strings.TrimSpace(f.Output))
 			}
-			if len(m.lines) > 0 && m.lines[len(m.lines)-1] == "\n"+toolLine {
-				// 避免重複追加
-			} else {
-				m.appendToolFrame(toolLine)
+			// 帧布局：工具调用标题紧随其结果帧时连成一体（两者间不留空行，
+			// 把「● Verb(arg)」与下方「└ 结果」紧贴展示）；其余情况（独立结果帧、
+			// 调用帧、相邻两帧）按原逻辑以空行分隔。
+			joinUnderCall := f.ToolResult != "" && m.toolCallOpen
+			m.toolCallOpen = !joinUnderCall && f.ToolResult == ""
+			if !(len(m.lines) > 0 && m.lines[len(m.lines)-1] == "\n"+toolLine) {
+				if joinUnderCall {
+					// 紧跟调用标题追加，不加空行
+					m.lines = append(m.lines, toolLine)
+				} else {
+					m.appendToolFrame(toolLine)
+				}
 			}
 			m.render()
-			m.viewport.GotoBottom()
+			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "success", "error":
 			m.thinking = false
@@ -1113,6 +1154,7 @@ func renderUserBubble(text string, width int) string {
 
 // appendMessage 追加一条已渲染消息；非首条消息前补一个空行，使消息之间留有间距。
 func (m *Model) appendMessage(rendered string) {
+	m.toolCallOpen = false // 非工具帧打断「调用标题→结果」的连续布局
 	if len(m.lines) > 0 {
 		m.lines = append(m.lines, "\n"+rendered)
 		return
@@ -1126,6 +1168,16 @@ func (m *Model) appendToolFrame(rendered string) {
 		m.lines = append(m.lines, "\n"+rendered)
 	} else {
 		m.lines = append(m.lines, rendered)
+	}
+}
+
+// scrollToBottomIfPinned 流式渲染后滚动到底：仅当用户钉在底部时自动跟随新内容；
+// 用户已向上翻阅（pinnedToBottom=false）时保持当前阅读位置不动，使模型工作期间
+// 历史保持可读（对齐 REX pinnedToBottom 语义）。render 的 SetContent 在内容增长时
+// 不会把越界的位置硬拉到底，只会保留用户当前位置，故这里无需额外处理。
+func (m *Model) scrollToBottomIfPinned() {
+	if m.pinnedToBottom {
+		m.viewport.GotoBottom()
 	}
 }
 
@@ -1342,6 +1394,29 @@ func renderToolCall(name, argsJSON string) string {
 // 不用 REX 的 ⎿（U+23BF 在多数终端字形不规整、视觉上对不齐），改用标准框线 └。
 const connector = "  └ "
 
+// exitCodeRe 匹配各工具插件统一追加的退出码标记（[exit_code: N] / [exit_code: -1]）。
+// exitCodeAtLineStartRe 用于判断该标记是否已位于一行的行首（前面有换行或就是开头）。
+var (
+	exitCodeAtLineStartRe = regexp.MustCompile(`(?m)(^|\n)\[exit_code\s*:\s*-?\d+\]`)
+	exitCodeAnyRe         = regexp.MustCompile(`\[exit_code\s*:\s*-?\d+\]`)
+)
+
+// ensureExitCodeLine 保证工具结果里的退出码标记 `[exit_code: N]` 独占一行：
+// 若工具插件未在标记前补换行（紧贴上一行输出），则补一个换行将其换行展示。
+// 已位于行首时原样返回，不做多余处理。
+func ensureExitCodeLine(result string) string {
+	if exitCodeAtLineStartRe.MatchString(result) {
+		return result
+	}
+	loc := exitCodeAnyRe.FindStringIndex(result)
+	if loc == nil {
+		return result
+	}
+	// 去掉标记前紧贴的空白，使 [exit_code] 紧贴内容换行独占一行
+	pre := strings.TrimRight(result[:loc[0]], " \t")
+	return pre + "\n" + result[loc[0]:]
+}
+
 // renderToolResult 以 REX 式 gutter 渲染工具结果：首行「└ 首行」，后续行缩进对齐下方。
 // isErr 时整块用错误色强调。空结果返回空串。
 func renderToolResult(result string, isErr bool) string {
@@ -1349,6 +1424,7 @@ func renderToolResult(result string, isErr bool) string {
 	if result == "" {
 		return ""
 	}
+	result = ensureExitCodeLine(result)
 
 	// 嘗試將結果格式化為 JSON（如果它是有效的 JSON 且不是錯誤）
 	formattedResult := result
