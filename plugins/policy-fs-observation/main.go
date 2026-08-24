@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"dsc/plugin"
+	"dsc-sdk"
 	"dsc/proto"
-	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
 )
 
 // FsObservationPolicyServer 文件系統觀測策略服務服務端實現
@@ -61,36 +59,13 @@ func (s *FsObservationPolicyServer) UpdateObservation(ctx context.Context, req *
 	}, nil
 }
 
-// MetadataServer 元數據服務服務端實現
-type MetadataServer struct {
-	metadata.UnimplementedPluginMetadataServer
-}
-
-func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
-	return &metadata.PluginInfo{
-		Type:       "policy",
-		Name:       "fs-observation-policy",
-		Version:    "1.0.0",
-		ApiVersion: "1.0",
-	}, nil
-}
-
+// main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 FsObservationPolicyService
+// 与 PluginMetadata 的 go-plugin 组装（重写自旧的
+// FsObservationPolicyGRPCPlugin/MetadataServer 样板）。
 func main() {
-	// 創建文件系統觀測策略服務服務端
 	policyServer := NewFsObservationPolicyServer()
 
-	// 創建元數據服務服務端
-	metadataServer := &MetadataServer{}
-
-	// 啟動插件服務
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"fs_observation_policy": &FsObservationPolicyGRPCPlugin{
-				PolicyImpl:   policyServer,
-				MetadataImpl: metadataServer,
-			},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
-	})
+	sdk := dsc.New(dsc.Config{Name: "fs-observation-policy", Version: "1.0.0", Type: dsc.TypePolicy})
+	sdk.Policy(policyServer)
+	sdk.Serve()
 }
