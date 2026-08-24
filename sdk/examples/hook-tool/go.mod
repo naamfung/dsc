@@ -1,6 +1,6 @@
 module hook-tool-example
 
-go 1.26.4
+go 1.26.0
 
 require dsc-sdk v0.0.0
 

@@ -109,6 +109,29 @@ func TestToolServiceServer(t *testing.T) {
 	}
 }
 
+// TestToolServiceServerContextFn 动态上下文优先于静态 Context（每次求值）。
+func TestToolServiceServerContextFn(t *testing.T) {
+	calls := 0
+	s := testSDK()
+	s.Tool(Tool{
+		Name: "t", Context: "static", ContextFn: func() string {
+			calls++
+			return "dynamic"
+		},
+		Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil },
+	})
+	srv := &toolServiceServer{sdk: s}
+	lc, err := srv.ListContext(context.Background(), &proto.ListContextRequest{})
+	if err != nil || !strings.Contains(lc.Content, "dynamic") || strings.Contains(lc.Content, "static") || calls != 1 {
+		t.Fatalf("ContextFn ListContext = %+v, calls=%d, err %v", lc, calls, err)
+	}
+	// 第二次调用重新求值
+	_, _ = srv.ListContext(context.Background(), &proto.ListContextRequest{})
+	if calls != 2 {
+		t.Fatalf("ContextFn 应每调用求值, calls=%d", calls)
+	}
+}
+
 func TestHookServiceServer(t *testing.T) {
 	t.Run("BeforeTool veto", func(t *testing.T) {
 		srv := &hookServiceServer{hook: &Hook{

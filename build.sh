@@ -58,9 +58,9 @@ go build -o plugins/tool-browser-use/tool-browser-use.exe ./plugins/tool-browser
 echo "Building tool-lisp-eval plugin..."
 go build -o plugins/tool-lisp-eval/tool-lisp-eval.exe ./plugins/tool-lisp-eval
 
-# 构建 tool-skill 插件
+# 构建 tool-skill 插件（独立 module，基于 dsc-sdk）
 echo "Building tool-skill plugin..."
-go build -o plugins/tool-skill/tool-skill.exe ./plugins/tool-skill
+(cd plugins/tool-skill && go build -o tool-skill.exe .)
 
 # 构建 tool-lua-host 插件
 echo "Building tool-lua-host plugin..."

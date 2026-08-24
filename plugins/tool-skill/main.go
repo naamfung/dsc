@@ -10,10 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"dsc/plugin"
-	"dsc/proto"
-	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
+	"dsc-sdk"
 	"gopkg.in/yaml.v3"
 )
 
@@ -462,78 +459,9 @@ func (t *UninstallSkillTool) Execute(ctx context.Context, args json.RawMessage) 
 	return string(res), nil
 }
 
-// ToolServiceServer 工具服務服務端實現
-type ToolServiceServer struct {
-	proto.UnimplementedToolServiceServer
-	store         *SkillStore
-	readTool      *ReadSkillTool
-	installTool   *InstallSkillTool
-	uninstallTool *UninstallSkillTool
-}
-
-func (s *ToolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
-	switch req.ToolName {
-	case s.readTool.Name():
-		res, err := s.readTool.Execute(ctx, json.RawMessage(req.ArgumentsJson))
-		if err != nil {
-			return &proto.ExecuteToolResponse{Error: err.Error()}, nil
-		}
-		return &proto.ExecuteToolResponse{Content: res}, nil
-	case s.installTool.Name():
-		res, err := s.installTool.Execute(ctx, json.RawMessage(req.ArgumentsJson))
-		if err != nil {
-			return &proto.ExecuteToolResponse{Error: err.Error()}, nil
-		}
-		return &proto.ExecuteToolResponse{Content: res}, nil
-	case s.uninstallTool.Name():
-		res, err := s.uninstallTool.Execute(ctx, json.RawMessage(req.ArgumentsJson))
-		if err != nil {
-			return &proto.ExecuteToolResponse{Error: err.Error()}, nil
-		}
-		return &proto.ExecuteToolResponse{Content: res}, nil
-	}
-	return &proto.ExecuteToolResponse{Error: "tool not found"}, nil
-}
-
-func (s *ToolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	return &proto.ListToolsResponse{Tools: []*proto.Tool{
-		{
-			Name:           s.readTool.Name(),
-			Description:    s.readTool.Description(),
-			ParametersJson: string(s.readTool.ParametersSchema()),
-		},
-		{
-			Name:           s.installTool.Name(),
-			Description:    s.installTool.Description(),
-			ParametersJson: string(s.installTool.ParametersSchema()),
-		},
-		{
-			Name:           s.uninstallTool.Name(),
-			Description:    s.uninstallTool.Description(),
-			ParametersJson: string(s.uninstallTool.ParametersSchema()),
-		},
-	}}, nil
-}
-
-// ListContext 返回技能索引块，宿主将其拼接到 agent 的 system prompt。
-func (s *ToolServiceServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
-	return &proto.ListContextResponse{Content: s.store.indexBlock()}, nil
-}
-
-// MetadataServer 元數據服務服務端實現
-type MetadataServer struct {
-	metadata.UnimplementedPluginMetadataServer
-}
-
-func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
-	return &metadata.PluginInfo{
-		Type:       "tool",
-		Name:       "skill",
-		Version:    "1.0.0",
-		ApiVersion: "1.0",
-	}, nil
-}
-
+// main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
+// PluginMetadata / PluginHookService 与 go-plugin 组装（重写自旧的
+// ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 func main() {
 	// 技能目录由宿主通过环境变量传入（未设置时默认 ./skills）
 	skillsDir := os.Getenv("DSC_SKILLS_DIR")
@@ -547,17 +475,26 @@ func main() {
 	readTool := &ReadSkillTool{store: store}
 	installTool := &InstallSkillTool{store: store, installedDir: installedDir}
 	uninstallTool := &UninstallSkillTool{store: store}
-	toolServer := &ToolServiceServer{store: store, readTool: readTool, installTool: installTool, uninstallTool: uninstallTool}
-	metadataServer := &MetadataServer{}
 
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"tool": &ToolMetadataGRPCPlugin{
-				ToolImpl:     toolServer,
-				MetadataImpl: metadataServer,
-			},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
+	sdk := dsc.New(dsc.Config{Name: "skill", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk.Tool(dsc.Tool{
+		Name:        readTool.Name(),
+		Description: readTool.Description(),
+		Schema:      readTool.ParametersSchema(),
+		Handler:     readTool.Execute,
+		ContextFn:   store.indexBlock, // 技能索引动态注入 system prompt（对齐旧 ListContext 每调用重算）
 	})
+	sdk.Tool(dsc.Tool{
+		Name:        installTool.Name(),
+		Description: installTool.Description(),
+		Schema:      installTool.ParametersSchema(),
+		Handler:     installTool.Execute,
+	})
+	sdk.Tool(dsc.Tool{
+		Name:        uninstallTool.Name(),
+		Description: uninstallTool.Description(),
+		Schema:      uninstallTool.ParametersSchema(),
+		Handler:     uninstallTool.Execute,
+	})
+	sdk.Serve()
 }

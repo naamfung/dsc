@@ -22,7 +22,10 @@ type Tool struct {
 	Handler     func(ctx context.Context, args json.RawMessage) (string, error)
 	// Context 可选：向宿主贡献的 system prompt 片段（ListContext），
 	// 用于向模型说明本工具的使用约定（如沙箱边界）。
-	Context string
+	// ContextFn 可选：动态上下文（每次 ListContext 调用时求值，优先于 Context），
+	// 用于索引等随运行状态变化的内容（如技能索引安装后需立即反映）。
+	Context   string
+	ContextFn func() string
 }
 
 // toolGRPCPlugin 是 go-plugin 适配器：注册 ToolService + PluginMetadata +
@@ -79,12 +82,17 @@ func (s *toolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsR
 	return &proto.ListToolsResponse{Tools: tools}, nil
 }
 
-// ListContext 贡献 system prompt 片段：把每个工具的 Context 拼成一段（旧宿主可忽略）。
+// ListContext 贡献 system prompt 片段：优先用动态 ContextFn（每调用求值），
+// 否则拼接各工具的静态 Context（旧宿主可忽略）。
 func (s *toolServiceServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
 	var b strings.Builder
 	for _, t := range s.sdk.tools {
-		if t.Context != "" {
-			b.WriteString(t.Context)
+		ctxText := t.Context
+		if t.ContextFn != nil {
+			ctxText = t.ContextFn()
+		}
+		if ctxText != "" {
+			b.WriteString(ctxText)
 			b.WriteString("\n")
 		}
 	}

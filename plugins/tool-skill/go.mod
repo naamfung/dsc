@@ -1,10 +1,12 @@
-module llm-proxy-example
+module dsc-plugin-tool-skill
 
 go 1.26.0
 
 require (
 	dsc v0.0.0
 	dsc-sdk v0.0.0
+	github.com/hashicorp/go-plugin v1.8.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -20,7 +22,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
-	github.com/hashicorp/go-plugin v1.8.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
@@ -38,11 +39,10 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace dsc-sdk => ../../
+replace dsc-sdk => ../../sdk
 
-replace dsc => ../../../
+replace dsc => ../..
 
-replace github.com/hashicorp/go-plugin => ../../../libs/go-plugin-1.8.0
+replace github.com/hashicorp/go-plugin => ../../libs/go-plugin-1.8.0

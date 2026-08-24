@@ -1,6 +1,6 @@
 module dsc-sdk
 
-go 1.26.4
+go 1.26.0
 
 require (
 	dsc v0.0.0
