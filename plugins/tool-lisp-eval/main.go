@@ -8,12 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"dsc/plugin"
-	"dsc/proto"
-	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
-
+	"dsc-sdk"
 	"github.com/jig/lisp"
 	"github.com/jig/lisp/env"
 	"github.com/jig/lisp/lib/concurrent/nsconcurrent"
@@ -25,30 +20,6 @@ import (
 // ============================================================
 // Lisp/Scheme 精確計算工具實現
 // ============================================================
-
-// LispEvalTool Lisp 計算工具實現
-type LispEvalTool struct {
-	name        string
-	description string
-	schema      json.RawMessage
-	handler     func(ctx context.Context, args json.RawMessage) (string, error)
-}
-
-func (l *LispEvalTool) Name() string {
-	return l.name
-}
-
-func (l *LispEvalTool) Description() string {
-	return l.description
-}
-
-func (l *LispEvalTool) ParametersSchema() json.RawMessage {
-	return l.schema
-}
-
-func (l *LispEvalTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	return l.handler(ctx, args)
-}
 
 // schemeEval 執行 Clojure/Lisp 表達式並返回結果字符串
 // 使用 jig/lisp 庫（純 Go 實現，Clojure 方言）
@@ -353,142 +324,42 @@ func toInt(v types.MalType) int {
 }
 
 // ============================================================
-// 插件服務實現
+// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
+// PluginMetadata / PluginHookService 与 go-plugin 组装（重写自旧的
+// ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 // ============================================================
-
-// ToolServiceServer 工具服務服務端實現
-type ToolServiceServer struct {
-	proto.UnimplementedToolServiceServer
-	tools []*LispEvalTool
-}
-
-func (s *ToolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
-	for _, t := range s.tools {
-		if t.Name() == req.ToolName {
-			res, err := t.Execute(ctx, json.RawMessage(req.ArgumentsJson))
-			if err != nil {
-				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
-			}
-			return &proto.ExecuteToolResponse{Content: res}, nil
-		}
-	}
-	return &proto.ExecuteToolResponse{Error: "tool not found"}, nil
-}
-
-func (s *ToolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	var tools []*proto.Tool
-	for _, t := range s.tools {
-		tools = append(tools, &proto.Tool{
-			Name:           t.Name(),
-			Description:    t.Description(),
-			ParametersJson: string(t.ParametersSchema()),
-		})
-	}
-	return &proto.ListToolsResponse{Tools: tools}, nil
-}
-
-// MetadataServer 元數據服務服務端實現
-type MetadataServer struct {
-	metadata.UnimplementedPluginMetadataServer
-}
-
-func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
-	return &metadata.PluginInfo{
-		Type:       "tool",
-		Name:       "lisp-eval",
-		Version:    "1.0.0",
-		ApiVersion: "1.0",
-	}, nil
-}
-
 func main() {
-	// 定義 lisp_eval 工具
-	lispEvalTool := &LispEvalTool{
-		name:        "lisp_eval",
-		description: "Evaluate a Lisp/Scheme expression with exact integer arithmetic (Clojure-dialect interpreter). Supported: integer + - * /, float f+ f- f* f/, math functions sqrt abs floor ceil round log exp sin cos tan asin acos atan pow min max mod, and list helpers filter range sum product reverse last. NOT supported: rationals (e.g. 3/4) and big integers (e.g. biginteger) — use plain integers or floats instead. Do NOT quote the expression: pass (+ 1 2), not '(+ 1 2).",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"expression": {
-					"type": "string",
-					"description": "Lisp/Scheme expression to evaluate, e.g. (+ 1 2), (* 3 4), (/ 10 3), (sqrt 2), (sum (range 100))"
-				}
-			},
-			"required": ["expression"]
-		}`),
-		handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var params struct {
-				Expression string `json:"expression"`
+	// 定義 lisp_eval 工具的元数据与处理器
+	name := "lisp_eval"
+	description := "Evaluate a Lisp/Scheme expression with exact integer arithmetic (Clojure-dialect interpreter). Supported: integer + - * /, float f+ f- f* f/, math functions sqrt abs floor ceil round log exp sin cos tan asin acos atan pow min max mod, and list helpers filter range sum product reverse last. NOT supported: rationals (e.g. 3/4) and big integers (e.g. biginteger) — use plain integers or floats instead. Do NOT quote the expression: pass (+ 1 2), not '(+ 1 2)."
+	schema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"expression": {
+				"type": "string",
+				"description": "Lisp/Scheme expression to evaluate, e.g. (+ 1 2), (* 3 4), (/ 10 3), (sqrt 2), (sum (range 100))"
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", fmt.Errorf("invalid arguments: %w", err)
-			}
-			if strings.TrimSpace(params.Expression) == "" {
-				return "", fmt.Errorf("expression is required")
-			}
-
-			result, err := schemeEval(ctx, params.Expression)
-			if err != nil {
-				return "", err
-			}
-			return result, nil
 		},
+		"required": ["expression"]
+	}`)
+	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		var params struct {
+			Expression string `json:"expression"`
+		}
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("invalid arguments: %w", err)
+		}
+		if strings.TrimSpace(params.Expression) == "" {
+			return "", fmt.Errorf("expression is required")
+		}
+		result, err := schemeEval(ctx, params.Expression)
+		if err != nil {
+			return "", err
+		}
+		return result, nil
 	}
 
-	// 創建工具服務服務端
-	toolServer := &ToolServiceServer{
-		tools: []*LispEvalTool{lispEvalTool},
-	}
-
-	// 創建元數據服務服務端
-	metadataServer := &MetadataServer{}
-
-	// 啟動插件服務
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"tool": &ToolMetadataGRPCPlugin{
-				ToolImpl:     toolServer,
-				MetadataImpl: metadataServer,
-			},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
-	})
-}
-
-// ToolMetadataGRPCPlugin 是 gRPC 插件的實現
-type ToolMetadataGRPCPlugin struct {
-	goplugin.NetRPCUnsupportedPlugin
-	ToolImpl     proto.ToolServiceServer
-	MetadataImpl metadata.PluginMetadataServer
-}
-
-func (p *ToolMetadataGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
-	proto.RegisterToolServiceServer(s, p.ToolImpl)
-	metadata.RegisterPluginMetadataServer(s, p.MetadataImpl)
-	return nil
-}
-
-func (p *ToolMetadataGRPCPlugin) GRPCClient(ctx context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return &ToolMetadataGRPCClient{
-		ToolClient:     proto.NewToolServiceClient(c),
-		MetadataClient: metadata.NewPluginMetadataClient(c),
-	}, nil
-}
-
-type ToolMetadataGRPCClient struct {
-	ToolClient     proto.ToolServiceClient
-	MetadataClient metadata.PluginMetadataClient
-}
-
-func (c *ToolMetadataGRPCClient) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest, opts ...grpc.CallOption) (*proto.ExecuteToolResponse, error) {
-	return c.ToolClient.ExecuteTool(ctx, req, opts...)
-}
-
-func (c *ToolMetadataGRPCClient) ListTools(ctx context.Context, req *proto.ListToolsRequest, opts ...grpc.CallOption) (*proto.ListToolsResponse, error) {
-	return c.ToolClient.ListTools(ctx, req, opts...)
-}
-
-func (c *ToolMetadataGRPCClient) GetInfo(ctx context.Context, req *metadata.Empty, opts ...grpc.CallOption) (*metadata.PluginInfo, error) {
-	return c.MetadataClient.GetInfo(ctx, req, opts...)
+	sdk := dsc.New(dsc.Config{Name: "lisp-eval", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk.Tool(dsc.Tool{Name: name, Description: description, Schema: schema, Handler: handler})
+	sdk.Serve()
 }
