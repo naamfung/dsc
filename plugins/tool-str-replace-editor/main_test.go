@@ -12,8 +12,8 @@ import (
 	"dsc/proto"
 )
 
-// newTestServer 創建帶臨時 workspace 的測試服務器
-func newTestServer(t *testing.T) (*ToolServiceServer, string) {
+// newTestState 創建帶臨時 workspace 的測試狀態
+func newTestState(t *testing.T) (*editorState, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ws := filepath.Join(dir, "workspace")
@@ -23,8 +23,7 @@ func newTestServer(t *testing.T) (*ToolServiceServer, string) {
 	// 統一工作空間根：handler 現讀 plugin.WorkspaceRoot（宿主經 DSC_WORKSPACE_ROOT 注入），
 	// 測試需將根指到臨時 ws 以便斷言寫入位置。
 	plugin.WorkspaceRoot = ws
-	server := &ToolServiceServer{
-		tools:        nil,
+	state := &editorState{
 		observations: make(map[string]*proto.FsObservation),
 	}
 	oldCwd, _ := os.Getwd()
@@ -32,24 +31,24 @@ func newTestServer(t *testing.T) (*ToolServiceServer, string) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	return server, dir
+	return state, dir
 }
 
 // exec 執行一次工具調用並返回結果/錯誤
-func exec(t *testing.T, server *ToolServiceServer, args map[string]interface{}) (string, error) {
+func exec(t *testing.T, state *editorState, args map[string]interface{}) (string, error) {
 	t.Helper()
 	data, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strReplaceEditorHandler(context.Background(), server, data)
+	return strReplaceEditorHandler(context.Background(), state, data)
 }
 
 func TestCreateView(t *testing.T) {
-	server, _ := newTestServer(t)
+	state, _ := newTestState(t)
 
 	// create
-	res, err := exec(t, server, map[string]interface{}{
+	res, err := exec(t, state, map[string]interface{}{
 		"command":   "create",
 		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\nfunc main() {\n\tprintln(\"hi\")\n}\n",
@@ -71,7 +70,7 @@ func TestCreateView(t *testing.T) {
 	}
 
 	// view
-	res, err = exec(t, server, map[string]interface{}{
+	res, err = exec(t, state, map[string]interface{}{
 		"command": "view",
 		"path":    "/workspace/test/fib.go",
 	})
@@ -84,9 +83,9 @@ func TestCreateView(t *testing.T) {
 }
 
 func TestStrReplace(t *testing.T) {
-	server, _ := newTestServer(t)
+	state, _ := newTestState(t)
 
-	_, err := exec(t, server, map[string]interface{}{
+	_, err := exec(t, state, map[string]interface{}{
 		"command":   "create",
 		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\nfunc main() {\n\tprintln(\"hi\")\n}\n",
@@ -95,11 +94,11 @@ func TestStrReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 需先 view 建立觀測狀態
-	if _, err = exec(t, server, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
+	if _, err = exec(t, state, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := exec(t, server, map[string]interface{}{
+	res, err := exec(t, state, map[string]interface{}{
 		"command": "str_replace",
 		"path":    "/workspace/test/fib.go",
 		"old_str": `println("hi")`,
@@ -122,8 +121,8 @@ func TestStrReplace(t *testing.T) {
 	}
 
 	// 未先 view 的文件應拒絕 str_replace
-	server2, _ := newTestServer(t)
-	_, err = exec(t, server2, map[string]interface{}{
+	state2, _ := newTestState(t)
+	_, err = exec(t, state2, map[string]interface{}{
 		"command": "str_replace",
 		"path":    "/workspace/x.go",
 		"old_str": "a",
@@ -135,9 +134,9 @@ func TestStrReplace(t *testing.T) {
 }
 
 func TestInsert(t *testing.T) {
-	server, _ := newTestServer(t)
+	state, _ := newTestState(t)
 
-	_, err := exec(t, server, map[string]interface{}{
+	_, err := exec(t, state, map[string]interface{}{
 		"command":   "create",
 		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\n\nfunc main() {\n}\n",
@@ -145,11 +144,11 @@ func TestInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = exec(t, server, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
+	if _, err = exec(t, state, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := exec(t, server, map[string]interface{}{
+	res, err := exec(t, state, map[string]interface{}{
 		"command":     "insert",
 		"path":        "/workspace/test/fib.go",
 		"insert_line": 2,

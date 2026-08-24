@@ -46,9 +46,9 @@ echo "Building llm-ollama plugin..."
 echo "Building tool-filesystem plugin..."
 (cd plugins/tool-filesystem && go build -o tool-filesystem.exe .)
 
-# 构建 tool-str-replace-editor 插件
+# 构建 tool-str-replace-editor 插件（独立 module，基于 dsc-sdk）
 echo "Building tool-str-replace-editor plugin..."
-go build -o plugins/tool-str-replace-editor/tool-str-replace-editor.exe ./plugins/tool-str-replace-editor
+(cd plugins/tool-str-replace-editor && go build -o tool-str-replace-editor.exe .)
 
 # 构建 tool-browser-use 插件（独立 module，基于 dsc-sdk）
 echo "Building tool-browser-use plugin..."

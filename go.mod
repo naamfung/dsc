@@ -7,7 +7,6 @@ require (
 	charm.land/bubbletea/v2 v2.0.7
 	charm.land/lipgloss/v2 v2.0.4
 	github.com/atotto/clipboard v0.1.4
-	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/casbin/casbin v1.9.1
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible

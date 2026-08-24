@@ -11,57 +11,31 @@ import (
 	"strings"
 	"sync"
 
+	"dsc-sdk"
 	"dsc/plugin"
 	"dsc/proto"
-	"dsc/proto/metadata"
 	"github.com/aymanbagabas/go-udiff"
-	goplugin "github.com/hashicorp/go-plugin"
 )
 
-// StrReplaceEditorTool 文件編輯工具實現
-type StrReplaceEditorTool struct {
-	name        string
-	description string
-	schema      json.RawMessage
-	server      *ToolServiceServer // 引用 ToolServiceServer 以訪問 observations
-}
-
-func (t *StrReplaceEditorTool) Name() string {
-	return t.name
-}
-
-func (t *StrReplaceEditorTool) Description() string {
-	return t.description
-}
-
-func (t *StrReplaceEditorTool) ParametersSchema() json.RawMessage {
-	return t.schema
-}
-
-func (t *StrReplaceEditorTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
-	return strReplaceEditorHandler(ctx, t.server, args)
-}
-
-// ToolServiceServer 工具服務服務端實現
-type ToolServiceServer struct {
-	proto.UnimplementedToolServiceServer
-	tools        []*StrReplaceEditorTool
+// editorState 维护编辑工具的观察状态（view 过的文件内容与版本），
+// 供 str_replace/insert 校验文件未在观察后被外部修改（重写自旧的
+// ToolServiceServer.observations，SDK 的 Tool.Handler 无 server 引用，
+// 故把状态抽成独立结构并由 handler 闭包捕获）。
+type editorState struct {
 	observations map[string]*proto.FsObservation
 	mu           sync.RWMutex
 }
 
-func (s *ToolServiceServer) getObservation(filePath string) (*proto.FsObservation, bool) {
+func (s *editorState) getObservation(filePath string) (*proto.FsObservation, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
 	obs, found := s.observations[filePath]
 	return obs, found
 }
 
-func (s *ToolServiceServer) updateObservation(filePath string, state string, version string, lastContent string) {
+func (s *editorState) updateObservation(filePath, state, version, lastContent string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if s.observations == nil {
 		s.observations = make(map[string]*proto.FsObservation)
 	}
@@ -70,45 +44,6 @@ func (s *ToolServiceServer) updateObservation(filePath string, state string, ver
 		Version:     version,
 		LastContent: lastContent,
 	}
-}
-
-func (s *ToolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
-	for _, t := range s.tools {
-		if t.Name() == req.ToolName {
-			res, err := t.Execute(ctx, json.RawMessage(req.ArgumentsJson))
-			if err != nil {
-				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
-			}
-			return &proto.ExecuteToolResponse{Content: res}, nil
-		}
-	}
-	return &proto.ExecuteToolResponse{Error: "tool not found"}, nil
-}
-
-func (s *ToolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	var tools []*proto.Tool
-	for _, t := range s.tools {
-		tools = append(tools, &proto.Tool{
-			Name:           t.Name(),
-			Description:    t.Description(),
-			ParametersJson: string(t.ParametersSchema()),
-		})
-	}
-	return &proto.ListToolsResponse{Tools: tools}, nil
-}
-
-// MetadataServer 元數據服務服務端實現
-type MetadataServer struct {
-	metadata.UnimplementedPluginMetadataServer
-}
-
-func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
-	return &metadata.PluginInfo{
-		Type:       "tool",
-		Name:       "str_replace_editor",
-		Version:    "1.0.0",
-		ApiVersion: "1.0",
-	}, nil
 }
 
 // withinBase 判斷 real 路徑是否在 base 目錄（含 base 自身）之內
@@ -269,7 +204,7 @@ func computeHash(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, argsJSON json.RawMessage) (string, error) {
+func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON json.RawMessage) (string, error) {
 	var args strReplaceEditorArgs
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
 		return "", err
@@ -298,7 +233,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		contentStr := string(content)
 		version := computeHash(contentStr)
 		// 更新觀測狀態
-		server.updateObservation(reqPath, "present", version, contentStr)
+		state.updateObservation(reqPath, "present", version, contentStr)
 		return contentStr, nil
 
 	case "create":
@@ -314,7 +249,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		}
 		version := computeHash(args.FileText)
 		// 更新觀測狀態
-		server.updateObservation(reqPath, "present", version, args.FileText)
+		state.updateObservation(reqPath, "present", version, args.FileText)
 		return appendDiff("File created successfully.", relPath, "", args.FileText), nil
 
 	case "str_replace":
@@ -326,7 +261,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		}
 
 		// 檢查觀測狀態
-		obs, found := server.getObservation(reqPath)
+		obs, found := state.getObservation(reqPath)
 		if !found || obs.State == "unseen" || obs.State == "absent" {
 			return "", fmt.Errorf("str_replace failed: file has not been observed (viewed). Please use 'view' command first.")
 		}
@@ -352,7 +287,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 
 		// 更新觀測狀態
 		newVersion := computeHash(newContentStr)
-		server.updateObservation(reqPath, "present", newVersion, newContentStr)
+		state.updateObservation(reqPath, "present", newVersion, newContentStr)
 
 		return appendDiff("File replaced successfully.", relPath, contentStr, newContentStr), nil
 
@@ -365,7 +300,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 		}
 
 		// 檢查觀測狀態
-		obs, found := server.getObservation(reqPath)
+		obs, found := state.getObservation(reqPath)
 		if !found || obs.State == "unseen" || obs.State == "absent" {
 			return "", fmt.Errorf("insert failed: file has not been observed (viewed). Please use 'view' command first.")
 		}
@@ -400,7 +335,7 @@ func strReplaceEditorHandler(ctx context.Context, server *ToolServiceServer, arg
 
 		// 更新觀測狀態
 		newVersion := computeHash(newContent)
-		server.updateObservation(reqPath, "present", newVersion, newContent)
+		state.updateObservation(reqPath, "present", newVersion, newContent)
 
 		return appendDiff("File inserted successfully.", relPath, contentStr, newContent), nil
 
@@ -420,63 +355,48 @@ func appendDiff(msg, path, oldContent, newContent string) string {
 }
 
 func main() {
-	// 創建工具服務服務端
-	toolServer := &ToolServiceServer{
-		observations: make(map[string]*proto.FsObservation),
-	}
+	// 观察状态由独立结构承载（SDK 的 Tool.Handler 无 server 引用，闭包捕获 state）
+	state := &editorState{observations: make(map[string]*proto.FsObservation)}
 
 	// 定義 str_replace_editor 工具
-	strReplaceEditorTool := &StrReplaceEditorTool{
-		name:        "str_replace_editor",
-		description: "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert.",
-		schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"command": {
-					"type": "string",
-					"enum": ["view", "create", "str_replace", "insert"],
-					"description": "The commands to run. Allowed options are: view, create, str_replace, insert."
-				},
-				"path": {
-					"type": "string",
-					"description": "Absolute path to the file, e.g. /workspace/file.py."
-				},
-				"file_text": {
-					"type": "string",
-					"description": "Required for 'create' command. The content of the file to be created."
-				},
-				"old_str": {
-					"type": "string",
-					"description": "Required for 'str_replace' command. The string in the file to replace."
-				},
-				"new_str": {
-					"type": "string",
-					"description": "Required for 'str_replace' and 'insert' commands. The new string to replace with or insert."
-				},
-				"insert_line": {
-					"type": "integer",
-					"description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
-				}
+	schema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"command": {
+				"type": "string",
+				"enum": ["view", "create", "str_replace", "insert"],
+				"description": "The commands to run. Allowed options are: view, create, str_replace, insert."
 			},
-			"required": ["command", "path"]
-		}`),
-		server: toolServer,
+			"path": {
+				"type": "string",
+				"description": "Absolute path to the file, e.g. /workspace/file.py."
+			},
+			"file_text": {
+				"type": "string",
+				"description": "Required for 'create' command. The content of the file to be created."
+			},
+			"old_str": {
+				"type": "string",
+				"description": "Required for 'str_replace' command. The string in the file to replace."
+			},
+			"new_str": {
+				"type": "string",
+				"description": "Required for 'str_replace' and 'insert' commands. The new string to replace with or insert."
+			},
+			"insert_line": {
+				"type": "integer",
+				"description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
+			}
+		},
+		"required": ["command", "path"]
+	}`)
+	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
+		return strReplaceEditorHandler(ctx, state, args)
 	}
 
-	toolServer.tools = []*StrReplaceEditorTool{strReplaceEditorTool}
-
-	// 創建元數據服務服務端
-	metadataServer := &MetadataServer{}
-
-	// 啟動插件服務
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"tool": &ToolMetadataGRPCPlugin{
-				ToolImpl:     toolServer,
-				MetadataImpl: metadataServer,
-			},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
-	})
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
+	// PluginMetadata / PluginHookService 与 go-plugin 组装。
+	sdk := dsc.New(dsc.Config{Name: "str_replace_editor", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk.Tool(dsc.Tool{Name: "str_replace_editor", Description: "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert.", Schema: schema, Handler: handler})
+	sdk.Serve()
 }
