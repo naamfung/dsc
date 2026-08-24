@@ -63,16 +63,70 @@ func GetBrowserSessionManager() *BrowserSessionManager {
 	return globalBrowserSessionManager
 }
 
+// getExeDir 獲取可執行文件所在目錄
+func getExeDir() (string, error) {
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(exePath), nil
+}
+
+// cleanupOldBrowserData 清理24小時前的臨時瀏覽器數據目錄
+func cleanupOldBrowserData(exeDir string) error {
+	browserDataRoot := filepath.Join(exeDir, "temp", "browser-data")
+	// 確保根目錄存在
+	if err := os.MkdirAll(browserDataRoot, 0755); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(browserDataRoot)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		fullPath := filepath.Join(browserDataRoot, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		// 檢查修改時間是否超過24小時
+		if now.Sub(info.ModTime()) > 24*time.Hour {
+			log.Printf("[BrowserSessionManager] removing old browser data directory: %s", fullPath)
+			if err := os.RemoveAll(fullPath); err != nil {
+				log.Printf("[BrowserSessionManager] error removing old browser data directory %s: %v", fullPath, err)
+			}
+		}
+	}
+	return nil
+}
+
 // launchBrowserRod 啟動瀏覽器實例
-func launchBrowserRod() (*rod.Browser, error) {
-	// 使用項目目錄內的用戶數據目錄（而非 rod 默認的 %APPDATA%\rod），
-	// 避免受沙箱「受限目錄不可寫」限制，同時保證多次啟動共用同一配置
-	userDataDir := filepath.Join(plugin.WorkspaceRoot, "browser-data")
-	if err := os.MkdirAll(userDataDir, 0755); err != nil {
+func launchBrowserRod(sessionID string) (*rod.Browser, error) {
+	// 獲取可執行文件所在目錄
+	exeDir, err := getExeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get executable dir: %w", err)
+	}
+
+	// 瀏覽器數據目錄：程序可執行路徑下的 temp/browser-data/<sessionID>
+	// 避免與 workspace 混雜，並通過 sessionID 區分不同實例
+	browserDataDir := filepath.Join(exeDir, "temp", "browser-data", sessionID)
+	if err := os.MkdirAll(browserDataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create browser data directory: %w", err)
 	}
 
-	l := launcher.New().UserDataDir(userDataDir)
+	// 清理24小時前的臨時瀏覽器數據
+	if err := cleanupOldBrowserData(exeDir); err != nil {
+		log.Printf("[BrowserSessionManager] warning: failed to cleanup old browser data: %v", err)
+	}
+
+	l := launcher.New().UserDataDir(browserDataDir)
 	browser := rod.New().
 		ControlURL(l.MustLaunch()).
 		MustConnect()
@@ -95,7 +149,7 @@ func (m *BrowserSessionManager) CreateSession(sessionID string) (*BrowserSession
 	}
 
 	// 啟動瀏覽器
-	browser, err := launchBrowserRod()
+	browser, err := launchBrowserRod(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("啟動瀏覽器失敗: %w", err)
 	}
