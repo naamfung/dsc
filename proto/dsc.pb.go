@@ -577,7 +577,7 @@ func (x *RunResponse) GetStatus() string {
 type RunStreamResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Output        string                 `protobuf:"bytes,1,opt,name=output,proto3" json:"output,omitempty"` // 增量输出（文本增量或工具调用提示）
-	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "streaming" | "reasoning" | "tool" | "success" | "error"
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"` // "streaming" | "reasoning" | "tool" | "todo" | "success" | "error"（"todo" 为待办投影帧：新一轮清空面板）
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	Usage         *Usage                 `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`                             // 本轮累计 token 用量（success 帧携带）
 	Reasoning     string                 `protobuf:"bytes,5,opt,name=reasoning,proto3" json:"reasoning,omitempty"`                     // 思考过程增量文本（status="reasoning" 帧携带）

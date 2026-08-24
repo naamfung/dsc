@@ -94,7 +94,7 @@ message RunResponse {
 // 流式运行响应：每帧携带一段增量输出，status 标记流的状态
 message RunStreamResponse {
   string output = 1; // 增量输出（文本增量或工具调用提示）
-  string status = 2; // "streaming" | "reasoning" | "tool" | "success" | "error"
+  string status = 2; // "streaming" | "reasoning" | "tool" | "todo" | "success" | "error"（"todo" 为待办投影帧：新一轮清空面板）
   string error = 3;
   Usage usage = 4; // 本轮累计 token 用量（success 帧携带）
   string reasoning = 5; // 思考过程增量文本（status="reasoning" 帧携带）
