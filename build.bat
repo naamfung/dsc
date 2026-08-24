@@ -90,9 +90,11 @@ cd plugins\tool-harness-webui
 call build.bat
 cd ..\..
 
-:: 构建 policy-fs-observation 插件
+:: 构建 policy-fs-observation 插件（独立 module，基于 dsc-sdk）
 echo Building policy-fs-observation plugin...
-go build -o plugins\policy-fs-observation\policy-fs-observation.exe .\plugins\policy-fs-observation
+cd plugins\policy-fs-observation
+go build -o policy-fs-observation.exe .
+cd ..\..
 
 echo Build completed successfully.
 endlocal

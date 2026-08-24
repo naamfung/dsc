@@ -70,8 +70,8 @@ cd ./plugins/tool-lua-host && go build && cd ../../
 echo "Building tool-harness-webui plugin..."
 cd ./plugins/tool-harness-webui && bash ./build.sh && cd ../../
 
-# 构建 policy-fs-observation 插件
+# 构建 policy-fs-observation 插件（独立 module，基于 dsc-sdk）
 echo "Building policy-fs-observation plugin..."
-go build -o plugins/policy-fs-observation/policy-fs-observation.exe ./plugins/policy-fs-observation
+(cd plugins/policy-fs-observation && go build -o policy-fs-observation.exe .)
 
 echo "Build completed successfully."
