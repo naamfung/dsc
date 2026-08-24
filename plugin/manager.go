@@ -112,6 +112,7 @@ type Manager struct {
 type ManagerConfig struct {
 	PluginDir    string
 	ExecDir      string // 可執行文件所在目錄，用作插件子進程的工作目錄
+	SessionID    string // 會話標識，用於 temp 目錄下的數據分離（如 browser-data/spill）
 	Handshake    goplugin.HandshakeConfig
 	Logger       hclog.Logger
 	PluginLogger hclog.Logger // logger for go-plugin internal logs (e.g., plugin process exited)
@@ -188,16 +189,30 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// post-execute 策略 + read_spill 取回工具
 	spillDir := os.Getenv("DSC_SPILL_DIR")
 	if spillDir == "" {
-		if cfg.ExecDir != "" {
-			spillDir = filepath.Join(cfg.ExecDir, "spill")
-		} else {
+		exeDir := cfg.ExecDir
+		if exeDir == "" {
 			// 嘗試獲取可執行文件所在目錄
 			if execPath, err := os.Executable(); err == nil {
-				spillDir = filepath.Join(filepath.Dir(execPath), "spill")
+				exeDir = filepath.Dir(execPath)
 			} else {
 				logger.Warn("spill store: cannot determine executable dir, using default 'spill' dir", "error", err)
-				spillDir = "spill"
+				exeDir = ""
 			}
+		}
+		if exeDir != "" {
+			// 清理24小時前的 temp 目錄
+			if err := cleanupOldTempDirs(exeDir, logger); err != nil {
+				logger.Warn("temp store: failed to cleanup old temp dirs", "error", err)
+			}
+			// spill 目錄：exe目錄下temp/spill/<sessionID>
+			sessionID := cfg.SessionID
+			if sessionID == "" {
+				sessionID = "default"
+			}
+			spillDir = filepath.Join(exeDir, "temp", "spill", sessionID)
+		} else {
+			logger.Warn("spill store: cannot determine executable dir, using default 'spill' dir", "error", fmt.Errorf("no exec dir"))
+			spillDir = "spill"
 		}
 	}
 	if store, err := NewSpillStore(spillDir); err == nil {
@@ -213,6 +228,40 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))
 	return m
+}
+
+// cleanupOldTempDirs 清理exe目錄下temp/内時間超過 24 小時的目錄
+func cleanupOldTempDirs(exeDir string, logger hclog.Logger) error {
+	tempRoot := filepath.Join(exeDir, "temp")
+	// 確保根目錄存在
+	if err := os.MkdirAll(tempRoot, 0755); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(tempRoot)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		fullPath := filepath.Join(tempRoot, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		// 檢查修改時間是否超過24小時
+		if now.Sub(info.ModTime()) > 24*time.Hour {
+			logger.Info("removing old temp directory", "path", fullPath)
+			if err := os.RemoveAll(fullPath); err != nil {
+				logger.Warn("error removing old temp directory", "path", fullPath, "error", err)
+			}
+		}
+	}
+	return nil
 }
 
 // trackStateLocked 在加载入口预置 Spawned 状态（需已持有 m.mu）。

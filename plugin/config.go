@@ -35,6 +35,8 @@ type Config struct {
 	// PlanSection plan 模式激活时注入 system prompt 的部署方引导文案（同 DSH plan-mode 的 section）；
 	// 空则用 react-loop 内置默认（DSH 示例文案）
 	PlanSection string `json:"plan_section" yaml:"plan_section"`
+	// SessionID 會話標識，用於 temp 目錄下的數據分離（如 browser-data/spill）
+	SessionID string `json:"session_id" yaml:"session_id"`
 }
 
 type PluginEntry struct {
