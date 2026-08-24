@@ -42,15 +42,17 @@ type Config struct {
 
 // SDK 声明式插件构建器：注册完成后调用 Serve 启动 gRPC 插件进程。
 type SDK struct {
-	cfg     Config
-	tools   []*Tool
-	llm     plugin.LLMProvider
-	agent   plugin.Agent
-	policy  proto.FsObservationPolicyServiceServer
-	hook    *Hook
-	inter   InterconnectHandler
-	onStart func(context.Context) error
-	onStop  func() error
+	cfg    Config
+	tools  []*Tool
+	llm    plugin.LLMProvider
+	agent  plugin.Agent
+	policy proto.FsObservationPolicyServiceServer
+	hook   *Hook
+	inter  InterconnectHandler
+	// agentBroker 可选的 agent 类型 gRPC server 初始化回调（注入宿主 broker）。
+	agentBroker func(broker *goplugin.GRPCBroker) error
+	onStart     func(context.Context) error
+	onStop      func() error
 }
 
 // New 创建 SDK。Name/Type 必填，Version 建议填写。
@@ -97,6 +99,15 @@ func (s *SDK) Hook(h Hook) *SDK {
 // 插件可经 ic.LLM()/ic.Tool()/ic.Notify() 调用宿主能力（独立插件间互不感知）。
 func (s *SDK) SetInterconnect(handler InterconnectHandler) *SDK {
 	s.inter = handler
+	return s
+}
+
+// AgentBroker 注册 agent 类型插件的 gRPC server 初始化回调：宿主 broker 就绪后、
+// 标准 AgentServiceServer 注册前执行。agent 实现常需 Dial 宿主挂载的 LLM/Tool/
+// UserQuestions 等服务（见 plugin/manager.go 的 RegisterServices 时序），
+// 而 broker 仅在 GRPCServer 阶段可用（OnStart 无 broker），故提供此回调注入。
+func (s *SDK) AgentBroker(fn func(broker *goplugin.GRPCBroker) error) *SDK {
+	s.agentBroker = fn
 	return s
 }
 
@@ -193,9 +204,7 @@ func (s *SDK) plugins() map[string]goplugin.Plugin {
 			Impl: &llmMetaWrapper{LLMProvider: s.llm, name: s.cfg.Name, version: s.cfg.Version},
 		}}
 	case TypeAgent:
-		return map[string]goplugin.Plugin{"agent": &plugin.AgentGRPCPlugin{
-			Impl: &agentMetaWrapper{Agent: s.agent, name: s.cfg.Name, version: s.cfg.Version},
-		}}
+		return map[string]goplugin.Plugin{"agent": &agentGRPCPlugin{sdk: s}}
 	case TypePolicy:
 		return map[string]goplugin.Plugin{"policy": &policyGRPCPlugin{sdk: s}}
 	default:

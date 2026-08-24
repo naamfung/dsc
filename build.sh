@@ -28,7 +28,7 @@ go build
 
 # 构建 agent-react-loop 插件
 echo "Building agent-react-loop plugin..."
-go build -o plugins/agent-react-loop/agent-react-loop.exe ./plugins/agent-react-loop
+(cd plugins/agent-react-loop && go build -o agent-react-loop.exe .)
 
 # 构建 llm-openai 插件
 echo "Building llm-openai plugin..."

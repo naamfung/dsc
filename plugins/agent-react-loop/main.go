@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"dsc-sdk"
 	"dsc/plugin"
 	"dsc/proto"
 	"dsc/session"
@@ -1022,14 +1023,10 @@ func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 	return nil
 }
 
-type customAgentPlugin struct {
-	goplugin.Plugin
-}
-
-func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
-	agent := &ReactLoopAgent{
-		broker: broker,
-	}
+// newAgent 从宿主注入的环境变量构建 ReactLoopAgent（配置读取 + 会话存储初始化）。
+// broker 由 SDK 在 gRPC server 建立时经 AgentBroker 回调注入（仅该阶段可用）。
+func newAgent() (*ReactLoopAgent, error) {
+	agent := &ReactLoopAgent{}
 	// 讀取宿主傳入的上下文窗口容量（DSC_CONTEXT_WINDOW，token 數）
 	if v := os.Getenv("DSC_CONTEXT_WINDOW"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -1099,120 +1096,27 @@ func (p *customAgentPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Serv
 	}
 	store, err := session.NewStore(dir)
 	if err != nil {
-		return fmt.Errorf("failed to open session store: %w", err)
+		return nil, fmt.Errorf("failed to open session store: %w", err)
 	}
 	agent.store = store
-	proto.RegisterAgentServiceServer(s, &agentGRPCServer{impl: agent})
-	return nil
+	return agent, nil
 }
 
-func (p *customAgentPlugin) GRPCClient(ctx context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return nil, nil
-}
-
-type agentGRPCServer struct {
-	proto.UnimplementedAgentServiceServer
-	impl plugin.Agent
-}
-
-func (s *agentGRPCServer) Run(ctx context.Context, req *proto.RunRequest) (*proto.RunResponse, error) {
-	result, err := s.impl.Run(ctx, req.Input)
-	if err != nil {
-		return nil, err
-	}
-	return &proto.RunResponse{
-		Output: result.Output,
-		Status: result.Status,
-	}, nil
-}
-
-func (s *agentGRPCServer) Name(ctx context.Context, req *proto.NameRequest) (*proto.NameResponse, error) {
-	return &proto.NameResponse{Name: s.impl.Name(ctx)}, nil
-}
-
-func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest) (*proto.VersionResponse, error) {
-	return &proto.VersionResponse{Version: s.impl.Version(ctx)}, nil
-}
-
-func (s *agentGRPCServer) RegisterServices(ctx context.Context, req *proto.RegisterServicesRequest) (*proto.RegisterServicesResponse, error) {
-	err := s.impl.RegisterServices(ctx, req.LlmServiceId, req.ToolServiceId)
-	return &proto.RegisterServicesResponse{}, err
-}
-
-func (s *agentGRPCServer) SwitchSession(ctx context.Context, req *proto.SwitchSessionRequest) (*proto.SwitchSessionResponse, error) {
-	if err := s.impl.SwitchSession(ctx, req.SessionId); err != nil {
-		return &proto.SwitchSessionResponse{Success: false, Message: err.Error()}, nil
-	}
-	return &proto.SwitchSessionResponse{Success: true}, nil
-}
-
-func (s *agentGRPCServer) SetPlanMode(ctx context.Context, req *proto.SetPlanModeRequest) (*proto.SetPlanModeResponse, error) {
-	if err := s.impl.SetPlanMode(ctx, req.Active); err != nil {
-		return &proto.SetPlanModeResponse{Success: false, Message: err.Error()}, nil
-	}
-	return &proto.SetPlanModeResponse{Success: true}, nil
-}
-
-func (s *agentGRPCServer) SetUserQuestionsService(ctx context.Context, req *proto.SetUserQuestionsServiceRequest) (*proto.SetUserQuestionsServiceResponse, error) {
-	if err := s.impl.SetUserQuestionsService(ctx, req.ServiceId); err != nil {
-		return &proto.SetUserQuestionsServiceResponse{Success: false, Message: err.Error()}, nil
-	}
-	return &proto.SetUserQuestionsServiceResponse{Success: true}, nil
-}
-
-func (s *agentGRPCServer) Shutdown(ctx context.Context, req *proto.ShutdownRequest) (*proto.ShutdownResponse, error) {
-	err := s.impl.Shutdown(ctx, req.Force)
-	if err != nil {
-		return &proto.ShutdownResponse{Success: false, Message: err.Error()}, err
-	}
-	return &proto.ShutdownResponse{Success: true, Message: "shutdown successful"}, nil
-}
-
-func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentService_RunStreamServer) error {
-	ch, err := s.impl.RunStream(stream.Context(), req.Input)
-	if err != nil {
-		return err
-	}
-	for item := range ch {
-		if err := stream.Send(&proto.RunStreamResponse{
-			Output:     item.Output,
-			Status:     item.Status,
-			Error:      item.Error,
-			Usage:      plugin.UsageToProto(item.Usage),
-			Reasoning:  item.Reasoning,
-			ToolName:   item.ToolName,
-			ToolArgs:   item.ToolArgs,
-			ToolResult: item.ToolResult,
-			Turn:       item.Turn,
-			Step:       item.Step,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *agentGRPCServer) InjectMessage(ctx context.Context, req *proto.InjectMessageRequest) (*proto.InjectMessageResponse, error) {
-	if err := s.impl.InjectMessage(ctx, req.Content); err != nil {
-		return nil, err
-	}
-	return &proto.InjectMessageResponse{}, nil
-}
-
-func (s *agentGRPCServer) DebugSnapshot(ctx context.Context, req *proto.DebugSnapshotRequest) (*proto.DebugSnapshotResponse, error) {
-	snap, err := s.impl.DebugSnapshot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return plugin.SnapshotToProto(snap), nil
-}
-
+// main 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.AgentGRPCPlugin 提供
+// AgentService + 元数据，并经 AgentBroker 回调在 gRPC server 建立时注入宿主 broker
+// （重写自旧的 customAgentPlugin/agentGRPCServer 样板）。
 func main() {
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"agent": &customAgentPlugin{},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
+	agent, err := newAgent()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-react-loop: %v\n", err)
+		os.Exit(2)
+	}
+
+	sdk := dsc.New(dsc.Config{Name: "agent-react-loop", Version: "1.0.0", Type: dsc.TypeAgent})
+	sdk.Agent(agent)
+	sdk.AgentBroker(func(broker *goplugin.GRPCBroker) error {
+		agent.broker = broker
+		return nil
 	})
+	sdk.Serve()
 }

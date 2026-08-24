@@ -72,6 +72,20 @@ func (s *agentGRPCServer) Name(ctx context.Context, req *proto.NameRequest) (*pr
 	return &proto.NameResponse{Name: s.impl.Name(ctx)}, nil
 }
 
+// RegisterServices 注入宿主挂载的 LLM/Tool 聚合服务 ID（agent 据此 Dial 依赖服务）。
+func (s *agentGRPCServer) RegisterServices(ctx context.Context, req *proto.RegisterServicesRequest) (*proto.RegisterServicesResponse, error) {
+	err := s.impl.RegisterServices(ctx, req.LlmServiceId, req.ToolServiceId)
+	return &proto.RegisterServicesResponse{}, err
+}
+
+// SwitchSession 切换 agent 的当前会话（事件溯源日志接管）。
+func (s *agentGRPCServer) SwitchSession(ctx context.Context, req *proto.SwitchSessionRequest) (*proto.SwitchSessionResponse, error) {
+	if err := s.impl.SwitchSession(ctx, req.SessionId); err != nil {
+		return &proto.SwitchSessionResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SwitchSessionResponse{Success: true}, nil
+}
+
 func (s *agentGRPCServer) Version(ctx context.Context, req *proto.VersionRequest) (*proto.VersionResponse, error) {
 	return &proto.VersionResponse{Version: s.impl.Version(ctx)}, nil
 }
