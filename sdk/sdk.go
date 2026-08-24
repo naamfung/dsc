@@ -14,6 +14,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 
 	"dsc/plugin"
+	"dsc/proto"
 )
 
 // Type 插件类型，与宿主发现规则（目录名 <type>-<name>）与 metadata.Type 对应。
@@ -26,6 +27,9 @@ const (
 	TypeLLM Type = "llm"
 	// TypeAgent 智能体插件：实现 plugin.Agent。
 	TypeAgent Type = "agent"
+	// TypePolicy 策略插件：注册宿主可桥接的策略服务（如文件系统观测
+	// FsObservationPolicyService）；宿主经主连接直接取对应 proto 客户端。
+	TypePolicy Type = "policy"
 )
 
 // Config 插件声明。Name 与宿主发现/注入的插件名一致（目录 plugins/<type>-<name>/）。
@@ -42,6 +46,7 @@ type SDK struct {
 	tools   []*Tool
 	llm     plugin.LLMProvider
 	agent   plugin.Agent
+	policy  proto.FsObservationPolicyServiceServer
 	hook    *Hook
 	inter   InterconnectHandler
 	onStart func(context.Context) error
@@ -71,6 +76,13 @@ func (s *SDK) LLM(impl plugin.LLMProvider) *SDK {
 // Agent 注册智能体实现（仅 agent 类型插件；实现 plugin.Agent）。
 func (s *SDK) Agent(impl plugin.Agent) *SDK {
 	s.agent = impl
+	return s
+}
+
+// Policy 注册策略服务实现（仅 policy 类型插件；实现 proto.FsObservationPolicyServiceServer，
+// 宿主经主连接直接取对应 proto 客户端并桥接到工具流水线）。
+func (s *SDK) Policy(impl proto.FsObservationPolicyServiceServer) *SDK {
+	s.policy = impl
 	return s
 }
 
@@ -161,8 +173,12 @@ func (s *SDK) validate() error {
 		if s.agent == nil {
 			return fmt.Errorf("agent 类型插件必须注册 Agent（调用 sdk.Agent(...)）")
 		}
+	case TypePolicy:
+		if s.policy == nil {
+			return fmt.Errorf("policy 类型插件必须注册策略服务（调用 sdk.Policy(...)）")
+		}
 	default:
-		return fmt.Errorf("不支持的插件类型 %q（tool | llm | agent）", s.cfg.Type)
+		return fmt.Errorf("不支持的插件类型 %q（tool | llm | agent | policy）", s.cfg.Type)
 	}
 	return nil
 }
@@ -180,6 +196,8 @@ func (s *SDK) plugins() map[string]goplugin.Plugin {
 		return map[string]goplugin.Plugin{"agent": &plugin.AgentGRPCPlugin{
 			Impl: &agentMetaWrapper{Agent: s.agent, name: s.cfg.Name, version: s.cfg.Version},
 		}}
+	case TypePolicy:
+		return map[string]goplugin.Plugin{"policy": &policyGRPCPlugin{sdk: s}}
 	default:
 		return map[string]goplugin.Plugin{"tool": &toolGRPCPlugin{sdk: s}}
 	}
