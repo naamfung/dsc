@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"dsc/plugin"
 	"dsc/proto"
 	"dsc/proto/metadata"
 )
@@ -211,6 +212,54 @@ func TestReadEnv(t *testing.T) {
 		t.Fatalf("ReadEnv = %+v", env)
 	}
 }
+
+// TestMetaWrapperCfgPrecedence 验证 LLM/Agent 元数据以 sdk.Config.Name/Version 为准
+// （wrapper 覆盖实现内部 Name()/Version()，避免两处维护不一致）。
+func TestMetaWrapperCfgPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	// TypeLLM：cfg 非空 → 以 cfg 为准
+	llmImpl := &stubLLM{name: "impl-name", version: "0.0.1"}
+	w := &llmMetaWrapper{LLMProvider: llmImpl, name: "cfg-name", version: "9.9.9"}
+	if got := w.Name(ctx); got != "cfg-name" {
+		t.Fatalf("LLM wrapper Name = %q, want cfg-name", got)
+	}
+	if got := w.Version(ctx); got != "9.9.9" {
+		t.Fatalf("LLM wrapper Version = %q, want 9.9.9", got)
+	}
+	// cfg 为空 → 回落实现
+	w2 := &llmMetaWrapper{LLMProvider: llmImpl}
+	if got := w2.Name(ctx); got != "impl-name" {
+		t.Fatalf("LLM wrapper fallback Name = %q, want impl-name", got)
+	}
+
+	// TypeAgent：同样规则
+	agentImpl := &stubAgent{name: "a-impl", version: "0.1.0"}
+	aw := &agentMetaWrapper{Agent: agentImpl, name: "a-cfg", version: "1.2.3"}
+	if got := aw.Name(ctx); got != "a-cfg" {
+		t.Fatalf("Agent wrapper Name = %q, want a-cfg", got)
+	}
+	aw2 := &agentMetaWrapper{Agent: agentImpl}
+	if got := aw2.Version(ctx); got != "0.1.0" {
+		t.Fatalf("Agent wrapper fallback Version = %q, want 0.1.0", got)
+	}
+}
+
+type stubLLM struct {
+	plugin.LLMProvider
+	name, version string
+}
+
+func (s *stubLLM) Name(context.Context) string    { return s.name }
+func (s *stubLLM) Version(context.Context) string { return s.version }
+
+type stubAgent struct {
+	plugin.Agent
+	name, version string
+}
+
+func (s *stubAgent) Name(context.Context) string    { return s.name }
+func (s *stubAgent) Version(context.Context) string { return s.version }
 
 func TestSetInterconnectCallsHandler(t *testing.T) {
 	called := false

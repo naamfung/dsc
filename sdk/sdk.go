@@ -168,13 +168,59 @@ func (s *SDK) validate() error {
 }
 
 // plugins 组装 go-plugin 注册表（key 与宿主侧客户端无关紧要，metadata 决定类型）。
+// LLM/Agent 类型用 metaWrapper 让元数据以 sdk.Config 的 Name/Version 为准（对齐 tool
+// 类型语义），避免实现内部 Name()/Version() 与注册信息两处维护不一致。
 func (s *SDK) plugins() map[string]goplugin.Plugin {
 	switch s.cfg.Type {
 	case TypeLLM:
-		return map[string]goplugin.Plugin{"llm": &plugin.LLMGRPCPlugin{Impl: s.llm}}
+		return map[string]goplugin.Plugin{"llm": &plugin.LLMGRPCPlugin{
+			Impl: &llmMetaWrapper{LLMProvider: s.llm, name: s.cfg.Name, version: s.cfg.Version},
+		}}
 	case TypeAgent:
-		return map[string]goplugin.Plugin{"agent": &plugin.AgentGRPCPlugin{Impl: s.agent}}
+		return map[string]goplugin.Plugin{"agent": &plugin.AgentGRPCPlugin{
+			Impl: &agentMetaWrapper{Agent: s.agent, name: s.cfg.Name, version: s.cfg.Version},
+		}}
 	default:
 		return map[string]goplugin.Plugin{"tool": &toolGRPCPlugin{sdk: s}}
 	}
+}
+
+// llmMetaWrapper 覆盖 LLMProvider 的 Name/Version：cfg 非空时以 cfg 为准，否则回落实现。
+type llmMetaWrapper struct {
+	plugin.LLMProvider
+	name, version string
+}
+
+func (w *llmMetaWrapper) Name(ctx context.Context) string {
+	if w.name != "" {
+		return w.name
+	}
+	return w.LLMProvider.Name(ctx)
+}
+
+func (w *llmMetaWrapper) Version(ctx context.Context) string {
+	if w.version != "" {
+		return w.version
+	}
+	return w.LLMProvider.Version(ctx)
+}
+
+// agentMetaWrapper 覆盖 Agent 的 Name/Version：cfg 非空时以 cfg 为准，否则回落实现。
+type agentMetaWrapper struct {
+	plugin.Agent
+	name, version string
+}
+
+func (w *agentMetaWrapper) Name(ctx context.Context) string {
+	if w.name != "" {
+		return w.name
+	}
+	return w.Agent.Name(ctx)
+}
+
+func (w *agentMetaWrapper) Version(ctx context.Context) string {
+	if w.version != "" {
+		return w.version
+	}
+	return w.Agent.Version(ctx)
 }

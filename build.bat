@@ -32,7 +32,9 @@ go build -o plugins\agent-react-loop\agent-react-loop.exe .\plugins\agent-react-
 
 :: 构建 llm-openai 插件
 echo Building llm-openai plugin...
-go build -o plugins\llm-openai\llm-openai.exe .\plugins\llm-openai
+cd plugins\llm-openai
+go build -o llm-openai.exe .
+cd ..\..
 
 :: 构建 llm-anthropic 插件
 echo Building llm-anthropic plugin...

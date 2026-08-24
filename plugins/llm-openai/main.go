@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"dsc-sdk"
 	"dsc/plugin"
-	gp "github.com/hashicorp/go-plugin"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -297,11 +297,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				}
 
 				finishReason := string(choice.FinishReason)
-				if finishReason == "null" {
-					finishReason = "stop"
-				}
 
-				// 把 usage 一并转发（部分服務會在 finish 分片攜帶 usage）
+				// 把 usage 一并转发（部分服務會在 finish 分片攜帶 usage）；
+				// 若該分片同時含正文/工具調用，則轉發完後仍繼續讀流，
+				// 由後續的空 choices 結尾分片（或 io.EOF）收尾退出。
 				ch <- &plugin.ChatStreamResponse{
 					Content:      "",
 					FinishReason: finishReason,
@@ -341,11 +340,9 @@ func main() {
 		model:  model,
 	}
 
-	gp.Serve(&gp.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]gp.Plugin{
-			"llm": &plugin.LLMGRPCPlugin{Impl: provider},
-		},
-		GRPCServer: gp.DefaultGRPCServer,
-	})
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.LLMGRPCPlugin
+	// 自动提供 LLMService + 元数据（重写自旧的 goplugin.Serve 样板）。
+	sdk := dsc.New(dsc.Config{Name: "openai", Version: "1.0.0", Type: dsc.TypeLLM})
+	sdk.LLM(provider)
+	sdk.Serve()
 }
