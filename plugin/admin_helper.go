@@ -2,8 +2,6 @@ package plugin
 
 import (
 	"fmt"
-	"net/http"
-
 	"dsc/libs/vodka"
 )
 
@@ -12,7 +10,7 @@ import (
 // 绑定失败时返回 400 HTTPError。
 func bindBody(c *vodka.Context, out interface{}) error {
 	if err := c.Bind(out); err != nil {
-		return vodka.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
+		return vodka.NewHTTPError(vodka.StatusBadRequest, fmt.Sprintf("invalid json: %v", err))
 	}
 	return nil
 }
