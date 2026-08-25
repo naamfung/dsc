@@ -28,6 +28,7 @@ type compactMockLLM struct {
 	streamCalls int
 	streamMsgs  []*proto.Message
 	done        chan struct{} // ChatStream 首次收到请求时关闭
+	usagePrompt int32         // 若 >0，主请求流携带该 prompt_tokens（模拟服务端低估 usage）
 }
 
 func (m *compactMockLLM) Chat(ctx context.Context, in *proto.ChatRequest, opts ...grpc.CallOption) (*proto.ChatResponse, error) {
@@ -47,15 +48,22 @@ func (m *compactMockLLM) ChatStream(ctx context.Context, in *proto.ChatRequest, 
 	default:
 		close(m.done)
 	}
-	return &compactMockStream{}, nil
+	var usage *proto.Usage
+	if m.usagePrompt > 0 {
+		usage = &proto.Usage{PromptTokens: m.usagePrompt}
+	}
+	return &compactMockStream{usage: usage}, nil
 }
 
-type compactMockStream struct{ sent bool }
+type compactMockStream struct {
+	sent  bool
+	usage *proto.Usage
+}
 
 func (s *compactMockStream) Recv() (*proto.ChatStreamResponse, error) {
 	if !s.sent {
 		s.sent = true
-		return &proto.ChatStreamResponse{Content: "继续执行", FinishReason: "stop"}, nil
+		return &proto.ChatStreamResponse{Content: "继续执行", FinishReason: "stop", Usage: s.usage}, nil
 	}
 	return nil, io.EOF
 }
@@ -151,5 +159,49 @@ func TestPreDispatchCompactionOnRestore(t *testing.T) {
 	}
 	if !notified {
 		t.Fatalf("未输出上下文压缩提示帧")
+	}
+}
+
+// TestCompactionTriggeredOnUnderReportedUsage 回归「服务端低估已用容量导致压缩永不触发」：
+// 本地 llama.cpp 启用提示缓存后，prompt_tokens 仅含未缓存新增 token（如 315），远小于真实
+// 上下文长度。修复前压缩判定只看该低估的 usage（315 < 80% 窗口）永不压缩，长程任务必崩；
+// 修复后以本地字符估算作为下界，历史估算达到阈值时仍触发压缩。
+func TestCompactionTriggeredOnUnderReportedUsage(t *testing.T) {
+	a := newTestAgent(t)
+	a.llmServiceID = 1
+	a.toolServiceID = 1
+	a.contextWindow = 50000
+	a.lastPromptTokens = 315 // 模拟服务端仅上报未缓存新增 token（真实上下文远大于此）
+
+	// 预置足够大的历史：字符估算超过 80% 窗口（40k），确保必然触发压缩
+	big := strings.Repeat("历史对话内容撑大上下文占用。", 1000) // 14 字 ×1000 = 14k 字 → ~3.5k token
+	for i := 0; i < 6; i++ {
+		a.sess.Append(session.UserMessage, &session.UserMessageData{Content: big, Source: "user"},
+			&session.SurfaceOp{Op: session.SurfaceAppend})
+		a.sess.Append(session.AssistantMessage, &session.AssistantMessageData{Content: big},
+			&session.SurfaceOp{Op: session.SurfaceAppend})
+	}
+	if got := estimatePromptTokens(a.sess.DeriveMessages(a.sysPrompt)); got < a.contextWindow*8/10 {
+		t.Fatalf("预置历史估算 = %d token, 需 >= %d 才能触发压缩", got, a.contextWindow*8/10)
+	}
+
+	// 主请求流每帧回报低估的 prompt_tokens=315，即使压缩后下一轮仍保持低估
+	llm := &compactMockLLM{done: make(chan struct{}), usagePrompt: 315}
+	a.llmClient = llm
+	a.toolClient = &mockToolClient{}
+
+	res, err := a.runLoop(context.Background(), "继续", nil)
+	if err != nil {
+		t.Fatalf("runLoop: %v", err)
+	}
+	if res.Status != "success" {
+		t.Fatalf("结果状态 = %s, 期望 success", res.Status)
+	}
+
+	llm.mu.Lock()
+	chatCalls := llm.chatCalls
+	llm.mu.Unlock()
+	if chatCalls < 1 {
+		t.Fatalf("压缩 Chat 调用次数 = %d, 期望 >= 1（服务端低估 usage 时仍应触发压缩）", chatCalls)
 	}
 }

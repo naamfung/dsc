@@ -167,6 +167,31 @@ func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
 	return toolCalls
 }
 
+// usageFromAnthropic 将 Anthropic usage 转换为 plugin.Usage（nil 返回 nil）。
+// 兼容启用提示缓存的 llama.cpp 等接口：其 input_tokens 仅统计未命中缓存的新增 token，
+// 已命中前缀单独计入 cache_read_input_tokens，真实上下文长度 = input + cache_read；
+// 标准 Anthropic 接口的 input_tokens 已含全部输入（cache_read 为其子集），
+// 此时 cache_read <= input，保持原值即可避免重复计数。
+func usageFromAnthropic(u *anthropic.Usage) *plugin.Usage {
+	if u == nil {
+		return nil
+	}
+	promptTokens := u.InputTokens
+	if u.CacheReadInputTokens > u.InputTokens {
+		promptTokens += u.CacheReadInputTokens
+	}
+	if promptTokens <= 0 && u.OutputTokens <= 0 {
+		return nil
+	}
+	return &plugin.Usage{
+		PromptTokens:             int32(promptTokens),
+		CompletionTokens:         int32(u.OutputTokens),
+		TotalTokens:              int32(promptTokens + u.OutputTokens),
+		CacheReadInputTokens:     int32(u.CacheReadInputTokens),
+		CacheCreationInputTokens: int32(u.CacheCreationInputTokens),
+	}
+}
+
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
 	params := p.buildMessageParams(messages, tools, int64(maxTokens))
 	resp, err := p.client.Messages.New(ctx, params)
@@ -222,15 +247,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 		}
 		// 處理 usage 信息（Anthropic 格式：input_tokens -> prompt_tokens, output_tokens -> completion_tokens；
 		// cache_read/cache_creation 直接对应）
-		if acc.msg.Usage.InputTokens > 0 || acc.msg.Usage.OutputTokens > 0 {
-			resp.Usage = &plugin.Usage{
-				PromptTokens:             int32(acc.msg.Usage.InputTokens),
-				CompletionTokens:         int32(acc.msg.Usage.OutputTokens),
-				TotalTokens:              int32(acc.msg.Usage.InputTokens + acc.msg.Usage.OutputTokens),
-				CacheReadInputTokens:     int32(acc.msg.Usage.CacheReadInputTokens),
-				CacheCreationInputTokens: int32(acc.msg.Usage.CacheCreationInputTokens),
-			}
-		}
+		resp.Usage = usageFromAnthropic(&acc.msg.Usage)
 		ch <- resp
 	}()
 	return ch, nil

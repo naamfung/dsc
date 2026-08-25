@@ -336,8 +336,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		//   而非把全部历史折叠成单一摘要。
 		compacted := false
 		promptTokens := int(a.lastPromptTokens)
-		if a.contextWindow > 0 && promptTokens <= 0 {
-			promptTokens = estimatePromptTokens(msgs)
+		if a.contextWindow > 0 {
+			// 已用容量取服务端上报值与本地字符估算的较大者：启用提示缓存的接口（如
+			// llama.cpp）可能只上报未缓存的新增 token（prompt_tokens 远小于真实上下文），
+			// 本地估算作为下界兜底，避免压缩判定被低估的 usage 推迟甚至永不触发。
+			if est := estimatePromptTokens(msgs); est > promptTokens {
+				promptTokens = est
+			}
 		}
 		if a.contextWindow > 0 && promptTokens >= a.contextWindow*8/10 {
 			if emit != nil {
