@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -358,7 +359,18 @@ func main() {
 	// 观察状态由独立结构承载（SDK 的 Tool.Handler 无 server 引用，闭包捕获 state）
 	state := &editorState{observations: make(map[string]*proto.FsObservation)}
 
-	// 定義 str_replace_editor 工具
+	// 定义 str_replace_editor 工具。path 描述以真实工作区根路径为示例：
+	// shell 等原生命令无法解析 /workspace 虚拟前缀，模型应优先使用真实路径；
+	// /workspace 仍作为工作区根别名被本工具与 sandbox 接受（对齐 DSH 以真实
+	// 路径呈现 workspace-write 根的设计，避免模型臆造不存在的虚拟路径而死循环）。
+	workspaceRoot := plugin.WorkspaceRoot
+	if workspaceRoot == "" {
+		workspaceRoot = "."
+	}
+	examplePath := filepath.ToSlash(workspaceRoot) + "/file.py"
+	pathDesc := "Absolute path to the file, e.g. " + examplePath +
+		`. "/workspace" is also accepted as an alias for the workspace root (` +
+		filepath.ToSlash(workspaceRoot) + `), but prefer the real path above for shell commands.`
 	schema := json.RawMessage(`{
 		"type": "object",
 		"properties": {
@@ -369,7 +381,7 @@ func main() {
 			},
 			"path": {
 				"type": "string",
-				"description": "Absolute path to the file, e.g. /workspace/file.py."
+				"description": ` + strconv.Quote(pathDesc) + `
 			},
 			"file_text": {
 				"type": "string",

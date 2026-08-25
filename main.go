@@ -95,6 +95,19 @@ func resolveWorkspaceRoot(cwd, cfgRoot string) string {
 	return cwd
 }
 
+// sandboxPolicyEnv 返回注入各插件进程的沙箱策略档名（DSC_SANDBOX_POLICY）：
+// 与 Manager 读取 DSC_SANDBOX 的缺省解析一致，未配置时回退 workspace-write。
+func sandboxPolicyEnv() string {
+	switch plugin.ParseSandboxPolicy(os.Getenv("DSC_SANDBOX")) {
+	case plugin.SandboxReadOnly:
+		return "read-only"
+	case plugin.SandboxFullAccess:
+		return "full-access"
+	default:
+		return "workspace-write"
+	}
+}
+
 func getExecutableDir() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -537,6 +550,9 @@ func main() {
 		e.Env["DSC_MODE"] = mode
 		// 注入統一工作空間根（對齊 DSH 單一策略歸屬：各能力族消費同一根）
 		e.Env["DSC_WORKSPACE_ROOT"] = plugin.WorkspaceRoot
+		// 注入沙箱策略档（agent 据此渲染 sandbox:policy 上下文，让模型知道
+		// 工作区真实根路径与写策略，避免臆造 /workspace 虚拟路径陷入死循环）
+		e.Env["DSC_SANDBOX_POLICY"] = sandboxPolicyEnv()
 	}
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices，

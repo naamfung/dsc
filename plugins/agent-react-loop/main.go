@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +63,11 @@ type ReactLoopAgent struct {
 	contextWindow    int           // 總容量（token 數），0 表示未設置（不做自動壓縮）
 	lastPromptTokens int32         // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
 	lastUsage        *plugin.Usage // 最近一次 LLM 請求的完整 usage 信息
+
+	// 沙箱策略（宿主經 DSC_SANDBOX_POLICY 傳入，缺省 workspace-write）：渲染进
+	// system prompt 的 sandbox:policy 上下文片段（对齐 DSH），让模型知道当前文件
+	// 策略与工作区真实根路径，避免臆造不存在的 /workspace 虚拟路径而陷入死循环。
+	sandboxPolicy string
 
 	// 記錄上次的工具名稱列表，用於檢測模式是否切換
 	lastToolNames []string
@@ -736,7 +742,34 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 			parts = append(parts, content)
 		}
 	}
+
+	// 沙箱策略上下文（对齐 DSH sandbox:policy 运行时上下文快照）：让模型知道当前
+	// 文件策略与工作区真实根路径，避免臆造不存在的 /workspace 虚拟路径而陷入
+	// 「虚拟路径访问出错、真实路径又被拦」的死循环。
+	if policy := a.sandboxPolicyContext(); policy != "" {
+		parts = append(parts, policy)
+	}
 	return strings.Join(parts, "\n\n")
+}
+
+// sandboxPolicyContext 渲染当前沙箱策略上下文片段。workspace-write 时携带工作区
+// 真实根路径（对齐 DSH renderPolicyContext 以真实路径呈现根的约定）；/workspace
+// 仍作为该根的别名被编辑器工具与 sandbox 接受，但 shell 等原生命令只能访问真实路径。
+func (a *ReactLoopAgent) sandboxPolicyContext() string {
+	ws := os.Getenv("DSC_WORKSPACE_ROOT")
+	if ws == "" {
+		ws = "."
+	}
+	ws = filepath.ToSlash(ws)
+	switch strings.ToLower(strings.TrimSpace(a.sandboxPolicy)) {
+	case "readonly", "read-only":
+		return "Current DSC file policy: read-only. The file sandbox blocks any file modification."
+	case "full", "full-access":
+		return "Current DSC file policy: danger-full-access. The file sandbox does not restrict file modifications."
+	default: // workspace / workspace-write（缺省）
+		return "Current DSC file policy: workspace-write. File modifications are allowed under the session workspace: " +
+			strconv.Quote(ws) + `. The "/workspace" prefix is an alias for that root; native commands (e.g. shell) can only use the real path.`
+	}
 }
 
 // compactSystemPrompt 上下文壓縮指令：要求模型只輸出精簡摘要，不添加額外解釋。
@@ -1041,6 +1074,11 @@ func newAgent() (*ReactLoopAgent, error) {
 	// 讀取宿主傳入的單輪模式標記（DSC_SINGLE_TURN=1，-input 自動化測試入口使用）
 	if v := os.Getenv("DSC_SINGLE_TURN"); v == "1" || strings.EqualFold(v, "true") {
 		agent.singleTurn = true
+	}
+	// 讀取宿主傳入的沙箱策略（DSC_SANDBOX_POLICY，缺省 workspace-write）
+	agent.sandboxPolicy = os.Getenv("DSC_SANDBOX_POLICY")
+	if agent.sandboxPolicy == "" {
+		agent.sandboxPolicy = "workspace-write"
 	}
 	// 讀取宿主傳入的循環輪數上限（DSC_MAX_ITERATIONS）。默認 0 = 不設限（面向長程任務），
 	// 僅當顯式設置大於 0 的值時才作為循環上限。

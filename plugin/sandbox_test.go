@@ -81,6 +81,35 @@ func TestSandboxWorkspaceAcceptsVirtualPrefix(t *testing.T) {
 	}
 }
 
+// TestSandboxWorkspaceAllowsRealPathCaseInsensitive 回归「换成真实路径被拦截」死循环：
+// Windows 文件系统大小写不敏感，模型按 pwd 或自身推断传回的盘符/目录名大小写可能与
+// WorkspaceRoot 不一致（如小写盘符 d:\agents\dsc\...）。修复前 inWorkspace 的词法前缀
+// 比较区分大小写，导致真实路径在 workspace 内却被误拦，模型只好退回 /workspace 虚拟
+// 前缀（该前缀在 shell 中又不存在），陷入死循环，最终被迫切换 full-access。
+func TestSandboxWorkspaceAllowsRealPathCaseInsensitive(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir() + "/ws"
+	defer func() { WorkspaceRoot = orig }()
+
+	// 以与 canonical 根大小写不同的真实路径写 workspace 内文件（模拟模型回传路径）
+	root := canonicalWorkspaceRoot()
+	alt := strings.ToLower(root) + "/inside.txt"
+	if alt == root+"/inside.txt" {
+		t.Skip("当前系统大小写不敏感或路径无大小写差异，跳过")
+	}
+	// JSON 中反斜杠需转义（真实请求由模型产出合法 JSON，这里等价构造）
+	escaped := strings.ReplaceAll(alt, `\`, `\\`)
+
+	m := newRouterManager()
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxWorkspaceWrite)))
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+
+	if _, err := m.ExecuteTool(context.Background(), "str_replace_editor",
+		json.RawMessage(`{"command":"str_replace","path":"`+escaped+`","old_str":"a","new_str":"b"}`)); err != nil {
+		t.Fatalf("write to real path with case variant should pass on case-insensitive FS: %v", err)
+	}
+}
+
 func TestSandboxFullAllowsWrite(t *testing.T) {
 	m := newRouterManager()
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxFullAccess)))
