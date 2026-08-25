@@ -11,9 +11,10 @@ import (
 
 // stubAgent 返回一个预填充的流通道（reasoning → streaming → success）
 type stubAgent struct {
-	frames      []*plugin.RunStreamResponse
-	switchCalls []string
-	planCalls   []bool
+	frames       []*plugin.RunStreamResponse
+	switchCalls  []string
+	planCalls    []bool
+	historyCalls []int
 }
 
 func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *plugin.RunStreamResponse, error) {
@@ -40,6 +41,10 @@ func (s *stubAgent) SwitchSession(_ context.Context, id string) error {
 }
 func (s *stubAgent) SetPlanMode(_ context.Context, active bool) error {
 	s.planCalls = append(s.planCalls, active)
+	return nil
+}
+func (s *stubAgent) SetHistoryInjection(_ context.Context, count int) error {
+	s.historyCalls = append(s.historyCalls, count)
 	return nil
 }
 func (s *stubAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }

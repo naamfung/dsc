@@ -105,6 +105,13 @@ func (s *agentGRPCServer) SetPlanMode(ctx context.Context, req *proto.SetPlanMod
 	return &proto.SetPlanModeResponse{Success: true}, nil
 }
 
+func (s *agentGRPCServer) SetHistoryInjection(ctx context.Context, req *proto.SetHistoryInjectionRequest) (*proto.SetHistoryInjectionResponse, error) {
+	if err := s.impl.SetHistoryInjection(ctx, int(req.Count)); err != nil {
+		return &proto.SetHistoryInjectionResponse{Success: false, Message: err.Error()}, nil
+	}
+	return &proto.SetHistoryInjectionResponse{Success: true}, nil
+}
+
 func (s *agentGRPCServer) SetUserQuestionsService(ctx context.Context, req *proto.SetUserQuestionsServiceRequest) (*proto.SetUserQuestionsServiceResponse, error) {
 	if err := s.impl.SetUserQuestionsService(ctx, req.ServiceId); err != nil {
 		return &proto.SetUserQuestionsServiceResponse{Success: false, Message: err.Error()}, nil
@@ -222,6 +229,11 @@ func (c *agentGRPCClient) SwitchSession(ctx context.Context, sessionID string) e
 
 func (c *agentGRPCClient) SetPlanMode(ctx context.Context, active bool) error {
 	_, err := c.client.SetPlanMode(ctx, &proto.SetPlanModeRequest{Active: active})
+	return err
+}
+
+func (c *agentGRPCClient) SetHistoryInjection(ctx context.Context, count int) error {
+	_, err := c.client.SetHistoryInjection(ctx, &proto.SetHistoryInjectionRequest{Count: int32(count)})
 	return err
 }
 

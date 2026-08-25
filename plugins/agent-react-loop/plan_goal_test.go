@@ -28,6 +28,8 @@ func newTestAgent(t *testing.T) *ReactLoopAgent {
 		planSection:                   defaultPlanSection,
 		defaultMaxGoalRounds:          256,
 		blockedAfterConsecutiveRounds: 3,
+		// 与 newAgent 缺省一致：-1 = 不限制历史注入（0 会关闭压缩并禁用历史）
+		historyInjection: -1,
 	}
 }
 

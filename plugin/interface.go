@@ -50,6 +50,10 @@ type Agent interface {
 	// 用于 TUI /plan 命令；激活时在 system prompt 注入部署方配置的 section，
 	// 供模型先探索与设计，再通过 exit_plan_mode 工具呈现完整计划并退出。
 	SetPlanMode(ctx context.Context, active bool) error
+	// SetHistoryInjection 设置当前会话的历史注入条数上限（log-only history/limit
+	// 事件，fold 恢复）：count < 0 不限制（缺省）；0 不注入历史；> 0 只注入最近
+	// count 条派生消息。用于 TUI /settings history 命令控制本地模型预填充长度。
+	SetHistoryInjection(ctx context.Context, count int) error
 	// SetUserQuestionsService 注入宿主挂载在 broker 上的 UserQuestionsService ID
 	// （0 = 无通道）。agent 的工具（如 exit_plan_mode）据此向用户提问并等待回答。
 	SetUserQuestionsService(ctx context.Context, serviceID uint32) error

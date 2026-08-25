@@ -69,6 +69,11 @@ type ReactLoopAgent struct {
 	// 策略与工作区真实根路径，避免臆造不存在的 /workspace 虚拟路径而陷入死循环。
 	sandboxPolicy string
 
+	// 历史注入条数上限（-1 = 不限制，缺省；0 = 不注入历史；>0 = 只注入最近 N 条）。
+	// 会话级设置以 log-only history/limit 事件持久化（每次 Run 折叠还原），
+	// 无事件时退回 DSC_HISTORY_INJECTION 环境变量默认。用于控制本地模型预填充长度。
+	historyInjection int
+
 	// 記錄上次的工具名稱列表，用於檢測模式是否切換
 	lastToolNames []string
 	// 標記是否需要重置 system prompt（例如模式切換導致工具上下線時）
@@ -262,6 +267,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	}
 	// plan 模式每次 Run 从事件日志折叠（SetPlanMode/exit_plan_mode 已提交的变更即时生效）
 	a.planActive = session.FoldPlanMode(a.sess.Events())
+	// 历史注入条数每次 Run 从事件日志折叠（/settings history 已提交的变更即时生效）；
+	// 无记录时保留 newAgent 读入的 DSC_HISTORY_INJECTION 部署默认（缺省 -1 = 不限制）。
+	if limit, found := session.FoldHistoryLimit(a.sess.Events()); found {
+		a.historyInjection = limit
+	}
 	a.turnCounter++
 	turnNo := a.turnCounter
 	sess := a.sess
@@ -330,7 +340,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		// 保证「已发送给模型的消息」与「已消费的注入」原子一致，避免注入恰好落在
 		// 两者之间被漏检。
 		a.sessMu.Lock()
-		msgs := sess.DeriveMessages(a.sysPrompt)
+		msgs := sess.DeriveMessagesLimited(a.sysPrompt, a.historyInjection)
 		iterPendingInjects := a.pendingInjects
 		a.sessMu.Unlock()
 
@@ -340,9 +350,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		//   "字符数 + 结构开销" 回退），确保重启后第一发请求不会把整段历史直接灌给模型。
 		// - 超过阈值（默认 80% 窗口）时压缩最旧前缀，保留近期尾部（默认 16% 窗口）逐字，
 		//   而非把全部历史折叠成单一摘要。
+		// - 历史注入设置了条数上限（historyInjection >= 0）时跳过压缩：注入条数本身就是
+		//   上下文的硬边界，压缩会与截断重复且其 surface 索引基于全量历史，不再适用。
 		compacted := false
 		promptTokens := int(a.lastPromptTokens)
-		if a.contextWindow > 0 {
+		if a.contextWindow > 0 && a.historyInjection < 0 {
 			// 已用容量取服务端上报值与本地字符估算的较大者：启用提示缓存的接口（如
 			// llama.cpp）可能只上报未缓存的新增 token（prompt_tokens 远小于真实上下文），
 			// 本地估算作为下界兜底，避免压缩判定被低估的 usage 推迟甚至永不触发。
@@ -350,7 +362,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				promptTokens = est
 			}
 		}
-		if a.contextWindow > 0 && promptTokens >= a.contextWindow*8/10 {
+		if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 {
 			if emit != nil {
 				emit(&plugin.RunStreamResponse{
 					Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
@@ -405,7 +417,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		// 历史的注入在收尾时被误判为新注入而重复发送）
 		if compacted {
 			a.sessMu.Lock()
-			msgs = sess.DeriveMessages(a.sysPrompt)
+			msgs = sess.DeriveMessagesLimited(a.sysPrompt, a.historyInjection)
 			iterPendingInjects = a.pendingInjects
 			a.sessMu.Unlock()
 		}
@@ -913,6 +925,24 @@ func (a *ReactLoopAgent) SetPlanMode(ctx context.Context, active bool) error {
 	return nil
 }
 
+// SetHistoryInjection 设置当前会话的历史注入条数上限：追加 log-only history/limit
+// 事件并落盘（事件溯源：恢复/切换/fork 都能折叠还原），无需重建 system prompt——
+// 该值在每次 Run 派生请求历史时读取。count < 0 表示不限制；0 表示不注入历史；
+// > 0 表示只注入最近 count 条派生消息。
+func (a *ReactLoopAgent) SetHistoryInjection(ctx context.Context, count int) error {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sess == nil {
+		return fmt.Errorf("set history injection: session not loaded")
+	}
+	a.sess.Append(session.HistoryLimit, &session.HistoryLimitData{Count: count}, nil)
+	if err := a.store.Save(a.sess); err != nil {
+		return fmt.Errorf("set history injection: %w", err)
+	}
+	fmt.Printf("[Agent Loop] history injection limit set to %d\n", count)
+	return nil
+}
+
 // ensureConnected 建立並快取 LLM/Tool 服務連接。
 // broker.Dial 對同一 serviceID 是一次性握手，連接信息只會發送一次，
 // 因此必須跨 Run 重用連接，否則第二次 Dial 會因收不到連接信息而超時。
@@ -996,8 +1026,8 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*plugin.AgentDebugS
 		}
 	}
 
-	// 派生的请求历史（与下次 LLM 请求一致，含实时注入的用户消息）
-	for _, m := range a.sess.DeriveMessages(a.sysPrompt) {
+	// 派生的请求历史（与下次 LLM 请求一致，含实时注入的消息与历史注入条数限制）
+	for _, m := range a.sess.DeriveMessagesLimited(a.sysPrompt, a.historyInjection) {
 		snap.Messages = append(snap.Messages, &plugin.AgentDebugMessage{Role: m.Role, Content: m.Content})
 	}
 	return snap, nil
@@ -1079,6 +1109,15 @@ func newAgent() (*ReactLoopAgent, error) {
 	agent.sandboxPolicy = os.Getenv("DSC_SANDBOX_POLICY")
 	if agent.sandboxPolicy == "" {
 		agent.sandboxPolicy = "workspace-write"
+	}
+	// 讀取宿主傳入的历史注入条数默认值（DSC_HISTORY_INJECTION）：-1 不限制（缺省），
+	// 0 不注入历史，>0 只注入最近 N 条。会话内可通过 /settings history 以 history/limit
+	// 事件覆盖（事件折叠优先于此默认值）。
+	agent.historyInjection = -1
+	if v := os.Getenv("DSC_HISTORY_INJECTION"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= -1 {
+			agent.historyInjection = n
+		}
 	}
 	// 讀取宿主傳入的循環輪數上限（DSC_MAX_ITERATIONS）。默認 0 = 不設限（面向長程任務），
 	// 僅當顯式設置大於 0 的值時才作為循環上限。

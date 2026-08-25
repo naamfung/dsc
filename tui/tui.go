@@ -1494,6 +1494,7 @@ var slashCommands = []compItem{
 	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
 	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
 	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
+	{label: "/settings history", insert: "/settings history ", hint: "历史注入条数（如 10 / off / unlimited）：控制模型预填充长度"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
 	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
 	{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
@@ -1640,6 +1641,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /cron on|off <id>  启用/停用定时任务",
 			"  /plan       进入 plan 模式（先探索与设计，再经 exit_plan_mode 呈现完整计划）",
 			"  /plan off   退出 plan 模式",
+			"  /settings history <N|off|unlimited>  历史注入条数：控制模型预填充长度",
+			"    （N 为注入最近 N 条；off 不注入历史；unlimited/on 不限制，默认）",
 			"  /session <id>  切换到指定会话（如 /session session-3）",
 			"  /session new  新建会话并切换",
 			"  /session delete <id>  删除指定会话",
@@ -1885,6 +1888,33 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已切换沙箱策略为 " + label + "。")
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	}
+	// /settings history <N|off|unlimited>：控制历史注入条数（模型预填充长度）。
+	// off/0 不注入历史；N 注入最近 N 条；unlimited/on/-1 不限制（默认）。
+	if strings.HasPrefix(cmd, "/settings") {
+		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/settings"))
+		sub, arg, _ := strings.Cut(strings.TrimSpace(rest), " ")
+		arg = strings.TrimSpace(arg)
+		if sub != "history" {
+			m.appendMessage(errorSty.Render("用法: /settings history <N|off|unlimited>（当前仅支持 history 子项）"))
+		} else {
+			count, err := parseHistoryInjection(arg)
+			if err != nil {
+				m.appendMessage(errorSty.Render("用法: /settings history <N|off|unlimited>（N 为注入最近 N 条；off 不注入；unlimited/on 不限制）"))
+			} else {
+				if err := m.agent.SetHistoryInjection(m.ctx, count); err != nil {
+					m.appendMessage(errorSty.Render("设置失败: " + err.Error()))
+				} else {
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 设置") + "\n历史注入已设置为 " + historyInjectionLabel(count) + "。")
+				}
+			}
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -2177,6 +2207,35 @@ func (m *Model) capacityTag() string {
 	return shortTokens(m.usedTokens)
 }
 
+// parseHistoryInjection 解析 /settings history 的参数：
+// off/0 → 0（不注入历史）；unlimited/on/-1 → -1（不限制，缺省）；正整数 N → 注入最近 N 条。
+func parseHistoryInjection(arg string) (int, error) {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+	switch arg {
+	case "", "on", "unlimited", "-1":
+		return -1, nil
+	case "off", "0":
+		return 0, nil
+	}
+	n, err := strconv.Atoi(arg)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid history injection count %q", arg)
+	}
+	return n, nil
+}
+
+// historyInjectionLabel 渲染历史注入设置的可读描述。
+func historyInjectionLabel(count int) string {
+	switch {
+	case count < 0:
+		return "不限制（unlimited）"
+	case count == 0:
+		return "不注入历史（off）"
+	default:
+		return fmt.Sprintf("最近 %d 条", count)
+	}
+}
+
 // composerView 渲染输入区：每行正文 pad 到「宽度-1」（输入框左侧 1 格内边距），
 // 使上下边框线延伸到终端全宽，避免右侧净余空白。
 func (m *Model) composerView() string {
@@ -2273,7 +2332,7 @@ func (m *Model) View() tea.View {
 		return m.viewOf("加载中...")
 	}
 
-	title := titleSty.Render(" ◆ DSC  |  " + m.displayMode() + "  |  " + m.capacityTag() + " ")
+	title := titleSty.Render(" ◆ DSC  |  " + m.displayMode() + "  |  " + m.capacityTag() + "  |  " + m.currentSessionID + " ")
 	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
 
 	var parts []string

@@ -20,3 +20,20 @@ func FoldPlanMode(events []*Event) bool {
 	}
 	return active
 }
+
+// FoldHistoryLimit 从事件日志（或任意前缀）折叠历史注入条数上限：
+// 最后一条 history/limit 生效；返回该值以及是否存在记录（无记录时返回的值为 -1，
+// 调用方应回退部署默认）。
+func FoldHistoryLimit(events []*Event) (int, bool) {
+	limit := -1
+	found := false
+	for _, ev := range events {
+		if ev.Type == HistoryLimit {
+			if d, ok := ev.Data.(*HistoryLimitData); ok {
+				limit = d.Count
+				found = true
+			}
+		}
+	}
+	return limit, found
+}

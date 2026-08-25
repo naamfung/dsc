@@ -29,6 +29,7 @@ func (a *mockAgent) RegisterServices(_ context.Context, llm, tool uint32) error 
 }
 func (a *mockAgent) SwitchSession(context.Context, string) error           { return nil }
 func (a *mockAgent) SetPlanMode(context.Context, bool) error               { return nil }
+func (a *mockAgent) SetHistoryInjection(context.Context, int) error        { return nil }
 func (a *mockAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
 func (a *mockAgent) Shutdown(context.Context, bool) error                  { return nil }
 func (a *mockAgent) InjectMessage(context.Context, string) error           { return nil }

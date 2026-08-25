@@ -242,6 +242,7 @@ const (
 	AgentService_RegisterServices_FullMethodName        = "/dsc.AgentService/RegisterServices"
 	AgentService_SwitchSession_FullMethodName           = "/dsc.AgentService/SwitchSession"
 	AgentService_SetPlanMode_FullMethodName             = "/dsc.AgentService/SetPlanMode"
+	AgentService_SetHistoryInjection_FullMethodName     = "/dsc.AgentService/SetHistoryInjection"
 	AgentService_SetUserQuestionsService_FullMethodName = "/dsc.AgentService/SetUserQuestionsService"
 	AgentService_Shutdown_FullMethodName                = "/dsc.AgentService/Shutdown"
 	AgentService_InjectMessage_FullMethodName           = "/dsc.AgentService/InjectMessage"
@@ -259,6 +260,11 @@ type AgentServiceClient interface {
 	RegisterServices(ctx context.Context, in *RegisterServicesRequest, opts ...grpc.CallOption) (*RegisterServicesResponse, error)
 	SwitchSession(ctx context.Context, in *SwitchSessionRequest, opts ...grpc.CallOption) (*SwitchSessionResponse, error)
 	SetPlanMode(ctx context.Context, in *SetPlanModeRequest, opts ...grpc.CallOption) (*SetPlanModeResponse, error)
+	// SetHistoryInjection 设置当前会话的历史注入条数上限（对齐 DSH 会话事件持久化：
+	// 以 log-only history/limit 事件落盘，恢复/fork 时折叠还原）：
+	// count < 0 表示不限制（缺省）；count == 0 表示不注入历史（每轮仅 system + 当前输入）；
+	// count > 0 表示只注入最近 count 条派生消息（从最近的 user 边界截取，保证工具调用配对完整）。
+	SetHistoryInjection(ctx context.Context, in *SetHistoryInjectionRequest, opts ...grpc.CallOption) (*SetHistoryInjectionResponse, error)
 	SetUserQuestionsService(ctx context.Context, in *SetUserQuestionsServiceRequest, opts ...grpc.CallOption) (*SetUserQuestionsServiceResponse, error)
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 	// InjectMessage 将一条用户消息实时注入到当前运行的会话历史末端：
@@ -356,6 +362,16 @@ func (c *agentServiceClient) SetPlanMode(ctx context.Context, in *SetPlanModeReq
 	return out, nil
 }
 
+func (c *agentServiceClient) SetHistoryInjection(ctx context.Context, in *SetHistoryInjectionRequest, opts ...grpc.CallOption) (*SetHistoryInjectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetHistoryInjectionResponse)
+	err := c.cc.Invoke(ctx, AgentService_SetHistoryInjection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) SetUserQuestionsService(ctx context.Context, in *SetUserQuestionsServiceRequest, opts ...grpc.CallOption) (*SetUserQuestionsServiceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetUserQuestionsServiceResponse)
@@ -407,6 +423,11 @@ type AgentServiceServer interface {
 	RegisterServices(context.Context, *RegisterServicesRequest) (*RegisterServicesResponse, error)
 	SwitchSession(context.Context, *SwitchSessionRequest) (*SwitchSessionResponse, error)
 	SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error)
+	// SetHistoryInjection 设置当前会话的历史注入条数上限（对齐 DSH 会话事件持久化：
+	// 以 log-only history/limit 事件落盘，恢复/fork 时折叠还原）：
+	// count < 0 表示不限制（缺省）；count == 0 表示不注入历史（每轮仅 system + 当前输入）；
+	// count > 0 表示只注入最近 count 条派生消息（从最近的 user 边界截取，保证工具调用配对完整）。
+	SetHistoryInjection(context.Context, *SetHistoryInjectionRequest) (*SetHistoryInjectionResponse, error)
 	SetUserQuestionsService(context.Context, *SetUserQuestionsServiceRequest) (*SetUserQuestionsServiceResponse, error)
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	// InjectMessage 将一条用户消息实时注入到当前运行的会话历史末端：
@@ -445,6 +466,9 @@ func (UnimplementedAgentServiceServer) SwitchSession(context.Context, *SwitchSes
 }
 func (UnimplementedAgentServiceServer) SetPlanMode(context.Context, *SetPlanModeRequest) (*SetPlanModeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetPlanMode not implemented")
+}
+func (UnimplementedAgentServiceServer) SetHistoryInjection(context.Context, *SetHistoryInjectionRequest) (*SetHistoryInjectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetHistoryInjection not implemented")
 }
 func (UnimplementedAgentServiceServer) SetUserQuestionsService(context.Context, *SetUserQuestionsServiceRequest) (*SetUserQuestionsServiceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetUserQuestionsService not implemented")
@@ -598,6 +622,24 @@ func _AgentService_SetPlanMode_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_SetHistoryInjection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetHistoryInjectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).SetHistoryInjection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_SetHistoryInjection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).SetHistoryInjection(ctx, req.(*SetHistoryInjectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_SetUserQuestionsService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetUserQuestionsServiceRequest)
 	if err := dec(in); err != nil {
@@ -700,6 +742,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPlanMode",
 			Handler:    _AgentService_SetPlanMode_Handler,
+		},
+		{
+			MethodName: "SetHistoryInjection",
+			Handler:    _AgentService_SetHistoryInjection_Handler,
 		},
 		{
 			MethodName: "SetUserQuestionsService",

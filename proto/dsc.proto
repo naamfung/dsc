@@ -19,6 +19,11 @@ service AgentService {
   rpc RegisterServices(RegisterServicesRequest) returns (RegisterServicesResponse);
   rpc SwitchSession(SwitchSessionRequest) returns (SwitchSessionResponse);
   rpc SetPlanMode(SetPlanModeRequest) returns (SetPlanModeResponse);
+  // SetHistoryInjection 设置当前会话的历史注入条数上限（对齐 DSH 会话事件持久化：
+  // 以 log-only history/limit 事件落盘，恢复/fork 时折叠还原）：
+  // count < 0 表示不限制（缺省）；count == 0 表示不注入历史（每轮仅 system + 当前输入）；
+  // count > 0 表示只注入最近 count 条派生消息（从最近的 user 边界截取，保证工具调用配对完整）。
+  rpc SetHistoryInjection(SetHistoryInjectionRequest) returns (SetHistoryInjectionResponse);
   rpc SetUserQuestionsService(SetUserQuestionsServiceRequest) returns (SetUserQuestionsServiceResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
   // InjectMessage 将一条用户消息实时注入到当前运行的会话历史末端：
@@ -178,6 +183,15 @@ message SetPlanModeRequest {
 }
 
 message SetPlanModeResponse {
+  bool success = 1;
+  string message = 2; // 错误信息（设置失败时）
+}
+
+message SetHistoryInjectionRequest {
+  int32 count = 1; // 历史注入条数上限：<0 不限制，0 不注入，>0 注入最近 count 条
+}
+
+message SetHistoryInjectionResponse {
   bool success = 1;
   string message = 2; // 错误信息（设置失败时）
 }

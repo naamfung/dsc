@@ -37,6 +37,9 @@ const (
 	CompactionSummary EventType = "compaction/summary"
 	// PlanMode plan 模式状态（log-only：整值替换，最后一条生效，fold 恢复）。
 	PlanMode EventType = "plan/mode"
+	// HistoryLimit 历史注入条数上限（log-only：整值替换，最后一条生效，fold 恢复）。
+	// 与 plan/mode 同类：属于会话级运行时设置，随事件日志持久化，重启/切换后折叠还原。
+	HistoryLimit EventType = "history/limit"
 	// GoalChange 目标状态变更（log-only：携带完整快照；clear 为 tombstone）。
 	GoalChange EventType = "goal/change"
 	// TodoWrite 任务清单整表替换（log-only：投影/UI 状态，不进模型历史；
@@ -94,6 +97,12 @@ type ToolResultData struct {
 	CallID, Content, Error string
 }
 type CompactionSummaryData struct{ Content string }
+
+// HistoryLimitData history/limit 事件载荷（log-only）：历史注入条数上限。
+// Count < 0 表示不限制（缺省）；0 表示不注入历史；>0 表示只注入最近 Count 条。
+type HistoryLimitData struct {
+	Count int
+}
 
 // Event 一条会话日志条目。Seq 单调连续（= 日志长度），Time 为 epoch 毫秒。
 type Event struct {
@@ -215,11 +224,41 @@ func (s *Session) applySurfaceLocked(ev *Event) {
 // DeriveMessages 从 surface 投影派生模型消息历史（[]*proto.Message，兼容 LLM 调用）。
 // sysPrompt 前置为 system 消息（来自宿主，不入事件日志）。
 func (s *Session) DeriveMessages(sysPrompt string) []*proto.Message {
+	return s.DeriveMessagesLimited(sysPrompt, -1)
+}
+
+// DeriveMessagesLimited 派生模型消息历史，并限制历史注入条数（对齐 DSH 会话级
+// 运行时设置）：injectCount < 0 不限制；== 0 不注入先前轮次（仅保留当前轮，即
+// 最后一条 user 消息起，模型始终能看到本次输入）；> 0 保留最近 injectCount 条
+// surface 消息、并回退到最近的 user 边界——保证首条为 user（tool_use 与 tool_result
+// 配对完整，Anthropic 要求 messages 以 user 开头），且当前轮总是完整保留。
+// 事件日志本身不受影响（append-only，历史始终可完整恢复）。
+func (s *Session) DeriveMessagesLimited(sysPrompt string, injectCount int) []*proto.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msgs := make([]*proto.Message, 0, len(s.surfaceNodes)+1)
 	if sysPrompt != "" {
 		msgs = append(msgs, &proto.Message{Role: "system", Content: sysPrompt})
+	}
+	if injectCount >= 0 {
+		// 起点：最近 injectCount 条消息的开头；injectCount==0 表示只保留当前轮。
+		start := len(s.surfaceNodes) - injectCount
+		if injectCount == 0 {
+			start = len(s.surfaceNodes) - 1
+		}
+		if start < 0 {
+			start = 0
+		}
+		// 回退到最近的 user 边界（会话首条必为 user，故终止条件必然可达）。
+		for start > 0 && deriveMessageRole(s.events[s.surfaceNodes[start]]) != "user" {
+			start--
+		}
+		for i := start; i < len(s.surfaceNodes); i++ {
+			if m := deriveEventMessage(s.events[s.surfaceNodes[i]]); m != nil {
+				msgs = append(msgs, m)
+			}
+		}
+		return msgs
 	}
 	for _, seq := range s.surfaceNodes {
 		if m := deriveEventMessage(s.events[seq]); m != nil {
@@ -227,6 +266,19 @@ func (s *Session) DeriveMessages(sysPrompt string) []*proto.Message {
 		}
 	}
 	return msgs
+}
+
+// deriveMessageRole 返回 surface 事件派生的消息角色（用于截断边界判定）。
+func deriveMessageRole(ev *Event) string {
+	switch ev.Data.(type) {
+	case *UserMessageData, *CompactionSummaryData:
+		return "user"
+	case *AssistantMessageData:
+		return "assistant"
+	case *ToolResultData:
+		return "tool"
+	}
+	return ""
 }
 
 // deriveEventMessage 单事件投影：surface 事件 → 消息；log-only 事件 → nil。
