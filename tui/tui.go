@@ -871,8 +871,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamOpen = false
 			// 工具帧随帧携带本步请求的 usage：每步工具调用后即刷新容量与运行指标
 			// （对齐 REX 每步 usage 事件即时更新统计行），不必等轮末 success 帧。
+			// 已用容量以 prompt_tokens 为准（反映当前上下文总长度），而非 TotalTokens。
 			if f.Usage != nil {
-				if f.Usage.TotalTokens > 0 {
+				if f.Usage.PromptTokens > 0 {
+					m.usedTokens = int(f.Usage.PromptTokens)
+				} else if f.Usage.TotalTokens > 0 {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
 				m.trackTurnUsage(f.Usage, msg.frame.Turn, msg.frame.Step)
@@ -917,7 +920,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamOpen = false
 			m.clearStream() // 成功/失敗後清理流通道狀態，避免後續 pumpStreamIfOpen 誤判「流進行中」
 			if f.Status == "success" && f.Usage != nil {
-				if f.Usage.TotalTokens > 0 {
+				// 已用容量以 prompt_tokens 為準（反映當前上下文總長度），而非 TotalTokens。
+				if f.Usage.PromptTokens > 0 {
+					m.usedTokens = int(f.Usage.PromptTokens)
+				} else if f.Usage.TotalTokens > 0 {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
 				m.trackTurnUsage(f.Usage, f.Turn, f.Step)
