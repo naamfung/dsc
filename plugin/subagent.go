@@ -21,7 +21,10 @@ type SubagentRequest struct {
 	MaxIterations int // 模型-工具循环轮数上限；<=0 时使用默认值
 }
 
-const defaultSubagentIterations = 3
+// defaultSubagentIterations 子代理模型-工具循环默认轮数上限。
+// 子代理拿到完整工具目录后模型常倾向多轮调用（view/编辑/检索），
+// 3 轮过小、本地慢模型下极易耗尽报错；取 8 兼顾收敛与防失控。
+const defaultSubagentIterations = 8
 
 // RunSubagent 执行一次子代理任务：system 引导 + prompt 进入循环，
 // 每轮调用聚合 LLM 服务；有工具调用则逐个经工具流水线执行并把结果回填，
@@ -107,14 +110,16 @@ func (t *subagentTool) Name() string { return "subagent" }
 
 func (t *subagentTool) Description() string {
 	return "Spawn a subagent to execute a delegated task (a self-contained prompt run) " +
-		"and return its final result. Use for tasks you can delegate and summarize."
+		"and return its final result. Use for tasks you can delegate and summarize. " +
+		"Set max_iterations for tasks that need more model-tool rounds than the default (8)."
 }
 
 func (t *subagentTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"prompt": {"type": "string", "description": "The task to delegate to the subagent."}
+			"prompt": {"type": "string", "description": "The task to delegate to the subagent."},
+			"max_iterations": {"type": "integer", "description": "Optional max model-tool rounds; default 8."}
 		},
 		"required": ["prompt"]
 	}`)
@@ -122,7 +127,8 @@ func (t *subagentTool) ParametersSchema() json.RawMessage {
 
 func (t *subagentTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Prompt string `json:"prompt"`
+		Prompt        string `json:"prompt"`
+		MaxIterations int    `json:"max_iterations"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("subagent: invalid args: %w", err)
@@ -130,5 +136,5 @@ func (t *subagentTool) Execute(ctx context.Context, args json.RawMessage) (strin
 	if p.Prompt == "" {
 		return "", fmt.Errorf("subagent: prompt is required")
 	}
-	return t.m.RunSubagent(ctx, &SubagentRequest{Prompt: p.Prompt})
+	return t.m.RunSubagent(ctx, &SubagentRequest{Prompt: p.Prompt, MaxIterations: p.MaxIterations})
 }

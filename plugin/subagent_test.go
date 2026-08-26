@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -177,6 +178,47 @@ func TestSubagentPropagatesCancelContext(t *testing.T) {
 	}
 	if !llm.gotCancel {
 		t.Fatal("subagent llm call should receive the cancelled ctx (context not propagated)")
+	}
+}
+
+// TestSubagentDefaultIterations 校验默认迭代上限足以完成多轮工具任务
+// （3 轮过小会导致本地慢模型下子代理频繁报 "exceeded iterations"）。
+func TestSubagentDefaultIterations(t *testing.T) {
+	m := newSubagentManager()
+	// 三步：工具调用 ×2 + 最终结果
+	llm := &scriptedLLM{steps: []*ChatResponse{
+		{ToolCalls: []ToolCall{{ID: "c1", Name: "plain-tool", Arguments: map[string]any{}}}},
+		{ToolCalls: []ToolCall{{ID: "c2", Name: "plain-tool", Arguments: map[string]any{}}}},
+		{Content: "final", FinishReason: "stop"},
+	}}
+	m.llms["p"] = llm
+	m.llmOrder = []string{"p"}
+	m.agentLLMName = "p"
+
+	res, err := m.ExecuteTool(context.Background(), "subagent", json.RawMessage(`{"prompt":"do it"}`))
+	if err != nil {
+		t.Fatalf("subagent with default iterations should complete: %v", err)
+	}
+	if res != "final" {
+		t.Fatalf("result = %q, want final", res)
+	}
+}
+
+// TestSubagentToolHonorsMaxIterations 校验工具参数 max_iterations 透传到运行循环。
+func TestSubagentToolHonorsMaxIterations(t *testing.T) {
+	m := newSubagentManager()
+	llm := &scriptedLLM{steps: []*ChatResponse{
+		{ToolCalls: []ToolCall{{ID: "c1", Name: "plain-tool", Arguments: map[string]any{}}}},
+		{Content: "final", FinishReason: "stop"},
+	}}
+	m.llms["p"] = llm
+	m.llmOrder = []string{"p"}
+	m.agentLLMName = "p"
+
+	// max_iterations=1：第一轮工具调用后即达上限报错，证明参数被透传
+	_, err := m.ExecuteTool(context.Background(), "subagent", json.RawMessage(`{"prompt":"do it","max_iterations":1}`))
+	if err == nil || !strings.Contains(err.Error(), "exceeded 1 iterations") {
+		t.Fatalf("err = %v, want iteration limit from max_iterations", err)
 	}
 }
 
