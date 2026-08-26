@@ -116,3 +116,55 @@ func TestQuestionMultiSelectAndQueue(t *testing.T) {
 		t.Fatal("answer should be delivered")
 	}
 }
+
+// TestQuestionCustomInput 校验自定义文字输入通道：模型选项不合适时，
+// 按 c 复用主输入框输入，Enter 提交后经 AnswerItem.Custom 返回模型。
+func TestQuestionCustomInput(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "m", "minimal", 131072)
+	ansCh := make(chan *userquestions.Answer, 1)
+	errCh := make(chan error, 1)
+
+	m.Update(questionMsg{request: &userquestions.Request{Questions: []userquestions.Question{{
+		ID:       "q",
+		Question: "how to proceed?",
+		Options:  []userquestions.Option{{Label: "Option A"}, {Label: "Option B"}},
+	}}}, answer: ansCh, err: errCh})
+	if m.question == nil {
+		t.Fatal("question should be pending")
+	}
+
+	// 按 c 进入自定义输入模式，主输入框清空并聚焦
+	m.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	if !m.question.customMode {
+		t.Fatal("customMode should be active after pressing c")
+	}
+	if v := m.questionView(); !strings.Contains(v, "自定义回答") {
+		t.Fatalf("custom mode view should hint custom input, got %q", v)
+	}
+
+	// 在主输入框输入字符（复用 composer）
+	for _, r := range []rune("换个方向做") {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if got := m.input.Value(); got != "换个方向做" {
+		t.Fatalf("input value = %q, want custom text", got)
+	}
+
+	// Enter 提交 → 答案经 Custom 字段交付，Selected 为空（明确"选项都不合适"）
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.question != nil {
+		t.Fatal("question should be cleared after custom submit")
+	}
+	select {
+	case ans := <-ansCh:
+		if len(ans.Answers) != 1 {
+			t.Fatalf("answers = %+v", ans)
+		}
+		a := ans.Answers[0]
+		if a.ID != "q" || len(a.Selected) != 0 || a.Custom != "换个方向做" {
+			t.Fatalf("custom answer = %+v, want selected=[] custom=换个方向做", a)
+		}
+	default:
+		t.Fatal("answer should be delivered")
+	}
+}
