@@ -120,6 +120,24 @@ func TestStrReplace(t *testing.T) {
 		t.Fatalf("unexpected content after replace: %q", string(content))
 	}
 
+	// old_str 确实未匹配时：应返回简洁错误（含 did not appear verbatim），
+	// 且不得把整个文件内容 dump 进错误消息（回归：if 判断曾被误删导致无条件报错）
+	_, err = exec(t, state, map[string]interface{}{
+		"command": "str_replace",
+		"path":    "/workspace/test/fib.go",
+		"old_str": "func nonexistent()",
+		"new_str": "func replaced()",
+	})
+	if err == nil {
+		t.Fatal("str_replace with missing old_str should fail")
+	}
+	if !strings.Contains(err.Error(), "did not appear verbatim") {
+		t.Fatalf("unexpected missing-old_str error: %v", err)
+	}
+	if strings.Contains(err.Error(), "package main") {
+		t.Fatalf("missing-old_str error should not dump file content: %v", err)
+	}
+
 	// 未先 view 的文件應拒絕 str_replace
 	state2, _ := newTestState(t)
 	_, err = exec(t, state2, map[string]interface{}{

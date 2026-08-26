@@ -278,8 +278,11 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("str_replace failed: file content has changed since last observation. Please use 'view' to get the latest content.")
 		}
 
-		// 与 DSH 语义对齐：不返回文件内容，仅提示 old_str 未在文件中找到
-		return "", fmt.Errorf("str_replace failed: No replacement was performed, old_str %q did not appear verbatim in %s", args.OldStr, relPath)
+		// 与 DSH 语义对齐：old_str 确实未匹配时，不返回完整文件内容，
+		// 仅提示 old_str 未在文件中找到（避免大文件错误信息导致 TUI 花屏）
+		if !strings.Contains(contentStr, args.OldStr) {
+			return "", fmt.Errorf("str_replace failed: No replacement was performed, old_str %q did not appear verbatim in %s", args.OldStr, relPath)
+		}
 		newContentStr := strings.Replace(contentStr, args.OldStr, args.NewStr, 1)
 		if err := os.WriteFile(reqPath, []byte(newContentStr), 0644); err != nil {
 			return "", err
