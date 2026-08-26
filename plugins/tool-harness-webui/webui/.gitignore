@@ -1,8 +1,2 @@
 # dependencies
 node_modules/
-
-# svelte-kit generated files
-.svelte-kit/
-
-# lockfile
-bun.lock
