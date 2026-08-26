@@ -26,6 +26,11 @@ func TestUsageFromAnthropicCacheSemantics(t *testing.T) {
 	if u.CacheReadInputTokens != 173 {
 		t.Fatalf("CacheReadInputTokens = %d, 期望 173", u.CacheReadInputTokens)
 	}
+	// llama.cpp 语义：未命中侧近似为 真实 prompt - cache_read = 177-173 = 4，
+	// 否则命中率恒 100%（miss 侧恒 0）。
+	if u.CacheCreationInputTokens != 4 {
+		t.Fatalf("CacheCreationInputTokens = %d, 期望 4（177-173）", u.CacheCreationInputTokens)
+	}
 
 	// 标准 Anthropic 语义：input_tokens 已含全部输入，cache_read 为其子集 → 保持原值
 	u = usageFromAnthropic(&anthropic.Usage{InputTokens: 1000, OutputTokens: 20, CacheReadInputTokens: 500})

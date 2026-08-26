@@ -172,6 +172,8 @@ func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
 // 已命中前缀单独计入 cache_read_input_tokens，真实上下文长度 = input + cache_read；
 // 标准 Anthropic 接口的 input_tokens 已含全部输入（cache_read 为其子集），
 // 此时 cache_read <= input，保持原值即可避免重复计数。
+// 命中率计算需要 miss 侧：以 CacheCreationInputTokens = 真实 prompt - cache_read 近似
+// （即本次请求中未被缓存提供的新增 token），否则未命中侧恒为 0，命中率恒显示 100%。
 func usageFromAnthropic(u *anthropic.Usage) *plugin.Usage {
 	if u == nil {
 		return nil
@@ -183,12 +185,16 @@ func usageFromAnthropic(u *anthropic.Usage) *plugin.Usage {
 	if promptTokens <= 0 && u.OutputTokens <= 0 {
 		return nil
 	}
+	cacheMiss := promptTokens - u.CacheReadInputTokens
+	if cacheMiss < 0 {
+		cacheMiss = 0
+	}
 	return &plugin.Usage{
 		PromptTokens:             int32(promptTokens),
 		CompletionTokens:         int32(u.OutputTokens),
 		TotalTokens:              int32(promptTokens + u.OutputTokens),
 		CacheReadInputTokens:     int32(u.CacheReadInputTokens),
-		CacheCreationInputTokens: int32(u.CacheCreationInputTokens),
+		CacheCreationInputTokens: int32(cacheMiss),
 	}
 }
 
