@@ -42,7 +42,7 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 	for i := 0; i < req.MaxIterations; i++ {
 		// 走流式聚合（与主 agent 一致）：unary Chat 在 thinking 模式下可能只返回
 		// thinking 块而 text 为空，流式帧则完整携带文本增量
-		col := &frameCollector{}
+		col := &frameCollector{ctx: ctx}
 		if err := agg.ChatStream(&proto.ChatRequest{Messages: msgs, Tools: tools}, col); err != nil {
 			return "", fmt.Errorf("subagent llm call: %w", err)
 		}
@@ -80,7 +80,11 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 }
 
 // frameCollector 内部收集流式帧，供子代理循环以流式路径调用聚合 LLM 服务。
+// ctx 透传调用方（主 agent）的上下文：聚合 LLM 服务的 ChatStream 用
+// stream.Context() 作为 provider 请求 ctx，若不透传则取消失效——主 agent 被
+// 中断后子代理的 LLM 请求仍会挂起等待流，表现为「卡死/像超时无响应」。
 type frameCollector struct {
+	ctx    context.Context
 	frames []*proto.ChatStreamResponse
 }
 
@@ -89,7 +93,7 @@ func (c *frameCollector) Send(r *proto.ChatStreamResponse) error {
 	return nil
 }
 
-func (c *frameCollector) Context() context.Context     { return context.Background() }
+func (c *frameCollector) Context() context.Context     { return c.ctx }
 func (c *frameCollector) RecvMsg(any) error            { return nil }
 func (c *frameCollector) SendMsg(any) error            { return nil }
 func (c *frameCollector) SetHeader(metadata.MD) error  { return nil }

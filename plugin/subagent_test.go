@@ -135,6 +135,51 @@ func TestSubagentIterationLimit(t *testing.T) {
 	}
 }
 
+// ctxAwareLLM 感知 ctx 的 LLM：ctx 已取消时 ChatStream 返回 ctx 错误，
+// 用于验证子代理的 LLM 请求正确透传调用方上下文（取消失效会表现为挂起）。
+type ctxAwareLLM struct {
+	gotCancel bool
+}
+
+func (p *ctxAwareLLM) Chat(_ context.Context, _ []Message, _ []Tool, _ int) (*ChatResponse, error) {
+	return &ChatResponse{Content: "done", FinishReason: "stop"}, nil
+}
+
+func (p *ctxAwareLLM) ChatStream(ctx context.Context, _ []Message, _ []Tool) (<-chan *ChatStreamResponse, error) {
+	if ctx.Err() != nil {
+		p.gotCancel = true
+		return nil, ctx.Err()
+	}
+	ch := make(chan *ChatStreamResponse, 1)
+	ch <- &ChatStreamResponse{Content: "done", FinishReason: "stop"}
+	close(ch)
+	return ch, nil
+}
+
+func (p *ctxAwareLLM) Name(context.Context) string    { return "ctx-aware" }
+func (p *ctxAwareLLM) Version(context.Context) string { return "1.0.0" }
+func (p *ctxAwareLLM) HealthCheck(context.Context) error {
+	return nil
+}
+
+func TestSubagentPropagatesCancelContext(t *testing.T) {
+	m := newSubagentManager()
+	llm := &ctxAwareLLM{}
+	m.llms["p"] = llm
+	m.llmOrder = []string{"p"}
+	m.agentLLMName = "p"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 调用前即取消，模拟主 agent 被中断
+	_, err := m.RunSubagent(ctx, &SubagentRequest{Prompt: "do it"})
+	if err == nil {
+		t.Fatal("RunSubagent with cancelled ctx should fail")
+	}
+	if !llm.gotCancel {
+		t.Fatal("subagent llm call should receive the cancelled ctx (context not propagated)")
+	}
+}
+
 func TestSubagentToolRegistered(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	if _, ok := m.toolRegistry.Get("subagent"); !ok {
