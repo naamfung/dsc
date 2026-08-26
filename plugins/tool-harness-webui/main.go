@@ -13,11 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"dsc/plugin"
-	"dsc/proto"
-	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
+	"dsc-sdk"
 )
 
 //go:embed all:webui/dist
@@ -195,77 +191,6 @@ func startHTTP() error {
 	return srv.ListenAndServe()
 }
 
-// ---------- Tool 插件（空壳，宿主要求注册 ToolService） ----------
-
-// ToolServiceServer 空壳工具服务：不提供业务工具，仅承载 HTTP 服务。
-type ToolServiceServer struct {
-	proto.UnimplementedToolServiceServer
-}
-
-func (s *ToolServiceServer) SetInterconnect(ctx context.Context, req *proto.InterconnectRequest) (*proto.InterconnectResponse, error) {
-	// 探知宿主 agent 名（来自环境注入，与 agent-react-loop 一致）
-	hd.mu.Lock()
-	hd.agent = os.Getenv("DSC_AGENT_NAME")
-	if hd.agent == "" {
-		hd.agent = "agent-react-loop"
-	}
-	hd.mu.Unlock()
-	// 后台启动独立 HTTP 服务（不阻塞 gRPC 握手；host ListTools 时端口已监听）
-	go func() {
-		if err := startHTTP(); err != nil {
-			hd.mu.Lock()
-			hd.lastErr = fmt.Sprintf("http: %v", err)
-			hd.mu.Unlock()
-			fmt.Printf("[tool-harness-webui] http server failed: %v\n", err)
-		}
-	}()
-	return &proto.InterconnectResponse{}, nil
-}
-
-func (s *ToolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	// 无工具；若宿主需要可注入一个 webui_open 工具（后续）
-	return &proto.ListToolsResponse{}, nil
-}
-
-func (s *ToolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
-	return &proto.ExecuteToolResponse{Error: "harness-webui: no tools"}, nil
-}
-
-func (s *ToolServiceServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
-	return &proto.ListContextResponse{}, nil
-}
-
-// MetadataServer 插件元数据。
-type MetadataServer struct {
-	metadata.UnimplementedPluginMetadataServer
-}
-
-func (m *MetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
-	return &metadata.PluginInfo{
-		Type:       "tool",
-		Name:       "tool-harness-webui",
-		Version:    "0.1.0",
-		ApiVersion: "1.0",
-	}, nil
-}
-
-// ToolMetadataGRPCPlugin gRPC 插件适配。
-type ToolMetadataGRPCPlugin struct {
-	goplugin.Plugin
-	ToolImpl     *ToolServiceServer
-	MetadataImpl *MetadataServer
-}
-
-func (p *ToolMetadataGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
-	proto.RegisterToolServiceServer(s, p.ToolImpl)
-	metadata.RegisterPluginMetadataServer(s, p.MetadataImpl)
-	return nil
-}
-
-func (p *ToolMetadataGRPCPlugin) GRPCClient(ctx context.Context, broker *goplugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return nil, nil
-}
-
 func main() {
 	// 预先探测一次 admin（失败不致命，前端会显示）
 	go func() {
@@ -279,15 +204,34 @@ func main() {
 		hd.mu.Unlock()
 	}()
 
-	server := &ToolServiceServer{}
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
-		Plugins: map[string]goplugin.Plugin{
-			"tool": &ToolMetadataGRPCPlugin{
-				ToolImpl:     server,
-				MetadataImpl: &MetadataServer{},
-			},
-		},
-		GRPCServer: goplugin.DefaultGRPCServer,
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService / PluginMetadata
+	// 与 go-plugin 组装。本插件为空壳工具（无业务工具，仅承载独立 HTTP 服务），
+	// 故用 sdk.ToolProvider 返回空集即可满足 SDK 校验。
+	sdk := dsc.New(dsc.Config{Name: "tool-harness-webui", Version: "0.1.0", Type: dsc.TypeTool})
+
+	// 互通握手：宿主挂载聚合服务后回调，后台启动独立 HTTP 服务
+	// （不阻塞 gRPC 握手；host ListTools 时端口已监听）。
+	sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
+		// 探知宿主 agent 名（来自环境注入，与 agent-react-loop 一致）
+		hd.mu.Lock()
+		hd.agent = os.Getenv("DSC_AGENT_NAME")
+		if hd.agent == "" {
+			hd.agent = "agent-react-loop"
+		}
+		hd.mu.Unlock()
+		go func() {
+			if err := startHTTP(); err != nil {
+				hd.mu.Lock()
+				hd.lastErr = fmt.Sprintf("http: %v", err)
+				hd.mu.Unlock()
+				fmt.Printf("[tool-harness-webui] http server failed: %v\n", err)
+			}
+		}()
+		return nil
 	})
+
+	// 空壳工具插件：不提供业务工具（若宿主需要可后续注入 webui_open 工具）
+	sdk.ToolProvider(func() []dsc.Tool { return nil })
+
+	sdk.Serve()
 }

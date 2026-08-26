@@ -4,9 +4,8 @@ go 1.26.4
 
 require (
 	dsc v0.0.0
-	github.com/hashicorp/go-plugin v1.8.0
+	dsc-sdk v0.0.0
 	github.com/wippyai/go-lua v1.5.17
-	google.golang.org/grpc v1.83.0
 )
 
 require (
@@ -22,6 +21,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
+	github.com/hashicorp/go-plugin v1.8.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
@@ -34,17 +34,19 @@ require (
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	mvdan.cc/sh/v3 v3.13.1 // indirect
 )
 
 // 宿主协议（dsc）本地引用：工具插件与宿主共享 plugin/proto 协议类型
 replace dsc => ../..
+
+// 公共 SDK（dsc-sdk）本地引用：声明式插件构建器
+replace dsc-sdk => ../../sdk
 
 // 与宿主 dsc/go.mod 对齐的本地依赖（libs/），保证协议类型一致
 replace github.com/hashicorp/go-plugin => ../../libs/go-plugin-1.8.0
