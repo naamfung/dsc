@@ -159,6 +159,45 @@ func TestLoadRestoresTodoWrite(t *testing.T) {
 	}
 }
 
+// TestLoadRestoresHistoryLimit 回归：history/limit 事件可持久化并恢复。
+// 曾因 unmarshalData 漏注册 HistoryLimit 类型，导致任何含 history/limit 的会话
+// 第二次启动恢复时（加载历史注入设置）报 unknown event type "history/limit"。
+func TestLoadRestoresHistoryLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	orig := New()
+	orig.Append(TurnStart, &TurnData{Turn: 1}, nil)
+	appendSurface(t, orig, UserMessage, &UserMessageData{Content: "u", Source: "user"})
+	orig.Append(HistoryLimit, &HistoryLimitData{Count: 4}, nil)
+	appendSurface(t, orig, AssistantMessage, &AssistantMessageData{Turn: 1, Step: 1, Content: "ok"})
+	orig.Append(TurnEnd, &TurnData{Turn: 1, Reason: "completed"}, nil)
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	restored, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("load returned nil session")
+	}
+	if restored.Len() != orig.Len() {
+		t.Fatalf("restored len = %d, want %d", restored.Len(), orig.Len())
+	}
+	// history/limit 折叠一致（从恢复事件重建，最后一条生效）
+	ol, of := FoldHistoryLimit(orig.Events())
+	rl, rf := FoldHistoryLimit(restored.Events())
+	if of != rf || ol != rl {
+		t.Fatalf("folded history limit %d/%v vs %d/%v", ol, of, rl, rf)
+	}
+	// 派生历史一致（history/limit 为 log-only，不进历史）
+	om, rm := orig.DeriveMessages("sys"), restored.DeriveMessages("sys")
+	if len(om) != len(rm) {
+		t.Fatalf("derived %d vs %d messages", len(om), len(rm))
+	}
+}
+
 func TestForkCopiesPrefix(t *testing.T) {
 	orig := buildSample(t)
 	// boundary = 最后一个事件（完整轮次前缀）→ 可 fork
