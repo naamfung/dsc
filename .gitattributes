@@ -1,0 +1,3 @@
+# 文本统一 LF 归一化；Go 源码强制 LF（与 gofmt 输出一致，消除 CRLF/LF 抖动）
+* text=auto
+*.go text eol=lf
