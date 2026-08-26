@@ -49,7 +49,7 @@ func main() {
 			}
 			return argumentsJSON, nil
 		},
-		AfterTool: func(ctx context.Context, toolName, result, toolErr string) (string, string) {
+		AfterTool: func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (string, string) {
 			return result + " [via hook-demo]", toolErr
 		},
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) {

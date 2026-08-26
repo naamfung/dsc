@@ -49,6 +49,10 @@ type SDK struct {
 	policy proto.FsObservationPolicyServiceServer
 	hook   *Hook
 	inter  InterconnectHandler
+	// toolProvider 可选动态工具提供者：每次 ListTools/ExecuteTool 求值当前工具集，
+	// 覆盖「运行时动态注册工具」的插件（如 tool-lua-host 的脚本工具）。非 nil 时
+	// 优先于静态 tools，validate 允许二选一。
+	toolProvider func() []Tool
 	// agentBroker 可选的 agent 类型 gRPC server 初始化回调（注入宿主 broker）。
 	agentBroker func(broker *goplugin.GRPCBroker) error
 	onStart     func(context.Context) error
@@ -67,6 +71,31 @@ func New(cfg Config) *SDK {
 func (s *SDK) Tool(t Tool) *SDK {
 	s.tools = append(s.tools, &t)
 	return s
+}
+
+// ToolProvider 注册动态工具提供者（仅 tool 类型插件）：每次宿主 ListTools/
+// ExecuteTool 时调用 fn 求值当前工具集，适合工具由运行时决定（如脚本注册）的
+// 插件；与 sdk.Tool 二选一（provider 非 nil 时优先）。fn 可返回空集（空壳工具
+// 插件，仅承载钩子/HTTP 服务等）。
+func (s *SDK) ToolProvider(fn func() []Tool) *SDK {
+	s.toolProvider = fn
+	return s
+}
+
+// snapshotTools 返回当前工具集：动态 provider 优先，否则静态注册的 tools。
+func (s *SDK) snapshotTools() []Tool {
+	if s.toolProvider != nil {
+		ts := s.toolProvider()
+		if ts == nil {
+			return nil
+		}
+		return ts
+	}
+	out := make([]Tool, 0, len(s.tools))
+	for _, t := range s.tools {
+		out = append(out, *t)
+	}
+	return out
 }
 
 // LLM 注册大模型实现（仅 llm 类型插件；实现 plugin.LLMProvider）。
@@ -165,8 +194,8 @@ func (s *SDK) validate() error {
 	}
 	switch s.cfg.Type {
 	case TypeTool:
-		if len(s.tools) == 0 {
-			return fmt.Errorf("tool 类型插件至少注册一个工具（调用 sdk.Tool(...)）")
+		if len(s.tools) == 0 && s.toolProvider == nil {
+			return fmt.Errorf("tool 类型插件需至少注册一个工具（sdk.Tool 或 sdk.ToolProvider）")
 		}
 		for i, t := range s.tools {
 			if t.Name == "" {

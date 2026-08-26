@@ -58,7 +58,7 @@ type toolServiceServer struct {
 }
 
 func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
-	for _, t := range s.sdk.tools {
+	for _, t := range s.sdk.snapshotTools() {
 		if t.Name == req.ToolName {
 			res, err := t.Handler(ctx, json.RawMessage(req.ArgumentsJson))
 			if err != nil {
@@ -72,7 +72,7 @@ func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteT
 
 func (s *toolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
 	var tools []*proto.Tool
-	for _, t := range s.sdk.tools {
+	for _, t := range s.sdk.snapshotTools() {
 		tools = append(tools, &proto.Tool{
 			Name:           t.Name,
 			Description:    t.Description,
@@ -86,7 +86,7 @@ func (s *toolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsR
 // 否则拼接各工具的静态 Context（旧宿主可忽略）。
 func (s *toolServiceServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
 	var b strings.Builder
-	for _, t := range s.sdk.tools {
+	for _, t := range s.sdk.snapshotTools() {
 		ctxText := t.Context
 		if t.ContextFn != nil {
 			ctxText = t.ContextFn()

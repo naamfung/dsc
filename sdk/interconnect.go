@@ -31,6 +31,11 @@ func (ic *Interconnect) LLM() *llmclient.Client { return ic.llm }
 // Tool 返回宿主聚合 Tool 客户端（未互联时为 nil）。
 func (ic *Interconnect) Tool() *toolclient.Client { return ic.tool }
 
+// Notifier 返回宿主插件通知客户端（未互联时为 nil）。
+// 与 Notify（发布事件的便捷方法）区分：需要把客户端实例传给第三方
+// （如 LUA 宿主 bindings.Services.Notify）时用本 getter。
+func (ic *Interconnect) Notifier() *notify.Notifier { return ic.ntf }
+
 // Notify 把事件发布到宿主事件总线（name 为宿主事件名，如 "job/done" 或插件自定义；
 // dataJSON 为事件数据 JSON）；未互联时静默忽略。
 func (ic *Interconnect) Notify(name, dataJSON string) error {

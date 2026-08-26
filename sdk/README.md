@@ -49,12 +49,31 @@ cd examples/tool-simple && go build -o my-tool.exe .
 
 | 类型 | 注册 API | 能力 |
 |---|---|---|
-| `dsc.TypeTool` | `sdk.Tool(...)` | 注册工具（可多个）；SDK 自动提供 ExecuteTool / ListTools / ListContext / 元数据 / 钩子服务 |
+| `dsc.TypeTool` | `sdk.Tool(...)` 或 `sdk.ToolProvider(...)` | 注册工具（可多个）或提供动态工具集；SDK 自动提供 ExecuteTool / ListTools / ListContext / 元数据 / 钩子服务 |
 | `dsc.TypeLLM` | `sdk.LLM(impl)` | 实现 `plugin.LLMProvider`（Chat / ChatStream / Name / Version / HealthCheck） |
 | `dsc.TypeAgent` | `sdk.Agent(impl)` | 实现 `plugin.Agent`（Run / RunStream / RegisterServices / InjectMessage 等 11 个方法） |
+| `dsc.TypePolicy` | `sdk.Policy(impl)` | 实现 `proto.FsObservationPolicyServiceServer`（宿主桥接到工具流水线） |
 
 所有类型的元数据（Type/Name/Version/APIVersion）由 SDK 自动提供，宿主加载时校验
 `APIVersion ∈ [1.0, 2.0)`。
+
+### 动态工具（运行时决定工具集）
+
+工具由运行时决定（如脚本注册、热加载增删）或插件为空壳（仅承载钩子/HTTP 服务）
+时，用 `sdk.ToolProvider` 提供当前工具集，宿主每次 ListTools/ExecuteTool 都会
+重新求值：
+
+```go
+sdk.ToolProvider(func() []dsc.Tool {
+	// 返回当前工具列表；空集合法（空壳工具插件）
+	return []dsc.Tool{{
+		Name: "dyn", Description: "dynamic", Schema: json.RawMessage(`{}`),
+		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	}}
+})
+```
 
 ## 钩子（参与宿主流水线，无需任何插件配合）
 
@@ -64,8 +83,8 @@ sdk.Hook(dsc.Hook{
 	BeforeTool: func(ctx context.Context, toolName, argumentsJSON string) (string, error) {
 		return argumentsJSON, nil
 	},
-	// 工具执行后：改写结果/错误
-	AfterTool: func(ctx context.Context, toolName, result, toolErr string) (string, string) {
+	// 工具执行后：按本次调用的原始参数改写结果/错误
+	AfterTool: func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (string, string) {
 		return result, toolErr
 	},
 	// 宿主事件订阅（异步广播：turn/start、tool/result 等）
@@ -80,8 +99,9 @@ sdk.Hook(dsc.Hook{
 
 ```go
 sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
-	// ic.LLM()  —— 宿主聚合 LLM（含多 provider 路由，Thinking/工具调用）
-	// ic.Tool() —— 宿主聚合 Tool（经宿主流水线调用任意工具插件）
+	// ic.LLM()      —— 宿主聚合 LLM（含多 provider 路由，Thinking/工具调用）
+	// ic.Tool()     —— 宿主聚合 Tool（经宿主流水线调用任意工具插件）
+	// ic.Notifier() —— 宿主插件通知客户端（把实例传给第三方场景用）
 	// ic.Notify(name, dataJSON) —— 发布事件到宿主总线（TUI 唤醒/其他插件订阅）
 	// 在此缓存 ic 供工具 Handler 使用
 	return nil

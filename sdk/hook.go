@@ -14,8 +14,9 @@ type Hook struct {
 	// BeforeTool 返回改写后的参数 JSON；err 非 nil 视为否决（阻止工具执行，
 	// 错误文本会反馈给调用方）。
 	BeforeTool func(ctx context.Context, toolName, argumentsJSON string) (rewrittenJSON string, err error)
-	// AfterTool 返回改写后的结果与错误文本。
-	AfterTool func(ctx context.Context, toolName, result, toolErr string) (newResult, newErr string)
+	// AfterTool 返回改写后的结果与错误文本。argumentsJSON 为本次调用的原始
+	// 参数（供按参数改写结果/判断），与宿主 AfterTool 语义一致。
+	AfterTool func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (newResult, newErr string)
 	// OnEvent 订阅宿主事件（异步广播；eventType 如 turn/start、tool/result 等）。
 	OnEvent func(ctx context.Context, eventType, dataJSON string)
 }
@@ -46,7 +47,7 @@ func (s *hookServiceServer) AfterTool(ctx context.Context, req *proto.AfterToolR
 	if s.hook == nil || s.hook.AfterTool == nil {
 		return resp, nil
 	}
-	newResult, newErr := s.hook.AfterTool(ctx, req.GetToolName(), req.GetResult(), req.GetError())
+	newResult, newErr := s.hook.AfterTool(ctx, req.GetToolName(), req.GetArgumentsJson(), req.GetResult(), req.GetError())
 	resp.Result = newResult
 	resp.Error = newErr
 	return resp, nil

@@ -166,11 +166,14 @@ func TestHookServiceServer(t *testing.T) {
 	})
 	t.Run("AfterTool rewrite", func(t *testing.T) {
 		srv := &hookServiceServer{hook: &Hook{
-			AfterTool: func(ctx context.Context, name, result, toolErr string) (string, string) {
+			AfterTool: func(ctx context.Context, name, args, result, toolErr string) (string, string) {
+				if args != `{"x":1}` {
+					t.Fatalf("AfterTool argumentsJSON = %q, want original args", args)
+				}
 				return result + "!", toolErr
 			},
 		}}
-		resp, err := srv.AfterTool(context.Background(), &proto.AfterToolRequest{ToolName: "t", Result: "r", Error: ""})
+		resp, err := srv.AfterTool(context.Background(), &proto.AfterToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`, Result: "r", Error: ""})
 		if err != nil || resp.Result != "r!" {
 			t.Fatalf("AfterTool = %+v, %v", resp, err)
 		}
@@ -300,5 +303,58 @@ func TestInterconnectNotifyNoopWhenDisconnected(t *testing.T) {
 	var nilIC *Interconnect
 	if err := nilIC.Notify("x", "{}"); err != nil {
 		t.Fatalf("nil Interconnect Notify = %v", err)
+	}
+}
+
+// TestToolProviderDynamic 校验动态工具提供者：空壳（空集）通过校验，
+// 运行时增删工具在 ListTools/ExecuteTool 中即时反映。
+func TestToolProviderDynamic(t *testing.T) {
+	// 空壳工具插件（无业务工具，仅承载钩子/HTTP 服务）应通过 validate
+	s := New(Config{Name: "x", Type: TypeTool})
+	if err := s.ToolProvider(func() []Tool { return nil }).validate(); err != nil {
+		t.Fatalf("empty ToolProvider validate = %v, want nil", err)
+	}
+
+	// 动态工具：每次 ListTools/ExecuteTool 求值当前工具集
+	state := []string{"a"}
+	s2 := New(Config{Name: "x", Type: TypeTool})
+	s2.ToolProvider(func() []Tool {
+		var out []Tool
+		for _, n := range state {
+			nn := n
+			out = append(out, Tool{
+				Name: nn, Description: "dyn-" + nn, Schema: json.RawMessage(`{}`),
+				Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "handled:" + nn, nil },
+			})
+		}
+		return out
+	})
+	srv := &toolServiceServer{sdk: s2}
+
+	list, err := srv.ListTools(context.Background(), &proto.ListToolsRequest{})
+	if err != nil || len(list.Tools) != 1 || list.Tools[0].Name != "a" || list.Tools[0].Description != "dyn-a" {
+		t.Fatalf("ListTools = %+v, %v", list.Tools, err)
+	}
+	resp, _ := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "a", ArgumentsJson: `{}`})
+	if resp.Content != "handled:a" {
+		t.Fatalf("ExecuteTool = %+v", resp)
+	}
+
+	// 运行时新增工具 → 下次求值即时反映
+	state = append(state, "b")
+	list, _ = srv.ListTools(context.Background(), &proto.ListToolsRequest{})
+	if len(list.Tools) != 2 {
+		t.Fatalf("ListTools after add = %d, want 2", len(list.Tools))
+	}
+	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "b", ArgumentsJson: `{}`})
+	if resp.Content != "handled:b" {
+		t.Fatalf("ExecuteTool(b) = %+v", resp)
+	}
+
+	// 运行时移除 → 立即消失
+	state = state[:1]
+	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "b", ArgumentsJson: `{}`})
+	if resp.Error == "" {
+		t.Fatal("removed tool should not be executable")
 	}
 }
