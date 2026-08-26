@@ -53,8 +53,9 @@ type SDK struct {
 	// 覆盖「运行时动态注册工具」的插件（如 tool-lua-host 的脚本工具）。非 nil 时
 	// 优先于静态 tools，validate 允许二选一。
 	toolProvider func() []Tool
-	// agentBroker 可选的 agent 类型 gRPC server 初始化回调（注入宿主 broker）。
-	agentBroker func(broker *goplugin.GRPCBroker) error
+	// agentBroker 可选的 agent 类型 gRPC server 初始化回调（注入宿主 broker 的
+	// SDK 隔离封装 AgentBroker；实现经其 Dial 宿主挂载的 LLM/Tool/UserQuestions）。
+	agentBroker func(b *AgentBroker) error
 	onStart     func(context.Context) error
 	onStop      func() error
 }
@@ -132,10 +133,11 @@ func (s *SDK) SetInterconnect(handler InterconnectHandler) *SDK {
 }
 
 // AgentBroker 注册 agent 类型插件的 gRPC server 初始化回调：宿主 broker 就绪后、
-// 标准 AgentServiceServer 注册前执行。agent 实现常需 Dial 宿主挂载的 LLM/Tool/
-// UserQuestions 等服务（见 plugin/manager.go 的 RegisterServices 时序），
-// 而 broker 仅在 GRPCServer 阶段可用（OnStart 无 broker），故提供此回调注入。
-func (s *SDK) AgentBroker(fn func(broker *goplugin.GRPCBroker) error) *SDK {
+// 标准 AgentServiceServer 注册前执行。回调收到 SDK 对 go-plugin broker 的隔离
+// 封装 AgentBroker（插件无需 import go-plugin）；agent 实现通常缓存它，待
+// RegisterServices 拿到 LLM/Tool/UserQuestions 服务 ID 后经 Dial* 建立连接
+// （见 plugin/manager.go 的 RegisterServices 时序）。
+func (s *SDK) AgentBroker(fn func(b *AgentBroker) error) *SDK {
 	s.agentBroker = fn
 	return s
 }

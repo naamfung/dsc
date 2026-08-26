@@ -111,6 +111,34 @@ sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
 宿主挂载聚合服务后回调一次；独立插件之间互不感知——经宿主聚合路由调用其他
 插件能力，无需知道对方的存在。
 
+## Agent 类型插件接入宿主服务（AgentBroker）
+
+`dsc.TypeAgent` 插件在 gRPC server 建立时收到 SDK 对 go-plugin broker 的隔离封装
+`*dsc.AgentBroker`——**插件代码无需 import go-plugin**：
+
+```go
+var ab *dsc.AgentBroker
+sdk.AgentBroker(func(b *dsc.AgentBroker) error {
+	ab = b // 缓存；宿主经 RegisterServices/SetUserQuestionsService 下发服务 ID 后使用
+	return nil
+})
+```
+
+宿主随后调用 `agent.RegisterServices(ctx, llmID, toolID)`（LLM 聚合服务 / Tool 聚合
+服务）与 `SetUserQuestionsService(uqID)`，agent 在回调里用 `AgentBroker` 建立连接：
+
+```go
+func (a *MyAgent) RegisterServices(ctx context.Context, llmID, toolID uint32) error {
+	llm, err := ab.DialLLM(llmID)          // 宿主聚合 LLM 客户端
+	tool, err := ab.DialTool(toolID)       // 宿主聚合 Tool 客户端
+	// 需要自建 proto client 时：conn, err := ab.Dial(id)
+	return nil
+}
+```
+
+便捷方法：`DialLLM / DialTool / DialNotify / DialUserQuestions`（返回封装客户端，
+`serviceID == 0` 或未注入时返回 `nil`）与通用 `Dial`（返回 `*grpc.ClientConn`）。
+
 ## 进程上下文
 
 ```go
@@ -147,13 +175,26 @@ sdk/
 
 ## 依赖说明
 
-`sdk/` 是独立 Go module（`dsc-sdk`），`require dsc` 并通过 `replace` 指向本仓库：
+`sdk/` 是独立 Go module（`dsc-sdk`）。**API 层已隔离 go-plugin**：公开接口（Tool /
+ToolProvider / Hook / SetInterconnect / AgentBroker）均不含 go-plugin 类型，插件代码
+无需 `import "github.com/hashicorp/go-plugin"`——一律以 SDK 的封装（AgentBroker 等）
+接入宿主能力。
+
+go.mod 中统一以**本仓库定制版 go-plugin 为准**（不要使用官方版）：`dsc` 的宿主
+plugin 包依赖定制版 `GRPCClient.Broker()` 扩展（宿主挂载聚合服务所必需），官方版
+无等价 API，用官方版会导致编译失败。模板：
 
 ```go
-require dsc v0.0.0
-replace dsc => ../            // SDK 依赖 DSC 契约（plugin/proto）
-replace github.com/hashicorp/go-plugin => ../libs/go-plugin-1.8.0  // 本地定制版（含 Broker 扩展）
+require (
+	dsc v0.0.0
+	dsc-sdk v0.0.0
+)
+
+replace dsc => <dsc 仓库路径>           // 宿主契约（plugin/proto）
+replace dsc-sdk => <dsc 仓库路径>/sdk   // 本 SDK
+replace github.com/hashicorp/go-plugin => <dsc 仓库路径>/libs/go-plugin-1.8.0 // 定制版（含 Broker 扩展）
 ```
 
-独立开发者在自己的仓库里同样声明这三个 replace 即可（examples/ 的 go.mod 是完整
-模板）。未来若将 DSC 发布为远程 module，replace 可去掉。
+独立开发者在自己的仓库里声明上述 replace 即可（`examples/*` 的 go.mod 是完整模板，
+可复制改路径）。未来将 dsc / 定制版 go-plugin 发布为远程 module 时，go-plugin 的
+replace 指向该远程地址即可——**始终以我们的定制版为准，不引入官方版**。

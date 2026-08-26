@@ -16,12 +16,11 @@ import (
 	"dsc/plugin"
 	"dsc/proto"
 	"dsc/session"
-	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
 
 type ReactLoopAgent struct {
-	broker        *goplugin.GRPCBroker
+	broker        *dsc.AgentBroker // SDK 隔离封装的宿主 broker（Dial 宿主 LLM/Tool/UserQuestions）
 	llmServiceID  uint32
 	toolServiceID uint32
 	mu            sync.Mutex // 保護 serviceID
@@ -1196,8 +1195,8 @@ func main() {
 
 	sdk := dsc.New(dsc.Config{Name: "agent-react-loop", Version: "1.0.0", Type: dsc.TypeAgent})
 	sdk.Agent(agent)
-	sdk.AgentBroker(func(broker *goplugin.GRPCBroker) error {
-		agent.broker = broker
+	sdk.AgentBroker(func(b *dsc.AgentBroker) error {
+		agent.broker = b
 		return nil
 	})
 	sdk.Serve()

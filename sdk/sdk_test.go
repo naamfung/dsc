@@ -291,6 +291,46 @@ func TestSetInterconnectCallsHandler(t *testing.T) {
 	}
 }
 
+// TestAgentBrokerNilSafe 校验 AgentBroker 封装：nil 接收者/未注入 broker 时
+// 各方法不 panic；serviceID 为 0 时便捷方法返回 (nil, nil)。
+func TestAgentBrokerNilSafe(t *testing.T) {
+	var b *AgentBroker
+	// nil 接收者：Dial 报错，便捷方法安全返回 nil
+	if c, err := b.Dial(1); c != nil || err == nil {
+		t.Fatalf("nil AgentBroker.Dial = (%v, %v), want error", c, err)
+	}
+	if c, err := b.DialLLM(1); c != nil || err != nil {
+		t.Fatalf("nil AgentBroker.DialLLM = (%v, %v)", c, err)
+	}
+	if c, err := b.DialTool(1); c != nil || err != nil {
+		t.Fatalf("nil AgentBroker.DialTool = (%v, %v)", c, err)
+	}
+	if n, err := b.DialNotify(1); n != nil || err != nil {
+		t.Fatalf("nil AgentBroker.DialNotify = (%v, %v)", n, err)
+	}
+	if c, err := b.DialUserQuestions(1); c != nil || err != nil {
+		t.Fatalf("nil AgentBroker.DialUserQuestions = (%v, %v)", c, err)
+	}
+
+	// 非 nil 但 broker 未注入：serviceID=0 时便捷方法返回 nil（llmDial 语义）
+	empty := &AgentBroker{}
+	if c, err := empty.DialLLM(0); c != nil || err != nil {
+		t.Fatalf("empty.DialLLM(0) = (%v, %v)", c, err)
+	}
+	if c, err := empty.DialTool(0); c != nil || err != nil {
+		t.Fatalf("empty.DialTool(0) = (%v, %v)", c, err)
+	}
+	if n, err := empty.DialNotify(0); n != nil || err != nil {
+		t.Fatalf("empty.DialNotify(0) = (%v, %v)", n, err)
+	}
+	if c, err := empty.DialUserQuestions(0); c != nil || err != nil {
+		t.Fatalf("empty.DialUserQuestions(0) = (%v, %v)", c, err)
+	}
+	if _, err := empty.Dial(0); err == nil {
+		t.Fatal("empty.Dial(0) should error (no broker injected)")
+	}
+}
+
 func TestInterconnectNotifyNoopWhenDisconnected(t *testing.T) {
 	ic := &Interconnect{}
 	if err := ic.Notify("x", `{}`); err != nil {

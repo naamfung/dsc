@@ -21,7 +21,7 @@ type agentGRPCPlugin struct {
 
 func (p *agentGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
 	if p.sdk.agentBroker != nil {
-		if err := p.sdk.agentBroker(broker); err != nil {
+		if err := p.sdk.agentBroker(&AgentBroker{broker: broker}); err != nil {
 			return err
 		}
 	}
