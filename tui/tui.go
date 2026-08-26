@@ -209,6 +209,14 @@ type Model struct {
 	sel          selection
 	wrappedLines []string
 
+	// 渲染行缓存（对齐 REX 的渲染缓存思路）：lineRendered[i] 是 m.lines[i] 按
+	// 当前宽度 wrap 后的结果（含 \n 多行）。流式帧只更新最后一行，历史行不变
+	// 却每帧全量重 wrap 是长会话卡顿主因；改为 dirtyFrom 起增量重算，
+	// renderWidth 记录上次宽度（终端尺寸变化时全量失效）。
+	lineRendered []string
+	renderWidth  int
+	dirtyFrom    int
+
 	// 输入历史：已提交命令 + 当前草稿，用于 ↑/↓ 翻阅
 	history []string
 	histPos int
@@ -845,6 +853,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				body = reasoning
 			}
 			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
+			m.invalidateLines(m.streamMsgIdx)
 			m.render()
 			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
@@ -864,6 +873,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streamBuffer += f.Output
 			body := joinReasoningAnswer(m.reasoningCommitted, renderMarkdown(m.streamBuffer, max(m.width-4, 20)))
 			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
+			m.invalidateLines(m.streamMsgIdx)
 			m.render()
 			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
@@ -981,6 +991,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // render 将历史行切分成与被选中区域一致的宽对齐渲染行，并把当前选区反色高亮后交给 viewport。
 // 内容宽度取 viewport 宽度（终端宽 -1，末列预留给自定义滚动条）。
+// 渲染行结果按语义行缓存（lineRendered），只从 dirtyFrom 起增量重算，避免长会话每帧全量重 wrap。
 func (m *Model) render() {
 	w := m.viewport.Width()
 	if w < 1 {
@@ -1002,13 +1013,40 @@ func (m *Model) render() {
 	m.viewport.SetContent(strings.Join(rows, "\n"))
 }
 
+// invalidateLines 标记从语义行 from 起需要重新渲染（就地替换 m.lines[i] 后调用）。
+func (m *Model) invalidateLines(from int) {
+	if from < 0 {
+		from = 0
+	}
+	if m.dirtyFrom > from {
+		m.dirtyFrom = from
+	}
+}
+
 // buildWrappedLines 将每条语义行以固定宽度渲染，得到换行后并为宽度对齐的可视行。
 // 每行恰好为宽度 w，故 viewport 对其不再折行，行号与可视列可直接映射。
+// 已渲染行缓存在 lineRendered；宽度变化或行被就地替换时从 dirtyFrom 起增量重算。
 func (m *Model) buildWrappedLines(w int) []string {
-	var rows []string
-	for _, line := range m.lines {
-		rendered := lipgloss.NewStyle().Width(w).Render(line)
-		rows = append(rows, strings.Split(rendered, "\n")...)
+	// 终端宽度变化 → 全部缓存失效
+	if m.renderWidth != w {
+		m.lineRendered = nil
+		m.dirtyFrom = 0
+		m.renderWidth = w
+	}
+	// 新增语义行：先扩充缓存占位（append 后新行从 dirtyFrom 起重算）
+	for len(m.lineRendered) < len(m.lines) {
+		m.lineRendered = append(m.lineRendered, "")
+	}
+	if m.dirtyFrom < 0 {
+		m.dirtyFrom = 0
+	}
+	for i := m.dirtyFrom; i < len(m.lines); i++ {
+		m.lineRendered[i] = lipgloss.NewStyle().Width(w).Render(m.lines[i])
+	}
+	m.dirtyFrom = len(m.lines)
+	rows := make([]string, 0, len(m.lineRendered))
+	for _, lr := range m.lineRendered {
+		rows = append(rows, strings.Split(lr, "\n")...)
 	}
 	return rows
 }
@@ -1218,6 +1256,7 @@ func (m *Model) finalizeAssistant() {
 		body = joinReasoningAnswer(body, renderMarkdown(m.streamBuffer, w))
 	}
 	m.lines[m.streamMsgIdx] = m.renderAssistant(body)
+	m.invalidateLines(m.streamMsgIdx)
 }
 
 // openAssistantBlock 新建一个助手正文块：重置思考/答案累积状态并追加身份头占位。
@@ -1658,6 +1697,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		return true, nil
 	case "/clear":
 		m.lines = nil
+		m.lineRendered = nil
+		m.dirtyFrom = 0
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
