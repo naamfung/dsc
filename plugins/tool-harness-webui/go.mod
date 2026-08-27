@@ -43,4 +43,4 @@ replace dsc => ../..
 
 replace dsc-sdk => ../../sdk
 
-replace github.com/hashicorp/go-plugin => ../../libs/go-plugin-1.8.0
+replace github.com/hashicorp/go-plugin => ../../plugin

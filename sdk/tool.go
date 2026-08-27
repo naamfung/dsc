@@ -9,7 +9,7 @@ import (
 
 	"dsc/proto"
 	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
+	plugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
 
@@ -28,14 +28,14 @@ type Tool struct {
 	ContextFn func() string
 }
 
-// toolGRPCPlugin 是 go-plugin 适配器：注册 ToolService + PluginMetadata +
+// toolGRPCPlugin 是 go-core 适配器：注册 ToolService + PluginMetadata +
 // PluginHookService（钩子为可选注册，未设置时为空实现，宿主调用无副作用）。
 type toolGRPCPlugin struct {
-	goplugin.NetRPCUnsupportedPlugin
+	plugin.NetRPCUnsupportedPlugin
 	sdk *SDK
 }
 
-func (p *toolGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server) error {
+func (p *toolGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
 	srv := &toolServiceServer{sdk: p.sdk, broker: broker}
 	proto.RegisterToolServiceServer(s, srv)
 	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg})
@@ -43,7 +43,7 @@ func (p *toolGRPCPlugin) GRPCServer(broker *goplugin.GRPCBroker, s *grpc.Server)
 	return nil
 }
 
-func (p *toolGRPCPlugin) GRPCClient(context.Context, *goplugin.GRPCBroker, *grpc.ClientConn) (interface{}, error) {
+func (p *toolGRPCPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientConn) (interface{}, error) {
 	return nil, nil
 }
 
@@ -51,7 +51,7 @@ func (p *toolGRPCPlugin) GRPCClient(context.Context, *goplugin.GRPCBroker, *grpc
 type toolServiceServer struct {
 	proto.UnimplementedToolServiceServer
 	sdk    *SDK
-	broker *goplugin.GRPCBroker // 互通：Dial 宿主聚合服务（SetInterconnect 时使用）
+	broker *plugin.GRPCBroker // 互通：Dial 宿主聚合服务（SetInterconnect 时使用）
 
 	mu sync.Mutex
 	ic *Interconnect

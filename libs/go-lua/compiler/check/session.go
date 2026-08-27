@@ -109,8 +109,8 @@ type Session struct {
 	// cfgCache caches built CFG graphs to avoid rebuilding for the same function.
 	cfgCache map[*ast.FunctionExpr]*cfg.Graph
 
-	// pluginStore provides extension storage for analysis plugins.
-	pluginStore map[any]any
+	// coreStore provides extension storage for analysis cores.
+	coreStore map[any]any
 
 	// scopeDepthDiagEmitted tracks diagnostics for scope depth limit per function.
 	scopeDepthDiagEmitted map[*ast.FunctionExpr]bool
@@ -329,23 +329,23 @@ func (s *Session) RegisterGraphHierarchy(root *cfg.Graph) {
 	walk(root)
 }
 
-// PluginStore stores a value for a plugin extension.
+// PluginStore stores a value for a core extension.
 func (s *Session) PluginStore(key, val any) {
 	if s == nil {
 		return
 	}
-	if s.pluginStore == nil {
-		s.pluginStore = make(map[any]any)
+	if s.coreStore == nil {
+		s.coreStore = make(map[any]any)
 	}
-	s.pluginStore[key] = val
+	s.coreStore[key] = val
 }
 
-// PluginLoad retrieves a value stored by a plugin extension.
+// PluginLoad retrieves a value stored by a core extension.
 func (s *Session) PluginLoad(key any) any {
-	if s == nil || s.pluginStore == nil {
+	if s == nil || s.coreStore == nil {
 		return nil
 	}
-	return s.pluginStore[key]
+	return s.coreStore[key]
 }
 
 // ExportType computes the module's exported type from return statements.
@@ -446,7 +446,7 @@ func (s *Session) Release() {
 
 	s.RootFunc = nil
 	s.RootResult = nil
-	s.pluginStore = nil
+	s.coreStore = nil
 	clear(s.scopeDepthDiagEmitted)
 }
 

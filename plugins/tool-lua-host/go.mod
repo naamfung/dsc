@@ -49,7 +49,7 @@ replace dsc => ../..
 replace dsc-sdk => ../../sdk
 
 // 与宿主 dsc/go.mod 对齐的本地依赖（libs/），保证协议类型一致
-replace github.com/hashicorp/go-plugin => ../../libs/go-plugin-1.8.0
+replace github.com/hashicorp/go-plugin => ../../plugin
 
 // go-lua：带类型检查的 LUA VM（本地 fork）
 replace github.com/wippyai/go-lua => ../../libs/go-lua

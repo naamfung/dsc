@@ -8,7 +8,7 @@ import (
 
 	"charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"dsc/plugin"
+	"dsc/core"
 	"fmt"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -16,7 +16,7 @@ import (
 // TestToolFrameGapVisual 用真实 lipgloss 渲染两个连续工具结果帧，
 // 观察它们之间的视觉间隔，并写入 tui/toolframe_gap_visual.txt 供人工核对。
 func TestToolFrameGapVisual(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "streaming", Output: "助手正文第一行\n助手正文第二行"},
 		{Status: "tool", ToolResult: "A结果行1\nA结果行2\nA结果行3"},
 		{Status: "tool", ToolResult: "B结果行1\nB结果行2"},
@@ -55,7 +55,7 @@ func TestToolFrameGapVisual(t *testing.T) {
 
 // TestToolFrameGapStructural 结构断言：两个连续工具结果帧之间以单空行分隔（紧凑展示）。
 func TestToolFrameGapStructural(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "streaming", Output: "助手正文第一行"},
 		{Status: "tool", ToolResult: "A结果行1\nA结果行2"},
 		{Status: "tool", ToolResult: "B结果行1\nB结果行2"},
@@ -87,7 +87,7 @@ func TestToolFrameGapStructural(t *testing.T) {
 // TestToolCallResultContiguous 结构断言：工具「调用标题」帧与其紧跟的「结果」帧
 // 之间不留空行（对齐 REX 的紧凑卡片布局），而非像普通帧间那样以空行分隔。
 func TestToolCallResultContiguous(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "streaming", Output: "助手正文"},
 		{Status: "tool", ToolName: "shell", ToolArgs: `{"command":"cat a.go"}`},
 		{Status: "tool", ToolName: "shell", ToolArgs: `{"command":"cat a.go"}`, ToolResult: "=====SUM=====\ncat: No such file\n\n[exit_code: 1]\n"},
@@ -133,14 +133,14 @@ func hasTrimmedLine(s, want string) bool {
 // REX pinnedToBottom 语义）；正文拖选复制在流式期间仍被禁用（不回归原设计）。
 func TestScrollbarDragDuringStreaming(t *testing.T) {
 	// 足够多的行使视口溢出（出现滚动条），且余量保证流式仍在进行中
-	var frames []*plugin.RunStreamResponse
+	var frames []*core.RunStreamResponse
 	for i := 0; i < 40; i++ {
-		frames = append(frames, &plugin.RunStreamResponse{
+		frames = append(frames, &core.RunStreamResponse{
 			Status: "streaming",
 			Output: fmt.Sprintf("内容行%02d ", i) + strings.Repeat("x", 60) + "\n" + fmt.Sprintf("内容行%02d-2", i) + "\n",
 		})
 	}
-	frames = append(frames, &plugin.RunStreamResponse{Status: "success"})
+	frames = append(frames, &core.RunStreamResponse{Status: "success"})
 
 	m := New(&stubAgent{frames: frames}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -210,14 +210,14 @@ func TestScrollbarDragDuringStreaming(t *testing.T) {
 
 // TestWheelDetachesAndRepins 验证滚轮向上翻阅脱离底部跟随、向下滚回底部重新钉住。
 func TestWheelDetachesAndRepins(t *testing.T) {
-	var frames []*plugin.RunStreamResponse
+	var frames []*core.RunStreamResponse
 	for i := 0; i < 40; i++ {
-		frames = append(frames, &plugin.RunStreamResponse{
+		frames = append(frames, &core.RunStreamResponse{
 			Status: "streaming",
 			Output: fmt.Sprintf("内容行%02d ", i) + strings.Repeat("y", 60) + "\n",
 		})
 	}
-	frames = append(frames, &plugin.RunStreamResponse{Status: "success"})
+	frames = append(frames, &core.RunStreamResponse{Status: "success"})
 
 	m := New(&stubAgent{frames: frames}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})

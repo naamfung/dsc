@@ -46,6 +46,6 @@ replace dsc-sdk => ../../sdk
 
 replace dsc => ../..
 
-replace github.com/hashicorp/go-plugin => ../../libs/go-plugin-1.8.0
+replace github.com/hashicorp/go-plugin => ../../plugin
 
 replace github.com/sashabaranov/go-openai => ../../libs/go-openai

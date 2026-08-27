@@ -1,6 +1,6 @@
 // Package tui 提供基于 Bubble Tea 的终端聊天界面。
-// 该界面运行在宿主进程中（不通过 go-plugin 子进程），
-// 因为 TUI 需要直接操作终端 raw mode 和 stdout，而插件子进程的 stdout 会被 go-plugin 捕获。
+// 该界面运行在宿主进程中（不通过 go-core 子进程），
+// 因为 TUI 需要直接操作终端 raw mode 和 stdout，而插件子进程的 stdout 会被 go-core 捕获。
 package tui
 
 import (
@@ -22,9 +22,9 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"dsc/core"
 	"dsc/cron"
 	"dsc/jobs"
-	"dsc/plugin"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"gopkg.in/yaml.v3"
@@ -146,15 +146,15 @@ func (s selection) empty() bool { return s.anchor == s.head }
 // submitResult 是一次 agent.Run 完成后的结果消息
 type submitResult struct {
 	input  string
-	result *plugin.AgentResult
+	result *core.AgentResult
 	err    error
 }
 
 // streamFrame 是流式響應的一幀
 type streamFrame struct {
 	input  string
-	frame  *plugin.RunStreamResponse
-	ch     <-chan *plugin.RunStreamResponse
+	frame  *core.RunStreamResponse
+	ch     <-chan *core.RunStreamResponse
 	first  bool
 	done   bool
 	err    error
@@ -182,8 +182,8 @@ type completion struct {
 
 // Model 是聊天界面的状态模型
 type Model struct {
-	agent     plugin.Agent
-	manager   *plugin.Manager // 插件管理器，用於實時切換模式
+	agent     core.Agent
+	manager   *core.Manager // 插件管理器，用於實時切換模式
 	ctx       context.Context
 	modelName string
 	mode      string // 當前預設模式（minimal / standard），實時反映切換
@@ -262,7 +262,7 @@ type Model struct {
 
 	// 当前一轮的流式通道暂存：供运行中输入（注入）时维持泵取，避免流式流停滞
 	streamInput string
-	streamCh    <-chan *plugin.RunStreamResponse
+	streamCh    <-chan *core.RunStreamResponse
 
 	// 思考过程（reasoning）渲染状态：reasoningBuffer 累积增量，
 	// reasoningOpen 标记当前正文块是否处于思考状态；transition 到答案时
@@ -305,7 +305,7 @@ type Model struct {
 }
 
 // New 创建一个聊天界面模型
-func New(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) *Model {
+func New(agent core.Agent, manager *core.Manager, ctx context.Context, modelName, mode string, contextWindow int) *Model {
 	input := textarea.New()
 	input.Placeholder = "输入消息，回车发送，Shift+Enter/Ctrl+J 换行，Ctrl+Q 退出"
 	input.CharLimit = 4096
@@ -387,7 +387,7 @@ func (m *Model) submitCmd(input string) tea.Cmd {
 }
 
 // pumpStream 读取通道的下一帧
-func (m *Model) pumpStream(input string, ch <-chan *plugin.RunStreamResponse) tea.Cmd {
+func (m *Model) pumpStream(input string, ch <-chan *core.RunStreamResponse) tea.Cmd {
 	return func() tea.Msg {
 		frame, ok := <-ch
 		if !ok {
@@ -1668,7 +1668,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /skills      列出所有已安装的技能",
 			"  /mode minimal   切换至极简模式",
 			"  /mode standard  切换至标准模式",
-			"  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-plugin-creator 技能提供指导）",
+			"  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-core-creator 技能提供指导）",
 			"  /sandbox read-only   沙箱只读（拒绝一切文件写操作）",
 			"  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
 			"  /sandbox full-access 沙箱全开（不额外拦截文件写）",
@@ -1724,7 +1724,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "minimal" // 實時反映標題欄模式
-				err := plugin.UpdateMode("minimal", plugin.ConfigPath)
+				err := core.UpdateMode("minimal", core.ConfigPath)
 				if err != nil {
 					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
 				} else {
@@ -1747,7 +1747,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "standard" // 實時反映標題欄模式
-				err := plugin.UpdateMode("standard", plugin.ConfigPath)
+				err := core.UpdateMode("standard", core.ConfigPath)
 				if err != nil {
 					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
 				} else {
@@ -1770,11 +1770,11 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
 			} else {
 				m.mode = "creation" // 實時反映標題欄模式
-				err := plugin.UpdateMode("creation", plugin.ConfigPath)
+				err := core.UpdateMode("creation", core.ConfigPath)
 				if err != nil {
 					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
 				} else {
-					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至創造模式 (creation)：可經 tool-lua-host 編寫 LUA 插件（參考 lua-plugin-creator 技能）。")
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至創造模式 (creation)：可經 tool-lua-host 編寫 LUA 插件（參考 lua-core-creator 技能）。")
 				}
 			}
 		} else {
@@ -1903,17 +1903,17 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	// /sandbox <mode>（对齐 DSH sandbox mode 三档；on/off 为 read-only/full-access 兼容别名）
 	if strings.HasPrefix(cmd, "/sandbox") {
 		arg := strings.TrimSpace(strings.TrimPrefix(cmd, "/sandbox"))
-		var policy plugin.SandboxPolicy
+		var policy core.SandboxPolicy
 		var label string
 		switch arg {
 		case "", "on", "read-only", "readonly":
-			policy = plugin.SandboxReadOnly
+			policy = core.SandboxReadOnly
 			label = "read-only（只读，拒绝一切文件写操作）"
 		case "workspace", "workspace-write":
-			policy = plugin.SandboxWorkspaceWrite
+			policy = core.SandboxWorkspaceWrite
 			label = "workspace-write（仅允许 workspace 内写）"
 		case "off", "full-access", "full":
-			policy = plugin.SandboxFullAccess
+			policy = core.SandboxFullAccess
 			label = "full-access（不额外拦截文件写）"
 		default:
 			m.appendMessage(errorSty.Render("用法: /sandbox read-only | workspace | full-access（on/off 为 read-only/full-access 别名）"))
@@ -1953,7 +1953,15 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 				if err := m.agent.SetHistoryInjection(m.ctx, count); err != nil {
 					m.appendMessage(errorSty.Render("设置失败: " + err.Error()))
 				} else {
-					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 设置") + "\n历史注入已设置为 " + historyInjectionLabel(count) + "。")
+					// 持久化到 config.yaml（history_injection），重启/换会话后依然生效
+					persistNote := ""
+					if m.manager != nil {
+						if err := m.manager.SetHistoryInjectionConfig(count); err != nil {
+							persistNote = "\n（已生效，但持久化到配置失败: " + err.Error() + "）"
+						}
+					}
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 设置") +
+						"\n历史注入已设置为 " + historyInjectionLabel(count) + "，并已持久化到配置。" + persistNote)
 				}
 			}
 		}
@@ -2322,7 +2330,7 @@ func (m *Model) runInfoLine() string {
 // trackTurnUsage 累計當前輪的運行指標：下行生成 token 與 prompt 緩存命中/寫入。
 // 避免同一 step 的 CompletionTokens 被 tool 調用/結果幀和 success 幀重複累加：
 // 僅在 Turn/Step 變化時才累加 turnTokens。
-func (m *Model) trackTurnUsage(u *plugin.Usage, turn, step int32) {
+func (m *Model) trackTurnUsage(u *core.Usage, turn, step int32) {
 	if u == nil {
 		return
 	}
@@ -2351,7 +2359,7 @@ func elapsedTick() tea.Cmd {
 // 采用 REX 风格的缩进 + 分隔线布局，把交互信息与模型信息区分开，营造呼吸感。
 func (m *Model) statusBar() string {
 	divider := dividerSty.Render(strings.Repeat("─", m.width))
-	left := "模型: " + m.displayModelName()
+	left := "模型: " + m.displayModelName() + " · " + m.scopeLabel()
 	if m.copyNotice != "" {
 		left += " · " + m.copyNotice
 	}
@@ -2365,6 +2373,29 @@ func (m *Model) statusBar() string {
 		pad = 1
 	}
 	return divider + "\n" + dimSty.Render(left+strings.Repeat(" ", pad)+right)
+}
+
+// scopeLabel 按沙箱权限显示当前工作范围（左下角状态栏随 /sandbox 即时反映）：
+// full-access → 「文件系统」（表达全局可写，不暴露目录名）；其余 → 当前工作区的
+// 真实目录基础名（限长，避免超长真实目录破坏布局）。
+func (m *Model) scopeLabel() string {
+	if m.manager != nil && m.manager.GetSandboxPolicy() == core.SandboxFullAccess {
+		return "文件系统"
+	}
+	root := core.WorkspaceRoot
+	if root == "" {
+		root = "."
+	}
+	name := filepath.Base(filepath.Clean(root))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return "工作区"
+	}
+	const maxScope = 16
+	r := []rune(name)
+	if len(r) > maxScope {
+		name = string(r[:maxScope]) + "…"
+	}
+	return name
 }
 
 // View 渲染视图
@@ -2452,7 +2483,7 @@ func (m *Model) inputCursorAbs() *tea.Cursor {
 }
 
 // Run 运行聊天界面，阻塞直到退出
-func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, modelName, mode string, contextWindow int) error {
+func Run(agent core.Agent, manager *core.Manager, ctx context.Context, modelName, mode string, contextWindow int) error {
 	m := New(agent, manager, ctx, modelName, mode, contextWindow)
 	p := tea.NewProgram(m)
 	m.program = p
@@ -2463,7 +2494,7 @@ func Run(agent plugin.Agent, manager *plugin.Manager, ctx context.Context, model
 			_ = err
 		}
 		// 后台任务完成 → 宿主事件总线 → 通知唤醒（对齐 DSH completionDelivery: wakeup）
-		manager.OnEvent(plugin.JobDoneEvent, func(ctx plugin.EventContext) (any, error) {
+		manager.OnEvent(core.JobDoneEvent, func(ctx core.EventContext) (any, error) {
 			if s, ok := ctx.Data.(jobs.JobSnapshot); ok {
 				m.program.Send(jobDoneMsg{snapshot: s})
 			}

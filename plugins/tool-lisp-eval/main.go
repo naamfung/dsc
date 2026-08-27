@@ -325,7 +325,7 @@ func toInt(v types.MalType) int {
 
 // ============================================================
 // 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
-// PluginMetadata / PluginHookService 与 go-plugin 组装（重写自旧的
+// PluginMetadata / PluginHookService 与 go-core 组装（重写自旧的
 // ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 // ============================================================
 func main() {

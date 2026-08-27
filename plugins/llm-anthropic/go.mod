@@ -57,6 +57,6 @@ replace dsc-sdk => ../../sdk
 
 replace dsc => ../..
 
-replace github.com/hashicorp/go-plugin => ../../libs/go-plugin-1.8.0
+replace github.com/hashicorp/go-plugin => ../../plugin
 
 replace github.com/anthropics/anthropic-sdk-go => ../../libs/anthropic-sdk-go

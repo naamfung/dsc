@@ -20,6 +20,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-version v1.9.0
+	github.com/jhump/protoreflect v1.17.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
 	github.com/microcosm-cc/bluemonday v1.0.27
@@ -82,7 +83,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
-replace github.com/hashicorp/go-plugin => ./libs/go-plugin-1.8.0
+// 定制版 go-plugin（plugin/，含宿主挂载聚合服务必需的 Broker 扩展）
+replace github.com/hashicorp/go-plugin => ./plugin
 
 // LLM SDK 改用本地版本（libs/），避免外部破坏性修改影响稳定性
 replace github.com/anthropics/anthropic-sdk-go => ./libs/anthropic-sdk-go

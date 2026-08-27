@@ -8,7 +8,7 @@ import (
 	"charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"dsc/plugin"
+	"dsc/core"
 )
 
 func TestScrollbarThumb(t *testing.T) {
@@ -50,7 +50,7 @@ func TestScrollbarCell(t *testing.T) {
 }
 
 // pumpFrames 提交输入并泵取 stubAgent 的帧，得到渲染完成的 Model。
-func pumpFrames(t *testing.T, frames []*plugin.RunStreamResponse) *Model {
+func pumpFrames(t *testing.T, frames []*core.RunStreamResponse) *Model {
 	t.Helper()
 	m := New(&stubAgent{frames: frames}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
@@ -72,9 +72,9 @@ func pumpFrames(t *testing.T, frames []*plugin.RunStreamResponse) *Model {
 func TestViewportViewAppendsScrollbar(t *testing.T) {
 	long := strings.Repeat("第%d行内容\n", 0)
 	_ = long
-	var frames []*plugin.RunStreamResponse
-	frames = append(frames, &plugin.RunStreamResponse{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)})
-	frames = append(frames, &plugin.RunStreamResponse{Status: "success"})
+	var frames []*core.RunStreamResponse
+	frames = append(frames, &core.RunStreamResponse{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)})
+	frames = append(frames, &core.RunStreamResponse{Status: "success"})
 	m := pumpFrames(t, frames)
 
 	v := m.viewportView()
@@ -110,7 +110,7 @@ func TestViewportViewAppendsScrollbar(t *testing.T) {
 
 // TestScrollbarNoOverflowNoThumb 内容不满一屏时末列为空格（无滚动条）。
 func TestScrollbarNoOverflowNoThumb(t *testing.T) {
-	m := pumpFrames(t, []*plugin.RunStreamResponse{
+	m := pumpFrames(t, []*core.RunStreamResponse{
 		{Status: "streaming", Output: "短内容"},
 		{Status: "success"},
 	})
@@ -126,9 +126,9 @@ func TestScrollbarNoOverflowNoThumb(t *testing.T) {
 // TestScrollbarDrag 点按滚动条列进入拖拽，拖动改变 YOffset，松开结束拖拽；
 // 点按正文不进入拖拽。
 func TestScrollbarDrag(t *testing.T) {
-	var frames []*plugin.RunStreamResponse
-	frames = append(frames, &plugin.RunStreamResponse{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)})
-	frames = append(frames, &plugin.RunStreamResponse{Status: "success"})
+	var frames []*core.RunStreamResponse
+	frames = append(frames, &core.RunStreamResponse{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)})
+	frames = append(frames, &core.RunStreamResponse{Status: "success"})
 	m := pumpFrames(t, frames)
 
 	// 点按滚动条列（x = viewport.Width()，viewport 从屏幕 y=1 开始）
@@ -159,9 +159,9 @@ func TestScrollbarDrag(t *testing.T) {
 
 // TestScrollbarClickBodyNotDrag 点按正文列（滚动条左侧）不进入拖拽，而是开启选区。
 func TestScrollbarClickBodyNotDrag(t *testing.T) {
-	var frames []*plugin.RunStreamResponse
-	frames = append(frames, &plugin.RunStreamResponse{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)})
-	frames = append(frames, &plugin.RunStreamResponse{Status: "success"})
+	var frames []*core.RunStreamResponse
+	frames = append(frames, &core.RunStreamResponse{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)})
+	frames = append(frames, &core.RunStreamResponse{Status: "success"})
 	m := pumpFrames(t, frames)
 
 	click := tea.MouseClickMsg{X: 0, Y: 1 + 1, Button: tea.MouseLeft}
@@ -177,7 +177,7 @@ func TestScrollbarClickBodyNotDrag(t *testing.T) {
 
 // TestInScrollbar 坐标判断：滚动条列位于 x == viewport.Width()，且 y 在正文区内。
 func TestInScrollbar(t *testing.T) {
-	m := pumpFrames(t, []*plugin.RunStreamResponse{
+	m := pumpFrames(t, []*core.RunStreamResponse{
 		{Status: "streaming", Output: strings.Repeat("填充内容行\n", 30)},
 		{Status: "success"},
 	})

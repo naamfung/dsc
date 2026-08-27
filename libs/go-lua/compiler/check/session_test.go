@@ -320,13 +320,13 @@ func TestFuncResult_IsData(t *testing.T) {
 func TestSession_PluginStore(t *testing.T) {
 	sess := New(db.NewQueryContext(db.New()), "test.lua")
 
-	type pluginKey struct{}
+	type coreKey struct{}
 
-	sess.PluginStore(pluginKey{}, "plugin_value")
+	sess.PluginStore(coreKey{}, "core_value")
 
-	got := sess.PluginLoad(pluginKey{})
-	if got != "plugin_value" {
-		t.Errorf("PluginLoad() = %v; want 'plugin_value'", got)
+	got := sess.PluginLoad(coreKey{})
+	if got != "core_value" {
+		t.Errorf("PluginLoad() = %v; want 'core_value'", got)
 	}
 }
 
@@ -486,8 +486,8 @@ func TestSession_Release(t *testing.T) {
 	if len(sess.scopeDepthDiagEmitted) != 0 {
 		t.Error("scopeDepthDiagEmitted should be empty after Release")
 	}
-	if sess.pluginStore != nil {
-		t.Error("pluginStore should be nil after Release")
+	if sess.coreStore != nil {
+		t.Error("coreStore should be nil after Release")
 	}
 
 	// Verify diagnostics survive

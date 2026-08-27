@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"dsc/proto/metadata"
 )
@@ -249,7 +249,7 @@ func TestMetaWrapperCfgPrecedence(t *testing.T) {
 }
 
 type stubLLM struct {
-	plugin.LLMProvider
+	core.LLMProvider
 	name, version string
 }
 
@@ -257,7 +257,7 @@ func (s *stubLLM) Name(context.Context) string    { return s.name }
 func (s *stubLLM) Version(context.Context) string { return s.version }
 
 type stubAgent struct {
-	plugin.Agent
+	core.Agent
 	name, version string
 }
 

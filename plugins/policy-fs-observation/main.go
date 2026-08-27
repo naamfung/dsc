@@ -60,7 +60,7 @@ func (s *FsObservationPolicyServer) UpdateObservation(ctx context.Context, req *
 }
 
 // main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 FsObservationPolicyService
-// 与 PluginMetadata 的 go-plugin 组装（重写自旧的
+// 与 PluginMetadata 的 go-core 组装（重写自旧的
 // FsObservationPolicyGRPCPlugin/MetadataServer 样板）。
 func main() {
 	policyServer := NewFsObservationPolicyServer()

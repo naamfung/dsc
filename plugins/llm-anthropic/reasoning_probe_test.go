@@ -8,7 +8,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"dsc/plugin"
+	"dsc/core"
 )
 
 // TestReasoningProbe 是临时运行时探针：真实调用 ChatStream 检查思考帧是否产出。
@@ -28,7 +28,7 @@ func TestReasoningProbe(t *testing.T) {
 		thinkingBudget: 4096,
 	}
 
-	messages := []plugin.Message{{Role: "user", Content: "3+4=? reply short"}}
+	messages := []core.Message{{Role: "user", Content: "3+4=? reply short"}}
 	ch, err := p.ChatStream(context.Background(), messages, nil)
 	if err != nil {
 		t.Fatalf("ChatStream err: %v", err)

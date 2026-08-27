@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"dsc-sdk"
-	"dsc/plugin"
+	"dsc/core"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -25,11 +25,11 @@ type toolCallDeltaAccumulator struct {
 	ArgumentsStr string
 }
 
-// usageFromOpenAI 將 OpenAI usage 轉換為 plugin.Usage（nil 返回 nil）。
+// usageFromOpenAI 將 OpenAI usage 轉換為 core.Usage（nil 返回 nil）。
 // cached_tokens（DeepSeek/llama.cpp 的 prompt_tokens_details.cached_tokens）映射为
 // CacheReadInputTokens；命中率计算需要 miss 侧，按 REX 语义以
 // CacheCreationInputTokens = prompt - cached 近似（无缓存报告时保持 0）。
-func usageFromOpenAI(u *openai.Usage) *plugin.Usage {
+func usageFromOpenAI(u *openai.Usage) *core.Usage {
 	if u == nil {
 		return nil
 	}
@@ -41,7 +41,7 @@ func usageFromOpenAI(u *openai.Usage) *plugin.Usage {
 	if cacheMiss < 0 {
 		cacheMiss = 0
 	}
-	return &plugin.Usage{
+	return &core.Usage{
 		PromptTokens:             int32(u.PromptTokens),
 		CompletionTokens:         int32(u.CompletionTokens),
 		TotalTokens:              int32(u.TotalTokens),
@@ -50,7 +50,7 @@ func usageFromOpenAI(u *openai.Usage) *plugin.Usage {
 	}
 }
 
-func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
+func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
 	// 转换消息格式
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, m := range messages {
@@ -104,22 +104,22 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []plugin.Message, to
 	}
 
 	if len(resp.Choices) == 0 {
-		return &plugin.ChatResponse{Content: "", FinishReason: "stop"}, nil
+		return &core.ChatResponse{Content: "", FinishReason: "stop"}, nil
 	}
 
 	choice := resp.Choices[0]
-	result := &plugin.ChatResponse{
+	result := &core.ChatResponse{
 		Content:      choice.Message.Content,
 		FinishReason: string(choice.FinishReason),
 	}
 
 	// 处理工具调用
 	if len(choice.Message.ToolCalls) > 0 {
-		result.ToolCalls = make([]plugin.ToolCall, len(choice.Message.ToolCalls))
+		result.ToolCalls = make([]core.ToolCall, len(choice.Message.ToolCalls))
 		for i, tc := range choice.Message.ToolCalls {
 			var args map[string]interface{}
 			json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			result.ToolCalls[i] = plugin.ToolCall{
+			result.ToolCalls[i] = core.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: args,
@@ -135,7 +135,7 @@ func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.0.0"
 func (p *OpenAIProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口
-func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (<-chan *plugin.ChatStreamResponse, error) {
+func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {
 	// 轉換消息格式
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, m := range messages {
@@ -188,7 +188,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		return nil, err
 	}
 
-	ch := make(chan *plugin.ChatStreamResponse)
+	ch := make(chan *core.ChatStreamResponse)
 	go func() {
 		defer close(ch)
 
@@ -202,13 +202,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				return
 			}
 			if err != nil {
-				ch <- &plugin.ChatStreamResponse{Error: err.Error()}
+				ch <- &core.ChatStreamResponse{Error: err.Error()}
 				return
 			}
 
 			// 處理 usage 數據（llama.cpp 等會在流式響應中攜帶 usage）
 			if resp.Usage != nil {
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Usage: usageFromOpenAI(resp.Usage),
 				}
 			}
@@ -228,14 +228,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 			// 處理文本增量
 			if delta.Content != "" {
 				textAccumulator.WriteString(delta.Content)
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Content: delta.Content,
 				}
 			}
 
 			// 處理思考過程增量（DeepSeek reasoning_content 等）
 			if delta.ReasoningContent != "" {
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Reasoning: delta.ReasoningContent,
 				}
 			}
@@ -277,19 +277,19 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				}
 				streamFinished = true
 
-				// 轉換工具調用為 plugin.ToolCall：按 index 排序，保证多工具调用顺序稳定
+				// 轉換工具調用為 core.ToolCall：按 index 排序，保证多工具调用顺序稳定
 				// （map 遍历顺序随机，直接遍历会让同一流在不同运行下顺序漂移）。
 				idxList := make([]int, 0, len(toolCallAccums))
 				for idx := range toolCallAccums {
 					idxList = append(idxList, idx)
 				}
 				sort.Ints(idxList)
-				var toolCalls []plugin.ToolCall
+				var toolCalls []core.ToolCall
 				for _, idx := range idxList {
 					acc := toolCallAccums[idx]
 					var args map[string]interface{}
 					json.Unmarshal([]byte(acc.ArgumentsStr), &args)
-					toolCalls = append(toolCalls, plugin.ToolCall{
+					toolCalls = append(toolCalls, core.ToolCall{
 						ID:        acc.ID,
 						Name:      acc.Name,
 						Arguments: args,
@@ -301,7 +301,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 				// 把 usage 一并转发（部分服務會在 finish 分片攜帶 usage）；
 				// 若該分片同時含正文/工具調用，則轉發完後仍繼續讀流，
 				// 由後續的空 choices 結尾分片（或 io.EOF）收尾退出。
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Content:      "",
 					FinishReason: finishReason,
 					ToolCalls:    toolCalls,
@@ -340,8 +340,8 @@ func main() {
 		model:  model,
 	}
 
-	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.LLMGRPCPlugin
-	// 自动提供 LLMService + 元数据（重写自旧的 goplugin.Serve 样板）。
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.LLMGRPCPlugin
+	// 自动提供 LLMService + 元数据（重写自旧的 plugin.Serve 样板）。
 	sdk := dsc.New(dsc.Config{Name: "openai", Version: "1.0.0", Type: dsc.TypeLLM})
 	sdk.LLM(provider)
 	sdk.Serve()

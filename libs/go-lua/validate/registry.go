@@ -1,5 +1,5 @@
 // Package validate provides validation for LValue types.
-// Validators register via init() for plugin-based extensibility.
+// Validators register via init() for core-based extensibility.
 package validate
 
 import (

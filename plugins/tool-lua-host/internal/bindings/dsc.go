@@ -15,9 +15,9 @@ import (
 	"io"
 	"strings"
 
-	"dsc/plugin/llmclient"
-	"dsc/plugin/notify"
-	"dsc/plugin/toolclient"
+	"dsc/core/llmclient"
+	"dsc/core/notify"
+	"dsc/core/toolclient"
 	"dsc/proto"
 	lua "github.com/wippyai/go-lua"
 )

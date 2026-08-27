@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"dsc-sdk"
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"dsc/session"
 	"google.golang.org/grpc"
@@ -59,9 +59,9 @@ type ReactLoopAgent struct {
 	store *session.Store
 
 	// 上下文容量管理（由宿主透過 DSC_CONTEXT_WINDOW 傳入）
-	contextWindow    int           // 總容量（token 數），0 表示未設置（不做自動壓縮）
-	lastPromptTokens int32         // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
-	lastUsage        *plugin.Usage // 最近一次 LLM 請求的完整 usage 信息
+	contextWindow    int         // 總容量（token 數），0 表示未設置（不做自動壓縮）
+	lastPromptTokens int32       // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
+	lastUsage        *core.Usage // 最近一次 LLM 請求的完整 usage 信息
 
 	// 沙箱策略（宿主經 DSC_SANDBOX_POLICY 傳入，缺省 workspace-write）：渲染进
 	// system prompt 的 sandbox:policy 上下文片段（对齐 DSH），让模型知道当前文件
@@ -142,17 +142,17 @@ func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, too
 	return nil
 }
 
-func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*plugin.AgentResult, error) {
+func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*core.AgentResult, error) {
 	return a.runLoop(ctx, input, nil)
 }
 
 // RunStream 以流式方式执行循环：LLM 文本增量、工具调用提示以帧的形式发送到通道，关闭表示结束
-func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *plugin.RunStreamResponse, error) {
-	ch := make(chan *plugin.RunStreamResponse)
+func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *core.RunStreamResponse, error) {
+	ch := make(chan *core.RunStreamResponse)
 	go func() {
 		defer close(ch)
 		var emittedErr bool
-		_, err := a.runLoop(ctx, input, func(item *plugin.RunStreamResponse) {
+		_, err := a.runLoop(ctx, input, func(item *core.RunStreamResponse) {
 			if item.Status == "error" {
 				emittedErr = true
 			}
@@ -161,14 +161,14 @@ func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *p
 		// runLoop 在早期失败（serviceID 未设置 / 连接失败等）时不会 emit 錯誤幀，
 		// 這裡補發一幀，避免錯誤被吞掉導致 TUI 靜默無響應
 		if err != nil && !emittedErr {
-			ch <- &plugin.RunStreamResponse{Status: "error", Error: err.Error()}
+			ch <- &core.RunStreamResponse{Status: "error", Error: err.Error()}
 		}
 	}()
 	return ch, nil
 }
 
 // runLoop 是 Agent 的核心循环；emit 非空时输出流式帧（文本增量 / 工具提示 / 结束状态），否则保持非流式
-func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*plugin.RunStreamResponse)) (*plugin.AgentResult, error) {
+func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*core.RunStreamResponse)) (*core.AgentResult, error) {
 	// 创建一个可取消的 context，保存 cancelFunc
 	ctx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
@@ -242,12 +242,14 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 	}
 
-	// 事件溯源会话：首轮从磁盘恢复或新建（多会话 Store，固定 default 会话），
+	// 事件溯源会话：首轮从磁盘恢复或新建（多会话 Store，默认会话按当前工作区
+	// 项目命名——同项目跨时期共享历史、不同项目隔离，不再硬编码 default.jsonl），
 	// 并构建完整 system prompt；工具列表变化时重建 system prompt。
 	// 历史以事件追加进 session（对齐 DSH：模型可见即已记录），不再维护独立消息数组。
 	a.sessMu.Lock()
 	if a.sess == nil {
-		restored, err := a.store.Ensure("default")
+		projectKey := session.SessionKeyForProject(os.Getenv("DSC_WORKSPACE_ROOT"))
+		restored, err := a.store.Ensure(projectKey)
 		if err != nil {
 			a.sessMu.Unlock()
 			return nil, fmt.Errorf("failed to restore session: %w", err)
@@ -291,8 +293,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user"}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
 	// cancelLoop 返回被取消的结果
-	cancelResult := func() (*plugin.AgentResult, error) {
-		return &plugin.AgentResult{
+	cancelResult := func() (*core.AgentResult, error) {
+		return &core.AgentResult{
 			Output: "Agent canceled",
 			Status: "error",
 		}, ctx.Err()
@@ -311,7 +313,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 	// 闭包按引用捕获 turnNo/stepNo，故每次发射都取当前步。
 	if emit != nil {
 		baseEmit := emit
-		emit = func(f *plugin.RunStreamResponse) {
+		emit = func(f *core.RunStreamResponse) {
 			f.Turn = int32(turnNo)
 			f.Step = int32(stepNo)
 			baseEmit(f)
@@ -319,7 +321,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		// 待办投影帧（对齐 DSH FoldTodos）：turn/start 使上一轮计划失效，
 		// 通知 TUI 清空待办面板；面板内容随后由 todo_write 成功结果帧驱动。
 		// 无需 /todo 手动清理，也不依赖模型主动清空——新一轮即自动让位。
-		emit(&plugin.RunStreamResponse{Status: "todo"})
+		emit(&core.RunStreamResponse{Status: "todo"})
 	}
 	// maxIterations == 0 表示不設上限，僅靠 ctx 取消（用戶 Ctrl+C / Shutdown）與模型自然收尾結束
 	for i := 0; maxIterations == 0 || i < maxIterations; i++ {
@@ -363,7 +365,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		}
 		if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 {
 			if emit != nil {
-				emit(&plugin.RunStreamResponse{
+				emit(&core.RunStreamResponse{
 					Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
 						promptTokens*100/a.contextWindow),
 					Status: "tool",
@@ -397,7 +399,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				summary, err := a.compactHistory(ctx, llmClient, msgs, availableTools)
 				if err != nil {
 					if emit != nil {
-						emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+						emit(&core.RunStreamResponse{Status: "error", Error: err.Error()})
 					}
 					return nil, err
 				}
@@ -438,7 +440,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		} else {
 			s, err := llmClient.ChatStream(ctx, req)
 			if err != nil {
-				emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+				emit(&core.RunStreamResponse{Status: "error", Error: err.Error()})
 				return nil, fmt.Errorf("LLM chat stream failed: %w", err)
 			}
 			for {
@@ -447,11 +449,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 					break
 				}
 				if err != nil {
-					emit(&plugin.RunStreamResponse{Status: "error", Error: err.Error()})
+					emit(&core.RunStreamResponse{Status: "error", Error: err.Error()})
 					return nil, fmt.Errorf("LLM chat stream recv failed: %w", err)
 				}
 				if cr.Error != "" {
-					emit(&plugin.RunStreamResponse{Status: "error", Error: cr.Error})
+					emit(&core.RunStreamResponse{Status: "error", Error: cr.Error})
 					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
 				}
 				// [DEBUG] 打印接收到的 ChatStreamResponse
@@ -459,14 +461,14 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				// 記錄 prompt 用量（≈ 當前上下文已用容量）；該值在 finish 分片由服務端返回
 				if cr.Usage != nil {
 					a.lastPromptTokens = cr.Usage.PromptTokens
-					a.lastUsage = plugin.UsageFromProto(cr.Usage)
+					a.lastUsage = core.UsageFromProto(cr.Usage)
 				}
 				content += cr.Content
 				if cr.Content != "" {
-					emit(&plugin.RunStreamResponse{Output: cr.Content, Status: "streaming"})
+					emit(&core.RunStreamResponse{Output: cr.Content, Status: "streaming"})
 				}
 				if cr.Reasoning != "" {
-					emit(&plugin.RunStreamResponse{Reasoning: cr.Reasoning, Status: "reasoning"})
+					emit(&core.RunStreamResponse{Reasoning: cr.Reasoning, Status: "reasoning"})
 				}
 				// 原始流分片记入会话（log-only：回放/UI 保真，不参与派生历史）
 				if cr.Content != "" || cr.Reasoning != "" {
@@ -511,7 +513,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 						Source:  "goal_round",
 					}, &session.SurfaceOp{Op: session.SurfaceAppend})
 					if emit != nil {
-						emit(&plugin.RunStreamResponse{
+						emit(&core.RunStreamResponse{
 							Output: fmt.Sprintf("\n[Goal Round %d/%d]\n", a.goalRounds, g.MaxGoalRounds),
 							Status: "tool",
 						})
@@ -524,7 +526,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				// 下一轮（消息已被下轮派生，不会重复触发，也不会死循环）。
 				if a.hasNewInjectedSince(iterPendingInjects) {
 					if emit != nil {
-						emit(&plugin.RunStreamResponse{
+						emit(&core.RunStreamResponse{
 							Output: "\n[已收到新消息，继续处理]\n",
 							Status: "tool",
 						})
@@ -535,7 +537,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
-				usage := &plugin.Usage{
+				usage := &core.Usage{
 					PromptTokens: a.lastPromptTokens,
 				}
 				if a.lastUsage != nil {
@@ -546,12 +548,12 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				} else {
 					usage.TotalTokens = a.lastPromptTokens
 				}
-				emit(&plugin.RunStreamResponse{
+				emit(&core.RunStreamResponse{
 					Status: "success",
 					Usage:  usage,
 				})
 			}
-			return &plugin.AgentResult{
+			return &core.AgentResult{
 				Output: content,
 				Status: "success",
 			}, nil
@@ -578,7 +580,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 			// 向客户端提示正在调用工具（携带工具名与参数 JSON，供 TUI 渲染 REX 式卡片）
 			// Usage 随帧携带：本步模型请求完成后即可刷新容量，不必等轮末 success 帧。
 			if emit != nil {
-				emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, Usage: a.usageSnapshot()})
+				emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, Usage: a.usageSnapshot()})
 			}
 
 			// 宿主托管的 plan/goal 工具直接本地执行（状态读写会话事件日志），
@@ -626,7 +628,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				}
 				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片
 				if emit != nil {
-					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error, Usage: a.usageSnapshot()})
+					emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error, Usage: a.usageSnapshot()})
 				}
 			} else {
 				sess.Append(session.ToolResult, &session.ToolResultData{
@@ -636,7 +638,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片；
 				// 成功结果帧附带 ToolArgs，供 TUI 更新待办面板（todo_write 等整表工具）
 				if emit != nil {
-					emit(&plugin.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, ToolResult: toolResp.Content, Usage: a.usageSnapshot()})
+					emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, ToolResult: toolResp.Content, Usage: a.usageSnapshot()})
 				}
 			}
 			// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链检测在每次调用后，
@@ -654,7 +656,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		if concludeTurn {
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "goal-concluded"}, nil)
 			if emit != nil {
-				usage := &plugin.Usage{PromptTokens: a.lastPromptTokens}
+				usage := &core.Usage{PromptTokens: a.lastPromptTokens}
 				if a.lastUsage != nil {
 					usage.CompletionTokens = a.lastUsage.CompletionTokens
 					usage.TotalTokens = a.lastUsage.TotalTokens
@@ -663,9 +665,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 				} else {
 					usage.TotalTokens = a.lastPromptTokens
 				}
-				emit(&plugin.RunStreamResponse{Status: "success", Usage: usage})
+				emit(&core.RunStreamResponse{Status: "success", Usage: usage})
 			}
-			return &plugin.AgentResult{Output: content, Status: "success"}, nil
+			return &core.AgentResult{Output: content, Status: "success"}, nil
 		}
 	}
 	// 超过最大迭代次数：轮次以 max-iterations 关闭（不再持久化独立消息数组，session 即历史）
@@ -676,26 +678,26 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 		if executedToolsErr {
 			// 工具執行出錯：發 error 幀，使 -input 以退出碼 1 結束，測試方能據此判斷失敗
 			if emit != nil {
-				emit(&plugin.RunStreamResponse{Output: "Single turn completed with tool errors", Status: "error"})
+				emit(&core.RunStreamResponse{Output: "Single turn completed with tool errors", Status: "error"})
 			}
-			return &plugin.AgentResult{
+			return &core.AgentResult{
 				Output: "Single turn completed with tool errors",
 				Status: "error",
 			}, nil
 		}
 		if emit != nil {
-			emit(&plugin.RunStreamResponse{Status: "success"})
+			emit(&core.RunStreamResponse{Status: "success"})
 		}
-		return &plugin.AgentResult{
+		return &core.AgentResult{
 			Output: "Single turn completed with tools executed",
 			Status: "success",
 		}, nil
 	}
 	if emit != nil {
 		// Error 字段必須帶上，否則 TUI 只按 Status 判斷、看不到任何提示，造成「莫名停止」
-		emit(&plugin.RunStreamResponse{Output: "Max iterations reached", Status: "error", Error: "达到最大轮次上限，自动停止"})
+		emit(&core.RunStreamResponse{Output: "Max iterations reached", Status: "error", Error: "达到最大轮次上限，自动停止"})
 	}
-	return &plugin.AgentResult{
+	return &core.AgentResult{
 		Output: "Max iterations reached",
 		Status: "error",
 	}, nil
@@ -704,8 +706,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*p
 // usageSnapshot 生成当前步骤请求的用量快照：优先取服务端返回的 lastUsage，
 // 否则退化为仅携带最近一次 prompt 用量。随工具帧携带，供 TUI 在每步工具调用
 // 后实时刷新容量显示（对齐 REX 每步 usage 事件即时更新统计行的观感）。
-func (a *ReactLoopAgent) usageSnapshot() *plugin.Usage {
-	usage := &plugin.Usage{PromptTokens: a.lastPromptTokens}
+func (a *ReactLoopAgent) usageSnapshot() *core.Usage {
+	usage := &core.Usage{PromptTokens: a.lastPromptTokens}
 	if a.lastUsage != nil {
 		usage.CompletionTokens = a.lastUsage.CompletionTokens
 		usage.TotalTokens = a.lastUsage.TotalTokens
@@ -925,9 +927,9 @@ func (a *ReactLoopAgent) SetPlanMode(ctx context.Context, active bool) error {
 }
 
 // SetHistoryInjection 设置当前会话的历史注入条数上限：追加 log-only history/limit
-// 事件并落盘（事件溯源：恢复/切换/fork 都能折叠还原），无需重建 system prompt——
-// 该值在每次 Run 派生请求历史时读取。count < 0 表示不限制；0 表示不注入历史；
-// > 0 表示只注入最近 count 条派生消息。
+// 事件并落盘（事件溯源：恢复/切换/fork 都能折叠还原），无需重建 system prompt。
+// 同时立即更新内存值（当前 Run 后续 step 即按新值派生，无需等下一次 Run 折叠）。
+// count < 0 表示不限制；0 表示不注入历史；> 0 表示只注入最近 count 条派生消息。
 func (a *ReactLoopAgent) SetHistoryInjection(ctx context.Context, count int) error {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
@@ -938,6 +940,7 @@ func (a *ReactLoopAgent) SetHistoryInjection(ctx context.Context, count int) err
 	if err := a.store.Save(a.sess); err != nil {
 		return fmt.Errorf("set history injection: %w", err)
 	}
+	a.historyInjection = count // 立即生效（history off/0 后本会话后续消息不再注入历史）
 	fmt.Printf("[Agent Loop] history injection limit set to %d\n", count)
 	return nil
 }
@@ -1003,14 +1006,14 @@ func (a *ReactLoopAgent) hasNewInjectedSince(iterInjects int) bool {
 // DebugSnapshot 返回 agent 当前运行时的调试快照，供 ADMIN API 的 DEBUGGER 端点
 // 与自动化测试观察代理内部状态：会话历史（含实时注入的消息）、token 用量、
 // turn 计数与 plan/goal 状态。
-func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*plugin.AgentDebugSnapshot, error) {
+func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*core.AgentDebugSnapshot, error) {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
 	if a.sess == nil {
 		return nil, fmt.Errorf("debug snapshot: session not loaded")
 	}
 
-	snap := &plugin.AgentDebugSnapshot{
+	snap := &core.AgentDebugSnapshot{
 		SessionID:        a.sess.ID(),
 		TurnCount:        a.turnCounter,
 		PlanActive:       a.planActive,
@@ -1019,7 +1022,7 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*plugin.AgentDebugS
 
 	// goal 状态由事件日志折叠
 	if g := session.FoldGoal(a.sess.Events()); g != nil {
-		snap.Goal = &plugin.AgentGoalDebugInfo{
+		snap.Goal = &core.AgentGoalDebugInfo{
 			Phase: g.Phase, Revision: g.Revision,
 			MaxRounds: g.MaxGoalRounds, Objective: g.Objective,
 		}
@@ -1027,7 +1030,7 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*plugin.AgentDebugS
 
 	// 派生的请求历史（与下次 LLM 请求一致，含实时注入的消息与历史注入条数限制）
 	for _, m := range a.sess.DeriveMessagesLimited(a.sysPrompt, a.historyInjection) {
-		snap.Messages = append(snap.Messages, &plugin.AgentDebugMessage{Role: m.Role, Content: m.Content})
+		snap.Messages = append(snap.Messages, &core.AgentDebugMessage{Role: m.Role, Content: m.Content})
 	}
 	return snap, nil
 }
@@ -1183,7 +1186,7 @@ func newAgent() (*ReactLoopAgent, error) {
 	return agent, nil
 }
 
-// main 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.AgentGRPCPlugin 提供
+// main 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.AgentGRPCPlugin 提供
 // AgentService + 元数据，并经 AgentBroker 回调在 gRPC server 建立时注入宿主 broker
 // （重写自旧的 customAgentPlugin/agentGRPCServer 样板）。
 func main() {

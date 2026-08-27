@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/session"
 )
 
@@ -37,7 +37,7 @@ func TestRunLoopLimitedHistoryInjection(t *testing.T) {
 	a.toolClient = &mockToolClient{}
 
 	// emit 非空走 ChatStream 路径（与 TUI 一致），compactMockLLM 在该路径记录入参消息
-	res, err := a.runLoop(context.Background(), "继续", func(*plugin.RunStreamResponse) {})
+	res, err := a.runLoop(context.Background(), "继续", func(*core.RunStreamResponse) {})
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}

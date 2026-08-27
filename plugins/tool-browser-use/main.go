@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"dsc-sdk"
-	"dsc/plugin"
+	"dsc/core"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
@@ -584,7 +584,7 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 	}
 
 	// 保存截圖到工作區目錄（沙箱限制寫入系統臨時目錄，如 %TEMP%，故存到 workspace 內）
-	downloadDir := filepath.Join(plugin.WorkspaceRoot, "screenshots")
+	downloadDir := filepath.Join(core.WorkspaceRoot, "screenshots")
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"創建下載目錄失敗: %s"}`, err.Error()), nil
 	}
@@ -613,7 +613,7 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 
 // ============================================================
 // 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
-// PluginMetadata / PluginHookService 与 go-plugin 组装（重写自旧的
+// PluginMetadata / PluginHookService 与 go-core 组装（重写自旧的
 // ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 // ============================================================
 func main() {

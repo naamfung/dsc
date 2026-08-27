@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"dsc/core"
 	"dsc/cron"
-	"dsc/plugin"
 )
 
 // TestSessionCommandSwitch 校验 /session <id> 命令触发 agent 会话切换。
@@ -46,7 +46,7 @@ func TestSessionCommandSwitchWithoutArg(t *testing.T) {
 
 // TestSessionsCommandLists 校验 /sessions 列出会话（manager 提供目录）。
 func TestSessionsCommandLists(t *testing.T) {
-	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
 	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
 
 	handled, _ := m.runSlashCommand("/sessions")
@@ -79,7 +79,7 @@ func TestPlanCommandToggle(t *testing.T) {
 
 // TestCronCommandAddAndList 校验 /job add 添加任务、/jobs 列出任务。
 func TestCronCommandAddAndList(t *testing.T) {
-	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
 	if err := mgr.StartCron(); err != nil {
 		t.Fatalf("start jobs: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestCronCommandAddAndList(t *testing.T) {
 
 // TestSessionCommandNew 校验 /session new 新建会话并切换。
 func TestSessionCommandNew(t *testing.T) {
-	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
 	ag := &stubAgent{}
 	m := New(ag, mgr, context.Background(), "m", "minimal", 131072)
 
@@ -130,7 +130,7 @@ func TestSessionCommandNew(t *testing.T) {
 
 // TestSessionCommandDelete 校验 /session delete <id> 删除会话。
 func TestSessionCommandDelete(t *testing.T) {
-	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
 	// 先建一个会话供删除
 	id, err := mgr.CreateSession()
 	if err != nil {
@@ -159,43 +159,43 @@ func TestSessionCommandDelete(t *testing.T) {
 
 // TestSandboxCommandToggle 校验 /sandbox 三档切换运行时沙箱策略（on/off 为兼容别名）。
 func TestSandboxCommandToggle(t *testing.T) {
-	mgr := plugin.NewManager(&plugin.ManagerConfig{ExecDir: t.TempDir()})
+	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
 	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
 
 	// 初始为缺省 workspace-write
-	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxWorkspaceWrite {
+	if got := mgr.GetSandboxPolicy(); got != core.SandboxWorkspaceWrite {
 		t.Fatalf("initial policy = %v, want workspace", got)
 	}
 	if handled, _ := m.runSlashCommand("/sandbox read-only"); !handled {
 		t.Fatal("/sandbox read-only should be handled")
 	}
-	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxReadOnly {
+	if got := mgr.GetSandboxPolicy(); got != core.SandboxReadOnly {
 		t.Fatalf("after read-only, policy = %v, want read-only", got)
 	}
 	// 切回 workspace-write 档（此前 TUI 无法切回的缺省档）
 	if handled, _ := m.runSlashCommand("/sandbox workspace"); !handled {
 		t.Fatal("/sandbox workspace should be handled")
 	}
-	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxWorkspaceWrite {
+	if got := mgr.GetSandboxPolicy(); got != core.SandboxWorkspaceWrite {
 		t.Fatalf("after workspace, policy = %v, want workspace", got)
 	}
 	if handled, _ := m.runSlashCommand("/sandbox full-access"); !handled {
 		t.Fatal("/sandbox full-access should be handled")
 	}
-	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxFullAccess {
+	if got := mgr.GetSandboxPolicy(); got != core.SandboxFullAccess {
 		t.Fatalf("after full-access, policy = %v, want full", got)
 	}
 	// on/off 兼容别名
 	if handled, _ := m.runSlashCommand("/sandbox on"); !handled {
 		t.Fatal("/sandbox on should be handled")
 	}
-	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxReadOnly {
+	if got := mgr.GetSandboxPolicy(); got != core.SandboxReadOnly {
 		t.Fatalf("after on, policy = %v, want read-only", got)
 	}
 	if handled, _ := m.runSlashCommand("/sandbox off"); !handled {
 		t.Fatal("/sandbox off should be handled")
 	}
-	if got := mgr.GetSandboxPolicy(); got != plugin.SandboxFullAccess {
+	if got := mgr.GetSandboxPolicy(); got != core.SandboxFullAccess {
 		t.Fatalf("after off, policy = %v, want full", got)
 	}
 	full := strings.Join(m.lines, "\n")

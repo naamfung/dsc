@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
-	"dsc/plugin/llmclient"
-	"dsc/plugin/notify"
-	"dsc/plugin/toolclient"
-	goplugin "github.com/hashicorp/go-plugin"
+	"dsc/core/llmclient"
+	"dsc/core/notify"
+	"dsc/core/toolclient"
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // InterconnectHandler 互通回调：宿主把聚合 LLM/Tool/Notify 服务挂载到本插件
@@ -71,7 +71,7 @@ func (ic *Interconnect) Close() error {
 
 // llmDial/toolDial/notifyDial 是 llmclient/toolclient/notify.Dial 的薄封装，
 // 统一处理「未提供 serviceID 时返回 nil 而非错误」（tool-lua-host 同款语义）。
-func llmDial(broker *goplugin.GRPCBroker, id uint32) (*llmclient.Client, error) {
+func llmDial(broker *plugin.GRPCBroker, id uint32) (*llmclient.Client, error) {
 	if broker == nil || id == 0 {
 		return nil, nil
 	}
@@ -82,7 +82,7 @@ func llmDial(broker *goplugin.GRPCBroker, id uint32) (*llmclient.Client, error) 
 	return c, nil
 }
 
-func toolDial(broker *goplugin.GRPCBroker, id uint32) (*toolclient.Client, error) {
+func toolDial(broker *plugin.GRPCBroker, id uint32) (*toolclient.Client, error) {
 	if broker == nil || id == 0 {
 		return nil, nil
 	}
@@ -93,7 +93,7 @@ func toolDial(broker *goplugin.GRPCBroker, id uint32) (*toolclient.Client, error
 	return c, nil
 }
 
-func notifyDial(broker *goplugin.GRPCBroker, id uint32) (*notify.Notifier, error) {
+func notifyDial(broker *plugin.GRPCBroker, id uint32) (*notify.Notifier, error) {
 	if broker == nil || id == 0 {
 		return nil, nil
 	}

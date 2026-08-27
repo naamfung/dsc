@@ -17,6 +17,31 @@ import (
 // user 内容预览）。对齐 DSH SessionStore 的存储 seam；会话内容本身仍是
 // 事件溯源日志（见 persist.go）。
 
+// SessionKeyForProject 把项目根路径转换为默认会话文件名（key）：
+// 统一 / 分隔 → 去掉根斜杠 → 冒号与 / 替换为 -，并清理 Windows 文件名非法字符。
+// 保证「同一项目同名、不同项目隔离」——默认会话按当前工作区命名，不再使用
+// 硬编码的 default.jsonl，避免跨项目历史被混入注入上下文。
+//
+// 例：
+//
+//	C:\Users\Administrator\Desktop\DeepClean → C--Users-Administrator-Desktop-DeepClean
+//	/mnt/c/Users/Administrator/Desktop/DeepClean → mnt-c-Users-Administrator-Desktop-DeepClean
+//	/home/jor/DeepClean → home-jor-DeepClean
+func SessionKeyForProject(projectRoot string) string {
+	p := filepath.ToSlash(projectRoot)
+	p = strings.TrimPrefix(p, "/")
+	p = strings.ReplaceAll(p, ":", "-")
+	p = strings.ReplaceAll(p, "/", "-")
+	// 清理 Windows 文件名非法字符（<>:"/\|?*；冒号已在上方替换）
+	for _, r := range []rune{'<', '>', '"', '|', '?', '*'} {
+		p = strings.ReplaceAll(p, string(r), "-")
+	}
+	if p == "" {
+		return "default"
+	}
+	return p
+}
+
 // SessionInfo 会话列表条目（轻量元数据，不加载全部事件）。
 type SessionInfo struct {
 	ID       string    `json:"id"`

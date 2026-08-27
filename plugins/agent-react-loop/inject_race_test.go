@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -99,14 +99,14 @@ func TestRunLoopContinuesOnInjectedDuringStream(t *testing.T) {
 	a.toolClient = &mockToolClient{}
 
 	var mu sync.Mutex
-	var frames []*plugin.RunStreamResponse
-	emit := func(f *plugin.RunStreamResponse) {
+	var frames []*core.RunStreamResponse
+	emit := func(f *core.RunStreamResponse) {
 		mu.Lock()
 		frames = append(frames, f)
 		mu.Unlock()
 	}
 
-	done := make(chan *plugin.AgentResult, 1)
+	done := make(chan *core.AgentResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
 		res, err := a.runLoop(context.Background(), "初始问题", emit)

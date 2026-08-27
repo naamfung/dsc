@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 )
 
@@ -20,9 +20,9 @@ func newTestState(t *testing.T) (*editorState, string) {
 	if err := os.MkdirAll(ws, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// 統一工作空間根：handler 現讀 plugin.WorkspaceRoot（宿主經 DSC_WORKSPACE_ROOT 注入），
+	// 統一工作空間根：handler 現讀 core.WorkspaceRoot（宿主經 DSC_WORKSPACE_ROOT 注入），
 	// 測試需將根指到臨時 ws 以便斷言寫入位置。
-	plugin.WorkspaceRoot = ws
+	core.WorkspaceRoot = ws
 	state := &editorState{
 		observations: make(map[string]*proto.FsObservation),
 	}

@@ -44,7 +44,7 @@ var holder = &hostHolder{}
 
 func main() {
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService / PluginHookService /
-	// PluginMetadata 与 go-plugin 组装。脚本经 dsc.register_tool 注册的工具为运行时
+	// PluginMetadata 与 go-core 组装。脚本经 dsc.register_tool 注册的工具为运行时
 	// 动态集合，故用 sdk.ToolProvider 每次求值；脚本钩子经 sdk.Hook 转发到宿主流水线。
 	sdk := dsc.New(dsc.Config{Name: "tool-lua-host", Version: "1.0.0", Type: dsc.TypeTool})
 

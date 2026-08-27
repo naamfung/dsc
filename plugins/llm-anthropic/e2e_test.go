@@ -13,14 +13,14 @@ import (
 	"strings"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的 LLM 插件：
-// 以宿主侧 go-plugin 客户端 spawn exe（ANTHROPIC_BASE_URL 指向本地 mock 服务），
+// 以宿主侧 go-core 客户端 spawn exe（ANTHROPIC_BASE_URL 指向本地 mock 服务），
 // 经 gRPC 验证元数据（type=llm）、Name/Version/HealthCheck、Chat（非流式）
 // 与 ChatStream（SSE 流式 + finish_reason + usage）。
 func TestE2EWithHostClient(t *testing.T) {
@@ -72,10 +72,10 @@ func TestE2EWithHostClient(t *testing.T) {
 		"ANTHROPIC_MODEL=mock-model",
 		"ANTHROPIC_THINKING=0",
 	)
-	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig:  plugin.Handshake,
-		Plugins:          map[string]goplugin.Plugin{},
-		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  core.Handshake,
+		Plugins:          map[string]plugin.Plugin{},
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Cmd:              cmd,
 	})
 	defer client.Kill()
@@ -84,7 +84,7 @@ func TestE2EWithHostClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
 	if !ok {
 		t.Fatalf("unexpected client type %T", rpcClient)
 	}
@@ -98,7 +98,7 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("GetInfo = %+v, err %v", info, err)
 	}
 
-	// 5. LLMService 基础方法（SDK 复用 plugin.LLMGRPCPlugin）
+	// 5. LLMService 基础方法（SDK 复用 core.LLMGRPCPlugin）
 	llm := proto.NewLLMServiceClient(conn)
 	nm, err := llm.Name(ctx, &proto.NameRequest{})
 	if err != nil || nm.Name != "anthropic" {

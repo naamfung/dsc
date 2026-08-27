@@ -16,21 +16,21 @@ func TestFieldWritePreservesTruthyNarrowingAcrossVersions(t *testing.T) {
 		}
 
 		local active: {[string]: PluginState} = {}
-		local plugin_prefix: string? = nil
-		local plugin_state: PluginState? = nil
+		local core_prefix: string? = nil
+		local core_state: PluginState? = nil
 
 		for prefix, state in pairs(active) do
-			plugin_prefix = prefix
-			plugin_state = state
+			core_prefix = prefix
+			core_state = state
 			break
 		end
 
-		if not plugin_prefix or not plugin_state then
+		if not core_prefix or not core_state then
 			return
 		end
 
-		plugin_state.pid = nil
-		plugin_state.restart_count = plugin_state.restart_count + 1
+		core_state.pid = nil
+		core_state.restart_count = core_state.restart_count + 1
 	`
 
 	result := testutil.Check(source, testutil.WithStdlib())

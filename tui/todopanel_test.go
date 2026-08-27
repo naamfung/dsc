@@ -8,7 +8,7 @@ import (
 	"charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"dsc/plugin"
+	"dsc/core"
 )
 
 func TestRenderTodoPanel(t *testing.T) {
@@ -84,7 +84,7 @@ func TestTodoPanelRows(t *testing.T) {
 
 // TestTodoPanelFrameUpdate todo_write 成功结果帧更新面板；调用帧/失败帧/其他工具不更新。
 func TestTodoPanelFrameUpdate(t *testing.T) {
-	frames := []*plugin.RunStreamResponse{
+	frames := []*core.RunStreamResponse{
 		{Status: "tool", ToolName: "todo_write", ToolArgs: `{"todos":[{"content":"x","status":"in_progress"}]}`, ToolResult: "Updated todo list: 1 in progress"},
 		{Status: "success"},
 	}
@@ -95,7 +95,7 @@ func TestTodoPanelFrameUpdate(t *testing.T) {
 
 	// 调用帧（ToolResult 空）不更新——工具尚未确认执行
 	m.todoArgs = ""
-	framesCall := []*plugin.RunStreamResponse{
+	framesCall := []*core.RunStreamResponse{
 		{Status: "tool", ToolName: "todo_write", ToolArgs: `{"todos":[{"content":"planned","status":"in_progress"}]}`},
 		{Status: "success"},
 	}
@@ -106,7 +106,7 @@ func TestTodoPanelFrameUpdate(t *testing.T) {
 
 	// 失败帧（Error 非空）不更新
 	m.todoArgs = `{"todos":[{"content":"keep","status":"in_progress"}]}`
-	frames2 := []*plugin.RunStreamResponse{
+	frames2 := []*core.RunStreamResponse{
 		{Status: "tool", ToolName: "todo_write", ToolArgs: `{"todos":[{"content":"rejected","status":"pending"}]}`, ToolResult: "rejected", Error: "validation failed"},
 		{Status: "success"},
 	}
@@ -153,7 +153,7 @@ func TestTodoPanelViewLayout(t *testing.T) {
 // 携带 ToolArgs 时填充（对齐 DSH FoldTodos：无需 /todo 手动清理，也不信任模型）。
 func TestTodoProjectionFrame(t *testing.T) {
 	// 清空：先有面板（残留），投影帧（空）应清除
-	frames := []*plugin.RunStreamResponse{
+	frames := []*core.RunStreamResponse{
 		{Status: "tool", ToolName: "todo_write", ToolArgs: `{"todos":[{"content":"旧任务","status":"in_progress"}]}`, ToolResult: "Updated todo list: 1 in progress"},
 		{Status: "success"},
 	}
@@ -161,7 +161,7 @@ func TestTodoProjectionFrame(t *testing.T) {
 	if m.todoArgs == "" {
 		t.Fatal("前置：应先填充面板")
 	}
-	frames2 := []*plugin.RunStreamResponse{
+	frames2 := []*core.RunStreamResponse{
 		{Status: "todo"},
 		{Status: "success"},
 	}
@@ -169,14 +169,14 @@ func TestTodoProjectionFrame(t *testing.T) {
 	// 注：投影帧在各帧最前，真实跨轮场景由 agent 每轮启动发帧保证清空；
 	// 此处直接验证 case "todo" 的空帧语义（清空 todoArgs）。
 	m2.todoArgs = `{"todos":[{"content":"残留","status":"in_progress"}]}`
-	model, _ := m2.Update(streamFrame{input: "x", ch: nil, frame: &plugin.RunStreamResponse{Status: "todo"}})
+	model, _ := m2.Update(streamFrame{input: "x", ch: nil, frame: &core.RunStreamResponse{Status: "todo"}})
 	m3 := model.(*Model)
 	if m3.todoArgs != "" {
 		t.Fatalf("todo 投影帧（空）应清空面板: %q", m3.todoArgs)
 	}
 
 	// 携带列表时填充（预留：恢复会话展示场景）
-	frames3 := []*plugin.RunStreamResponse{
+	frames3 := []*core.RunStreamResponse{
 		{Status: "todo", ToolArgs: `{"todos":[{"content":"恢复的任务","status":"in_progress"}]}`},
 		{Status: "success"},
 	}
@@ -189,7 +189,7 @@ func TestTodoProjectionFrame(t *testing.T) {
 // TestTodoPanelRealisticFlow 真实帧序：每轮启动先发 todo 投影帧（清空），
 // 模型随后 todo_write 结果帧填充，success 结束；面板不残留也不需要 /todo。
 func TestTodoPanelRealisticFlow(t *testing.T) {
-	frames := []*plugin.RunStreamResponse{
+	frames := []*core.RunStreamResponse{
 		{Status: "todo"},
 		{Status: "tool", ToolName: "todo_write", ToolArgs: `{"todos":[{"content":"任务","status":"in_progress"}]}`, ToolResult: "Updated todo list: 1 in progress"},
 		{Status: "success"},

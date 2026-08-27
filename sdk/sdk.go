@@ -2,7 +2,7 @@
 //
 // 独立开发者只需引入本包（及其底层 dsc/proto 依赖），声明式地注册工具、LLM、
 // Agent、钩子与互通回调，即可产出宿主零改动即可加载的插件二进制。
-// 宿主按目录名 <type>-<name> 发现插件（见 plugin/manager.go validatePluginDirectoryName），
+// 宿主按目录名 <type>-<name> 发现插件（见 core/manager.go validatePluginDirectoryName），
 // 因此构建产物应放到宿主 plugins/ 目录（或经 ADMIN API /plugins/load 动态注入）。
 package dsc
 
@@ -11,9 +11,9 @@ import (
 	"fmt"
 	"os"
 
-	goplugin "github.com/hashicorp/go-plugin"
+	plugin "github.com/hashicorp/go-plugin"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 )
 
@@ -23,9 +23,9 @@ type Type string
 const (
 	// TypeTool 工具插件：注册一个或多个工具（可附加钩子与互通回调）。
 	TypeTool Type = "tool"
-	// TypeLLM 大模型插件：实现 plugin.LLMProvider。
+	// TypeLLM 大模型插件：实现 core.LLMProvider。
 	TypeLLM Type = "llm"
-	// TypeAgent 智能体插件：实现 plugin.Agent。
+	// TypeAgent 智能体插件：实现 core.Agent。
 	TypeAgent Type = "agent"
 	// TypePolicy 策略插件：注册宿主可桥接的策略服务（如文件系统观测
 	// FsObservationPolicyService）；宿主经主连接直接取对应 proto 客户端。
@@ -44,8 +44,8 @@ type Config struct {
 type SDK struct {
 	cfg    Config
 	tools  []*Tool
-	llm    plugin.LLMProvider
-	agent  plugin.Agent
+	llm    core.LLMProvider
+	agent  core.Agent
 	policy proto.FsObservationPolicyServiceServer
 	hook   *Hook
 	inter  InterconnectHandler
@@ -99,14 +99,14 @@ func (s *SDK) snapshotTools() []Tool {
 	return out
 }
 
-// LLM 注册大模型实现（仅 llm 类型插件；实现 plugin.LLMProvider）。
-func (s *SDK) LLM(impl plugin.LLMProvider) *SDK {
+// LLM 注册大模型实现（仅 llm 类型插件；实现 core.LLMProvider）。
+func (s *SDK) LLM(impl core.LLMProvider) *SDK {
 	s.llm = impl
 	return s
 }
 
-// Agent 注册智能体实现（仅 agent 类型插件；实现 plugin.Agent）。
-func (s *SDK) Agent(impl plugin.Agent) *SDK {
+// Agent 注册智能体实现（仅 agent 类型插件；实现 core.Agent）。
+func (s *SDK) Agent(impl core.Agent) *SDK {
 	s.agent = impl
 	return s
 }
@@ -133,10 +133,10 @@ func (s *SDK) SetInterconnect(handler InterconnectHandler) *SDK {
 }
 
 // AgentBroker 注册 agent 类型插件的 gRPC server 初始化回调：宿主 broker 就绪后、
-// 标准 AgentServiceServer 注册前执行。回调收到 SDK 对 go-plugin broker 的隔离
-// 封装 AgentBroker（插件无需 import go-plugin）；agent 实现通常缓存它，待
+// 标准 AgentServiceServer 注册前执行。回调收到 SDK 对 go-core broker 的隔离
+// 封装 AgentBroker（插件无需 import go-core）；agent 实现通常缓存它，待
 // RegisterServices 拿到 LLM/Tool/UserQuestions 服务 ID 后经 Dial* 建立连接
-// （见 plugin/manager.go 的 RegisterServices 时序）。
+// （见 core/manager.go 的 RegisterServices 时序）。
 func (s *SDK) AgentBroker(fn func(b *AgentBroker) error) *SDK {
 	s.agentBroker = fn
 	return s
@@ -154,7 +154,7 @@ func (s *SDK) OnStop(fn func() error) *SDK {
 	return s
 }
 
-// Serve 校验声明并启动 go-plugin gRPC 服务；正常情形永不返回（宿主拉起并管理生命周期）。
+// Serve 校验声明并启动 go-core gRPC 服务；正常情形永不返回（宿主拉起并管理生命周期）。
 func (s *SDK) Serve() {
 	if err := s.validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "dsc-sdk: %v\n", err)
@@ -176,14 +176,14 @@ func (s *SDK) Serve() {
 	}
 
 	plugins := s.plugins()
-	goplugin.Serve(&goplugin.ServeConfig{
-		HandshakeConfig: plugin.Handshake,
+	plugin.Serve(&plugin.ServeConfig{
+		HandshakeConfig: core.Handshake,
 		Plugins:         plugins,
-		GRPCServer:      goplugin.DefaultGRPCServer,
+		GRPCServer:      plugin.DefaultGRPCServer,
 	})
 
 	// Serve 返回说明发生错误（宿主异常终止等）
-	fmt.Fprintln(os.Stderr, "dsc-sdk: plugin serve exited unexpectedly")
+	fmt.Fprintln(os.Stderr, "dsc-sdk: core serve exited unexpectedly")
 	os.Exit(1)
 }
 
@@ -225,27 +225,27 @@ func (s *SDK) validate() error {
 	return nil
 }
 
-// plugins 组装 go-plugin 注册表（key 与宿主侧客户端无关紧要，metadata 决定类型）。
+// plugins 组装 go-core 注册表（key 与宿主侧客户端无关紧要，metadata 决定类型）。
 // LLM/Agent 类型用 metaWrapper 让元数据以 sdk.Config 的 Name/Version 为准（对齐 tool
 // 类型语义），避免实现内部 Name()/Version() 与注册信息两处维护不一致。
-func (s *SDK) plugins() map[string]goplugin.Plugin {
+func (s *SDK) plugins() map[string]plugin.Plugin {
 	switch s.cfg.Type {
 	case TypeLLM:
-		return map[string]goplugin.Plugin{"llm": &plugin.LLMGRPCPlugin{
+		return map[string]plugin.Plugin{"llm": &core.LLMGRPCPlugin{
 			Impl: &llmMetaWrapper{LLMProvider: s.llm, name: s.cfg.Name, version: s.cfg.Version},
 		}}
 	case TypeAgent:
-		return map[string]goplugin.Plugin{"agent": &agentGRPCPlugin{sdk: s}}
+		return map[string]plugin.Plugin{"agent": &agentGRPCPlugin{sdk: s}}
 	case TypePolicy:
-		return map[string]goplugin.Plugin{"policy": &policyGRPCPlugin{sdk: s}}
+		return map[string]plugin.Plugin{"policy": &policyGRPCPlugin{sdk: s}}
 	default:
-		return map[string]goplugin.Plugin{"tool": &toolGRPCPlugin{sdk: s}}
+		return map[string]plugin.Plugin{"tool": &toolGRPCPlugin{sdk: s}}
 	}
 }
 
 // llmMetaWrapper 覆盖 LLMProvider 的 Name/Version：cfg 非空时以 cfg 为准，否则回落实现。
 type llmMetaWrapper struct {
-	plugin.LLMProvider
+	core.LLMProvider
 	name, version string
 }
 
@@ -265,7 +265,7 @@ func (w *llmMetaWrapper) Version(ctx context.Context) string {
 
 // agentMetaWrapper 覆盖 Agent 的 Name/Version：cfg 非空时以 cfg 为准，否则回落实现。
 type agentMetaWrapper struct {
-	plugin.Agent
+	core.Agent
 	name, version string
 }
 

@@ -29,15 +29,15 @@ type PluginMetadataClient interface {
 	GetInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*PluginInfo, error)
 }
 
-type pluginMetadataClient struct {
+type coreMetadataClient struct {
 	cc grpc.ClientConnInterface
 }
 
 func NewPluginMetadataClient(cc grpc.ClientConnInterface) PluginMetadataClient {
-	return &pluginMetadataClient{cc}
+	return &coreMetadataClient{cc}
 }
 
-func (c *pluginMetadataClient) GetInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*PluginInfo, error) {
+func (c *coreMetadataClient) GetInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*PluginInfo, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PluginInfo)
 	err := c.cc.Invoke(ctx, PluginMetadata_GetInfo_FullMethodName, in, out, cOpts...)

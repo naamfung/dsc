@@ -7,7 +7,7 @@ import (
 )
 
 // Env 宿主注入的进程上下文（插件只读）。宿主在拉起插件时统一注入
-// DSC_* 环境变量（见 main.go / plugin/manager.go），插件在 OnStart 或
+// DSC_* 环境变量（见 main.go / core/manager.go），插件在 OnStart 或
 // 工具执行时读取，无需关心注入细节。
 type Env struct {
 	// Mode 当前模式：minimal | standard | creation（tool-lua-host 据此限制脚本创造）。

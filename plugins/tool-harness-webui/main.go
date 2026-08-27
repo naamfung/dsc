@@ -205,7 +205,7 @@ func main() {
 	}()
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService / PluginMetadata
-	// 与 go-plugin 组装。本插件为空壳工具（无业务工具，仅承载独立 HTTP 服务），
+	// 与 go-core 组装。本插件为空壳工具（无业务工具，仅承载独立 HTTP 服务），
 	// 故用 sdk.ToolProvider 返回空集即可满足 SDK 校验。
 	sdk := dsc.New(dsc.Config{Name: "tool-harness-webui", Version: "0.1.0", Type: dsc.TypeTool})
 

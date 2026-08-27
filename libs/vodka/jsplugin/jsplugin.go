@@ -1,4 +1,4 @@
-package jsplugin
+package jscore
 
 import (
 	"fmt"
@@ -114,7 +114,7 @@ func watcher(dir string) {
 }
 
 func JSPlugin(dir ...string) vodka.Handler {
-	var dirPath = "./plugin"
+	var dirPath = "./core"
 	if len(dir) > 0 {
 		dirPath = dir[0]
 	}

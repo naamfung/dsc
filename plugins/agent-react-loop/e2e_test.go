@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"dsc/plugin"
-	goplugin "github.com/hashicorp/go-plugin"
+	"dsc/core"
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的 agent 插件：
-// 以宿主侧 go-plugin 客户端（loadAgentAndGetBroker 同款）spawn exe，经
-// rpcClient.Dispense("agent") 获取 plugin.Agent 实例（SDK 复用
-// plugin.AgentGRPCPlugin 的 GRPCClient），并验证 Name/Version/SwitchSession/
+// 以宿主侧 go-core 客户端（loadAgentAndGetBroker 同款）spawn exe，经
+// rpcClient.Dispense("agent") 获取 core.Agent 实例（SDK 复用
+// core.AgentGRPCPlugin 的 GRPCClient），并验证 Name/Version/SwitchSession/
 // SetPlanMode。完整 Run/RunStream 需宿主挂载 LLM+Tool 聚合服务并走
 // RegisterServices，属宿主集成范畴，不在 SDK 层验证。
 func TestE2EWithHostClient(t *testing.T) {
@@ -31,10 +31,10 @@ func TestE2EWithHostClient(t *testing.T) {
 		"DSC_SESSION_DIR="+filepath.Join(dir, "sessions"),
 		"DSC_SINGLE_TURN=0",
 	)
-	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig:  plugin.Handshake,
-		Plugins:          map[string]goplugin.Plugin{"agent": &plugin.AgentGRPCPlugin{}},
-		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  core.Handshake,
+		Plugins:          map[string]plugin.Plugin{"agent": &core.AgentGRPCPlugin{}},
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Cmd:              cmd,
 	})
 	defer client.Kill()
@@ -49,9 +49,9 @@ func TestE2EWithHostClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dispense(agent): %v", err)
 	}
-	agent, ok := raw.(plugin.Agent)
+	agent, ok := raw.(core.Agent)
 	if !ok {
-		t.Fatalf("dispensed value %T 未实现 plugin.Agent", raw)
+		t.Fatalf("dispensed value %T 未实现 core.Agent", raw)
 	}
 
 	// 4. 基础方法

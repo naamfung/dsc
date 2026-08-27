@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	"charm.land/bubbletea/v2"
-	"dsc/plugin"
+	"dsc/core"
 )
 
 // 复现实际服务端的乱序流：先发 text（正文），后发 thinking（思考块）。
 // 修复前，迟到的思考块会覆盖已渲染的正文，导致流结束时屏幕上只剩思考块、正文丢失。
 func TestPumpLoopReversedOrderContentBeforeReasoning(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "streaming", Output: "你好！我在的，请问有什么我可以帮你呢？"},
 		{Status: "reasoning", Reasoning: "思考過程：\n1. 用戶問好\n2. 直接回答即可"},
 		{Status: "success"},
@@ -41,7 +41,7 @@ func TestPumpLoopReversedOrderContentBeforeReasoning(t *testing.T) {
 
 // 思考块与正文有序到达（先思考后正文）时，两者都应当完整保留。
 func TestPumpLoopOrderedReasoningThenContent(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "reasoning", Reasoning: "思考過程：\n1. 分析"},
 		{Status: "streaming", Output: "正文内容"},
 		{Status: "success"},
@@ -107,7 +107,7 @@ func TestRenderReasoningMarkdown(t *testing.T) {
 
 // 思考块弱化不应泄漏到紧随其后的正文。
 func TestPumpLoopReasoningDimDoesNotLeakToBody(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "streaming", Output: "正文示例"},
 		{Status: "reasoning", Reasoning: "思考：**重点**分析"},
 		{Status: "success"},

@@ -6,19 +6,19 @@ import (
 	"testing"
 
 	"charm.land/bubbletea/v2"
-	"dsc/plugin"
+	"dsc/core"
 )
 
 // stubAgent 返回一个预填充的流通道（reasoning → streaming → success）
 type stubAgent struct {
-	frames       []*plugin.RunStreamResponse
+	frames       []*core.RunStreamResponse
 	switchCalls  []string
 	planCalls    []bool
 	historyCalls []int
 }
 
-func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *plugin.RunStreamResponse, error) {
-	ch := make(chan *plugin.RunStreamResponse)
+func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *core.RunStreamResponse, error) {
+	ch := make(chan *core.RunStreamResponse)
 	go func() {
 		defer close(ch)
 		for _, f := range s.frames {
@@ -28,7 +28,7 @@ func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *plugin.RunSt
 	return ch, nil
 }
 
-func (s *stubAgent) Run(context.Context, string) (*plugin.AgentResult, error) {
+func (s *stubAgent) Run(context.Context, string) (*core.AgentResult, error) {
 	return nil, nil
 }
 
@@ -50,12 +50,12 @@ func (s *stubAgent) SetHistoryInjection(_ context.Context, count int) error {
 func (s *stubAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
 func (s *stubAgent) Shutdown(context.Context, bool) error                  { return nil }
 func (s *stubAgent) InjectMessage(context.Context, string) error           { return nil }
-func (s *stubAgent) DebugSnapshot(context.Context) (*plugin.AgentDebugSnapshot, error) {
-	return &plugin.AgentDebugSnapshot{SessionID: "stub"}, nil
+func (s *stubAgent) DebugSnapshot(context.Context) (*core.AgentDebugSnapshot, error) {
+	return &core.AgentDebugSnapshot{SessionID: "stub"}, nil
 }
 
 func TestPumpLoopRealFlow(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
 		{Status: "reasoning", Reasoning: "1. 用户发了好\n2. 需要回应\n回应策略"},
 		{Status: "reasoning", Reasoning: "之一：礼貌回答"},
 		{Status: "streaming", Output: "我在的"},

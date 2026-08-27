@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/tui"
 	"github.com/hashicorp/go-hclog"
 	"gopkg.in/yaml.v3"
@@ -65,12 +65,12 @@ func probeContextWindow(baseURL string) int {
 	return 0
 }
 
-func loadConfig(path string) (*plugin.Config, error) {
+func loadConfig(path string) (*core.Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	var cfg plugin.Config
+	var cfg core.Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
@@ -98,10 +98,10 @@ func resolveWorkspaceRoot(cwd, cfgRoot string) string {
 // sandboxPolicyEnv 返回注入各插件进程的沙箱策略档名（DSC_SANDBOX_POLICY）：
 // 与 Manager 读取 DSC_SANDBOX 的缺省解析一致，未配置时回退 workspace-write。
 func sandboxPolicyEnv() string {
-	switch plugin.ParseSandboxPolicy(os.Getenv("DSC_SANDBOX")) {
-	case plugin.SandboxReadOnly:
+	switch core.ParseSandboxPolicy(os.Getenv("DSC_SANDBOX")) {
+	case core.SandboxReadOnly:
 		return "read-only"
-	case plugin.SandboxFullAccess:
+	case core.SandboxFullAccess:
 		return "full-access"
 	default:
 		return "workspace-write"
@@ -139,7 +139,7 @@ func loadBinaryPath(cfgPath string, defaultRel string) string {
 
 // runOneTurn 以与 TUI 内部一致的 RunStream 方式运行一组输入（不渲染 TUI），
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
-func runOneTurn(agent plugin.Agent, ctx context.Context, input string) int {
+func runOneTurn(agent core.Agent, ctx context.Context, input string) int {
 	ch, err := agent.RunStream(ctx, input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
@@ -183,7 +183,7 @@ func stdinIsRedirected() bool {
 
 // runStdinLoop 从 stdin 逐行读取作为后续每一轮输入，逐轮调用 runOneTurn，
 // 直到 EOF；会话事件溯源在 agent 内累积，故多轮天然共享上下文。
-func runStdinLoop(agent plugin.Agent, ctx context.Context) int {
+func runStdinLoop(agent core.Agent, ctx context.Context) int {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	exitCode := 0
@@ -204,7 +204,7 @@ func runStdinLoop(agent plugin.Agent, ctx context.Context) int {
 // 首轮跑 -input 传入的文本；随后若 stdin 为重定向输入（管道/文件），
 // 则继续逐行驱动多轮，直到 EOF。始终不进入 TUI 事件循环，故 ADMIN API / DEBUGGER
 // 端点可在进程存活期间持续观察。
-func runInputMode(agent plugin.Agent, ctx context.Context, input string) int {
+func runInputMode(agent core.Agent, ctx context.Context, input string) int {
 	if code := runOneTurn(agent, ctx, input); code != 0 {
 		return code
 	}
@@ -287,8 +287,8 @@ func main() {
 		Output: os.Stderr,
 	})
 
-	// 初始化 logger 与 pluginLogger (根據 logToFile 与 logToScreen 調整)
-	var pluginLogger hclog.Logger
+	// 初始化 logger 与 coreLogger (根據 logToFile 与 logToScreen 調整)
+	var coreLogger hclog.Logger
 	var logOutput io.Writer
 
 	if logToFile != "" {
@@ -302,8 +302,8 @@ func main() {
 				Level:  hclog.Info,
 				Output: logOutput,
 			})
-			pluginLogger = hclog.New(&hclog.LoggerOptions{
-				Name:   "plugin",
+			coreLogger = hclog.New(&hclog.LoggerOptions{
+				Name:   "core",
 				Level:  hclog.Info,
 				Output: logOutput,
 			})
@@ -314,8 +314,8 @@ func main() {
 				Level:  hclog.Info,
 				Output: logOutput,
 			})
-			pluginLogger = hclog.New(&hclog.LoggerOptions{
-				Name:   "plugin",
+			coreLogger = hclog.New(&hclog.LoggerOptions{
+				Name:   "core",
 				Level:  hclog.Info,
 				Output: logOutput,
 			})
@@ -330,8 +330,8 @@ func main() {
 			Level:  hclog.Info,
 			Output: logOutput,
 		})
-		pluginLogger = hclog.New(&hclog.LoggerOptions{
-			Name:   "plugin",
+		coreLogger = hclog.New(&hclog.LoggerOptions{
+			Name:   "core",
 			Level:  hclog.Info,
 			Output: logOutput,
 		})
@@ -342,8 +342,8 @@ func main() {
 			Level:  hclog.NoLevel,
 			Output: io.Discard,
 		})
-		pluginLogger = hclog.New(&hclog.LoggerOptions{
-			Name:   "plugin",
+		coreLogger = hclog.New(&hclog.LoggerOptions{
+			Name:   "core",
 			Level:  hclog.NoLevel,
 			Output: io.Discard,
 		})
@@ -366,28 +366,40 @@ func main() {
 	// 在哪个目录启动 dsc，就以哪个目录为工作区（对齐 REX/Claude Code）；
 	// 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
 	// 沙箱策略（read-only / workspace-write / full-access）由 TUI /sandbox 命令
-	// 运行时切换，见 plugin.Manager.SetSandboxPolicy。
+	// 运行时切换，见 core.Manager.SetSandboxPolicy。
 	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
 	if err == nil && mainCfg != nil {
-		plugin.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
+		core.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
 	}
-	logger.Info("workspace root", "root", plugin.WorkspaceRoot)
+	logger.Info("workspace root", "root", core.WorkspaceRoot)
 
-	// 放大 go-plugin GRPCBroker 的连接超时（库默认 5 秒，见 EnvConnTimeout）：
+	// /settings history 持久化的历史注入编码（config.yaml history_injection）在启动时
+	// 下发 agent 子进程：0 未定义（默认不限制，不设）；-1 禁止（不注入）→ agent 0；
+	// N>0 启用并注入 N 条 → agent N。
+	if mainCfg != nil && mainCfg.HistoryInjection != 0 {
+		agentCount := mainCfg.HistoryInjection
+		if agentCount == -1 {
+			agentCount = 0 // config 禁止 → agent off
+		}
+		os.Setenv("DSC_HISTORY_INJECTION", strconv.Itoa(agentCount))
+		logger.Info("history injection from config", "encoded", mainCfg.HistoryInjection, "agent", agentCount)
+	}
+
+	// 放大 go-core GRPCBroker 的连接超时（库默认 5 秒，见 EnvConnTimeout）：
 	// 宿主与插件进程同时加载超大本地模型、传输通道被挤占时，接收方收到 ConnInfo
 	// 后可能未能及时 Dial，一旦超过一次性窗口即被丢弃且无法重连。统一经环境变量
 	// 下发，所有插件子进程（buildEnv 继承宿主环境）同样生效；外部已显式设置时尊重之。
 	if os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT") == "" {
 		os.Setenv("PLUGIN_BROKER_CONN_TIMEOUT", "5m")
 	}
-	logger.Info("plugin broker conn timeout", "timeout", os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT"))
+	logger.Info("core broker conn timeout", "timeout", os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT"))
 
-	mgr := plugin.NewManager(&plugin.ManagerConfig{
+	mgr := core.NewManager(&core.ManagerConfig{
 		PluginDir:       filepath.Join(execDir, "plugins"),
 		ExecDir:         execDir,
-		Handshake:       plugin.Handshake,
+		Handshake:       core.Handshake,
 		Logger:          logger,
-		PluginLogger:    pluginLogger,
+		PluginLogger:    coreLogger,
 		DebuggerEnabled: debuggerOpen,
 	})
 	defer mgr.Shutdown()
@@ -409,8 +421,8 @@ func main() {
 	}
 
 	// 从 config.yaml 收集启用的 LLM 条目与 agent 条目（沿用其 binary_path/env 声明）
-	var llmEntries []plugin.PluginEntry
-	var agentEntry *plugin.PluginEntry
+	var llmEntries []core.PluginEntry
+	var agentEntry *core.PluginEntry
 	if mainCfg != nil {
 		for i := range mainCfg.Plugins {
 			e := mainCfg.Plugins[i]
@@ -437,7 +449,7 @@ func main() {
 		if llmName == "" {
 			llmName = "openai"
 		}
-		llmEntries = append(llmEntries, plugin.PluginEntry{
+		llmEntries = append(llmEntries, core.PluginEntry{
 			Name:       llmName,
 			Type:       "llm",
 			Enabled:    true,
@@ -500,11 +512,11 @@ func main() {
 	logger.Info("context window", "window", contextWindow)
 
 	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy（来自 preset）
-	merged := &plugin.Config{}
+	merged := &core.Config{}
 	merged.Plugins = append(merged.Plugins, llmEntries...)
 	if agentEntry == nil {
 		// config.yaml 未声明 agent，用默认 agent-react-loop
-		merged.Plugins = append(merged.Plugins, plugin.PluginEntry{
+		merged.Plugins = append(merged.Plugins, core.PluginEntry{
 			Name:       "agent-react-loop",
 			Type:       "agent",
 			Enabled:    true,
@@ -549,7 +561,7 @@ func main() {
 		}
 		e.Env["DSC_MODE"] = mode
 		// 注入統一工作空間根（對齊 DSH 單一策略歸屬：各能力族消費同一根）
-		e.Env["DSC_WORKSPACE_ROOT"] = plugin.WorkspaceRoot
+		e.Env["DSC_WORKSPACE_ROOT"] = core.WorkspaceRoot
 		// 注入沙箱策略档（agent 据此渲染 sandbox:policy 上下文，让模型知道
 		// 工作区真实根路径与写策略，避免臆造 /workspace 虚拟路径陷入死循环）
 		e.Env["DSC_SANDBOX_POLICY"] = sandboxPolicyEnv()

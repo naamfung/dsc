@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"charm.land/bubbletea/v2"
+	"dsc/core"
 	"dsc/jobs"
-	"dsc/plugin"
 )
 
 // wakeSnap 便捷构造完成快照。
@@ -16,7 +16,7 @@ func wakeSnap(id string) jobs.JobSnapshot {
 }
 
 func TestWakeup(t *testing.T) {
-	m := New(&stubAgent{frames: []*plugin.RunStreamResponse{{Status: "success"}}}, nil, context.Background(), "m", "minimal", 131072)
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{{Status: "success"}}}, nil, context.Background(), "m", "minimal", 131072)
 
 	// 空闲时收到完成通知 → 自动开启一轮，预算扣减，通知清空
 	_, cmd := m.Update(jobDoneMsg{snapshot: wakeSnap("workflow-1")})

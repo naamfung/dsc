@@ -13,7 +13,7 @@ import (
 	"sync"
 
 	"dsc-sdk"
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"github.com/aymanbagabas/go-udiff"
 )
@@ -211,9 +211,9 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		return "", err
 	}
 
-	// 使用安全路徑檢查；workspace 根統一來自 plugin.WorkspaceRoot
+	// 使用安全路徑檢查；workspace 根統一來自 core.WorkspaceRoot
 	// （宿主按 config workspace_root 解析並經 DSC_WORKSPACE_ROOT 注入，對齊 DSH 單一策略歸屬）
-	workspaceRoot := plugin.WorkspaceRoot
+	workspaceRoot := core.WorkspaceRoot
 
 	// 模型按工具描述會傳入形如 /workspace/test/fib.go 的絕對路徑，
 	// 需剝離 /workspace 前綴後再與 workspaceRoot 拼接，避免變成 workspace/workspace/...
@@ -365,7 +365,7 @@ func main() {
 	// shell 等原生命令无法解析 /workspace 虚拟前缀，模型应优先使用真实路径；
 	// /workspace 仍作为工作区根别名被本工具与 sandbox 接受（对齐 DSH 以真实
 	// 路径呈现 workspace-write 根的设计，避免模型臆造不存在的虚拟路径而死循环）。
-	workspaceRoot := plugin.WorkspaceRoot
+	workspaceRoot := core.WorkspaceRoot
 	if workspaceRoot == "" {
 		workspaceRoot = "."
 	}
@@ -409,7 +409,7 @@ func main() {
 	}
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
-	// PluginMetadata / PluginHookService 与 go-plugin 组装。
+	// PluginMetadata / PluginHookService 与 go-core 组装。
 	sdk := dsc.New(dsc.Config{Name: "str_replace_editor", Version: "1.0.0", Type: dsc.TypeTool})
 	sdk.Tool(dsc.Tool{Name: "str_replace_editor", Description: "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert.", Schema: schema, Handler: handler})
 	sdk.Serve()

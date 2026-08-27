@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的插件能被宿主侧正常拉起并调用：
-// 以 go-plugin 客户端 spawn 本插件 exe，经 gRPC 验证元数据、工具目录，并真实
+// 以 go-core 客户端 spawn 本插件 exe，经 gRPC 验证元数据、工具目录，并真实
 // 执行 create/view 工具（workspace 根经 DSC_WORKSPACE_ROOT 注入）。
 func TestE2EWithHostClient(t *testing.T) {
 	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
@@ -34,10 +34,10 @@ func TestE2EWithHostClient(t *testing.T) {
 	// 3. 以宿主侧客户端拉起插件进程（注入 DSC_WORKSPACE_ROOT）
 	cmd := osexec.Command(exe)
 	cmd.Env = append(os.Environ(), "DSC_WORKSPACE_ROOT="+ws)
-	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig:  plugin.Handshake,
-		Plugins:          map[string]goplugin.Plugin{},
-		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  core.Handshake,
+		Plugins:          map[string]plugin.Plugin{},
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Cmd:              cmd,
 	})
 	defer client.Kill()
@@ -46,7 +46,7 @@ func TestE2EWithHostClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
 	if !ok {
 		t.Fatalf("unexpected client type %T", rpcClient)
 	}

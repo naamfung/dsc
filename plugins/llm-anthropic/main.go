@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"dsc-sdk"
-	"dsc/plugin"
+	"dsc/core"
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
@@ -28,7 +28,7 @@ type AnthropicProvider struct {
 
 // buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）。
 // maxTokens <= 0 表示使用服务端默认（不再人为限制）；>0 时才显式携带。
-func (p *AnthropicProvider) buildMessageParams(messages []plugin.Message, tools []plugin.Tool, maxTokens int64) anthropic.MessageNewParams {
+func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []core.Tool, maxTokens int64) anthropic.MessageNewParams {
 	// 1. 构建 Anthropic 消息
 	var systemMsg string
 	userMessages := make([]anthropic.MessageParam, 0, len(messages))
@@ -144,8 +144,8 @@ func concatReasoning(blocks []anthropic.ContentBlockUnion) string {
 }
 
 // extractToolCalls 从消息内容块中提取工具调用
-func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
-	var toolCalls []plugin.ToolCall
+func extractToolCalls(blocks []anthropic.ContentBlockUnion) []core.ToolCall {
+	var toolCalls []core.ToolCall
 	for _, block := range blocks {
 		if block.Type != "tool_use" {
 			continue
@@ -158,7 +158,7 @@ func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
 				argsMap = rawArgs
 			}
 		}
-		toolCalls = append(toolCalls, plugin.ToolCall{
+		toolCalls = append(toolCalls, core.ToolCall{
 			ID:        toolUse.ID,
 			Name:      toolUse.Name,
 			Arguments: argsMap,
@@ -167,14 +167,14 @@ func extractToolCalls(blocks []anthropic.ContentBlockUnion) []plugin.ToolCall {
 	return toolCalls
 }
 
-// usageFromAnthropic 将 Anthropic usage 转换为 plugin.Usage（nil 返回 nil）。
+// usageFromAnthropic 将 Anthropic usage 转换为 core.Usage（nil 返回 nil）。
 // 兼容启用提示缓存的 llama.cpp 等接口：其 input_tokens 仅统计未命中缓存的新增 token，
 // 已命中前缀单独计入 cache_read_input_tokens，真实上下文长度 = input + cache_read；
 // 标准 Anthropic 接口的 input_tokens 已含全部输入（cache_read 为其子集），
 // 此时 cache_read <= input，保持原值即可避免重复计数。
 // 命中率计算需要 miss 侧：以 CacheCreationInputTokens = 真实 prompt - cache_read 近似
 // （即本次请求中未被缓存提供的新增 token），否则未命中侧恒为 0，命中率恒显示 100%。
-func usageFromAnthropic(u *anthropic.Usage) *plugin.Usage {
+func usageFromAnthropic(u *anthropic.Usage) *core.Usage {
 	if u == nil {
 		return nil
 	}
@@ -189,7 +189,7 @@ func usageFromAnthropic(u *anthropic.Usage) *plugin.Usage {
 	if cacheMiss < 0 {
 		cacheMiss = 0
 	}
-	return &plugin.Usage{
+	return &core.Usage{
 		PromptTokens:             int32(promptTokens),
 		CompletionTokens:         int32(u.OutputTokens),
 		TotalTokens:              int32(promptTokens + u.OutputTokens),
@@ -198,24 +198,24 @@ func usageFromAnthropic(u *anthropic.Usage) *plugin.Usage {
 	}
 }
 
-func (p *AnthropicProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
+func (p *AnthropicProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
 	params := p.buildMessageParams(messages, tools, int64(maxTokens))
 	resp, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 
-	return &plugin.ChatResponse{
+	return &core.ChatResponse{
 		Content:      concatText(resp.Content),
 		FinishReason: string(resp.StopReason),
 		ToolCalls:    extractToolCalls(resp.Content),
 	}, nil
 }
 
-func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (<-chan *plugin.ChatStreamResponse, error) {
+func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {
 	stream := p.client.Messages.NewStreaming(ctx, p.buildMessageParams(messages, tools, p.maxTokens))
 
-	ch := make(chan *plugin.ChatStreamResponse)
+	ch := make(chan *core.ChatStreamResponse)
 	go func() {
 		defer close(ch)
 		acc := newStreamAccumulator()
@@ -224,13 +224,13 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 		for stream.Next() {
 			event := stream.Current()
 			if err := acc.accumulate(event); err != nil {
-				ch <- &plugin.ChatStreamResponse{Error: fmt.Sprintf("stream accumulate error: %v", err)}
+				ch <- &core.ChatStreamResponse{Error: fmt.Sprintf("stream accumulate error: %v", err)}
 				return
 			}
 			// 仅当文本有新增时才发送增量帧
 			text := concatText(acc.msg.Content)
 			if len(text) > prevLen {
-				ch <- &plugin.ChatStreamResponse{Content: text[prevLen:]}
+				ch <- &core.ChatStreamResponse{Content: text[prevLen:]}
 				prevLen = len(text)
 			}
 			// 思考过程增量（thinking 块）
@@ -238,16 +238,16 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []plugin.Me
 			if len(reason) > prevReasonLen {
 				// [DEBUG] 打印 reasoning 帧
 				fmt.Fprintf(os.Stderr, "[LLM-ANTHROPIC-REASONING] %s\n", reason[prevReasonLen:])
-				ch <- &plugin.ChatStreamResponse{Reasoning: reason[prevReasonLen:]}
+				ch <- &core.ChatStreamResponse{Reasoning: reason[prevReasonLen:]}
 				prevReasonLen = len(reason)
 			}
 		}
 		if err := stream.Err(); err != nil {
-			ch <- &plugin.ChatStreamResponse{Error: err.Error()}
+			ch <- &core.ChatStreamResponse{Error: err.Error()}
 			return
 		}
 		// 流结束：发送最终帧（工具调用与结束原因；文本已增量发送，不再重复）
-		resp := &plugin.ChatStreamResponse{
+		resp := &core.ChatStreamResponse{
 			FinishReason: string(acc.msg.StopReason),
 			ToolCalls:    extractToolCalls(acc.msg.Content),
 		}
@@ -321,8 +321,8 @@ func main() {
 		maxTokens:      maxTokens,
 	}
 
-	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.LLMGRPCPlugin
-	// 自动提供 LLMService + 元数据（重写自旧的 goplugin.Serve 样板）。
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.LLMGRPCPlugin
+	// 自动提供 LLMService + 元数据（重写自旧的 plugin.Serve 样板）。
 	sdk := dsc.New(dsc.Config{Name: "anthropic", Version: "1.1.0", Type: dsc.TypeLLM})
 	sdk.LLM(provider)
 	sdk.Serve()

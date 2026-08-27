@@ -3,27 +3,27 @@ package dsc
 import (
 	"fmt"
 
-	"dsc/plugin/llmclient"
-	"dsc/plugin/notify"
-	"dsc/plugin/toolclient"
+	"dsc/core/llmclient"
+	"dsc/core/notify"
+	"dsc/core/toolclient"
 	"dsc/proto"
-	goplugin "github.com/hashicorp/go-plugin"
+	plugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
 
-// AgentBroker 面向 agent 类型插件的宿主服务接入点：SDK 对 go-plugin GRPCBroker
-// 的隔离封装，插件作者无需 import go-plugin（也无需在 go.mod 中 replace 到本
-// 仓库定制的 libs/go-plugin）。
+// AgentBroker 面向 agent 类型插件的宿主服务接入点：SDK 对 go-core GRPCBroker
+// 的隔离封装，插件作者无需 import go-core（也无需在 go.mod 中 replace 到本
+// 仓库定制的 libs/go-core）。
 //
 // agent 在 sdk.AgentBroker 回调中缓存本对象；待宿主经 RegisterServices /
 // SetUserQuestionsService 下发 serviceID 后，用 Dial* 建立对应宿主服务的连接。
 // 便捷方法（DialLLM/DialTool/DialNotify/DialUserQuestions）返回封装客户端；
 // 需要自建 proto client 时用 Dial 拿原始 *grpc.ClientConn。
 type AgentBroker struct {
-	broker *goplugin.GRPCBroker
+	broker *plugin.GRPCBroker
 }
 
-// Dial 按宿主下发的 serviceID 建立 gRPC 连接（go-plugin broker.Dial 的封装）。
+// Dial 按宿主下发的 serviceID 建立 gRPC 连接（go-core broker.Dial 的封装）。
 // 返回 *grpc.ClientConn，可自建任意 proto client。
 func (b *AgentBroker) Dial(serviceID uint32) (*grpc.ClientConn, error) {
 	if b == nil || b.broker == nil {

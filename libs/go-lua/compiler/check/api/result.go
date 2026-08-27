@@ -58,7 +58,7 @@ type FuncResult struct {
 	// LiteralSignatures holds synthesized signatures for function literals in this graph.
 	LiteralSignatures map[*ast.FunctionExpr]*typ.Function
 
-	// Extras stores results from registered ComputePass plugins.
+	// Extras stores results from registered ComputePass cores.
 	// Keyed by ComputePass.Name().
 	Extras map[string]any
 

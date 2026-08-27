@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"dsc/proto/metadata"
-	goplugin "github.com/hashicorp/go-plugin"
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的插件能被宿主侧正常拉起并调用：
-// 以 go-plugin 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，经 gRPC
+// 以 go-core 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，经 gRPC
 // 验证元数据、工具目录与工具执行（lisp 表达式求值）。
 func TestE2EWithHostClient(t *testing.T) {
 	dir := t.TempDir()
@@ -27,10 +27,10 @@ func TestE2EWithHostClient(t *testing.T) {
 
 	// 2. 以宿主侧客户端拉起插件进程
 	cmd := exec.Command(exe)
-	client := goplugin.NewClient(&goplugin.ClientConfig{
-		HandshakeConfig:  plugin.Handshake,
-		Plugins:          map[string]goplugin.Plugin{},
-		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  core.Handshake,
+		Plugins:          map[string]plugin.Plugin{},
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Cmd:              cmd,
 	})
 	defer client.Kill()
@@ -39,7 +39,7 @@ func TestE2EWithHostClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	grpcClient, ok := rpcClient.(*goplugin.GRPCClient)
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
 	if !ok {
 		t.Fatalf("unexpected client type %T", rpcClient)
 	}

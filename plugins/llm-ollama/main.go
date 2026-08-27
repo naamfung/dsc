@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"dsc-sdk"
-	"dsc/plugin"
+	"dsc/core"
 	"github.com/ollama/ollama/api"
 )
 
@@ -26,7 +26,7 @@ type OllamaProvider struct {
 	thinking bool
 }
 
-func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, tools []plugin.Tool, maxTokens int) (*plugin.ChatResponse, error) {
+func (p *OllamaProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
 	// 转换消息
 	ollamaMessages := make([]api.Message, len(messages))
 	for i, m := range messages {
@@ -117,14 +117,14 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, to
 	}
 
 	// 處理工具調用
-	var toolCalls []plugin.ToolCall
+	var toolCalls []core.ToolCall
 	if len(resp.Message.ToolCalls) > 0 {
 		for _, tc := range resp.Message.ToolCalls {
 			var args map[string]interface{}
 			if argsJSON, err := json.Marshal(tc.Function.Arguments); err == nil {
 				json.Unmarshal(argsJSON, &args)
 			}
-			toolCalls = append(toolCalls, plugin.ToolCall{
+			toolCalls = append(toolCalls, core.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: args,
@@ -132,7 +132,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []plugin.Message, to
 		}
 	}
 
-	return &plugin.ChatResponse{
+	return &core.ChatResponse{
 		Content:      resp.Message.Content,
 		FinishReason: "stop",
 		ToolCalls:    toolCalls,
@@ -144,7 +144,7 @@ func (p *OllamaProvider) Version(ctx context.Context) string    { return "1.0.0"
 func (p *OllamaProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口
-func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Message, tools []plugin.Tool) (<-chan *plugin.ChatStreamResponse, error) {
+func (p *OllamaProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {
 	// 轉換消息
 	ollamaMessages := make([]api.Message, len(messages))
 	for i, m := range messages {
@@ -222,7 +222,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		req.Think = &api.ThinkValue{Value: true}
 	}
 
-	ch := make(chan *plugin.ChatStreamResponse)
+	ch := make(chan *core.ChatStreamResponse)
 	go func() {
 		defer close(ch)
 
@@ -235,7 +235,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 			// 与 llm-anthropic/openai 一致：思考作为 reasoning 帧单独发送）
 			if resp.Message.Thinking != "" {
 				fmt.Fprintf(os.Stderr, "[LLM-OLLAMA-REASONING] %s\n", resp.Message.Thinking)
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Reasoning: resp.Message.Thinking,
 				}
 			}
@@ -243,7 +243,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 			// 處理文本增量
 			if resp.Message.Content != "" {
 				textAccumulator.WriteString(resp.Message.Content)
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Content: resp.Message.Content,
 				}
 			}
@@ -281,21 +281,21 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 
 			// 處理完成原因
 			if resp.Done {
-				var toolCalls []plugin.ToolCall
+				var toolCalls []core.ToolCall
 				for _, key := range toolCallOrder {
 					acc := toolCallAccums[key]
 					var args map[string]interface{}
 					if acc.ArgumentsStr != "" {
 						json.Unmarshal([]byte(acc.ArgumentsStr), &args)
 					}
-					toolCalls = append(toolCalls, plugin.ToolCall{
+					toolCalls = append(toolCalls, core.ToolCall{
 						ID:        acc.ID,
 						Name:      acc.Name,
 						Arguments: args,
 					})
 				}
 
-				ch <- &plugin.ChatStreamResponse{
+				ch <- &core.ChatStreamResponse{
 					Content:      "",
 					FinishReason: "stop",
 					ToolCalls:    toolCalls,
@@ -307,7 +307,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []plugin.Messa
 		})
 
 		if streamErr != nil {
-			ch <- &plugin.ChatStreamResponse{Error: streamErr.Error()}
+			ch <- &core.ChatStreamResponse{Error: streamErr.Error()}
 		}
 	}()
 
@@ -341,8 +341,8 @@ func main() {
 		thinking: thinking,
 	}
 
-	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 plugin.LLMGRPCPlugin
-	// 自动提供 LLMService + 元数据（重写自旧的 goplugin.Serve 样板）。
+	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.LLMGRPCPlugin
+	// 自动提供 LLMService + 元数据（重写自旧的 plugin.Serve 样板）。
 	sdk := dsc.New(dsc.Config{Name: "ollama", Version: "1.0.0", Type: dsc.TypeLLM})
 	sdk.LLM(provider)
 	sdk.Serve()

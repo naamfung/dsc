@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"dsc/plugin"
+	"dsc/core"
 	"dsc/proto"
 	"dsc/session"
 	"google.golang.org/grpc"
@@ -101,8 +101,8 @@ func TestPreDispatchCompactionOnRestore(t *testing.T) {
 	a.toolClient = &mockToolClient{}
 
 	var mu sync.Mutex
-	var frames []*plugin.RunStreamResponse
-	emit := func(f *plugin.RunStreamResponse) {
+	var frames []*core.RunStreamResponse
+	emit := func(f *core.RunStreamResponse) {
 		mu.Lock()
 		frames = append(frames, f)
 		mu.Unlock()

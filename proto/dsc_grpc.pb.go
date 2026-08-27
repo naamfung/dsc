@@ -1382,15 +1382,15 @@ type PluginNotifyServiceClient interface {
 	Notify(ctx context.Context, in *NotifyRequest, opts ...grpc.CallOption) (*NotifyResponse, error)
 }
 
-type pluginNotifyServiceClient struct {
+type coreNotifyServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
 func NewPluginNotifyServiceClient(cc grpc.ClientConnInterface) PluginNotifyServiceClient {
-	return &pluginNotifyServiceClient{cc}
+	return &coreNotifyServiceClient{cc}
 }
 
-func (c *pluginNotifyServiceClient) Notify(ctx context.Context, in *NotifyRequest, opts ...grpc.CallOption) (*NotifyResponse, error) {
+func (c *coreNotifyServiceClient) Notify(ctx context.Context, in *NotifyRequest, opts ...grpc.CallOption) (*NotifyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(NotifyResponse)
 	err := c.cc.Invoke(ctx, PluginNotifyService_Notify_FullMethodName, in, out, cOpts...)
@@ -1499,15 +1499,15 @@ type PluginHookServiceClient interface {
 	OnEvent(ctx context.Context, in *OnEventRequest, opts ...grpc.CallOption) (*OnEventResponse, error)
 }
 
-type pluginHookServiceClient struct {
+type coreHookServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
 func NewPluginHookServiceClient(cc grpc.ClientConnInterface) PluginHookServiceClient {
-	return &pluginHookServiceClient{cc}
+	return &coreHookServiceClient{cc}
 }
 
-func (c *pluginHookServiceClient) BeforeTool(ctx context.Context, in *BeforeToolRequest, opts ...grpc.CallOption) (*BeforeToolResponse, error) {
+func (c *coreHookServiceClient) BeforeTool(ctx context.Context, in *BeforeToolRequest, opts ...grpc.CallOption) (*BeforeToolResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BeforeToolResponse)
 	err := c.cc.Invoke(ctx, PluginHookService_BeforeTool_FullMethodName, in, out, cOpts...)
@@ -1517,7 +1517,7 @@ func (c *pluginHookServiceClient) BeforeTool(ctx context.Context, in *BeforeTool
 	return out, nil
 }
 
-func (c *pluginHookServiceClient) AfterTool(ctx context.Context, in *AfterToolRequest, opts ...grpc.CallOption) (*AfterToolResponse, error) {
+func (c *coreHookServiceClient) AfterTool(ctx context.Context, in *AfterToolRequest, opts ...grpc.CallOption) (*AfterToolResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AfterToolResponse)
 	err := c.cc.Invoke(ctx, PluginHookService_AfterTool_FullMethodName, in, out, cOpts...)
@@ -1527,7 +1527,7 @@ func (c *pluginHookServiceClient) AfterTool(ctx context.Context, in *AfterToolRe
 	return out, nil
 }
 
-func (c *pluginHookServiceClient) OnEvent(ctx context.Context, in *OnEventRequest, opts ...grpc.CallOption) (*OnEventResponse, error) {
+func (c *coreHookServiceClient) OnEvent(ctx context.Context, in *OnEventRequest, opts ...grpc.CallOption) (*OnEventResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OnEventResponse)
 	err := c.cc.Invoke(ctx, PluginHookService_OnEvent_FullMethodName, in, out, cOpts...)
