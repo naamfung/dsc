@@ -21,7 +21,7 @@ func TestRenderMarkdownNoPanic(t *testing.T) {
 		"```go\nfunc main(){}\n```\n之后正文",
 		"| a | b |\n|---|---|\n| 1 | 2 |",
 		`百分号% 百分号%s 和 %d 格式符`,
-		"斜杠/反斜杠\\和\n换行后\t制表",
+		"斜杆/反斜杆\\和\n换行后\t制表",
 		"Weird chars: \x00 \x7f ❤ 中文字长一段中文字长一段中文字长一段中文字长一段中文字长一段中文字长一段中文字长一段",
 	}
 	for i, in := range inputs {

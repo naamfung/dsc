@@ -97,7 +97,7 @@ func TestSandboxWorkspaceAllowsRealPathCaseInsensitive(t *testing.T) {
 	if alt == root+"/inside.txt" {
 		t.Skip("当前系统大小写不敏感或路径无大小写差异，跳过")
 	}
-	// JSON 中反斜杠需转义（真实请求由模型产出合法 JSON，这里等价构造）
+	// JSON 中反斜杆需转义（真实请求由模型产出合法 JSON，这里等价构造）
 	escaped := strings.ReplaceAll(alt, `\`, `\\`)
 
 	m := newRouterManager()

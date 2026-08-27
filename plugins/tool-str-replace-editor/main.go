@@ -222,7 +222,7 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		return "", err
 	}
 	// diff 标签用相对 workspace 的路径（对齐 REX 的 a/path b/path），
-	// ToSlash 统一为正斜杠，避免 Windows 绝对路径标签含反斜杠
+	// ToSlash 统一为正斜杆，避免 Windows 绝对路径标签含反斜杆
 	relPath := filepath.ToSlash(normalizeWorkspacePath(args.Path))
 
 	switch args.Command {
