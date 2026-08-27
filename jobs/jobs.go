@@ -237,6 +237,30 @@ func (r *Registry) List(caller string) []JobSnapshot {
 	return out
 }
 
+// ListAll 返回全部任务快照（宿主管理视图：TUI /jobs 使用，不做 owner 隔离）。
+func (r *Registry) ListAll() []JobSnapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]JobSnapshot, 0, len(r.order))
+	for _, id := range r.order {
+		out = append(out, r.jobs[id].snapshot)
+	}
+	return out
+}
+
+// readLocked 读取单个任务输出（需已持有锁）：流式任务消费自上次以来的增量；
+// 最终输出任务在终止后幂等返回终态输出（运行中为空）。终止读取标记 reported。
+func (r *Registry) readLocked(j *Job) Read {
+	if j.readOutput != nil {
+		return Read{Text: j.readOutput(), Snapshot: j.snapshot}
+	}
+	if j.snapshot.Status != StatusRunning && j.snapshot.Status != StatusStopping {
+		j.snapshot.Reported = true
+		return Read{Text: j.output, Snapshot: j.snapshot}
+	}
+	return Read{Text: "", Snapshot: j.snapshot}
+}
+
 // Read 读取输出：流式任务消费自上次以来的增量（单一游标）；最终输出任务在
 // 终止后幂等返回终态输出（运行中为空）。终止读取标记 reported。
 func (r *Registry) Read(id, caller string) (Read, error) {
@@ -246,14 +270,32 @@ func (r *Registry) Read(id, caller string) (Read, error) {
 	if err != nil {
 		return Read{}, err
 	}
-	if j.readOutput != nil {
-		return Read{Text: j.readOutput(), Snapshot: j.snapshot}, nil
+	return r.readLocked(j), nil
+}
+
+// ReadHost 读取任意任务输出与状态（宿主管理视图：TUI /jobs output，跳过 owner 隔离）。
+func (r *Registry) ReadHost(id string) (Read, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[id]
+	if !ok {
+		return Read{}, fmt.Errorf("jobs: unknown job %q", id)
 	}
+	return r.readLocked(j), nil
+}
+
+// killLocked 请求取消单个任务（需已持有锁）：先标记 stopping + reported，再调用
+// 生产方 cancel（reason 转发）。已终态返回 already-finished（幂等，不重复取消）。
+func (r *Registry) killLocked(j *Job, reason string) KillResult {
 	if j.snapshot.Status != StatusRunning && j.snapshot.Status != StatusStopping {
-		j.snapshot.Reported = true
-		return Read{Text: j.output, Snapshot: j.snapshot}, nil
+		return KillAlreadyFinished
 	}
-	return Read{Text: "", Snapshot: j.snapshot}, nil
+	j.snapshot.Status = StatusStopping
+	j.snapshot.Reported = true
+	if j.cancel != nil {
+		j.cancel(reason)
+	}
+	return KillRequested
 }
 
 // Kill 请求取消：先标记 stopping + reported，再调用生产方 cancel（reason 转发）。
@@ -265,15 +307,18 @@ func (r *Registry) Kill(id, caller, reason string) (KillResult, error) {
 	if err != nil {
 		return "", err
 	}
-	if j.snapshot.Status != StatusRunning && j.snapshot.Status != StatusStopping {
-		return KillAlreadyFinished, nil
+	return r.killLocked(j, reason), nil
+}
+
+// KillHost 请求取消任意任务（宿主管理视图：TUI /jobs kill，跳过 owner 隔离）。
+func (r *Registry) KillHost(id, reason string) (KillResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	j, ok := r.jobs[id]
+	if !ok {
+		return "", fmt.Errorf("jobs: unknown job %q", id)
 	}
-	j.snapshot.Status = StatusStopping
-	j.snapshot.Reported = true
-	if j.cancel != nil {
-		j.cancel(reason)
-	}
-	return KillRequested, nil
+	return r.killLocked(j, reason), nil
 }
 
 // Wait 有界等待落定（不取消任务）：超时返回存活快照；落定后返回终态快照并

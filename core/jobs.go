@@ -30,6 +30,31 @@ func CallerFromContext(ctx context.Context) string {
 // 对齐 DSH onJobDone 的通用送达——TUI 唤醒、web 界面插件、novelforge 等）。
 const JobDoneEvent EventName = "job/done"
 
+// ListJobs 返回宿主侧全部后台任务快照（TUI /jobs 管理视图：宿主是任务所有者，
+// 不做 owner 会话隔离）。
+func (m *Manager) ListJobs() []jobs.JobSnapshot {
+	if m.jobs == nil {
+		return nil
+	}
+	return m.jobs.ListAll()
+}
+
+// ReadJob 读取任务输出与状态（TUI /jobs output；宿主管理视图）。
+func (m *Manager) ReadJob(id string) (jobs.Read, error) {
+	if m.jobs == nil {
+		return jobs.Read{}, fmt.Errorf("jobs registry not available")
+	}
+	return m.jobs.ReadHost(id)
+}
+
+// KillJob 请求取消任务（TUI /jobs kill；宿主管理视图）。
+func (m *Manager) KillJob(id, reason string) (jobs.KillResult, error) {
+	if m.jobs == nil {
+		return "", fmt.Errorf("jobs registry not available")
+	}
+	return m.jobs.KillHost(id, reason)
+}
+
 // OnEvent 订阅宿主事件总线（如 JobDoneEvent 完成通知；TUI/web 插件等复用）。
 // 返回取消函数。
 func (m *Manager) OnEvent(name EventName, fn Listener) func() {

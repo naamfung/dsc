@@ -1533,6 +1533,9 @@ var slashCommands = []compItem{
 	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
 	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
 	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
+	{label: "/jobs", insert: "/jobs", hint: "列出后台任务（含 workflow）状态"},
+	{label: "/jobs output", insert: "/jobs output ", hint: "读取后台任务输出（如 /jobs output workflow-1）"},
+	{label: "/jobs kill", insert: "/jobs kill ", hint: "取消后台任务（如 /jobs kill workflow-1）"},
 	{label: "/settings history", insert: "/settings history ", hint: "历史注入条数（如 10 / off / unlimited）：控制模型预填充长度"},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
 	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
@@ -1673,6 +1676,9 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
 			"  /sandbox full-access 沙箱全开（不额外拦截文件写）",
 			"  （/sandbox on / off 为 read-only / full-access 的兼容别名）",
+			"  /jobs        列出后台任务（含 workflow）与状态",
+			"  /jobs output <id>  读取后台任务输出（如 /jobs output workflow-1）",
+			"  /jobs kill <id> [reason]  取消后台任务",
 			"  /sessions    列出所有会话",
 			"  /crons       列出所有定时任务",
 			"  /cron add <cron> <prompt>  添加定时任务（cron 为 5 段表达式，如 0 8 * * *）",
@@ -1929,6 +1935,21 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已切换沙箱策略为 " + label + "。")
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
+	}
+	// /jobs [list|output <id>|kill <id> [reason]]：宿主侧后台任务（含 workflow）
+	// 管理入口——用户在 TUI 里即可查看/读取/取消后台工作流，不必依赖模型工具。
+	if cmd == "/jobs" || strings.HasPrefix(cmd, "/jobs ") {
+		if m.manager == nil {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		} else {
+			m.runJobsCommand(strings.TrimSpace(strings.TrimPrefix(cmd, "/jobs")))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -2271,6 +2292,65 @@ func parseHistoryInjection(arg string) (int, error) {
 		return 0, fmt.Errorf("invalid history injection count %q", arg)
 	}
 	return n, nil
+}
+
+// runJobsCommand 处理 /jobs 子命令（宿主侧后台任务管理视图，不做 owner 隔离）：
+//   - /jobs 或 /jobs list        列出全部后台任务（含 workflow）与状态
+//   - /jobs output <id>          读取任务输出与状态
+//   - /jobs kill <id> [reason]   请求取消任务
+func (m *Model) runJobsCommand(rest string) {
+	switch {
+	case rest == "" || rest == "list":
+		jobs := m.manager.ListJobs()
+		if len(jobs) == 0 {
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 后台任务") + "\n(没有后台任务)")
+			return
+		}
+		var b strings.Builder
+		for _, j := range jobs {
+			fmt.Fprintf(&b, "%s [%s] %s — %s", j.ID, j.Kind, j.Status, j.Label)
+			if j.Detail != "" {
+				fmt.Fprintf(&b, " (%s)", j.Detail)
+			}
+			if j.Owner != "" {
+				fmt.Fprintf(&b, " [owner: %s]", j.Owner)
+			}
+			b.WriteString("\n")
+		}
+		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 后台任务") +
+			"\n" + strings.TrimSuffix(b.String(), "\n"))
+	case strings.HasPrefix(rest, "output "):
+		id := strings.TrimSpace(strings.TrimPrefix(rest, "output "))
+		rd, err := m.manager.ReadJob(id)
+		if err != nil {
+			m.appendMessage(errorSty.Render("读取失败: " + err.Error()))
+			return
+		}
+		msg := "job " + id + " [status: " + string(rd.Snapshot.Status) + "]"
+		if rd.Snapshot.Detail != "" {
+			msg += " (" + rd.Snapshot.Detail + ")"
+		}
+		if rd.Text != "" {
+			msg += "\n" + rd.Text
+		} else {
+			msg += "\n(no output yet)"
+		}
+		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 后台任务") + "\n" + msg)
+	case strings.HasPrefix(rest, "kill "):
+		id, reason, _ := strings.Cut(strings.TrimSpace(strings.TrimPrefix(rest, "kill ")), " ")
+		res, err := m.manager.KillJob(strings.TrimSpace(id), strings.TrimSpace(reason))
+		if err != nil {
+			m.appendMessage(errorSty.Render("取消失败: " + err.Error()))
+			return
+		}
+		msg := "已请求取消 job " + id
+		if res == jobs.KillAlreadyFinished {
+			msg = "job " + id + " 已结束（无需取消）"
+		}
+		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 后台任务") + "\n" + msg)
+	default:
+		m.appendMessage(errorSty.Render("用法: /jobs [list|output <id>|kill <id> [reason]]"))
+	}
 }
 
 // historyInjectionLabel 渲染历史注入设置的可读描述。

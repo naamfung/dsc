@@ -277,3 +277,78 @@ func TestRegistryOnJobDone(t *testing.T) {
 	case <-time.After(30 * time.Millisecond):
 	}
 }
+
+// TestRegistryHostView 校验宿主管理视图（TUI /jobs）：ListAll 不做 owner 隔离，
+// ReadHost/KillHost 可读/取消任意任务（含他会话 owner 任务）。
+func TestRegistryHostView(t *testing.T) {
+	r := NewRegistry()
+
+	// owner 任务（模型经会话调用产生的 workflow background）
+	id, err := r.Start(StartSpec{
+		Kind:  "workflow",
+		Label: "tally",
+		Owner: "sess-a",
+		Start: func() (JobHooks, error) {
+			done := make(chan JobOutcome, 1)
+			go func() { time.Sleep(10 * time.Millisecond); done <- JobOutcome{Status: StatusCompleted, Output: "ok"} }()
+			return JobHooks{Done: done}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 普通调用方看不到 owner 任务，宿主视图（ListAll）能看到
+	if all := r.List(""); len(all) != 0 {
+		t.Fatalf("List('') should hide owner job, got %d", len(all))
+	}
+	if all := r.ListAll(); len(all) != 1 || all[0].ID != id {
+		t.Fatalf("ListAll = %+v, want 1 job %s", all, id)
+	}
+
+	// owner 任务不能用空 caller 的 Get/Wait 等待，用宿主视图 ReadHost 轮询
+	waitHost := func(id string, want JobStatus) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if rd, err := r.ReadHost(id); err == nil && rd.Snapshot.Status == want {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("job %s not settled to %s", id, want)
+	}
+	waitHost(id, StatusCompleted)
+	// 普通 Read(id, "") 对 owner 任务报错；ReadHost 可读
+	if _, err := r.Read(id, ""); err == nil {
+		t.Fatal("Read('') on owner job should be rejected")
+	}
+	rd, err := r.ReadHost(id)
+	if err != nil || rd.Text != "ok" {
+		t.Fatalf("ReadHost = %+v, %v", rd, err)
+	}
+
+	// kill：普通 Kill 拒绝，KillHost 可取消（Start 提供 Cancel 钩子才能落定 killed）
+	id2, _ := r.Start(StartSpec{
+		Kind:  "workflow",
+		Label: "hang",
+		Owner: "sess-b",
+		Start: func() (JobHooks, error) {
+			done := make(chan JobOutcome, 1)
+			cancel := func(reason string) {
+				select {
+				case done <- JobOutcome{Status: StatusKilled}:
+				default:
+				}
+			}
+			return JobHooks{Cancel: cancel, Done: done}, nil
+		},
+	})
+	if _, err := r.Kill(id2, "", "x"); err == nil {
+		t.Fatal("Kill('') on owner job should be rejected")
+	}
+	if res, err := r.KillHost(id2, "user"); err != nil || res != KillRequested {
+		t.Fatalf("KillHost = %v, %v", res, err)
+	}
+	waitHost(id2, StatusKilled)
+}
