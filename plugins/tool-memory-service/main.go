@@ -52,14 +52,15 @@ type resultItem struct {
 	Score float64 `json:"score"`
 }
 
-// dbPath 返回记忆库文件路径：优先使用宿主注入的 DSC_WORKSPACE_ROOT（记忆按项目隔离），
-// 否则回退到进程工作目录（独立运行调试时）。
+// dbPath 返回记忆库文件路径：位于 DSC 程序可执行目录下的 memory 目录中
+// （宿主把插件子进程工作目录设为可执行目录，故用 os.Getwd 解析；目录由本插件创建）。
+// 记忆是跨会话共享的，并非项目级，因此不复用 DSC_WORKSPACE_ROOT。
 func dbPath() string {
-	root := os.Getenv("DSC_WORKSPACE_ROOT")
-	if root == "" {
-		root = "."
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
 	}
-	return filepath.Join(root, "memory.db")
+	return filepath.Join(cwd, "memory", "memory.db")
 }
 
 // initDB 初始化数据库：常规表自动迁移 + FTS5 虚拟表与同步触发器 + 预置高频问题。

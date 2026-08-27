@@ -16,7 +16,7 @@ import (
 
 // TestE2EWithHostClient 端到端验证 SDK 化后的记忆服务插件能被宿主侧正常拉起并调用：
 // 以 go-plugin 客户端 spawn 本插件 exe，经 gRPC 验证元数据、工具目录，并真实执行
-// memory_add → memory_search（记忆库经 DSC_WORKSPACE_ROOT 落到工作区根）。
+// memory_add → memory_search（记忆库落在宿主可执行目录 memory/ 下，跨会话共享）。
 func TestE2EWithHostClient(t *testing.T) {
 	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
 	dir := t.TempDir()
@@ -25,15 +25,16 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 
-	// 2. 准备 workspace 根（记忆库落点）
-	ws := filepath.Join(dir, "ws")
-	if err := os.MkdirAll(ws, 0o755); err != nil {
+	// 2. 准备宿主可执行目录（记忆库落点 <exeDir>/memory/memory.db）
+	hostDir := filepath.Join(dir, "host")
+	if err := os.MkdirAll(hostDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// 3. 以宿主侧客户端拉起插件进程（注入 DSC_WORKSPACE_ROOT）
+	// 3. 以宿主侧客户端拉起插件进程（工作目录=宿主可执行目录，模拟宿主注入 ExecDir）
 	cmd := osexec.Command(exe)
-	cmd.Env = append(os.Environ(), "DSC_WORKSPACE_ROOT="+ws)
+	cmd.Dir = hostDir
+	cmd.Env = os.Environ()
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  core.Handshake,
 		Plugins:          map[string]plugin.Plugin{},
@@ -90,8 +91,8 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("memory_search = %+v", resp)
 	}
 
-	// 7. 记忆库落点校验：DSC_WORKSPACE_ROOT/memory.db
-	if _, err := os.Stat(filepath.Join(ws, "memory.db")); err != nil {
-		t.Fatalf("memory.db 未创建于 workspace 根: %v", err)
+	// 7. 记忆库落点校验：<hostDir>/memory/memory.db（跨会话，非项目级）
+	if _, err := os.Stat(filepath.Join(hostDir, "memory", "memory.db")); err != nil {
+		t.Fatalf("memory.db 未创建于宿主可执行目录 memory 下: %v", err)
 	}
 }
