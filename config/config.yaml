@@ -31,6 +31,12 @@ plugins:
     binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
     enabled: true
 
+  # 记忆服务：memory_search / memory_add 工具 + AfterTool 自动记忆钩子
+  - name: tool-memory-service
+    type: tool
+    binary_path: ./plugins/tool-memory-service/tool-memory-service.exe
+    enabled: true
+
   # 本地内部使用（不入库）：逆推情节生成小说工具插件（经互通机制 1 复用宿主 LLM）
   - name: tool-novelforge
     type: tool

@@ -62,6 +62,10 @@ echo "Building tool-lisp-eval plugin..."
 echo "Building tool-skill plugin..."
 (cd plugins/tool-skill && go build -o tool-skill.exe .)
 
+# 构建 tool-memory-service 插件（独立 module，基于 dsc-sdk）
+echo "Building tool-memory-service plugin..."
+(cd plugins/tool-memory-service && go build -o tool-memory-service.exe .)
+
 # 构建 tool-lua-host 插件
 echo "Building tool-lua-host plugin..."
 cd ./plugins/tool-lua-host && go build && cd ../../
