@@ -2197,12 +2197,14 @@ func (m *Manager) interconnectToolPlugin(name string, grpcClient *plugin.GRPCCli
 	if id, err := m.servePluginNotifyOnBroker(pBroker); err == nil {
 		notifyID = id
 	}
-	if llmID == 0 && toolID == 0 && notifyID == 0 {
+	agentID := m.serveAgentBridgeOnBroker(pBroker)
+	if llmID == 0 && toolID == 0 && notifyID == 0 && agentID == 0 {
 		return
 	}
 	ictx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	_, err := toolClient.SetInterconnect(ictx, &proto.InterconnectRequest{
 		LlmServiceId: llmID, NotifyServiceId: notifyID, ToolServiceId: toolID,
+		AgentServiceId: agentID,
 	})
 	cancel()
 	if err != nil {

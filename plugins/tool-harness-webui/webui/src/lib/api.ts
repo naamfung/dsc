@@ -33,6 +33,25 @@ export async function apiGet<T>(path: string): Promise<T> {
 	return (await r.json()) as T;
 }
 
+// apiPlugins 调 /api/plugins。宿主 /plugins/list 返回 { status, plugins: [...] }，
+// 这里解包成裸数组，供界面直接渲染。
+export async function apiPlugins(): Promise<PluginItem[]> {
+	const r = await fetch('/api/plugins');
+	if (!r.ok) throw new Error(`HTTP ${r.status}`);
+	const data = (await r.json()) as { plugins?: PluginItem[] };
+	return data.plugins ?? [];
+}
+
+// apiDebugger 调 /api/debugger。宿主 /debugger/agent 返回 { status, agent, snapshot: {...} }，
+// 这里解包成扁平快照结构，供界面直接渲染。
+export async function apiDebugger(): Promise<DebuggerSnapshot> {
+	const r = await fetch('/api/debugger');
+	if (!r.ok) throw new Error(`HTTP ${r.status}`);
+	const data = (await r.json()) as { snapshot?: DebuggerSnapshot; error?: string };
+	if (data.error) throw new Error(data.error);
+	return data.snapshot ?? {};
+}
+
 export async function apiChat(content: string): Promise<ChatResult> {
 	const r = await fetch('/api/chat', {
 		method: 'POST',

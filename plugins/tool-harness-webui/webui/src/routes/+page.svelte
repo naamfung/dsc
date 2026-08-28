@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { apiChat, apiGet } from '$lib/api';
+	import { apiChat, apiDebugger, apiPlugins } from '$lib/api';
 	import type { ChatResult, DebuggerSnapshot, HealthResult, PluginItem } from '$lib/api';
 
 	// ---- 状态 ----
@@ -32,14 +32,14 @@
 		}
 
 		try {
-			plugins = await apiGet<PluginItem[]>('/api/plugins');
+			plugins = await apiPlugins();
 		} catch (e) {
 			plugins = [];
 			addSystem(`/api/plugins 失败：${String(e)}`);
 		}
 
 		try {
-			const s = await apiGet<DebuggerSnapshot>('/api/debugger');
+			const s = await apiDebugger();
 			snap = s && s.error ? null : s;
 			if (s && s.error) addSystem(`快照不可用：${s.error}`);
 		} catch (e) {
@@ -136,7 +136,7 @@
 				></textarea>
 				<div class="row">
 					<button onclick={() => void send()} disabled={sending}>{sending ? '发送中…' : '发送'}</button>
-					<span class="meta">{connected ? '' : '宿主 admin 未连接（探路版：对话桥接宿主尚未接入）'}</span>
+					<span class="meta">{connected ? '' : '宿主 admin 未连接'}</span>
 				</div>
 			</div>
 		</main>

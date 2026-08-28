@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"dsc/core/agentclient"
 	"dsc/core/llmclient"
 	"dsc/core/notify"
 	"dsc/core/toolclient"
@@ -18,12 +19,17 @@ type InterconnectHandler func(ctx context.Context, ic *Interconnect) error
 // Interconnect 宿主能力客户端集（插件→宿主）。
 // 独立插件之间互不感知：经宿主聚合路由调用其他插件的工具/LLM。
 type Interconnect struct {
-	llm  *llmclient.Client
-	tool *toolclient.Client
-	ntf  *notify.Notifier
+	agent *agentclient.Client
+	llm   *llmclient.Client
+	tool  *toolclient.Client
+	ntf   *notify.Notifier
 
 	closeOnce sync.Once
 }
+
+// Agent 返回宿主主 agent 桥接客户端（RunStream/InjectMessage；未互联时为 nil，
+// 调用方自行判空）。
+func (ic *Interconnect) Agent() *agentclient.Client { return ic.agent }
 
 // LLM 返回宿主聚合 LLM 客户端（未互联时为 nil；调用方自行判空）。
 func (ic *Interconnect) LLM() *llmclient.Client { return ic.llm }
@@ -52,6 +58,9 @@ func (ic *Interconnect) Close() error {
 	}
 	var err error
 	ic.closeOnce.Do(func() {
+		if ic.agent != nil {
+			err = ic.agent.Close()
+		}
 		if ic.llm != nil {
 			err = ic.llm.Close()
 		}
@@ -69,8 +78,19 @@ func (ic *Interconnect) Close() error {
 	return err
 }
 
-// llmDial/toolDial/notifyDial 是 llmclient/toolclient/notify.Dial 的薄封装，
+// llmDial/toolDial/notifyDial/agentDial 是各 client 包的 Dial 薄封装，
 // 统一处理「未提供 serviceID 时返回 nil 而非错误」（tool-lua-host 同款语义）。
+func agentDial(broker *plugin.GRPCBroker, id uint32) (*agentclient.Client, error) {
+	if broker == nil || id == 0 {
+		return nil, nil
+	}
+	c, err := agentclient.Dial(broker, id)
+	if err != nil {
+		return nil, fmt.Errorf("dsc-sdk: dial agent bridge service: %w", err)
+	}
+	return c, nil
+}
+
 func llmDial(broker *plugin.GRPCBroker, id uint32) (*llmclient.Client, error) {
 	if broker == nil || id == 0 {
 		return nil, nil

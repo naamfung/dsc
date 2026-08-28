@@ -19,14 +19,14 @@ import (
 //go:embed all:webui/dist
 var distFS embed.FS
 
-// harnessData 探路版宿主接线状态：仅有 agent 名与 admin 可达性。
-// 完整对话交互需宿主侧新增对主 agent RunStream/InjectMessage 的桥接 RPC，属下一阶段。
+// harnessData 宿主接线状态：agent 名、admin 可达性，以及互通注入的宿主能力
+// 客户端集（含主 agent 对话通道 ic.Agent()）。
 type harnessData struct {
 	mu       sync.RWMutex
 	agent    string
 	adminURL string
-	ok       bool
 	lastErr  string
+	ic       *dsc.Interconnect
 }
 
 var hd = &harnessData{adminURL: defaultAdminURL()}
@@ -60,9 +60,10 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.Agent == "" {
 		s.Agent = "agent-react-loop"
 	}
-	// 代理一次 admin 快照确认可达
+	// 代理一次 admin 可达性确认（用始终开放的 /plugins/list，而非 -debugger 才开放的
+	// /debugger/agent，避免 health 误报离线）。
 	base := hd.adminURL
-	code, body, err := proxy(base, "/debugger/agent", nil)
+	code, body, err := proxy(base, "/plugins/list", nil)
 	s.Message = fmt.Sprintf("admin http %d, err=%v", code, err)
 	s.Ok = err == nil && code == 200
 	_ = body
@@ -70,14 +71,15 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // proxy 把请求代理转发到宿主 admin API，剥离前缀 /api。
-// 复用 admin 的 DSC_ADMIN_TOKEN 认证（与宿主进程同一环境变量）。
+// 复用 admin 的 DSC_ADMIN_TOKEN 认证（与宿主进程同一环境变量）：宿主
+// adminAuth 只认 "Authorization: Bearer <token>"，故此处对齐该头格式。
 func proxy(base, targetPath string, body io.Reader) (int, []byte, error) {
 	req, err := http.NewRequest(http.MethodGet, base+targetPath, body)
 	if err != nil {
 		return 0, nil, err
 	}
 	if tok := os.Getenv("DSC_ADMIN_TOKEN"); tok != "" {
-		req.Header.Set("X-Admin-Token", tok)
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
@@ -87,11 +89,6 @@ func proxy(base, targetPath string, body io.Reader) (int, []byte, error) {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	return resp.StatusCode, b, err
-}
-
-// readAdminTokenFrom 读取 admin token 认证头（与 admin.go adminAuth 对齐）。
-func readAdminTokenFrom(r *http.Request) string {
-	return r.Header.Get("X-Admin-Token")
 }
 
 // handleDebugger 代理 /debugger/agent（需 query name）。
@@ -110,7 +107,8 @@ func handlePlugins(w http.ResponseWriter, r *http.Request) {
 	respondProxy(w, code, body, err)
 }
 
-// handleChat 发送/接收消息。探路版：未接入宿主对话桥接，返回占位说明。
+// handleChat 发送/接收消息：经互通注入的主 agent 桥接客户端 RunStream 一轮对话，
+// 把流式帧汇聚为回复文本返回。未接入主 agent（未互联或主 agent 未加载）时返回占位说明。
 func handleChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
@@ -119,9 +117,49 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": "invalid body"})
 		return
 	}
+	if strings.TrimSpace(req.Content) == "" {
+		writeJSON(w, map[string]string{"error": "content required"})
+		return
+	}
+
+	hd.mu.RLock()
+	ic := hd.ic
+	hd.mu.RUnlock()
+	if ic == nil || ic.Agent() == nil {
+		writeJSON(w, map[string]string{"bridge": "pending", "reply": "对话桥接未接入宿主主 agent。"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
+	defer cancel()
+	ch, err := ic.Agent().RunStream(ctx, req.Content)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": fmt.Sprintf("对话失败：%v", err)})
+		return
+	}
+
+	var reply strings.Builder
+	for frame := range ch {
+		switch frame.Status {
+		case "error":
+			if frame.Error != "" {
+				if reply.Len() > 0 {
+					reply.WriteString("\n\n")
+				}
+				reply.WriteString("[错误] " + frame.Error)
+			}
+		default:
+			if frame.Output != "" {
+				reply.WriteString(frame.Output)
+			}
+		}
+	}
+	if reply.Len() == 0 {
+		reply.WriteString("（无回复）")
+	}
 	writeJSON(w, map[string]any{
-		"reply":  fmt.Sprintf("（探路占位）收到消息「%s」。对话桥接宿主将在下一阶段接入。", req.Content),
-		"bridge": "pending",
+		"reply":  reply.String(),
+		"bridge": "connected",
 	})
 }
 
@@ -192,18 +230,6 @@ func startHTTP() error {
 }
 
 func main() {
-	// 预先探测一次 admin（失败不致命，前端会显示）
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		code, _, err := proxy(hd.adminURL, "/debugger/agent", nil)
-		hd.mu.Lock()
-		hd.ok = err == nil && code == 200
-		if err != nil {
-			hd.lastErr = err.Error()
-		}
-		hd.mu.Unlock()
-	}()
-
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService / PluginMetadata
 	// 与 go-core 组装。本插件为空壳工具（无业务工具，仅承载独立 HTTP 服务），
 	// 故用 sdk.ToolProvider 返回空集即可满足 SDK 校验。
@@ -218,6 +244,7 @@ func main() {
 		if hd.agent == "" {
 			hd.agent = "agent-react-loop"
 		}
+		hd.ic = ic
 		hd.mu.Unlock()
 		go func() {
 			if err := startHTTP(); err != nil {

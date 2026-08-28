@@ -26,6 +26,7 @@ type InterconnectRequest struct {
 	LlmServiceId    uint32                 `protobuf:"varint,1,opt,name=llm_service_id,json=llmServiceId,proto3" json:"llm_service_id,omitempty"`          // 聚合 LLM 服务 ID（0 = 未提供）
 	NotifyServiceId uint32                 `protobuf:"varint,2,opt,name=notify_service_id,json=notifyServiceId,proto3" json:"notify_service_id,omitempty"` // PluginNotifyService ID（0 = 未提供）
 	ToolServiceId   uint32                 `protobuf:"varint,3,opt,name=tool_service_id,json=toolServiceId,proto3" json:"tool_service_id,omitempty"`       // 聚合 Tool 服务 ID（0 = 未提供；经宿主转发到任意工具插件）
+	AgentServiceId  uint32                 `protobuf:"varint,4,opt,name=agent_service_id,json=agentServiceId,proto3" json:"agent_service_id,omitempty"`    // 主 agent 的桥接服务 ID（0 = 未提供；仅 RunStream/InjectMessage）
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -77,6 +78,13 @@ func (x *InterconnectRequest) GetNotifyServiceId() uint32 {
 func (x *InterconnectRequest) GetToolServiceId() uint32 {
 	if x != nil {
 		return x.ToolServiceId
+	}
+	return 0
+}
+
+func (x *InterconnectRequest) GetAgentServiceId() uint32 {
+	if x != nil {
+		return x.AgentServiceId
 	}
 	return 0
 }
@@ -3405,11 +3413,12 @@ var File_dsc_proto protoreflect.FileDescriptor
 
 const file_dsc_proto_rawDesc = "" +
 	"\n" +
-	"\tdsc.proto\x12\x03dsc\"\x8f\x01\n" +
+	"\tdsc.proto\x12\x03dsc\"\xb9\x01\n" +
 	"\x13InterconnectRequest\x12$\n" +
 	"\x0ellm_service_id\x18\x01 \x01(\rR\fllmServiceId\x12*\n" +
 	"\x11notify_service_id\x18\x02 \x01(\rR\x0fnotifyServiceId\x12&\n" +
-	"\x0ftool_service_id\x18\x03 \x01(\rR\rtoolServiceId\"\x16\n" +
+	"\x0ftool_service_id\x18\x03 \x01(\rR\rtoolServiceId\x12(\n" +
+	"\x10agent_service_id\x18\x04 \x01(\rR\x0eagentServiceId\"\x16\n" +
 	"\x14InterconnectResponse\"\r\n" +
 	"\vNameRequest\"\"\n" +
 	"\fNameResponse\x12\x12\n" +

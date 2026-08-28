@@ -129,6 +129,13 @@ func (s *toolServiceServer) SetInterconnect(ctx context.Context, req *proto.Inte
 				dialErr = err
 			}
 		}
+		if id := req.GetAgentServiceId(); id != 0 {
+			if a, err := agentDial(s.broker, id); err == nil {
+				ic.agent = a
+			} else if dialErr == nil {
+				dialErr = err
+			}
+		}
 	}
 	s.mu.Lock()
 	if old := s.ic; old != nil {

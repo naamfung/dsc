@@ -60,6 +60,7 @@ message InterconnectRequest {
   uint32 llm_service_id = 1;    // 聚合 LLM 服务 ID（0 = 未提供）
   uint32 notify_service_id = 2; // PluginNotifyService ID（0 = 未提供）
   uint32 tool_service_id = 3;   // 聚合 Tool 服务 ID（0 = 未提供；经宿主转发到任意工具插件）
+  uint32 agent_service_id = 4;  // 主 agent 的桥接服务 ID（0 = 未提供；仅 RunStream/InjectMessage）
 }
 
 message InterconnectResponse {}
