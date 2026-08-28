@@ -107,6 +107,58 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 LLM_PROVIDER=openai ./dsc
 ```
 
+## Golang 插件熱更新實操
+
+DSC 的 Go 插件（基於 go-plugin / gRPC）支持**版本化二進制的在線熱更新**：無需重啟宿主，即可把運行中的 dsc / agent / llm / tool / policy 插件換成新版本進程。
+
+### 原理
+
+- **啟動選版**：`LoadFromConfig` 用 `ResolveLatestBinary` 在每個插件的二進制目錄內挑選「版本號最高」的版本化文件作為初始載入（見 [core/hot_reload_version.go](core/hot_reload_version.go)）。
+- **運行監測**：配置 `hot_reload: true` 時，宿主經 `StartHotReloadWatcher` 啟動 fsnotify + 週期掃描（見 [core/hot_reload_watch.go](core/hot_reload_watch.go)）。一旦某插件目錄內出現比當前運行版本更高的 `<插件名>-v<版本><擴展名>` 文件（fsnotify 即時 + ≤5s 週期兜底，≥500ms 節流防抖），即自動調用 `HotReload` 換進程，不中斷宿主與其他插件。
+- **支援類型**：dsc / agent / llm / tool / policy 五類全部可熱重載。
+
+### 版本化文件命名約定
+
+格式：`<插件基名>-v<主版本>.<次版本>[.<修訂>[.<構建>]]<擴展名>`
+
+- **基名取自行為所在目錄的基名**（即插件名），版本化文件須與現行運行文件**同目錄**。
+- 舉例（tool-filesystem，Windows 下為 `.exe`）：
+
+  ```
+  plugins/tool-filesystem/tool-filesystem.exe          # 基線（視為 0.0.0）
+  plugins/tool-filesystem/tool-filesystem-v1.2.0.exe
+  plugins/tool-filesystem/tool-filesystem-v4.0.1.exe
+  ```
+
+- 版本比較採用語義化版本（semver，經 `hashicorp/go-version`），多個版本化文件共存時宿主取版本號**最高**者。
+- **為何用「版本號文件」而非覆蓋原文件**：Windows 下運行中的 `.exe` 被進程鎖定、無法原地覆蓋。寫成新版本文件後宿主直接以新文件啟動新進程，舊文件留在磁碟待資源釋放後由人手清理。
+
+### 開啟方法
+
+在 `config/config.yaml` 增加並重啟宿主一次（首次開啟需重啟才能啟動 watch；此後插件更新皆不需重啟）：
+
+```yaml
+hot_reload: true
+```
+
+### 一次插件更新的實操流程
+
+1. 修改插件源碼（例如 `plugins/tool-filesystem`）。
+2. 在插件目錄內把新二進制編譯成**自增版本號**的文件名：
+
+   ```bash
+   go build -o plugins/tool-filesystem/tool-filesystem-v2.3.1.exe ./plugins/tool-filesystem
+   ```
+
+3. 宿主較短時間內檢測到更高版本，日誌輸出 `hot-reload detected higher version binary ...`；自動卸載舊進程並以 `-v2.3.1.exe` 啟動新進程。
+4. 確認日誌 `hot-reload applied` 且新行為生效。
+
+### 注意事項
+
+- 版本號必須嚴格符合 `v<主>.<次>[.<修訂>[.<構建>]]`；`v1`、`v1.2.3.4.5` 無法匹配，`v<num>.<num>` 為最小合法形式。
+- 版本化文件基名須**恰好等於二進制所在目錄的基名**，否則不會被識別為該插件的更新。
+- 宿主不自動刪除舊版本化文件；舊進程退出後可自行清理殘留文件。
+
 ## 許可證
 
 本項目基於 [Apache-2.0 License](LICENSE) 許可。

@@ -244,6 +244,7 @@ func main() {
 	inputText := ""       // -input：一次性提示文本（自動化測試入口，不經 TUI）
 	debuggerOpen := false // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
 	adminAddr := ""       // -admin：管理 API 監聽地址（默認取環境變量 DSC_ADMIN_ADDR，缺省 :9999）
+	headless := false     // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
 
 	for i, arg := range os.Args {
 		if arg == "-log" {
@@ -271,6 +272,9 @@ func main() {
 			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 				inputText = os.Args[i+1]
 			}
+		} else if arg == "-headless" {
+			// 精简无头模式：单发任务、不开 ADMIN 端口 / 热重载 / cron，专为 CI 脚本
+			headless = true
 		} else if arg == "-debugger" {
 			// 顯式開放 /debugger 觀察路由（含完整會話歷史，屬敏感信息，默認不開放）
 			debuggerOpen = true
@@ -278,6 +282,15 @@ func main() {
 			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 				adminAddr = os.Args[i+1]
 			}
+		}
+	}
+
+	// -headless 精简无头模式校验：任务必须来自 -input 且非空白（对齐 harness headless：
+	// 缺失/空白任务为用法错误，任何东西都不执行并退出 1）
+	if headless {
+		if strings.TrimSpace(inputText) == "" {
+			fmt.Fprintln(os.Stderr, "headless mode requires -input <task>")
+			os.Exit(1)
 		}
 	}
 
@@ -401,6 +414,7 @@ func main() {
 		Logger:          logger,
 		PluginLogger:    coreLogger,
 		DebuggerEnabled: debuggerOpen,
+		EnableHotReload: mainCfg != nil && mainCfg.HotReload,
 	})
 	defer mgr.Shutdown()
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
@@ -534,8 +548,9 @@ func main() {
 			agentEnv["DSC_PLAN_SECTION"] = presetCfg.PlanSection
 		}
 		// -input 且 stdin 为终端时锁定单轮（单发测试后自然退出）；
-		// 管道/文件重定向时走多轮 stdin 驱动，不锁单轮，让每一轮都能完整执行工具循环
-		if inputText != "" && !stdinIsRedirected() {
+		// 管道/文件重定向时走多轮 stdin 驱动，不锁单轮，让每一轮都能完整执行工具循环；
+		// -headless 精简无头模式恒为单发单轮，不受 stdin 重定向影响。
+		if (inputText != "" && !stdinIsRedirected()) || headless {
 			agentEnv["DSC_SINGLE_TURN"] = "1"
 		}
 		for k, v := range agentEntry.Env {
@@ -573,22 +588,31 @@ func main() {
 		fail("failed to load plugins declaratively: %v", err)
 	}
 
-	// 启动 cron 定时任务调度器（失败仅告警，不阻塞主流程）
-	if err := mgr.StartCron(); err != nil {
-		logger.Warn("failed to start cron scheduler", "err", err)
-	} else {
-		logger.Info("cron scheduler started")
-	}
+	// 后台监听/调度仅在常规模式启用；-headless 精简无头模式不开端口、不起常驻轮询，
+	// 对齐 harness headless「进程只存活于单发、不留任何后台」的契约。
+	if !headless {
+		// 版本化二进制自动热重载（config.yaml hot_reload: true 时启用）：fsnotify + 周期扫描
+		if err := mgr.StartHotReloadWatcher(); err != nil {
+			logger.Warn("failed to start hot-reload watcher", "err", err)
+		}
 
-	// 启动管理 API：监听地址取 -admin 旗标，未指定则回退环境变量 DSC_ADMIN_ADDR，再默认 :9999
-	if adminAddr == "" {
-		adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+		// 启动 cron 定时任务调度器（失败仅告警，不阻塞主流程）
+		if err := mgr.StartCron(); err != nil {
+			logger.Warn("failed to start cron scheduler", "err", err)
+		} else {
+			logger.Info("cron scheduler started")
+		}
+
+		// 启动管理 API：监听地址取 -admin 旗标，未指定则回退环境变量 DSC_ADMIN_ADDR，再默认 :9999
+		if adminAddr == "" {
+			adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+		}
+		if adminAddr == "" {
+			adminAddr = ":9999"
+		}
+		mgr.StartAdmin(adminAddr)
+		logger.Info("admin api started", "addr", adminAddr)
 	}
-	if adminAddr == "" {
-		adminAddr = ":9999"
-	}
-	mgr.StartAdmin(adminAddr)
-	logger.Info("admin api started", "addr", adminAddr)
 
 	// 获取 Agent 并运行
 	agentName := mgr.GetMainAgentName()

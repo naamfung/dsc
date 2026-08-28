@@ -41,6 +41,9 @@ type Config struct {
 	// DSC_HISTORY_INJECTION 下发 agent）：-1 禁止（不注入历史）、0 未定义（默认，
 	// agent 缺省不限制）、>0 启用并注入最近 N 条。
 	HistoryInjection int `json:"history_injection" yaml:"history_injection"`
+	// HotReload 是否启用版本化二进制自动热重载 watch：插件目录内出现版本高于当前运行的
+	// <基名>-v<版本><ext> 文件时，自动经 HotReload 换成新进程（默认关闭）。
+	HotReload bool `json:"hot_reload" yaml:"hot_reload"`
 }
 
 type PluginEntry struct {

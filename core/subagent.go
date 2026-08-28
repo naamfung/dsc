@@ -9,40 +9,35 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// Subagent 子代理（对齐 DSH subagent 的 in-process provider）：宿主侧轻量
-// agent 执行器，接受委派的 prompt，驱动「LLM 调用 → 工具执行」小循环直至
-// 模型不再请求工具，返回最终结果。LLM 走多 provider 聚合路由（含瀑布/重试），
-// 工具走执行流水线（含策略拦截），与主 agent 共享同一套宿主机制。
-// 对外以 subagent 工具暴露，agent 可通过工具调用委派子任务。
-
 // SubagentRequest 子代理请求。
 type SubagentRequest struct {
 	Prompt        string
-	MaxIterations int // 模型-工具循环轮数上限；<=0 时使用默认值
+	MaxIterations int // 模型-工具循环轮数上限；>0 时生效，<=0 表示无上限（退出由模型/进度决定）
 }
-
-// defaultSubagentIterations 子代理模型-工具循环默认轮数上限。
-// 子代理拿到完整工具目录后模型常倾向多轮调用（view/编辑/检索），
-// 3 轮过小、本地慢模型下极易耗尽报错；取 8 兼顾收敛与防失控。
-const defaultSubagentIterations = 8
 
 // RunSubagent 执行一次子代理任务：system 引导 + prompt 进入循环，
 // 每轮调用聚合 LLM 服务；有工具调用则逐个经工具流水线执行并把结果回填，
-// 直至模型返回纯文本（或达到迭代上限）。
+// 直至模型返回纯文本（自然退出）。不设刚性默认迭代上限——长程任务只要模型持续
+// 产出有用的工具调用就会一直推进，何时收尾由模型自行决定（返回纯文本即完成）。
+// 需要显式防失控时由调用方传入 max_iterations；外部中断经由 ctx 取消（父 agent
+// 被取消时子代理 LLM 调用随之失败，见 TestSubagentPropagatesCancelContext）。
 func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string, error) {
-	if req.MaxIterations <= 0 {
-		req.MaxIterations = defaultSubagentIterations
-	}
 	// 子代理同样拿到宿主聚合工具目录（互通：cron/subagent 任务可调用工具插件，
 	// 与主 agent 从聚合 ToolService.ListTools 拿到的一致）
 	tools := m.AllToolsProto()
 	msgs := []*proto.Message{
 		{Role: "system", Content: "You are a subagent executing a delegated task. " +
-			"Complete the task using the available tools if needed, then return only the final result, concise."},
+			"Complete the task using the available tools if needed, then return only the final result, concise. " +
+			"You decide when the task is done; there is no iteration limit on you."},
 		{Role: "user", Content: req.Prompt},
 	}
 	agg := &llmAggregateServer{m: m}
-	for i := 0; i < req.MaxIterations; i++ {
+	iteration := 0
+	for {
+		// 显式上限仅在调用方要求时生效（防失控）；默认无上限，退出交由模型/进度决定。
+		if req.MaxIterations > 0 && iteration >= req.MaxIterations {
+			return "", fmt.Errorf("subagent exceeded %d iterations", req.MaxIterations)
+		}
 		// 走流式聚合（与主 agent 一致）：unary Chat 在 thinking 模式下可能只返回
 		// thinking 块而 text 为空，流式帧则完整携带文本增量
 		col := &frameCollector{ctx: ctx}
@@ -78,8 +73,8 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 			}
 			msgs = append(msgs, &proto.Message{Role: "tool", Content: content, ToolCallId: callID})
 		}
+		iteration++
 	}
-	return "", fmt.Errorf("subagent exceeded %d iterations", req.MaxIterations)
 }
 
 // frameCollector 内部收集流式帧，供子代理循环以流式路径调用聚合 LLM 服务。
@@ -111,7 +106,8 @@ func (t *subagentTool) Name() string { return "subagent" }
 func (t *subagentTool) Description() string {
 	return "Spawn a subagent to execute a delegated task (a self-contained prompt run) " +
 		"and return its final result. Use for tasks you can delegate and summarize. " +
-		"Set max_iterations for tasks that need more model-tool rounds than the default (8)."
+		"The subagent runs until it decides the task is done (no iteration limit by default), " +
+		"so it suits long-running work; set max_iterations to impose an explicit cap if needed."
 }
 
 func (t *subagentTool) ParametersSchema() json.RawMessage {
@@ -119,7 +115,7 @@ func (t *subagentTool) ParametersSchema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"prompt": {"type": "string", "description": "The task to delegate to the subagent."},
-			"max_iterations": {"type": "integer", "description": "Optional max model-tool rounds; default 8."}
+			"max_iterations": {"type": "integer", "description": "Optional hard cap on model-tool rounds; omit for no limit (the subagent stops when it decides the task is done)."}
 		},
 		"required": ["prompt"]
 	}`)

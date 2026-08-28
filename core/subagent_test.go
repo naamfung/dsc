@@ -181,8 +181,8 @@ func TestSubagentPropagatesCancelContext(t *testing.T) {
 	}
 }
 
-// TestSubagentDefaultIterations 校验默认迭代上限足以完成多轮工具任务
-// （3 轮过小会导致本地慢模型下子代理频繁报 "exceeded iterations"）。
+// TestSubagentDefaultIterations 校验子代理默认（未传 max_iterations）可完成多轮工具任务：
+// 默认无迭代上限，退出由模型/进度决定（返回纯文本即完成）。
 func TestSubagentDefaultIterations(t *testing.T) {
 	m := newSubagentManager()
 	// 三步：工具调用 ×2 + 最终结果
@@ -201,6 +201,34 @@ func TestSubagentDefaultIterations(t *testing.T) {
 	}
 	if res != "final" {
 		t.Fatalf("result = %q, want final", res)
+	}
+}
+
+// TestSubagentUnlimitedByDefault 回归：默认（未传 max_iterations）不应因超过旧的 8 轮
+// 上限而失败——只要模型持续调用工具推进，长程任务可继续，直至模型返回纯文本收尾。
+func TestSubagentUnlimitedByDefault(t *testing.T) {
+	m := newSubagentManager()
+	steps := make([]*ChatResponse, 0, 11)
+	// 10 轮连续工具调用（远超旧默认上限 8），最后以纯文本收尾
+	for i := 0; i < 10; i++ {
+		steps = append(steps, &ChatResponse{ToolCalls: []ToolCall{{ID: "c", Name: "plain-tool", Arguments: map[string]any{}}}})
+	}
+	steps = append(steps, &ChatResponse{Content: "long task done", FinishReason: "stop"})
+	llm := &scriptedLLM{steps: steps}
+	m.llms["p"] = llm
+	m.llmOrder = []string{"p"}
+	m.agentLLMName = "p"
+
+	res, err := m.RunSubagent(context.Background(), &SubagentRequest{Prompt: "long task"})
+	if err != nil {
+		t.Fatalf("RunSubagent with unlimited default should complete all rounds: %v", err)
+	}
+	if res != "long task done" {
+		t.Fatalf("result = %q, want 'long task done'", res)
+	}
+	// 11 步全部被执行（10 轮工具 + 1 轮收尾），证明未被 8 轮上限截断
+	if llm.chatCalls != 11 {
+		t.Fatalf("llm calls = %d, want 11 (must not be capped at former default 8)", llm.chatCalls)
 	}
 }
 

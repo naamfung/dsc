@@ -31,6 +31,7 @@ import (
 // Manager 插件管理器
 type Manager struct {
 	mu              sync.RWMutex
+	reloadMu        sync.Mutex                // 串行化热重载；准备阶段(拉起/握手/验证)不持 mu，仅交换临界区持 mu
 	clients         map[string]*plugin.Client // 插件名 -> 客戶端
 	plugins         map[string]DSCPlugin      // 插件名 -> DSC業務接口
 	agents          map[string]Agent          // 插件名 -> Agent接口
@@ -107,6 +108,14 @@ type Manager struct {
 	// jobs 后台任务注册表（对齐 DSH jobs v1 种子）：workflow 后台运行等
 	// 长任务经 Registry.Start 启动，模型用 job_output/job_list/job_kill 查询管理。
 	jobs *jobs.Registry
+
+	// hotReloadWatcher 版本化二进制自动热重载 watch（仅 m.config.EnableHotReload 时非空）。
+	hotReloadWatcher *hotReloadWatcher
+
+	// loadedBinaries 各插件当前运行（已加载/热重载后）的二进制路径，按插件名索引。
+	// 版本化自动热重载据此判定「当前版本」，从而检测目录内是否出现更高版本的二进制。
+	// 在加载与热重载完成点统一记录（需已持有 m.mu；watcher 读侧持读锁快照）。
+	loadedBinaries map[string]string
 }
 
 type ManagerConfig struct {
@@ -119,6 +128,10 @@ type ManagerConfig struct {
 	// DebuggerEnabled 控制是否开放 /debugger/* 观察路由（默认关闭）。
 	// DEBUGGER 快照含完整会话历史，属敏感信息，仅在显式以 -debugger 启动时开放。
 	DebuggerEnabled bool
+	// EnableHotReload 控制是否启用版本化二进制自动热重载 watch（默认关闭）。
+	// 开启后，插件目录中出现「比当前二进制版本更高」的 <基名>-v<版本><ext> 文件时，
+	// 自动经 Manager.HotReload 换成新进程（解决 Windows 下运行中 .exe 被占用无法覆盖的问题）。
+	EnableHotReload bool
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {
@@ -160,6 +173,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		subscribers:         make(map[int]chan PluginEvent),
 		stopHooks:           make(map[string][]func() error),
 		agentEntries:        make(map[string]PluginEntry),
+		loadedBinaries:      make(map[string]string),
 		pendingEntries:      make(map[string]PluginEntry),
 		events:              NewEventBus(),
 		policyClients:       make(map[string]proto.FsObservationPolicyServiceClient),
@@ -428,6 +442,7 @@ func (m *Manager) Load(name string, binaryPath string) error {
 	m.clients[name] = client
 	m.plugins[name] = impl
 	m.typeMap[name] = "dsc"
+	m.recordLoadedBinaryLocked(name, binaryPath)
 	m.transitionLocked(name, StateReady, "")
 	go m.monitorExit(name, client)
 
@@ -749,6 +764,7 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 	m.llms[name] = impl
 	m.llmOrder = append(m.llmOrder, name) // 记录加载顺序（去重由加载前 unload 保证）
 	m.typeMap[name] = "llm"
+	m.recordLoadedBinaryLocked(name, binaryPath)
 	m.transitionLocked(name, StateReady, "")
 	go m.monitorExit(name, client)
 
@@ -789,64 +805,116 @@ func (m *Manager) unloadLLMLocked(name string) error {
 // HotReload 熱重載：卸載舊版本，加載新版本
 // 支持 DSCPlugin、Agent、LLM 三種類型的插件，根據 typeMap 記錄的類型自動判斷
 func (m *Manager) HotReload(name string, newBinaryPath string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// 热重载串行化：慢速的准备阶段（子进程拉起、gRPC 握手、验证、依赖注入）
+	// 不持有 m.mu，仅在最末的映射交换临界区内短暂持锁，避免长时间阻塞整体管理。
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 
+	// 快照必需配置（短读锁，随即释放，不阻塞后续 I/O）
+	m.mu.RLock()
 	typ, ok := m.typeMap[name]
+	execDir := m.config.ExecDir
+	handshake := m.config.Handshake
+	coreLogger := m.coreLogger
+	broker := m.broker
+	refs := interconnectRefs{hasAggLLM: m.agentLLMServiceID != 0, agentLLMName: m.agentLLMName}
+	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("core '%s' not found (no registered type)", name)
 	}
+
 	switch typ {
 	case "dsc":
-		return m.hotReloadPluginLocked(name, newBinaryPath)
+		return m.hotReloadPlugin(name, newBinaryPath, execDir, handshake, coreLogger)
 	case "agent":
-		return m.hotReloadAgentLocked(name, newBinaryPath)
+		return m.hotReloadAgent(name, newBinaryPath, execDir, handshake, coreLogger)
 	case "llm":
-		return m.hotReloadLLMLocked(name, newBinaryPath)
+		return m.hotReloadLLM(name, newBinaryPath, execDir, handshake, coreLogger)
+	case "tool":
+		return m.hotReloadTool(name, newBinaryPath, execDir, handshake, coreLogger, broker, refs)
+	case "policy":
+		return m.hotReloadPolicy(name, newBinaryPath, execDir, handshake, coreLogger)
 	default:
 		return fmt.Errorf("unknown core type '%s' for name '%s'", typ, name)
 	}
 }
 
-// hotReloadPluginLocked 內部重載 DSCPlugin（需已持有鎖）
-func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
-	// 1. 建立新 client 並驗證
+// reloadSnapshotAgent 快照 agent 重载准备阶段所需的只读 serviceID（短读锁）。
+func (m *Manager) reloadSnapshotAgent(name string, typ string) (llmID, toolID, userQID uint32, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.typeMap[name] != typ {
+		return 0, 0, 0, false
+	}
+	return m.agentLLMServiceID, m.agentToolServiceID, m.userQuestionsServiceID, true
+}
+
+// setReloadConnecting 在准备阶段短暂持锁置 StateConnecting（插件若已被卸载则跳过）。
+func (m *Manager) setReloadConnecting(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.typeMap[name]; ok {
+		m.transitionLocked(name, StateConnecting, "")
+	}
+}
+
+// setReloadFailed 准备阶段失败时短暂持锁置 StateFailed（插件若已被卸载则跳过）。
+func (m *Manager) setReloadFailed(name string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.typeMap[name]; !ok {
+		return // 准备期间已被卸载/关闭，无需置失败
+	}
+	m.transitionLocked(name, StateFailed, err.Error())
+}
+
+// hotReloadPlugin 內部重載 DSCPlugin。准备阶段（拉起/握手/验证）不持 mu，
+// 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
+func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger) error {
+	// ---- 准备阶段（不持 m.mu）：拉起并验证新进程 ----
 	cmd := exec.Command(newBinaryPath)
-	if m.config.ExecDir != "" {
-		cmd.Dir = m.config.ExecDir
+	if execDir != "" {
+		cmd.Dir = execDir
 	}
 	newClient := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig: m.config.Handshake,
+		HandshakeConfig: handshake,
 		Plugins: map[string]plugin.Plugin{
 			"dsc_core": &DSCPluginGRPC{},
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-		Logger:           m.coreLogger,
+		Logger:           coreLogger,
 	})
 
 	rpcClient, err := newClient.Client()
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("new core connection failed: %w", err)
 	}
-	m.transitionLocked(name, StateConnecting, "")
+	m.setReloadConnecting(name)
 
 	raw, err := rpcClient.Dispense("dsc_core")
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("dispense new core failed: %w", err)
 	}
 
 	newImpl, ok := raw.(DSCPlugin)
 	if !ok {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, "new core does not implement DSCPlugin interface")
+		m.setReloadFailed(name, fmt.Errorf("new core does not implement DSCPlugin interface"))
 		return fmt.Errorf("new core does not implement DSCPlugin interface")
 	}
 
+	// ---- 交换阶段（短临界 m.mu）----
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.typeMap[name] != "dsc" {
+		newClient.Kill() // 准备期间被卸载/关闭，放弃
+		return fmt.Errorf("core '%s' unloaded during reload; abort", name)
+	}
 	// 3. 先对称清理旧实例，再更新映射（令旧进程的退出监控不再生效）
 	m.runStopHooksLocked(name)
 	oldClient := m.clients[name]
@@ -856,6 +924,7 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 	if oldClient != nil {
 		oldClient.Kill()
 	}
+	m.recordLoadedBinaryLocked(name, newBinaryPath)
 	m.transitionLocked(name, StateReady, "")
 	go m.monitorExit(name, newClient)
 
@@ -863,72 +932,82 @@ func (m *Manager) hotReloadPluginLocked(name, newBinaryPath string) error {
 	return nil
 }
 
-// hotReloadAgentLocked 內部重載 Agent（需已持有鎖）
-func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
-	oldServiceID, ok := m.agentServiceIDs[name]
+// hotReloadAgent 內部重載 Agent。准备阶段（拉起/握手/验证/依赖注入）不持 mu，
+// 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
+func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger) error {
+	// 快照只读的 serviceID（短读锁），供准备阶段的 RPC 注依赖使用。
+	llmID, toolID, userQID, ok := m.reloadSnapshotAgent(name, "agent")
 	if !ok {
 		return fmt.Errorf("no serviceID recorded for agent %s", name)
 	}
 
-	// 1. 建立新 client 並驗證
+	// ---- 准备阶段（不持 m.mu）：拉起并验证新进程 ----
 	cmd := exec.Command(newBinaryPath)
-	if m.config.ExecDir != "" {
-		cmd.Dir = m.config.ExecDir
+	if execDir != "" {
+		cmd.Dir = execDir
 	}
 	newClient := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig: m.config.Handshake,
+		HandshakeConfig: handshake,
 		Plugins: map[string]plugin.Plugin{
 			"agent": &AgentGRPCPlugin{},
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-		Logger:           m.coreLogger,
+		Logger:           coreLogger,
 	})
 
 	rpcClient, err := newClient.Client()
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("new agent core connection failed: %w", err)
 	}
-	m.transitionLocked(name, StateConnecting, "")
+	m.setReloadConnecting(name)
 
 	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
 	if !ok {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, "new agent core is not a gRPC client")
+		m.setReloadFailed(name, fmt.Errorf("new agent core is not a gRPC client"))
 		return fmt.Errorf("new agent core is not a gRPC client")
 	}
 
 	// 透過 RPC 重新注冊服务ID（tool 沿用聚合 Tool 服务；LLM 走聚合多 provider 路由）
 	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: m.agentLLMServiceID, ToolServiceId: m.agentToolServiceID})
+	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: llmID, ToolServiceId: toolID})
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("failed to register service IDs on agent: %w", err)
 	}
 	// 重新注入用户评审通道 serviceID（同一 broker，沿用挂载的服务）
-	if m.userQuestionsServiceID != 0 {
-		_, _ = agentClient.SetUserQuestionsService(context.Background(), &proto.SetUserQuestionsServiceRequest{ServiceId: m.userQuestionsServiceID})
+	if userQID != 0 {
+		_, _ = agentClient.SetUserQuestionsService(context.Background(), &proto.SetUserQuestionsServiceRequest{ServiceId: userQID})
 	}
 
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("dispense new agent core failed: %w", err)
 	}
 
 	newImpl, ok := raw.(Agent)
 	if !ok {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, "new agent core does not implement Agent interface")
+		m.setReloadFailed(name, fmt.Errorf("new agent core does not implement Agent interface"))
 		return fmt.Errorf("new agent core does not implement Agent interface")
 	}
 
+	// ---- 交换阶段（短临界 m.mu）----
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.typeMap[name] != "agent" {
+		newClient.Kill() // 准备期间被卸载/关闭，放弃
+		return fmt.Errorf("agent '%s' unloaded during reload; abort", name)
+	}
 	// 3. 先对称清理旧 agent，再更新映射（旧进程退出监控随之失效）
 	m.runStopHooksLocked(name) // 优雅关闭旧实例
+	oldServiceID := m.agentServiceIDs[name]
 	oldClient := m.clients[name]
 	m.clients[name] = newClient
 	m.agents[name] = newImpl
@@ -936,6 +1015,7 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	if oldClient != nil {
 		oldClient.Kill()
 	}
+	m.recordLoadedBinaryLocked(name, newBinaryPath)
 	// 为新实例注册对称清理 hook
 	ni := newImpl
 	m.addStopHookLocked(name, func() error {
@@ -948,45 +1028,53 @@ func (m *Manager) hotReloadAgentLocked(name, newBinaryPath string) error {
 	return nil
 }
 
-// hotReloadLLMLocked 內部重載 LLM（需已持有鎖）
-func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
-	// 1. 建立新 client 並驗證
+// hotReloadLLM 內部重載 LLM。准备阶段（拉起/握手/验证）不持 mu，
+// 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
+func (m *Manager) hotReloadLLM(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger) error {
+	// ---- 准备阶段（不持 m.mu）：拉起并验证新进程 ----
 	cmd := exec.Command(newBinaryPath)
-	if m.config.ExecDir != "" {
-		cmd.Dir = m.config.ExecDir
+	if execDir != "" {
+		cmd.Dir = execDir
 	}
 	newClient := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig: m.config.Handshake,
+		HandshakeConfig: handshake,
 		Plugins: map[string]plugin.Plugin{
 			"llm": &LLMGRPCPlugin{},
 		},
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-		Logger:           m.coreLogger,
+		Logger:           coreLogger,
 	})
 
 	rpcClient, err := newClient.Client()
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("new LLM core connection failed: %w", err)
 	}
-	m.transitionLocked(name, StateConnecting, "")
+	m.setReloadConnecting(name)
 
 	raw, err := rpcClient.Dispense("llm")
 	if err != nil {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, err.Error())
+		m.setReloadFailed(name, err)
 		return fmt.Errorf("dispense new LLM core failed: %w", err)
 	}
 
 	newImpl, ok := raw.(LLMProvider)
 	if !ok {
 		newClient.Kill()
-		m.transitionLocked(name, StateFailed, "new LLM core does not implement LLMProvider interface")
+		m.setReloadFailed(name, fmt.Errorf("new LLM core does not implement LLMProvider interface"))
 		return fmt.Errorf("new LLM core does not implement LLMProvider interface")
 	}
 
+	// ---- 交换阶段（短临界 m.mu）----
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.typeMap[name] != "llm" {
+		newClient.Kill() // 准备期间被卸载/关闭，放弃
+		return fmt.Errorf("LLM '%s' unloaded during reload; abort", name)
+	}
 	// 3. 先对称清理旧实例，再更新映射（旧进程退出监控随之失效）
 	m.runStopHooksLocked(name)
 	oldClient := m.clients[name]
@@ -996,10 +1084,156 @@ func (m *Manager) hotReloadLLMLocked(name, newBinaryPath string) error {
 	if oldClient != nil {
 		oldClient.Kill()
 	}
+	m.recordLoadedBinaryLocked(name, newBinaryPath)
 	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, newClient)
 
 	m.logger.Info("LLM core hot-reloaded", "name", name)
+	return nil
+}
+
+// hotReloadTool 內部重載 Tool。准备阶段（拉起/握手/验证）不持 mu，
+// 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
+// toolHookOrder 由 putToolHookOrderLocked 保持原位，避免重复登记。
+func (m *Manager) hotReloadTool(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger, broker *plugin.GRPCBroker, refs interconnectRefs) error {
+	// ---- 准备阶段（不持 m.mu）：拉起并验证新进程（类型须为 tool）----
+	cmd := exec.Command(newBinaryPath)
+	if execDir != "" {
+		cmd.Dir = execDir
+	}
+	newClient := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: handshake,
+		Plugins: map[string]plugin.Plugin{
+			"dsc_core": &DSCPluginGRPC{},
+		},
+		Cmd:              cmd,
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           coreLogger,
+	})
+
+	rpcClient, err := newClient.Client()
+	if err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return fmt.Errorf("new core connection failed: %w", err)
+	}
+	m.setReloadConnecting(name)
+
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		newClient.Kill()
+		m.setReloadFailed(name, fmt.Errorf("core is not a gRPC client"))
+		return fmt.Errorf("core is not a gRPC client")
+	}
+
+	info, err := GetPluginInfo(grpcClient.Conn)
+	if err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return fmt.Errorf("failed to get core info: %w", err)
+	}
+	if err := validateCoreInfo(info, "tool"); err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return err
+	}
+	toolClient := proto.NewToolServiceClient(grpcClient.Conn)
+
+	// ---- 暂存（不持 m.mu）：host broker 挂载 + 互通注入 + 列清单，全部慢速 RPC 提前完成 ----
+	// 清单/互通失败即中止，新 client 被 Kill，旧实例及其全部注册原封未动（真正的原子性来源）。
+	st, err := m.stageToolPlugin(name, grpcClient, toolClient, broker, refs)
+	if err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return fmt.Errorf("failed to stage tool core '%s': %w", name, err)
+	}
+	st.info = info
+	st.client = newClient
+
+	// ---- 提交（短临界 m.mu）----
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.typeMap[name] != "tool" {
+		newClient.Kill() // 准备期间被卸载/关闭，放弃
+		return fmt.Errorf("tool '%s' unloaded during reload; abort", name)
+	}
+	oldClient := m.clients[name]
+	// 先卸旧实例注册（stop hooks 撤销旧工具），再一次性提交新注册（m.clients[name] → newClient），
+	// 最后杀旧进程：旧进程退出监控按 m.clients[name] != oldClient 判陈而忽略，不会误触发 StateFailed。
+	m.runStopHooksLocked(name)
+	m.commitToolPluginLocked(st)
+	if oldClient != nil {
+		oldClient.Kill()
+	}
+	m.recordLoadedBinaryLocked(name, newBinaryPath)
+	return nil
+}
+
+// hotReloadPolicy 內部重載 Policy。准备阶段（拉起/握手/验证）不持 mu，
+// 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
+func (m *Manager) hotReloadPolicy(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger) error {
+	// ---- 准备阶段（不持 m.mu）：拉起并验证新进程（类型须为 policy）----
+	cmd := exec.Command(newBinaryPath)
+	if execDir != "" {
+		cmd.Dir = execDir
+	}
+	newClient := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig: handshake,
+		Plugins: map[string]plugin.Plugin{
+			"dsc_core": &DSCPluginGRPC{},
+		},
+		Cmd:              cmd,
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Logger:           coreLogger,
+	})
+
+	rpcClient, err := newClient.Client()
+	if err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return fmt.Errorf("new core connection failed: %w", err)
+	}
+	m.setReloadConnecting(name)
+
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		newClient.Kill()
+		m.setReloadFailed(name, fmt.Errorf("core is not a gRPC client"))
+		return fmt.Errorf("core is not a gRPC client")
+	}
+
+	info, err := GetPluginInfo(grpcClient.Conn)
+	if err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return fmt.Errorf("failed to get core info: %w", err)
+	}
+	if err := validateCoreInfo(info, "policy"); err != nil {
+		newClient.Kill()
+		m.setReloadFailed(name, err)
+		return err
+	}
+
+	// ---- 交换阶段（短临界 m.mu）----
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.typeMap[name] != "policy" {
+		newClient.Kill() // 准备期间被卸载/关闭，放弃
+		return fmt.Errorf("policy '%s' unloaded during reload; abort", name)
+	}
+	// 2. 撤销旧策略桥接（policy 未注册 stopHook，手动 off() 桥接）；
+	//    随后先把新 client 挂到 m.clients，再终止旧进程，令旧进程退出监控不再生效，保证替换原子。
+	for _, off := range m.policyOff[name] {
+		off()
+	}
+	delete(m.policyOff, name)
+	oldClient := m.clients[name]
+	m.clients[name] = newClient
+	if oldClient != nil {
+		oldClient.Kill()
+	}
+	m.registerPolicyLocked(name, info, newClient, grpcClient)
+	m.recordLoadedBinaryLocked(name, newBinaryPath)
 	return nil
 }
 
@@ -1016,6 +1250,9 @@ func (m *Manager) ListLLMs() []string {
 
 // Shutdown 關閉所有插件
 func (m *Manager) Shutdown() {
+	// 先停版本化二进制热重载 watch：它持有 m.mu（读锁扫描 / HotReload 写锁）。
+	// 若先加了下面的写锁再等 watcher 退出，会因 watcher 阻塞在读锁而互等死锁。
+	m.StopHotReloadWatcher()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopCronLocked() // 先停调度，避免新任务触发时插件已退出
@@ -1564,6 +1801,15 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 		}
 	}
 
+	// 版本感知解析：各插件目录内若存在「<目录基名>-v<版本><ext>」的更高版本二进制，
+	// 启动即直接加载最高版本，避免先起基线进程再由 watcher 换新（Windows 下运行中的
+	// 同名二进制被占用不可覆盖，只能以新版本文件启动新进程）。
+	for i := range cfg.Plugins {
+		if cfg.Plugins[i].BinaryPath != "" {
+			cfg.Plugins[i].BinaryPath = ResolveLatestBinary(cfg.Plugins[i].BinaryPath)
+		}
+	}
+
 	// 分離 Agent（broker 提供者）與 provider（LLM/Tool/Policy）
 	var agentEntry *PluginEntry
 	var providerEntries []PluginEntry
@@ -1900,6 +2146,182 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*plugin.GRPCBroker, 
 	return broker, agent, nil
 }
 
+// validateCoreInfo 校验插件元数据与宿主协议的兼容性：API 版本约束与类型一致性。
+// 供 loadPluginWithBroker 与热重载共用，保证新二进制在替换旧实例前先被验证通过。
+func validateCoreInfo(info *metadata.PluginInfo, wantType string) error {
+	cons, err := version.NewConstraint(">= 1.0, < 2.0")
+	if err != nil {
+		return fmt.Errorf("failed to create version constraint: %w", err)
+	}
+	v, err := version.NewVersion(info.ApiVersion)
+	if err != nil {
+		return fmt.Errorf("invalid API version %s: %w", info.ApiVersion, err)
+	}
+	if !cons.Check(v) {
+		return fmt.Errorf("unsupported API version %s, expected >=1.0 <2.0", info.ApiVersion)
+	}
+	if info.Type != wantType {
+		return fmt.Errorf("core type mismatch: expected %s, got %s", wantType, info.Type)
+	}
+	return nil
+}
+
+// interconnectRefs 互通注入所需的宿主侧稳定引用。在「暂存」阶段前由调用方以正确的
+// 加锁姿态快照（无锁路径读锁快照；已持 m.mu 写锁路径直接读字段），interconnectToolPlugin
+// 本身不再取 m.mu，从而允许在无锁阶段执行慢速 SetInterconnect RPC，不与热重载锁互斥。
+type interconnectRefs struct {
+	hasAggLLM    bool
+	agentLLMName string
+}
+
+// interconnectToolPlugin 互通机制 1/2/4：聚合 LLM、聚合 Tool 与插件通知服务挂在
+// 本插件 client 自己的 broker 上（插件进程经自身 broker.Dial 访问），并把 serviceID 经
+// SetInterconnect 传入插件进程（旧插件未实现则 UNIMPLEMENTED 容错跳过）。
+// 属慢速 RPC，须在无锁阶段执行；refs 由调用方快照，本函数不取 m.mu。
+func (m *Manager) interconnectToolPlugin(name string, grpcClient *plugin.GRPCClient, toolClient proto.ToolServiceClient, refs interconnectRefs) {
+	pBroker := grpcClient.Broker()
+	if pBroker == nil {
+		return
+	}
+	llmID := uint32(0)
+	if refs.hasAggLLM {
+		if id, err := m.serveAggregateLLMOnBroker(pBroker, refs.agentLLMName); err == nil {
+			llmID = id
+		}
+	}
+	toolID := uint32(0)
+	if id, err := m.serveAggregateToolOnBroker(pBroker); err == nil {
+		toolID = id
+	}
+	notifyID := uint32(0)
+	if id, err := m.servePluginNotifyOnBroker(pBroker); err == nil {
+		notifyID = id
+	}
+	if llmID == 0 && toolID == 0 && notifyID == 0 {
+		return
+	}
+	ictx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, err := toolClient.SetInterconnect(ictx, &proto.InterconnectRequest{
+		LlmServiceId: llmID, NotifyServiceId: notifyID, ToolServiceId: toolID,
+	})
+	cancel()
+	if err != nil {
+		m.logger.Warn("plugin does not support interconnect", "plugin", name, "error", err)
+	}
+}
+
+// listStagedTools 在「暂存」（无锁）阶段仅执行工具列清单 RPC，返回待注册的工具定义与名称，
+// 不触碰宿主共享注册表；提交阶段再由 commitToolPluginLocked 统一写入。清单获取失败返回硬错误。
+func listStagedTools(toolClient proto.ToolServiceClient) ([]ToolDefinition, []string, error) {
+	listCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	listResp, err := toolClient.ListTools(listCtx, &proto.ListToolsRequest{})
+	cancel()
+	if err != nil {
+		return nil, nil, err
+	}
+	var defs []ToolDefinition
+	var names []string
+	for _, t := range listResp.Tools {
+		defs = append(defs, &RemoteTool{
+			name:        t.Name,
+			description: t.Description,
+			schema:      json.RawMessage(t.ParametersJson),
+			client:      toolClient,
+		})
+		names = append(names, t.Name)
+	}
+	return defs, names, nil
+}
+
+// putToolHookOrderLocked 将插件名登记进 toolHookOrder（已存在则保持原位置，避免热重载重复追加）。
+// 需已持有 m.mu。
+func (m *Manager) putToolHookOrderLocked(name string) {
+	for _, n := range m.toolHookOrder {
+		if n == name {
+			return
+		}
+	}
+	m.toolHookOrder = append(m.toolHookOrder, name)
+}
+
+// stagedTool tool 插件「暂存」成果：无锁阶段的慢速 RPC 结果（host broker 挂载、互通注入、工具列清单）。
+// 提交阶段仅把它一次性写进共享映射，因此清单/握手失败不会在宿主留下任何半成品状态。
+type stagedTool struct {
+	name       string
+	info       *metadata.PluginInfo
+	client     *plugin.Client
+	grpcClient *plugin.GRPCClient
+	toolClient proto.ToolServiceClient
+	serviceID  uint32
+	tools      []ToolDefinition
+	toolNames  []string
+}
+
+// stageToolPlugin 在「暂存」（无锁）阶段完成 host broker 挂载、互通注入与工具列清单（全部为慢速 RPC），
+// 产出可在提交阶段直接套用的 stagedTool。清单失败返回错误，调用方负责 Kill 新 client，旧实例不受影响。
+// refs 由调用方以正确加锁姿态快照；本函数不取 m.mu。
+func (m *Manager) stageToolPlugin(name string, grpcClient *plugin.GRPCClient, toolClient proto.ToolServiceClient, broker *plugin.GRPCBroker, refs interconnectRefs) (*stagedTool, error) {
+	st := &stagedTool{name: name, grpcClient: grpcClient, toolClient: toolClient}
+	st.serviceID = broker.NextId()
+	proxy := &toolProxyServer{client: toolClient}
+	go broker.AcceptAndServe(st.serviceID, func(opts []grpc.ServerOption) *grpc.Server {
+		s := grpc.NewServer(opts...)
+		proto.RegisterToolServiceServer(s, proxy)
+		return s
+	})
+	// 互通注入须先于列工具：宿主内工具（如 tool-lua-host）的脚本在握手时加载，先握手再列工具。
+	m.interconnectToolPlugin(name, grpcClient, toolClient, refs)
+	defs, names, err := listStagedTools(toolClient)
+	if err != nil {
+		return nil, err
+	}
+	st.tools = defs
+	st.toolNames = names
+	return st, nil
+}
+
+// commitToolPluginLocked 把 stagedTool 一次性写入宿主共享映射与索引，并建立卸载清理 hook。
+// commit 仅做 map 写入/注册表登记（不再持有锁做 RPC），视为不可失败；需已持有 m.mu。
+// 调用方须先卸载旧实例（runStopHooksLocked）再 commit，令旧工具注册被覆盖、旧进程退出监控失效。
+func (m *Manager) commitToolPluginLocked(st *stagedTool) {
+	m.toolServiceIDs[st.name] = st.serviceID
+	m.toolClients[st.name] = st.toolClient
+	m.toolHookClients[st.name] = proto.NewPluginHookServiceClient(st.grpcClient.Conn)
+	m.putToolHookOrderLocked(st.name)
+	m.coreToolNames[st.name] = st.toolNames
+	for _, t := range st.tools {
+		if err := m.toolRegistry.Register(t); err != nil {
+			m.logger.Warn("failed to register tool", "tool", t.Name(), "error", err)
+			continue
+		}
+		m.toolNameToServiceID[t.Name()] = st.serviceID
+	}
+	m.clients[st.name] = st.client
+	m.typeMap[st.name] = "tool"
+	m.coreMetadata[st.name] = st.info
+	m.addStopHookLocked(st.name, func() error {
+		m.unregisterPluginToolsLocked(st.name)
+		return nil
+	})
+	m.transitionLocked(st.name, StateActive, "")
+	go m.monitorExit(st.name, st.client)
+	m.logger.Info("Tool service registered", "name", st.name, "serviceID", st.serviceID)
+}
+
+// registerPolicyLocked 注册一个已连接的 policy 插件：写入映射并桥接到工具流水线并建立清理。
+// 供 loadPluginWithBroker 与热重载共用。需已持有 m.mu。
+func (m *Manager) registerPolicyLocked(name string, info *metadata.PluginInfo, client *plugin.Client, grpcClient *plugin.GRPCClient) {
+	m.clients[name] = client
+	m.typeMap[name] = "policy"
+	m.coreMetadata[name] = info
+	pc := proto.NewFsObservationPolicyServiceClient(grpcClient.Conn)
+	m.policyClients[name] = pc
+	m.policyOff[name] = m.bridgePolicyToPipeline(name, pc)
+	m.transitionLocked(name, StateActive, "")
+	go m.monitorExit(name, client)
+	m.logger.Info("Policy core loaded and bridged to tool pipeline", "name", name)
+}
+
 // loadPluginWithBroker 用於 LLM/Tool 插件加載，通過 broker 註冊服務
 func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBroker) error {
 	// 跨平台處理二進制路徑
@@ -1960,31 +2382,11 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 		return fmt.Errorf("failed to get core info: %w", err)
 	}
 
-	// 版本兼容性檢查
-	cons, err := version.NewConstraint(">= 1.0, < 2.0")
-	if err != nil {
+	// 版本兼容性檢查（API 版本约束 + 类型一致性）
+	if err := validateCoreInfo(info, entry.Type); err != nil {
 		client.Kill()
 		m.transitionLocked(entry.Name, StateFailed, err.Error())
-		return fmt.Errorf("failed to create version constraint: %w", err)
-	}
-
-	v, err := version.NewVersion(info.ApiVersion)
-	if err != nil {
-		client.Kill()
-		m.transitionLocked(entry.Name, StateFailed, err.Error())
-		return fmt.Errorf("invalid API version %s: %w", info.ApiVersion, err)
-	}
-
-	if !cons.Check(v) {
-		client.Kill()
-		m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("unsupported API version %s", info.ApiVersion))
-		return fmt.Errorf("unsupported API version %s, expected >=1.0 <2.0", info.ApiVersion)
-	}
-
-	if info.Type != entry.Type {
-		client.Kill()
-		m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("core type mismatch: expected %s, got %s", entry.Type, info.Type))
-		return fmt.Errorf("core type mismatch: expected %s, got %s", entry.Type, info.Type)
+		return err
 	}
 	m.transitionLocked(entry.Name, StateReady, "")
 
@@ -2008,100 +2410,21 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 
 	case "tool":
 		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
-		serviceID := broker.NextId()
-
-		proxy := &toolProxyServer{client: toolClient}
-		go broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
-			s := grpc.NewServer(opts...)
-			proto.RegisterToolServiceServer(s, proxy)
-			return s
-		})
-		m.toolServiceIDs[entry.Name] = serviceID
-		m.toolClients[entry.Name] = toolClient
-		// 互通机制 3：插件钩子回调客户端（插件未注册 PluginHookService 时
-		// 调用返回 UNIMPLEMENTED，宿主容错跳过）
-		m.toolHookClients[entry.Name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
-		m.toolHookOrder = append(m.toolHookOrder, entry.Name)
-		// 互通机制 1/2/4：聚合 LLM、聚合 Tool 与插件通知服务须挂在本插件 client 的
-		// broker 上（插件进程经自身 broker.Dial 访问）；serviceID 经 SetInterconnect
-		// 传给插件进程（旧插件未实现则 UNIMPLEMENTED 容错跳过）。
-		if pBroker := grpcClient.Broker(); pBroker != nil {
-			llmID := uint32(0)
-			if m.agentLLMServiceID != 0 {
-				if id, err := m.serveAggregateLLMOnBroker(pBroker, m.agentLLMName); err == nil {
-					llmID = id
-				}
-			}
-			toolID := uint32(0)
-			if id, err := m.serveAggregateToolOnBroker(pBroker); err == nil {
-				toolID = id
-			}
-			notifyID := uint32(0)
-			if id, err := m.servePluginNotifyOnBroker(pBroker); err == nil {
-				notifyID = id
-			}
-			if llmID != 0 || toolID != 0 || notifyID != 0 {
-				ictx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				_, err := toolClient.SetInterconnect(ictx, &proto.InterconnectRequest{
-					LlmServiceId: llmID, NotifyServiceId: notifyID, ToolServiceId: toolID,
-				})
-				cancel()
-				if err != nil {
-					m.logger.Warn("plugin does not support interconnect", "plugin", entry.Name, "error", err)
-				}
-			}
-		}
-
-		// 工具清单在 SetInterconnect 之后拉取：宿主内工具（如 tool-lua-host）的脚本
-		// 在握手时加载，必须先握手再列工具，否则其注册的工具会缺失。
-		listCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		listResp, err := toolClient.ListTools(listCtx, &proto.ListToolsRequest{})
-		cancel()
+		// 「暂存 + 提交」：在无锁阶段完成 host broker 挂载、互通注入与工具列清单（慢速 RPC），
+		// 产出 stagedTool 后再在持锁（本流程调用方均已持有 m.mu）阶段一次性提交映射。
+		refs := interconnectRefs{hasAggLLM: m.agentLLMServiceID != 0, agentLLMName: m.agentLLMName}
+		st, err := m.stageToolPlugin(entry.Name, grpcClient, toolClient, broker, refs)
 		if err != nil {
 			client.Kill()
 			m.transitionLocked(entry.Name, StateFailed, err.Error())
-			return fmt.Errorf("failed to list tools after retries: %w", err)
+			return fmt.Errorf("failed to stage tool core '%s': %w", entry.Name, err)
 		}
-		var toolNames []string
-		for _, t := range listResp.Tools {
-			remote := &RemoteTool{
-				name:        t.Name,
-				description: t.Description,
-				schema:      json.RawMessage(t.ParametersJson),
-				client:      toolClient,
-			}
-			if err := m.toolRegistry.Register(remote); err != nil {
-				m.logger.Warn("failed to register tool", "tool", t.Name, "error", err)
-				continue
-			}
-			toolNames = append(toolNames, t.Name)
-			m.toolNameToServiceID[t.Name] = serviceID
-		}
-		m.coreToolNames[entry.Name] = toolNames
-		m.clients[entry.Name] = client
-		m.typeMap[entry.Name] = "tool"
-		m.coreMetadata[entry.Name] = info
-		// 注册对称清理 hook：卸载/热重载时先撤销该插件的全部工具，再终止进程
-		m.addStopHookLocked(entry.Name, func() error {
-			m.unregisterPluginToolsLocked(entry.Name)
-			return nil
-		})
-		m.transitionLocked(entry.Name, StateActive, "")
-		go m.monitorExit(entry.Name, client)
-		m.logger.Info("Tool service registered", "name", entry.Name, "serviceID", serviceID)
+		st.info = info
+		st.client = client
+		m.commitToolPluginLocked(st)
 
 	case "policy":
-		m.clients[entry.Name] = client
-		m.typeMap[entry.Name] = "policy"
-		m.coreMetadata[entry.Name] = info
-		// 桥接：策略观测服务挂在插件主 gRPC server 上，经主连接取 client
-		// 并注册为工具流水线监听器（替代旁路）
-		pc := proto.NewFsObservationPolicyServiceClient(grpcClient.Conn)
-		m.policyClients[entry.Name] = pc
-		m.policyOff[entry.Name] = m.bridgePolicyToPipeline(entry.Name, pc)
-		m.transitionLocked(entry.Name, StateActive, "")
-		go m.monitorExit(entry.Name, client)
-		m.logger.Info("Policy core loaded and bridged to tool pipeline", "name", entry.Name)
+		m.registerPolicyLocked(entry.Name, info, client, grpcClient)
 
 	default:
 		client.Kill()

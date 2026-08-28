@@ -90,10 +90,12 @@ func (t *workflowTool) Execute(ctx context.Context, args json.RawMessage) (strin
 				runCtx, cancel := context.WithCancel(context.Background())
 				run, err := workflow.Start(runCtx, req)
 				if err != nil {
+					cancel()
 					return jobs.JobHooks{}, err
 				}
 				done := make(chan jobs.JobOutcome, 1)
 				go func() {
+					defer cancel() // 工作流结算后释放上下文，避免 context-leak
 					r := <-run.Result
 					switch r.StopReason {
 					case workflow.StopCompleted:
