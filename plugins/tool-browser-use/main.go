@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ type BrowserSession struct {
 	ActivePage string
 	CreatedAt  time.Time
 	LastUsed   time.Time
+	UserMode   bool // 是否命中用户模式（复用默认 Chrome 登录态）
 	mu         sync.Mutex
 }
 
@@ -103,19 +105,60 @@ func cleanupOldBrowserData(exeDir string) error {
 	return nil
 }
 
-// launchBrowserRod 啟動瀏覽器實例
-func launchBrowserRod(sessionID string) (*rod.Browser, error) {
-	// 獲取可執行文件所在目錄
-	exeDir, err := getExeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get executable dir: %w", err)
+// defaultUserDataDir 返回默认 Chrome 用户数据目录（内含用户登录态）。
+// Windows 下为 %LOCALAPPDATA%\Google\Chrome\User Data；不存在或未知平台返回空串。
+func defaultUserDataDir() string {
+	if runtime.GOOS == "windows" {
+		if la := os.Getenv("LOCALAPPDATA"); la != "" {
+			p := filepath.Join(la, "Google", "Chrome", "User Data")
+			if st, err := os.Stat(p); err == nil && st.IsDir() {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// tryLaunch 用给定 user-data-dir 启动浏览器并连接，返回是否成功。
+// 用 recover 捕获启动/连接异常（如 profile 被锁），供用户模式失败降级。
+func tryLaunch(userDataDir string) (b *rod.Browser, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			ok = false
+			b = nil
+		}
+	}()
+	l := launcher.New().UserDataDir(userDataDir)
+	b = rod.New().ControlURL(l.MustLaunch()).MustConnect()
+	return b, true
+}
+
+// launchBrowserRod 启动浏览器实例。userMode 为真时优先复用默认 Chrome 用户数据
+// 目录（携带登录态）；该目录不可用（如用户 Chrome 已在运行、profile 被锁）时
+// 自动降级到按 session 隔离的临时目录。返回浏览器与是否命中了用户模式。
+func launchBrowserRod(sessionID string, userMode bool) (*rod.Browser, bool, error) {
+	// 用户模式：复用默认用户数据目录以保留登录态；失败则降级
+	if userMode {
+		if dir := defaultUserDataDir(); dir != "" {
+			if b, ok := tryLaunch(dir); ok {
+				log.Printf("[BrowserSessionManager] user-mode session %s using default Chrome profile %s", sessionID, dir)
+				return b, true, nil
+			}
+			log.Printf("[BrowserSessionManager] user-mode profile unavailable for %s (likely locked), falling back to isolated temp profile", sessionID)
+		}
 	}
 
-	// 瀏覽器數據目錄：程序可執行路徑下的 temp/browser-data/<sessionID>
-	// 避免與 workspace 混雜，並通過 sessionID 區分不同實例
+	// 获取可执行文件所在目录
+	exeDir, err := getExeDir()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get executable dir: %w", err)
+	}
+
+	// 浏览器数据目录：程序可执行路径下的 temp/browser-data/<sessionID>
+	// 避免与 workspace 混雜，並通過 sessionID 區分不同實例
 	browserDataDir := filepath.Join(exeDir, "temp", "browser-data", sessionID)
 	if err := os.MkdirAll(browserDataDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create browser data directory: %w", err)
+		return nil, false, fmt.Errorf("failed to create browser data directory: %w", err)
 	}
 
 	// 清理24小時前的臨時瀏覽器數據
@@ -123,17 +166,16 @@ func launchBrowserRod(sessionID string) (*rod.Browser, error) {
 		log.Printf("[BrowserSessionManager] warning: failed to cleanup old browser data: %v", err)
 	}
 
-	l := launcher.New().UserDataDir(browserDataDir)
-	browser := rod.New().
-		ControlURL(l.MustLaunch()).
-		MustConnect()
-
-	return browser, nil
+	b, ok := tryLaunch(browserDataDir)
+	if !ok {
+		return nil, false, fmt.Errorf("failed to launch browser for session %s", sessionID)
+	}
+	return b, false, nil
 }
 
 // CreateSession 創建新的瀏覽器會話
 // 如果會話已存在，直接返回現有會話並更新 LastUsed
-func (m *BrowserSessionManager) CreateSession(sessionID string) (*BrowserSession, error) {
+func (m *BrowserSessionManager) CreateSession(sessionID string, userMode bool) (*BrowserSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -146,7 +188,7 @@ func (m *BrowserSessionManager) CreateSession(sessionID string) (*BrowserSession
 	}
 
 	// 啟動瀏覽器
-	browser, err := launchBrowserRod(sessionID)
+	browser, usedUserMode, err := launchBrowserRod(sessionID, userMode)
 	if err != nil {
 		return nil, fmt.Errorf("啟動瀏覽器失敗: %w", err)
 	}
@@ -158,10 +200,11 @@ func (m *BrowserSessionManager) CreateSession(sessionID string) (*BrowserSession
 		Pages:     make(map[string]*rod.Page),
 		CreatedAt: now,
 		LastUsed:  now,
+		UserMode:  usedUserMode,
 	}
 
 	m.sessions[sessionID] = sess
-	log.Printf("[BrowserSessionManager] Created session %s", sessionID)
+	log.Printf("[BrowserSessionManager] Created session %s (userMode=%v)", sessionID, usedUserMode)
 	return sess, nil
 }
 
@@ -371,12 +414,13 @@ func (s *BrowserSession) ListPages() []PageInfo {
 // ============================================================
 
 // getOrCreatePage 獲取或創建瀏覽器頁面（使用會話管理器）
-func getOrCreatePage(sessionID, pageID, url string) (*rod.Page, *BrowserSession, error) {
+// userMode 仅在首次创建会话（启动浏览器）时生效；会话已存在则忽略。
+func getOrCreatePage(sessionID, pageID, url string, userMode bool) (*rod.Page, *BrowserSession, error) {
 	mgr := GetBrowserSessionManager()
 	sess, ok := mgr.GetSession(sessionID)
 	if !ok {
 		var err error
-		sess, err = mgr.CreateSession(sessionID)
+		sess, err = mgr.CreateSession(sessionID, userMode)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -412,74 +456,189 @@ type FetchUrlResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-func fetchUrlImpl(sessionID, url string) (string, error) {
-	page, _, err := getOrCreatePage(sessionID, "default", url)
+// fetchUrlImpl 抓取网页内容。plainText 为真时返回剥离结构的纯文本（默认，
+// 便于模型直接阅读、避免对大量 HTML 产生抗拒），为假时返回原始 HTML 供需要
+// 结构化内容的场景使用。结果用 json.Marshal 序列化，避免手拼字符串破坏转义。
+func fetchUrlImpl(sessionID, url string, plainText, userMode bool) (string, error) {
+	page, _, err := getOrCreatePage(sessionID, "default", url, userMode)
 	if err != nil {
-		return fmt.Sprintf(`{"success":false,"url":"%s","error":"%s"}`, url, err.Error()), nil
+		e := FetchUrlResult{Success: false, URL: url, Error: err.Error()}
+		b, _ := json.Marshal(e)
+		return string(b), nil
 	}
 
-	// 等待頁面加載
+	// 等待页面加载
 	if err := page.WaitLoad(); err != nil {
 		log.Printf("頁面加載警告: %v", err)
 	}
 
-	// 獲取頁面內容
-	contentHTML := page.MustEval("() => document.documentElement.outerHTML").Str()
+	content := ""
+	if plainText {
+		content = page.MustEval("() => document.body.innerText").Str()
+	} else {
+		content = page.MustEval("() => document.documentElement.outerHTML").Str()
+	}
 
-	return fmt.Sprintf(`{"success":true,"url":"%s","content":"%s"}`, url, contentHTML), nil
+	e := FetchUrlResult{Success: true, URL: url, Content: content}
+	b, _ := json.Marshal(e)
+	return string(b), nil
 }
 
-// WebSearchResult 搜索結果
+// WebSearchResult 聚合搜索结果
 type WebSearchResult struct {
 	Success bool               `json:"success"`
 	Query   string             `json:"query"`
 	Results []SearchResultItem `json:"results"`
+	Errors  []string           `json:"errors,omitempty"`
+	Sources []string           `json:"sources,omitempty"`
 }
 
 type SearchResultItem struct {
 	Title       string `json:"title"`
 	URL         string `json:"url"`
 	Description string `json:"description"`
+	Source      string `json:"source,omitempty"`
 }
 
-func webSearchImpl(sessionID, query string) (string, error) {
-	// 先嘗試 DuckDuckGo（HTML 版對自動化友好、無需 JS 渲染；Google 對 headless 會返回 reCAPTCHA）
-	searchURL := fmt.Sprintf("https://html.duckduckgo.com/html/?q=%s", url.QueryEscape(query))
-	page, _, err := getOrCreatePage(sessionID, "default", searchURL)
-	if err != nil {
-		return fmt.Sprintf(`{"success":false,"query":"%s","error":"%s"}`, query, err.Error()), nil
-	}
+// searchEngine 单一搜索引擎的取值定义：怎样构造搜索 URL、等待哪个结果容器、
+// 以及如何从 DOM 提取结果。
+type searchEngine struct {
+	name      string
+	urlFmt    string
+	waitSel   string
+	extractJS string
+}
 
-	// 等待頁面加載
-	if err := page.WaitLoad(); err != nil {
-		log.Printf("頁面加載警告: %v", err)
-	}
-
-	// 等待搜索結果渲染（DDG 的結果容器為 .result；最多等 10 秒）
-	waitCtx := page.Timeout(10 * time.Second)
-	_, err = waitCtx.Element(`.result, .results, form[action*="search"]`)
-	if err != nil {
-		// 結果容器未出現：返回當前標題與 URL，便於調試
-		info, _ := page.Info()
-		return fmt.Sprintf(`{"success":false,"query":"%s","error":"results not rendered","pageTitle":"%s","pageUrl":"%s"}`, query, info.Title, info.URL), nil
-	}
-	// 等待至少一個結果元素
-	_ = waitCtx.WaitElementsMoreThan(`.result`, 0)
-
-	// 提取搜索結果：DDG HTML 版每個結果塊為 .result，含 .result__a 標題鏈接與 .result__snippet 摘要
-	linksJSON := page.MustEval(`() => {
-		return JSON.stringify(Array.from(document.querySelectorAll('.result')).map(r => {
+// searchEngines 支持的多搜索引擎。各引擎的提取脚本独立（DOM 结构差异大），
+// 单个引擎失败仅导致该引擎无结果，不影响整体聚合。
+var searchEngines = map[string]searchEngine{
+	"duckduckgo": {
+		name:    "duckduckgo",
+		urlFmt:  "https://html.duckduckgo.com/html/?q=%s",
+		waitSel: ".result, .results",
+		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('.result')).map(r => {
 			const a = r.querySelector('a.result__a');
-			const snippet = r.querySelector('.result__snippet, .result__snippet_no_offset');
-			return {
-				title: a ? a.innerText.trim() : '',
-				url: a ? a.href : '',
-				description: snippet ? snippet.innerText.trim() : ''
-			};
-		}).filter(r => r.url && r.url.startsWith('http')));
-	}`).Str()
+			const s = r.querySelector('.result__snippet, .result__snippet_no_offset');
+			return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
+		}).filter(r => r.url && r.url.startsWith('http')))`,
+	},
+	"google": {
+		name:    "google",
+		urlFmt:  "https://www.google.com/search?q=%s",
+		waitSel: "a[href]",
+		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('a[href^="http"]')).map(r => {
+			const a = r.querySelector('h3') || r;
+			return { title: a ? a.innerText.trim() : '', url: r.href || '', description: '' };
+		}).filter(r => r.url && r.url.startsWith('http')))`,
+	},
+	"baidu": {
+		name:    "baidu",
+		urlFmt:  "https://www.baidu.com/s?wd=%s",
+		waitSel: "#content_left",
+		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('#content_left .result, #content_left .c-container')).map(r => {
+			const a = r.querySelector('h3 a');
+			const s = r.querySelector('.c-abstract, .content-right');
+			return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
+		}).filter(r => r.url && r.url.startsWith('http')))`,
+	},
+	"so360": {
+		name:    "so360",
+		urlFmt:  "https://www.so.com/s?q=%s",
+		waitSel: ".res-list",
+		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('.res-list')).map(r => {
+			const a = r.querySelector('h3 a');
+			const s = r.querySelector('.res-desc');
+			return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
+		}).filter(r => r.url && r.url.startsWith('http')))`,
+	},
+}
 
-	return fmt.Sprintf(`{"success":true,"query":"%s","results_json":"%s"}`, query, linksJSON), nil
+// parseEngines 解析 engines 参数（逗号分隔），非法项跳过；空则返回默认引擎集。
+func parseEngines(engines string) []string {
+	if strings.TrimSpace(engines) == "" {
+		return []string{"google", "duckduckgo", "baidu", "so360"}
+	}
+	var out []string
+	for _, e := range strings.Split(engines, ",") {
+		e = strings.TrimSpace(e)
+		if _, ok := searchEngines[e]; ok {
+			out = append(out, e)
+		}
+	}
+	if len(out) == 0 {
+		return []string{"google", "duckduckgo", "baidu", "so360"}
+	}
+	return out
+}
+
+// extractSearchPageElements 从已就绪的搜索结果页提取结果项。
+func extractSearchPageElements(page *rod.Page, spec searchEngine) ([]SearchResultItem, error) {
+	linksJSON := page.MustEval(spec.extractJS).Str()
+	var items []SearchResultItem
+	if err := json.Unmarshal([]byte(linksJSON), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// webSearchImpl 按指定引擎集搜索并聚合。逐个引擎访问其搜索结果页、提取结果，
+// 按 URL 去重后统一返回；单引擎失败（DOM 变化 / 验证码 / 网络）仅记录错误，
+// 不阻断其它引擎，满足"多源同时搜索再聚合"的诉求。
+func webSearchImpl(sessionID, query string, engines []string, userMode bool) (string, error) {
+	aggregated := make([]SearchResultItem, 0, 16)
+	seen := make(map[string]bool)
+	sources := make([]string, 0)
+	var errors []string
+
+	for _, name := range engines {
+		spec, ok := searchEngines[name]
+		if !ok {
+			errors = append(errors, fmt.Sprintf("engine %q not supported", name))
+			continue
+		}
+		searchURL := fmt.Sprintf(spec.urlFmt, url.QueryEscape(query))
+		page, _, err := getOrCreatePage(sessionID, "default", searchURL, userMode)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
+			continue
+		}
+		if err := page.WaitLoad(); err != nil {
+			log.Printf("頁面加載警告(%s): %v", name, err)
+		}
+		// 等待结果容器出现（最多 10 秒）
+		waitCtx := page.Timeout(10 * time.Second)
+		if _, err := waitCtx.Element(spec.waitSel); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: results not rendered", name))
+			continue
+		}
+		items, err := extractSearchPageElements(page, spec)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
+			continue
+		}
+		for i := range items {
+			it := items[i]
+			it.Source = name
+			if seen[it.URL] {
+				continue
+			}
+			seen[it.URL] = true
+			aggregated = append(aggregated, it)
+		}
+		if len(items) > 0 {
+			sources = append(sources, name)
+		}
+	}
+
+	res := WebSearchResult{
+		Success: len(aggregated) > 0,
+		Query:   query,
+		Results: aggregated,
+		Errors:  errors,
+		Sources: sources,
+	}
+	b, _ := json.Marshal(res)
+	return string(b), nil
 }
 
 // BrowserClickResult 點擊結果
@@ -490,7 +649,7 @@ type BrowserClickResult struct {
 }
 
 func browserClickImpl(sessionID, url, selector string) (string, error) {
-	page, _, err := getOrCreatePage(sessionID, "default", url)
+	page, _, err := getOrCreatePage(sessionID, "default", url, true)
 	if err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"%s"}`, err.Error()), nil
 	}
@@ -526,7 +685,7 @@ type BrowserTypeResult struct {
 }
 
 func browserTypeImpl(sessionID, url, selector, text string, submit bool) (string, error) {
-	page, _, err := getOrCreatePage(sessionID, "default", url)
+	page, _, err := getOrCreatePage(sessionID, "default", url, true)
 	if err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"%s"}`, err.Error()), nil
 	}
@@ -567,7 +726,7 @@ type BrowserScreenshotResult struct {
 }
 
 func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error) {
-	page, _, err := getOrCreatePage(sessionID, "default", url)
+	page, _, err := getOrCreatePage(sessionID, "default", url, true)
 	if err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"%s"}`, err.Error()), nil
 	}
@@ -628,14 +787,24 @@ func main() {
 			"url": {
 				"type": "string",
 				"description": "URL to fetch"
+			},
+			"return_html": {
+				"type": "boolean",
+				"description": "Whether to return raw HTML instead of plain text. Defaults to false (plain text)."
+			},
+			"user_mode": {
+				"type": "boolean",
+				"description": "Whether to reuse the default Chrome profile (logged-in state) when creating the session. Defaults to true."
 			}
 		},
 		"required": ["url"]
 	}`)
 	fetchUrlHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
-			SessionID string `json:"session_id"`
-			URL       string `json:"url"`
+			SessionID  string `json:"session_id"`
+			URL        string `json:"url"`
+			ReturnHTML bool   `json:"return_html"`
+			UserMode   *bool  `json:"user_mode"`
 		}
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("invalid arguments: %w", err)
@@ -647,7 +816,11 @@ func main() {
 		if sessionID == "" {
 			sessionID = "default-browser-session"
 		}
-		return fetchUrlImpl(sessionID, params.URL)
+		userMode := true // 默认用户模式
+		if params.UserMode != nil {
+			userMode = *params.UserMode
+		}
+		return fetchUrlImpl(sessionID, params.URL, !params.ReturnHTML, userMode)
 	}
 
 	// 定義 web_search 工具
@@ -661,6 +834,14 @@ func main() {
 			"query": {
 				"type": "string",
 				"description": "Search query"
+			},
+			"engines": {
+				"type": "string",
+				"description": "Comma-separated search engines to aggregate, e.g. \"google,baidu,so360\". Supported: google, duckduckgo, baidu, so360. Defaults to all."
+			},
+			"user_mode": {
+				"type": "boolean",
+				"description": "Whether to reuse the default Chrome profile (logged-in state) when creating the session. Defaults to true."
 			}
 		},
 		"required": ["query"]
@@ -669,6 +850,8 @@ func main() {
 		var params struct {
 			SessionID string `json:"session_id"`
 			Query     string `json:"query"`
+			Engines   string `json:"engines"`
+			UserMode  *bool  `json:"user_mode"`
 		}
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("invalid arguments: %w", err)
@@ -680,7 +863,11 @@ func main() {
 		if sessionID == "" {
 			sessionID = "default-browser-session"
 		}
-		return webSearchImpl(sessionID, params.Query)
+		userMode := true // 默认用户模式
+		if params.UserMode != nil {
+			userMode = *params.UserMode
+		}
+		return webSearchImpl(sessionID, params.Query, parseEngines(params.Engines), userMode)
 	}
 
 	// 定義 browser_click 工具
