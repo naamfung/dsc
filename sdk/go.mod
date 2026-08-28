@@ -29,6 +29,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/toon-format/toon-go v0.0.0 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
@@ -43,3 +44,19 @@ require (
 replace dsc => ../
 
 replace github.com/hashicorp/go-plugin => ../plugin
+
+// 与根模块一致的本地维护 replace（dsc 自身的 replace 不向本模块继承，
+// sdk 作为独立主模块须自行声明，否则离线构建会缺 go.sum 条目）
+replace github.com/anthropics/anthropic-sdk-go => ../libs/anthropic-sdk-go
+
+replace github.com/sashabaranov/go-openai => ../libs/go-openai
+
+replace github.com/ollama/ollama => ../libs/ollama
+
+replace github.com/robfig/cron/v3 => ../libs/cron
+
+replace github.com/toon-format/toon-go => ../libs/toon-go
+
+replace github.com/valyala/fasttemplate => ../libs/fasttemplate
+
+replace github.com/valyala/bytebufferpool => ../libs/bytebufferpool
