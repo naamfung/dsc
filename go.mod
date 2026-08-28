@@ -100,3 +100,9 @@ replace github.com/robfig/cron/v3 => ./libs/cron
 // TOON 紧凑序列化格式（libs/），用于投喂模型前把结构化工具结果从 JSON 压缩为
 // 更低 token 的表式表示，以更少噪音、稳定前缀缓存
 replace github.com/toon-format/toon-go => ./libs/toon-go
+
+// vodka 的日志模板依赖 fasttemplate / bytebufferpool。原为上游第三方模块，
+// 依赖模块缓存与网络；改放本地（libs/）确保离线可复现构建
+replace github.com/valyala/fasttemplate => ./libs/fasttemplate
+
+replace github.com/valyala/bytebufferpool => ./libs/bytebufferpool
