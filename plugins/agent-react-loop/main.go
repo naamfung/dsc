@@ -423,6 +423,12 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*c
 			a.sessMu.Unlock()
 		}
 
+		// 稳定排序工具目录（按名称），消除无关的顺序差异导致请求前缀字节变化、
+		// 命中前缀缓存失效（对齐 REX 的 normalizeToolSchemas；顺序不影响功能）。
+		sort.Slice(availableTools, func(i, j int) bool {
+			return availableTools[i].Name < availableTools[j].Name
+		})
+
 		// 调用 LLM（流式或非流式）
 		req := &proto.ChatRequest{
 			Messages: msgs,
