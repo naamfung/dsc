@@ -10,7 +10,7 @@ import (
 
 	"dsc/libs/vodka"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // User is the key used to store and retrieve the user identity information in vodka.Context
@@ -222,7 +222,7 @@ func DefaultJWTTokenHandler(c *vodka.Context, token *jwt.Token) error {
 //	  "errors"
 //	  "fmt"
 //	  "net/http"
-//	  "github.com/dgrijalva/jwt-go"
+//	  "github.com/golang-jwt/jwt/v5"
 //	  "dsc/libs/vodka"
 //	  "dsc/libs/vodka/auth"
 //	)
@@ -264,9 +264,6 @@ func JWT(verificationKey string, options ...JWTOptions) vodka.Handler {
 	if opt.TokenHandler == nil {
 		opt.TokenHandler = DefaultJWTTokenHandler
 	}
-	parser := &jwt.Parser{
-		ValidMethods: []string{opt.SigningMethod},
-	}
 	return func(c *vodka.Context) error {
 		header := c.Request.Header.Get("Authorization")
 		message := ""
@@ -274,8 +271,8 @@ func JWT(verificationKey string, options ...JWTOptions) vodka.Handler {
 			verificationKey = opt.GetVerificationKey(c)
 		}
 		if strings.HasPrefix(header, "Bearer ") {
-			token, err := parser.Parse(header[7:], func(t *jwt.Token) (interface{}, error) { return []byte(verificationKey), nil })
-			if err == nil && token.Valid {
+			token, err := jwt.Parse(header[7:], func(t *jwt.Token) (interface{}, error) { return []byte(verificationKey), nil }, jwt.WithValidMethods([]string{opt.SigningMethod}))
+			if err == nil && token != nil && token.Valid {
 				err = opt.TokenHandler(c, token)
 			}
 			if err == nil {

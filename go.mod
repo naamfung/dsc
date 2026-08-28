@@ -9,7 +9,6 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/casbin/casbin v1.9.1
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/flosch/pongo2/v6 v6.1.0
 	github.com/fsnotify/fsnotify v1.10.1
@@ -20,7 +19,6 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-version v1.9.0
-	github.com/jhump/protoreflect v1.17.0
 	github.com/mattn/go-colorable v0.1.14
 	github.com/mattn/go-isatty v0.0.20
 	github.com/microcosm-cc/bluemonday v1.0.27
