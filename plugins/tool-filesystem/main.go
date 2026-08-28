@@ -112,24 +112,26 @@ func main() {
 			return "", fmt.Errorf("failed to execute command in session: %w", err)
 		}
 
-		result := output
-		if exitCode != 0 {
-			// 出錯或有非零退出碼時，無論是否有輸出，都追加 [exit_code: ***]
-			result += fmt.Sprintf("\n[exit_code: %d]\n", exitCode)
-		} else {
-			// 成功（exitCode == 0）時
-			if strings.TrimSpace(output) == "" {
-				// 無內容輸出時，輸出 [exit_code: 0]
-				result = "\n[exit_code: 0]\n"
-			}
-			// 有內容輸出時，不輸出 [exit_code: 0]，result 已經是 output
-		}
-		return result, nil
+		return formatShellResult(output, exitCode), nil
 	}
 
 	sdk := dsc.New(dsc.Config{Name: "filesystem", Version: "1.0.0", Type: dsc.TypeTool})
 	sdk.Tool(dsc.Tool{Name: "shell", Description: description, Schema: schema, Handler: handler})
 	sdk.Serve()
+}
+
+// formatShellResult 根據命令輸出與退出碼組裝最終返回文本：
+// - 非 0 退出碼：無論是否有輸出，都追加 [exit_code: N]。
+// - 0 退出碼且有輸出：直接返回輸出，不附加 [exit_code: 0]。
+// - 0 退出碼且無輸出：返回 [exit_code: 0]。
+func formatShellResult(output string, exitCode int32) string {
+	if exitCode != 0 {
+		return output + fmt.Sprintf("\n[exit_code: %d]\n", exitCode)
+	}
+	if strings.TrimSpace(output) == "" {
+		return "\n[exit_code: 0]\n"
+	}
+	return output
 }
 
 // getOrCreateSession 獲取或創建 session

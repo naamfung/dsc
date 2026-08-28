@@ -553,15 +553,18 @@ var searchEngines = map[string]searchEngine{
 	},
 }
 
-// parseEngines 解析 engines 参数（逗号分隔），非法项跳过；空则返回默认引擎集。
+// parseEngines 解析 engines 参数（逗号分隔），去重并跳过非法项；空或全部非法时
+// 返回默认引擎集。
 func parseEngines(engines string) []string {
 	if strings.TrimSpace(engines) == "" {
 		return []string{"google", "duckduckgo", "baidu", "so360"}
 	}
+	seen := map[string]bool{}
 	var out []string
 	for _, e := range strings.Split(engines, ",") {
 		e = strings.TrimSpace(e)
-		if _, ok := searchEngines[e]; ok {
+		if _, ok := searchEngines[e]; ok && !seen[e] {
+			seen[e] = true
 			out = append(out, e)
 		}
 	}
@@ -574,11 +577,32 @@ func parseEngines(engines string) []string {
 // extractSearchPageElements 从已就绪的搜索结果页提取结果项。
 func extractSearchPageElements(page *rod.Page, spec searchEngine) ([]SearchResultItem, error) {
 	linksJSON := page.MustEval(spec.extractJS).Str()
+	return unmarshalSearchItems(linksJSON)
+}
+
+// unmarshalSearchItems 解析引擎提取脚本产出的结果 JSON 数组。
+func unmarshalSearchItems(raw string) ([]SearchResultItem, error) {
 	var items []SearchResultItem
-	if err := json.Unmarshal([]byte(linksJSON), &items); err != nil {
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+// mergeEngineResults 把单个引擎的结果按 URL 去重并入调用方的 seen 集合，
+// 并给每条结果标注来源引擎。返回新增（未重复）的结果与是否带来了新结果。
+func mergeEngineResults(items []SearchResultItem, engine string, seen map[string]bool) (added []SearchResultItem, hasNew bool) {
+	for i := range items {
+		it := items[i]
+		it.Source = engine
+		if seen[it.URL] {
+			continue
+		}
+		seen[it.URL] = true
+		added = append(added, it)
+		hasNew = true
+	}
+	return added, hasNew
 }
 
 // webSearchImpl 按指定引擎集搜索并聚合。逐个引擎访问其搜索结果页、提取结果，
@@ -616,16 +640,9 @@ func webSearchImpl(sessionID, query string, engines []string, userMode bool) (st
 			errors = append(errors, fmt.Sprintf("%s: %v", name, err))
 			continue
 		}
-		for i := range items {
-			it := items[i]
-			it.Source = name
-			if seen[it.URL] {
-				continue
-			}
-			seen[it.URL] = true
-			aggregated = append(aggregated, it)
-		}
-		if len(items) > 0 {
+		added, hasNew := mergeEngineResults(items, name, seen)
+		aggregated = append(aggregated, added...)
+		if hasNew {
 			sources = append(sources, name)
 		}
 	}

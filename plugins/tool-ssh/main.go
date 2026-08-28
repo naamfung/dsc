@@ -24,8 +24,24 @@ type SSHSessionManager struct {
 
 var globalSSH = &SSHSessionManager{sessions: make(map[string]*ssh.Client)}
 
+// hasAuthMethod 判断是否提供了任一可用认证方法（密码或私钥路径）。
+func hasAuthMethod(password, privateKeyPath string) bool {
+	return password != "" || privateKeyPath != ""
+}
+
+// resolveSSHPort 解析 SSH 端口：未指定（<=0）回退默认 22。
+func resolveSSHPort(port int) int {
+	if port <= 0 {
+		return 22
+	}
+	return port
+}
+
 // connect 建立并缓存一个 SSH 连接，返回会话 id。支持密码或私钥认证。
 func (m *SSHSessionManager) connect(host string, port int, username, password, privateKeyPath string) (string, error) {
+	if !hasAuthMethod(password, privateKeyPath) {
+		return "", fmt.Errorf("no auth method (password or private_key_path required)")
+	}
 	var auth []ssh.AuthMethod
 	if password != "" {
 		auth = append(auth, ssh.Password(password))
@@ -40,9 +56,6 @@ func (m *SSHSessionManager) connect(host string, port int, username, password, p
 			return "", fmt.Errorf("parse private key: %w", err)
 		}
 		auth = append(auth, ssh.PublicKeys(signer))
-	}
-	if len(auth) == 0 {
-		return "", fmt.Errorf("no auth method (password or private_key_path required)")
 	}
 	cfg := &ssh.ClientConfig{
 		User:            username,
@@ -164,9 +177,7 @@ func main() {
 		if p.Host == "" || p.Username == "" {
 			return "", fmt.Errorf("host and username are required")
 		}
-		if p.Port == 0 {
-			p.Port = 22
-		}
+		p.Port = resolveSSHPort(p.Port)
 		id, err := globalSSH.connect(p.Host, p.Port, p.Username, p.Password, p.PrivateKeyPath)
 		res := SSHConnectResult{Success: err == nil, SessionID: id}
 		if err != nil {
