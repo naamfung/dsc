@@ -5,13 +5,13 @@
 ## 核心功能
 
 - **插件架構**：基於 `go-plugin` 与 gRPC 的宿主與插件通信機制，支持熱插拔加載或卸載。
-- **熱重載（Hot Reload）**：支持 DSCPlugin、Agent、LLM 等類型插件的在線熱重載，無需重啟主程序即可更新插件版本。
+- **熱重載（Hot Reload）**：支持 dsc / agent / llm / tool / policy 五類插件的在線熱重載，無需重啟主程序即可更新插件版本；幾乎全程不持全局鎖，失敗不影響舊實例。
 - **多 LLM 支持**：支持 OpenAI、Anthropic、Ollama 等主流 LLM 提供商；其中 `llm-openai` 與 `llm-anthropic` 插件支持本地 LlamaCpp 推理引擎。
 - **ReAct 循環**：實現 Agent 的 Reasoning and Acting 循環，支持多輪推理與工具執行。
 - **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（不额外拦截）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控。
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
 - **TUI 工具調用顯示增強**：在 TUI 界面中，針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `Edit(View, /root/file/path)`、`Edit(Create, /root/file/path)`、`Edit(StrReplace, /root/file/path)`、`Edit(Insert, /root/file/path)` 等格式，提供更清晰的操作方向性展示。
-- **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 JS 编排脚本经 goja 执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子），`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI 新增 `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
+- **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 JS 编排脚本经 goja 执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子）；子代理默认无迭代上限，何时完成由模型/进度自行决定（返回纯文本即收尾）；`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI 新增 `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
 - **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
 
@@ -39,12 +39,12 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - **完全對齊（概念同構）**：事件溯源會話、沙箱三檔策略語義、上下文壓縮（pre-step 壓力檢查 + 尾部保留）、plan/goal/todo 領域、以真實路徑呈現 workspace 根給模型、技能注入。
 - **部分對齊（同概念、異實現）**：沙箱從 DSH 的內核級（bwrap/Landlock）改為 DSC 的宿主工具級攔截（換取 Windows 兼容與可移植性，代價是「策略圍欄」而非「內核邊界」）；token 計量從 DSH 的 TokenMeter（本地精確 tokenizer）改為 DSC 的「服務端 usage + 字符估算回退」；技能注入從 DSH 的 provider registry 改為目錄掃描 + `ListContext` 索引。
-- **DSC 擴展（DSH 沒有）**：`/settings history` 歷史注入條數限制（DSH 僅靠壓縮限界）+ 項目級會話隔離 + 配置持久化；提示緩存感知的容量計算（本地 llama.cpp 緩存命中時 `input_tokens` 僅含新增部分，須加回 `cache_read`）；`/sandbox` TUI 即時切換；多會話 TUI 管理（`/session new\|list\|switch\|delete`）；cron 定時任務；多 Agent workflow 後台運行（`background: true`）+ TUI `/jobs` 管理命令；`-input` 自動化多輪入口；`-debugger` 管理 API 觀察端點。
+- **DSC 擴展（DSH 沒有）**：`/settings history` 歷史注入條數限制（DSH 僅靠壓縮限界）+ 項目級會話隔離 + 配置持久化；提示緩存感知的容量計算（本地 llama.cpp 緩存命中時 `input_tokens` 僅含新增部分，須加回 `cache_read`）；`/sandbox` TUI 即時切換；多會話 TUI 管理（`/session new\|list\|switch\|delete`）；cron 定時任務；多 Agent workflow 後台運行（`background: true`）+ TUI `/jobs` 管理命令；`-input` 自動化多輪入口；`-headless` 精简单发模式；`-debugger` 管理 API 觀察端點。
 
 ### 各自獨特實現
 
 - **DSH 獨特**：內核級沙箱（真實 OS 邊界，不可信代碼經 `ctx.shell` 隔離）；跨能力族統一的可寫根集合（`writableRoots` 與 Seatbelt profile 共享，防止 fs 圍欄與 runner 漂移）；文件身份（dev/ino）圍欄回退；TokenMeter 精確計量；API 代理層（`api-proxy`：歷史分頁、子代理、投影）。
-- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化。
+- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
 
 ## 支持的插件
 
@@ -63,6 +63,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `tool-lisp-eval`
 - `tool-skill`
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify）
+- `tool-memory-service`（记忆库工具：原生 RPC 工具 + AfterTool 自动记忆钩子，落点宿主可执行目录 `memory/`，跨会话共享）
 - `tool-harness-webui`（独立 HTTP 服务，代理宿主 admin API 的前端）
 
 ### Policy 插件
@@ -93,6 +94,17 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | `/mode minimal\|standard\|creation` | 切換模式 |
 | `/skills` · `/help` · `/clear` · `/export` · `/mouse` | 技能 / 幫助 / 清屏 / 導出 / 鼠標 |
 
+## 啟動參數（CLI 旗標）
+
+| 旗標 | 用途 |
+| --- | --- |
+| `-mode minimal\|standard\|creation` | 切換模式（默認 `standard`） |
+| `-input <text>` | 非 TUI 自動化入口：執行一單輪後退出；stdin 為管道/文件重定向時進入多輪 stdin 驅動，直到 EOF |
+| `-headless` | 精简单发模式（对齐 DSH harness headless）：仅执行 `-input` 指定的**单个任务**一次后退出，不启动后续 stdin 多轮；任务须非空白（否则 stderr 报错并以码 1 退出）；**不开** ADMIN API 端口、热重载 watcher 与 cron，专为 CI 脚本 |
+| `-admin <addr>` | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认 `:9999`） |
+| `-debugger` | 开放 `/debugger` 观察路由（含完整会话历史，敏感，默认不开放） |
+| `-log [<file>]` | 日志：带文件名写文件；仅 `-log` 时输出到屏幕 |
+
 ## 構建與運行
 
 使用提供的構建腳本編譯主程序與所有插件：
@@ -116,6 +128,7 @@ DSC 的 Go 插件（基於 go-plugin / gRPC）支持**版本化二進制的在�
 - **啟動選版**：`LoadFromConfig` 用 `ResolveLatestBinary` 在每個插件的二進制目錄內挑選「版本號最高」的版本化文件作為初始載入（見 [core/hot_reload_version.go](core/hot_reload_version.go)）。
 - **運行監測**：配置 `hot_reload: true` 時，宿主經 `StartHotReloadWatcher` 啟動 fsnotify + 週期掃描（見 [core/hot_reload_watch.go](core/hot_reload_watch.go)）。一旦某插件目錄內出現比當前運行版本更高的 `<插件名>-v<版本><擴展名>` 文件（fsnotify 即時 + ≤5s 週期兜底，≥500ms 節流防抖），即自動調用 `HotReload` 換進程，不中斷宿主與其他插件。
 - **支援類型**：dsc / agent / llm / tool / policy 五類全部可熱重載。
+- **原子「暂存 + 提交」**：tool/policy 等熱重載採用兩階段。先在不持鎖階段拉起新進程並完成全部慢速 RPC（broker 掛載、互通注入、工具列清單/策略對齊），確證體康後才在極短臨界持鎖區一次性交換地圖引用並殺舊進程；`pre-commit` 任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**。
 
 ### 版本化文件命名約定
 
