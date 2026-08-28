@@ -10,16 +10,24 @@ set -e
 GOPATH=$(go env GOPATH)
 export PATH="$PATH:$GOPATH/bin"
 
-# 安装 protoc 生成插件（如果尚未安装）
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
-# 编译 proto 文件
+# 编译 proto 文件：仅当检测到 protoc 编译器时才重新生成；未检测到则跳过。
+# 理由：proto 代码（*.pb.go）已纳入仓库，且 protoc 编译器二进制不宜入库，
+# 用户没有编译器时不应报错，直接复用仓库内已生成的代码即可。
 echo "Generating proto Go code..."
+PROTOC_BIN=""
 if [ -f "protoc_dir/bin/protoc.exe" ]; then
-    protoc_dir/bin/protoc.exe --proto_path=proto --go_out=proto --go_opt=paths=source_relative --go-grpc_out=proto --go-grpc_opt=paths=source_relative proto/dsc.proto
+    PROTOC_BIN="protoc_dir/bin/protoc.exe"
+elif command -v protoc >/dev/null 2>&1; then
+    PROTOC_BIN="protoc"
+fi
+
+if [ -n "$PROTOC_BIN" ]; then
+    # 安装 protoc 生成插件（如果尚未安装）
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+    "$PROTOC_BIN" --proto_path=proto --go_out=proto --go_opt=paths=source_relative --go-grpc_out=proto --go-grpc_opt=paths=source_relative proto/dsc.proto
 else
-    protoc --proto_path=proto --go_out=proto --go_opt=paths=source_relative --go-grpc_out=proto --go-grpc_opt=paths=source_relative proto/dsc.proto
+    echo "  (skipped: 未检测到 protoc 编译器，使用仓库内已生成的 proto 代码)"
 fi
 
 # 构建主程序
