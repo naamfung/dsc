@@ -14,3 +14,11 @@ func bindBody(c *vodka.Context, out interface{}) error {
 	}
 	return nil
 }
+
+// wrapErr 把插件生命周期操作的内部错误统一包装为 500 HTTPError。
+// op 为操作动词（如 "load"/"unload"/"reload"），错误消息统一
+// "failed to <op> core: ..."，供 load/unload/reload 等 handler 复用，
+// 避免重复编写 NewHTTPError(StatusInternalServerError, ...) 分支。
+func wrapErr(op string, err error) error {
+	return vodka.NewHTTPError(vodka.StatusInternalServerError, fmt.Sprintf("failed to %s core: %v", op, err))
+}

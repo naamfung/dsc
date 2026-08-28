@@ -76,7 +76,7 @@ func (m *Manager) handleLoad(c *vodka.Context) error {
 	}
 
 	if err := m.LoadPlugin(entry); err != nil {
-		return vodka.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to load core: %v", err))
+		return wrapErr("load", err)
 	}
 
 	return c.JSON(vodka.Map{"status": "success", "message": "core loaded"})
@@ -92,7 +92,7 @@ func (m *Manager) handleUnload(c *vodka.Context) error {
 	}
 
 	if err := m.UnloadPlugin(req.Name); err != nil {
-		return vodka.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to unload core: %v", err))
+		return wrapErr("unload", err)
 	}
 
 	return c.JSON(vodka.Map{"status": "success", "message": "core unloaded"})
@@ -107,12 +107,12 @@ func (m *Manager) handleReload(c *vodka.Context) error {
 
 	// 先卸載
 	if err := m.UnloadPlugin(entry.Name); err != nil {
-		return vodka.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to unload core: %v", err))
+		return wrapErr("unload", err)
 	}
 
 	// 再加載
 	if err := m.LoadPlugin(entry); err != nil {
-		return vodka.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to reload core: %v", err))
+		return wrapErr("reload", err)
 	}
 
 	return c.JSON(vodka.Map{"status": "success", "message": "core reloaded"})
