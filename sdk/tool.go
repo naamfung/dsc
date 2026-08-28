@@ -7,6 +7,10 @@ import (
 	"strings"
 	"sync"
 
+	"dsc/core/agentclient"
+	"dsc/core/llmclient"
+	"dsc/core/notify"
+	"dsc/core/toolclient"
 	"dsc/proto"
 	"dsc/proto/metadata"
 	plugin "github.com/hashicorp/go-plugin"
@@ -108,34 +112,18 @@ func (s *toolServiceServer) SetInterconnect(ctx context.Context, req *proto.Inte
 	ic := &Interconnect{}
 	var dialErr error
 	if s.broker != nil {
-		if id := req.GetLlmServiceId(); id != 0 {
-			if c, err := llmDial(s.broker, id); err == nil {
-				ic.llm = c
-			} else if dialErr == nil {
-				dialErr = err
-			}
-		}
-		if id := req.GetToolServiceId(); id != 0 {
-			if c, err := toolDial(s.broker, id); err == nil {
-				ic.tool = c
-			} else if dialErr == nil {
-				dialErr = err
-			}
-		}
-		if id := req.GetNotifyServiceId(); id != 0 {
-			if n, err := notifyDial(s.broker, id); err == nil {
-				ic.ntf = n
-			} else if dialErr == nil {
-				dialErr = err
-			}
-		}
-		if id := req.GetAgentServiceId(); id != 0 {
-			if a, err := agentDial(s.broker, id); err == nil {
-				ic.agent = a
-			} else if dialErr == nil {
-				dialErr = err
-			}
-		}
+		dialInterconnect(req.GetLlmServiceId(), func(id uint32) (*llmclient.Client, error) {
+			return llmDial(s.broker, id)
+		}, func(c *llmclient.Client) { ic.llm = c }, &dialErr)
+		dialInterconnect(req.GetToolServiceId(), func(id uint32) (*toolclient.Client, error) {
+			return toolDial(s.broker, id)
+		}, func(c *toolclient.Client) { ic.tool = c }, &dialErr)
+		dialInterconnect(req.GetNotifyServiceId(), func(id uint32) (*notify.Notifier, error) {
+			return notifyDial(s.broker, id)
+		}, func(n *notify.Notifier) { ic.ntf = n }, &dialErr)
+		dialInterconnect(req.GetAgentServiceId(), func(id uint32) (*agentclient.Client, error) {
+			return agentDial(s.broker, id)
+		}, func(a *agentclient.Client) { ic.agent = a }, &dialErr)
 	}
 	s.mu.Lock()
 	if old := s.ic; old != nil {
