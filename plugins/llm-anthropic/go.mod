@@ -39,6 +39,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/toon-format/toon-go v0.0.0
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
@@ -60,3 +61,5 @@ replace dsc => ../..
 replace github.com/hashicorp/go-plugin => ../../plugin
 
 replace github.com/anthropics/anthropic-sdk-go => ../../libs/anthropic-sdk-go
+
+replace github.com/toon-format/toon-go => ../../libs/toon-go

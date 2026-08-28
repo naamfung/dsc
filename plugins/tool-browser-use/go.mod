@@ -30,6 +30,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/toon-format/toon-go v0.0.0
 	github.com/ysmood/fetchup v0.2.3 // indirect
 	github.com/ysmood/goob v0.4.0 // indirect
 	github.com/ysmood/got v0.40.0 // indirect
@@ -52,3 +53,5 @@ replace dsc-sdk => ../../sdk
 replace dsc => ../..
 
 replace github.com/hashicorp/go-plugin => ../../plugin
+
+replace github.com/toon-format/toon-go => ../../libs/toon-go

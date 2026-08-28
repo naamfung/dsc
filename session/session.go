@@ -6,9 +6,12 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/toon-format/toon-go"
 
 	"dsc/proto"
 )
@@ -297,9 +300,32 @@ func deriveEventMessage(ev *Event) *proto.Message {
 		}
 		return m
 	case *ToolResultData:
-		return &proto.Message{Role: "tool", Content: d.Content, ToolCallId: d.CallID}
+		return &proto.Message{Role: "tool", Content: toonizeToolContent(d.Content), ToolCallId: d.CallID}
 	case *CompactionSummaryData:
 		return &proto.Message{Role: "user", Content: d.Content}
 	}
 	return nil
+}
+
+// toonizeToolContent 在「事件 → 模型消息」投影层把工具结果的 Content 做确定性
+// TOON 规范化：当结果为结构化 JSON（对象/数组）时转成更紧凑的表式表示，以更少
+// token 投喂模型、减少上下文噪音；非结构内容（纯文本、标量、null）与无法解析的
+// 串一律原样保留。转换是纯函数（map 按键排序输出），同样的 JSON 恒得同样的 TOON，
+// 因此不破坏前缀缓存稳定。事件日志原文与 TUI 展示不受影响（仅在投喂模型时生效）。
+func toonizeToolContent(content string) string {
+	var v any
+	if err := json.Unmarshal([]byte(content), &v); err != nil {
+		return content
+	}
+	switch v.(type) {
+	case map[string]any, []any:
+		// 仅对有序结构做紧凑化；标量 / null 无结构，转换无益。
+	default:
+		return content
+	}
+	encoded, err := toon.MarshalString(v)
+	if err != nil {
+		return content // 降级：TOON 失败则保留原文 JSON，绝不断裂投喂
+	}
+	return encoded
 }

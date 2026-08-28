@@ -27,6 +27,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/smartystreets/goconvey v1.8.1
 	github.com/stretchr/testify v1.11.1
+	github.com/toon-format/toon-go v0.0.0
 	github.com/valyala/fasttemplate v1.2.2
 	github.com/yuin/goldmark v1.8.5
 	github.com/zeebo/blake3 v0.2.4
@@ -95,3 +96,7 @@ replace github.com/ollama/ollama => ./libs/ollama
 
 // cron 久未维护，改放本地（libs/）便于发现问题直接改源码
 replace github.com/robfig/cron/v3 => ./libs/cron
+
+// TOON 紧凑序列化格式（libs/），用于投喂模型前把结构化工具结果从 JSON 压缩为
+// 更低 token 的表式表示，以更少噪音、稳定前缀缓存
+replace github.com/toon-format/toon-go => ./libs/toon-go

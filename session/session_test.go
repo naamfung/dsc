@@ -1,7 +1,11 @@
 package session
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
+
+	"github.com/toon-format/toon-go"
 
 	"dsc/proto"
 )
@@ -144,11 +148,107 @@ func TestNonSurfaceCarriesSurfacePanics(t *testing.T) {
 }
 
 func TestUnknownSurfaceOpPanics(t *testing.T) {
-	s := New()
 	defer func() {
 		if r := recover(); r == nil {
 			t.Fatal("expected panic for unknown surface op")
 		}
 	}()
+	s := New()
 	s.Append(UserMessage, &UserMessageData{Content: "u"}, &SurfaceOp{Op: "bogus"})
+}
+
+// mustEqualJSONDecode 断言 toon 解码结果与原 JSON 解码结构等价（往返等价）。
+func mustEqualJSONDecode(t *testing.T, jsonStr, toonStr string) {
+	t.Helper()
+	var want any
+	if err := json.Unmarshal([]byte(jsonStr), &want); err != nil {
+		t.Fatalf("bad fixture json: %v", err)
+	}
+	got, err := toon.Decode([]byte(toonStr))
+	if err != nil {
+		t.Fatalf("toon.Decode(%q) failed: %v", toonStr, err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("toon decode != json decode\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestToonizeToolContentStructuredAndEquivalent(t *testing.T) {
+	in := `{"users":[{"id":1,"name":"Alice","role":"admin"},{"id":2,"name":"Bob","role":"user"}]}`
+	got := toonizeToolContent(in)
+	if got == in {
+		t.Fatal("structured JSON tool result was not compacted to TOON")
+	}
+	// 信息等价：TOON 表示必须能还原为原 JSON 的语义结构。
+	mustEqualJSONDecode(t, in, got)
+	// 确实更紧凑（token 目标）。
+	if len(got) >= len(in) {
+		t.Fatalf("TOON result not more compact: len(toon)=%d >= len(json)=%d", len(got), len(in))
+	}
+}
+
+func TestToonizeToolContentNested(t *testing.T) {
+	in := `{"orders":[{"id":1,"customer":{"name":"Ada","country":"UK"},"total":9.5}]}`
+	got := toonizeToolContent(in)
+	if got == in {
+		t.Fatal("nested structured JSON was not compacted")
+	}
+	mustEqualJSONDecode(t, in, got)
+}
+
+func TestToonizeToolContentTextUnchanged(t *testing.T) {
+	in := "plain text tool result, not JSON"
+	if got := toonizeToolContent(in); got != in {
+		t.Fatalf("plain text should stay verbatim, got %q", got)
+	}
+}
+
+func TestToonizeToolContentScalarUnchanged(t *testing.T) {
+	// 标量 / null 无表式结构，转换无益，须原样保留。
+	for _, in := range []string{`"hello"`, `42`, `true`, `null`} {
+		if got := toonizeToolContent(in); got != in {
+			t.Errorf("scalar %q should stay verbatim, got %q", in, got)
+		}
+	}
+}
+
+func TestToonizeToolContentInvalidJSONUnchanged(t *testing.T) {
+	for _, in := range []string{`{broken`, `[1, 2`, ``} {
+		if got := toonizeToolContent(in); got != in {
+			t.Errorf("invalid json %q should stay verbatim, got %q", in, got)
+		}
+	}
+}
+
+func TestToonizeToolContentDeterministic(t *testing.T) {
+	in := `{"b":{"x":1,"w":0},"a":{"z":3,"y":2}}`
+	first := toonizeToolContent(in)
+	second := toonizeToolContent(in)
+	if first != second {
+		t.Fatalf("TOON encoding not deterministic:\n %q\n %q", first, second)
+	}
+}
+
+func TestDeriveToolResultIsToonized(t *testing.T) {
+	s := New()
+	appendSurface(t, s, UserMessage, &UserMessageData{Content: "q1", Source: "user"})
+	raw := `{"ok":true,"count":3}`
+	appendSurface(t, s, ToolResult, &ToolResultData{CallID: "c1", Content: raw})
+
+	msgs := s.DeriveMessages("")
+	if len(msgs) != 2 {
+		t.Fatalf("derived %d messages, want 2 (user+tool)", len(msgs))
+	}
+	tool := msgs[1]
+	if tool.Role != "tool" || tool.ToolCallId != "c1" {
+		t.Fatalf("unexpected tool message: role=%s id=%s", tool.Role, tool.ToolCallId)
+	}
+	// 事件日志原文无损，但派生消息 Content 为 TOON 紧凑形式。
+	if ev := s.Events(); ev[1].Data.(*ToolResultData).Content != raw {
+		t.Fatalf("event log must preserve raw JSON, got %q", ev[1].Data.(*ToolResultData).Content)
+	}
+	if tool.Content == raw {
+		t.Fatal("derived tool message should carry TOON-ized content, not raw JSON")
+	}
+	mustEqualJSONDecode(t, raw, tool.Content)
 }

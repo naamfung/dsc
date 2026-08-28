@@ -30,6 +30,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/toon-format/toon-go v0.0.0
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
@@ -53,3 +54,5 @@ replace github.com/hashicorp/go-plugin => ../../plugin
 
 // go-lua：带类型检查的 LUA VM（本地 fork）
 replace github.com/wippyai/go-lua => ../../libs/go-lua
+
+replace github.com/toon-format/toon-go => ../../libs/toon-go
