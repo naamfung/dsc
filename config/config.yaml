@@ -55,10 +55,16 @@ plugins:
     binary_path: ./plugins/tool-harness-webui/tool-harness-webui.exe
     enabled: true
 
+  # SSH 终端：ssh_connect / ssh_exec / ssh_list / ssh_close，远程命令执行（持久会话）
+  - name: tool-ssh
+    type: tool
+    binary_path: ./plugins/tool-ssh/tool-ssh.exe
+    enabled: true
+
   - name: agent-react-loop
     type: agent
     binary_path: ./plugins/agent-react-loop/agent-react-loop.exe
     enabled: true
     depends_on:
       llm: llm-anthropic
-      tools: [tool-filesystem, tool-novelforge, tool-lua-host]
+      tools: [tool-filesystem, tool-novelforge, tool-lua-host, tool-ssh]

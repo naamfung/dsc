@@ -102,5 +102,11 @@ cd plugins\policy-fs-observation
 go build -o policy-fs-observation.exe .
 cd ..\..
 
+:: 构建 tool-ssh 插件（独立 module，基于 dsc-sdk）
+echo Building tool-ssh plugin...
+cd plugins\tool-ssh
+go build -o tool-ssh.exe .
+cd ..\..
+
 echo Build completed successfully.
 endlocal
