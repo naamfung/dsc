@@ -1,11 +1,13 @@
 package core
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"dsc/libs/vodka"
 )
@@ -13,6 +15,7 @@ import (
 // adminAuth 管理 API 的 Token 认证中间件。
 // 通过环境变量 DSC_ADMIN_TOKEN 配置认证 Token，未设置则不启用认证。
 // 支持请求头 "Authorization: Bearer <token>" 或直接 "<token>"。
+// Token 比较使用常量时间比较，避免时序侧信道。
 func adminAuth(c *vodka.Context) error {
 	token := os.Getenv("DSC_ADMIN_TOKEN")
 	if token == "" {
@@ -22,7 +25,7 @@ func adminAuth(c *vodka.Context) error {
 	if strings.HasPrefix(provided, "Bearer ") {
 		provided = strings.TrimPrefix(provided, "Bearer ")
 	}
-	if provided != token {
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 		return vodka.NewHTTPError(http.StatusUnauthorized, "unauthorized")
 	}
 	return c.Next()
@@ -31,6 +34,12 @@ func adminAuth(c *vodka.Context) error {
 // StartAdmin 啟動管理 API HTTP 服務（基於 Vodka 框架）
 func (m *Manager) StartAdmin(addr string) {
 	e := vodka.New()
+
+	// 反慢速攻擊：限制讀取請求頭與空閒連接超時。刻意不設 Read/WriteTimeout——
+	// /plugins/events 係長連接 SSE 流（持續寫入），設 WriteTimeout 會中斷訂閱；
+	// /plugins/load|unload|reload 要拉起/關閉插件進程，可能超過保守讀超時。
+	e.Server.ReadHeaderTimeout = 10 * time.Second
+	e.Server.IdleTimeout = 60 * time.Second
 
 	admin := e.Group("/plugins")
 	admin.Use(adminAuth)

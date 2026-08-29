@@ -243,7 +243,7 @@ func main() {
 	mode := "standard"    // 默認標準模式
 	inputText := ""       // -input：一次性提示文本（自動化測試入口，不經 TUI）
 	debuggerOpen := false // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
-	adminAddr := ""       // -admin：管理 API 監聽地址（默認取環境變量 DSC_ADMIN_ADDR，缺省 :9999）
+	adminAddr := ""       // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
 	headless := false     // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
 
 	for i, arg := range os.Args {
@@ -603,12 +603,15 @@ func main() {
 			logger.Info("cron scheduler started")
 		}
 
-		// 启动管理 API：监听地址取 -admin 旗标，未指定则回退环境变量 DSC_ADMIN_ADDR，再默认 :9999
+		// 启动管理 API：监听地址取 -admin 旗标，未指定则回退环境变量 DSC_ADMIN_ADDR，
+		// 再默认绑定回环地址 127.0.0.1:9999（避免局域网内任意主机在未配置
+		// DSC_ADMIN_TOKEN 时经 /plugins/load 加载任意二进制触发 RCE；需要远程
+		// 管理时显式用 -admin :9999 并配置 token）。
 		if adminAddr == "" {
 			adminAddr = os.Getenv("DSC_ADMIN_ADDR")
 		}
 		if adminAddr == "" {
-			adminAddr = ":9999"
+			adminAddr = "127.0.0.1:9999"
 		}
 		mgr.StartAdmin(adminAddr)
 		logger.Info("admin api started", "addr", adminAddr)
