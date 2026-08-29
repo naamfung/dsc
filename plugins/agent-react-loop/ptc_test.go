@@ -8,6 +8,7 @@ import (
 )
 
 func TestPTCEnabled(t *testing.T) {
+	t.Setenv("DSC_MODE", "")
 	cases := map[string]bool{
 		"":     false,
 		"0":    false,
@@ -24,6 +25,21 @@ func TestPTCEnabled(t *testing.T) {
 		if got := ptcEnabled(); got != want {
 			t.Fatalf("DSC_PTC=%q -> ptcEnabled=%v, want %v", env, got, want)
 		}
+	}
+}
+
+// TestPTCEnabledViaMode 验证处于 ptc preset（DSC_MODE=ptc）时，即使未单独设 DSC_PTC 也开启 PTC。
+func TestPTCEnabledViaMode(t *testing.T) {
+	t.Setenv("DSC_PTC", "")
+	for _, mode := range []string{"ptc", "PTC", " ptc "} {
+		t.Setenv("DSC_MODE", mode)
+		if got := ptcEnabled(); !got {
+			t.Fatalf("DSC_MODE=%q -> ptcEnabled=%v, want true", mode, got)
+		}
+	}
+	t.Setenv("DSC_MODE", "standard")
+	if got := ptcEnabled(); got {
+		t.Fatalf("DSC_MODE=standard -> ptcEnabled=%v, want false", got)
 	}
 }
 

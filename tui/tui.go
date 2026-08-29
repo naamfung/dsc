@@ -1792,6 +1792,29 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.render()
 		m.viewport.GotoBottom()
 		return true, nil
+	case "/mode ptc":
+		if m.manager != nil {
+			err := m.manager.SwitchMode("ptc")
+			if err != nil {
+				m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
+			} else {
+				m.mode = "ptc" // 實時反映標題欄模式
+				err := core.UpdateMode("ptc", core.ConfigPath)
+				if err != nil {
+					m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+				} else {
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至 PTC 模式 (ptc)：引导用 run_code 写 Lua 一把过组合多步。")
+				}
+			}
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.viewport.GotoBottom()
+		return true, nil
 	case "/sessions":
 		if m.manager != nil {
 			summaries, err := m.manager.ListSessions()
@@ -2253,6 +2276,8 @@ func (m *Model) displayMode() string {
 		return "Standard"
 	case "creation":
 		return "Creation"
+	case "ptc":
+		return "PTC"
 	}
 	return m.mode
 }

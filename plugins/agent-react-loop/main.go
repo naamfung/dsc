@@ -777,8 +777,11 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	return strings.Join(parts, "\n\n")
 }
 
-// ptcEnabled 是否开启 PTC 呈现模式（环境变量 DSC_PTC）。
+// ptcEnabled 是否开启 PTC 呈现模式：环境变量 DSC_PTC，或处于 ptc preset（DSC_MODE=ptc）。
 func ptcEnabled() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DSC_MODE")), "ptc") {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_PTC"))) {
 	case "1", "true", "on", "ptc", "yes":
 		return true

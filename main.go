@@ -261,7 +261,7 @@ func main() {
 		} else if arg == "-mode" {
 			if i+1 < len(os.Args) {
 				nextArg := os.Args[i+1]
-				if nextArg == "minimal" || nextArg == "standard" || nextArg == "creation" {
+				if nextArg == "minimal" || nextArg == "standard" || nextArg == "creation" || nextArg == "ptc" {
 					mode = nextArg
 				} else {
 					mode = "standard" // 默認 standard

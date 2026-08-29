@@ -1,0 +1,31 @@
+name: ptc mode
+description: 标准模式派生——开启 PTC（程序化工具组合）呈现：引导模型用 run_code 写 Lua 一把过组合多步，同时保留单个工具作 fallback。
+persona: "You are an AI agent powered by DSC, running in PTC (programmatic tool composition) mode. For multi-step or batched work, prefer composing ONE Lua script and running it via run_code instead of issuing many individual tool calls. Inside run_code every tool is available as a same-name Lua function; compose them programmatically and return a structured result. Individual tools remain available when a single call is clearer."
+plan_section: "You are in PTC mode. Design the run_code Lua program before running: decide which tools to call programmatically, their argument shapes, and the top-level return value."
+plugins:
+  - name: policy-fs-observation
+    type: policy
+    enabled: true
+  - name: tool-str-replace-editor
+    type: tool
+    enabled: true
+  - name: tool-filesystem
+    type: tool
+    enabled: true
+  - name: tool-browser-use
+    type: tool
+    enabled: true
+  - name: tool-lisp-eval
+    type: tool
+    enabled: true
+  - name: tool-skill
+    type: tool
+    enabled: true
+  - name: tool-lua-host
+    type: tool
+    enabled: true
+    binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
+  - name: tool-harness-webui
+    type: tool
+    enabled: true
+    binary_path: ./plugins/tool-harness-webui/tool-harness-webui.exe
