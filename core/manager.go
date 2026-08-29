@@ -619,7 +619,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 		cmd.Dir = m.config.ExecDir
 	}
 	if len(env) > 0 {
-		cmd.Env = buildEnv(env)
+		cmd.Env = buildEnv(env, false)
 	}
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
@@ -726,7 +726,7 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 		cmd.Dir = m.config.ExecDir
 	}
 	if len(entry.Env) > 0 {
-		cmd.Env = buildEnv(entry.Env)
+		cmd.Env = buildEnv(entry.Env, true)
 	}
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
@@ -2088,7 +2088,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*plugin.GRPCBroker, 
 	if m.config.ExecDir != "" {
 		cmd.Dir = m.config.ExecDir
 	}
-	cmd.Env = buildEnv(entry.Env)
+	cmd.Env = buildEnv(entry.Env, false)
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: m.config.Handshake,
 		Plugins: map[string]plugin.Plugin{
@@ -2438,12 +2438,51 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 	return nil
 }
 
-// buildEnv 合併宿主環境與插件自定義環境變量，插件變量優先
-func buildEnv(custom map[string]string) []string {
+// envSecretSuffixes 命中即视为凭据、不注入非 LLM 插件的键名后缀（P1-4：防 LLM/第三方
+// API key 经 shell 等工具进程被模型读进会话历史）。
+var envSecretSuffixes = []string{
+	"_API_KEY", "_API_TOKEN", "_AUTH_TOKEN", "_SECRET", "_PASSWORD",
+	"_CREDENTIAL", "_CREDENTIALS", "_ACCESS_KEY", "_TOKEN", "_TOKEN_HASH",
+}
+
+// envSecretKeys 不走后缀规律、直接列出的完整机密键。
+var envSecretKeys = map[string]bool{
+	"GITHUB_TOKEN":        true,
+	"GITLAB_TOKEN":        true,
+	"HUGGINGFACE_TOKEN":   true,
+	"REPLICATE_API_TOKEN": true,
+	"AWS_SESSION_TOKEN":   true,
+}
+
+// isSecretEnvKey 判断环境变量键是否为不应注入非 LLM 插件的凭据。
+// DSC_* 是宿主自有配置（如 DSC_ADMIN_TOKEN 供 webui 代理认证），一律保留。
+func isSecretEnvKey(k string) bool {
+	u := strings.ToUpper(k)
+	if strings.HasPrefix(u, "DSC_") {
+		return false
+	}
+	if envSecretKeys[u] {
+		return true
+	}
+	for _, suf := range envSecretSuffixes {
+		if strings.HasSuffix(u, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildEnv 构建插件进程 env = 宿主环境 + 插件自定义 env。
+// allowSecrets=false 时滤除凭据类键（非 LLM 插件用）；LLM 插件需凭据，传 true。
+func buildEnv(custom map[string]string, allowSecrets bool) []string {
 	envMap := make(map[string]string)
 	for _, kv := range os.Environ() {
 		if i := strings.Index(kv, "="); i > 0 {
-			envMap[kv[:i]] = kv[i+1:]
+			k := kv[:i]
+			if !allowSecrets && isSecretEnvKey(k) {
+				continue
+			}
+			envMap[k] = kv[i+1:]
 		}
 	}
 	for k, v := range custom {
@@ -2460,8 +2499,10 @@ func buildEnv(custom map[string]string) []string {
 // 互通服务 ID 不再经 env 注入（握手时序问题）：改为宿主加载工具插件后经
 // ToolService.SetInterconnect 把挂载在本插件 client broker 上的服务 ID 传入
 // 插件进程（互通机制 1/2）。
+// 仅 LLM 插件放行凭据类键（P1-4）；tool/policy/agent 等一律滤除，防凭据被
+// shell 等工具进程读出。
 func (m *Manager) coreEnv(entry PluginEntry) []string {
-	return buildEnv(entry.Env)
+	return buildEnv(entry.Env, entry.Type == "llm")
 }
 
 // LoadToolsAndPoliciesFromConfig 從配置加載 tool 和 policy 插件
