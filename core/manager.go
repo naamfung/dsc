@@ -2567,15 +2567,23 @@ func (m *Manager) SwitchMode(mode string) error {
 	// 卸載不再需要的插件
 	for name := range currentTools {
 		if !targetTools[name] {
-			// 卸載 tool/core
+			// 卸載 tool/core：與 UnloadPlugin 對稱清理（P2.2）
 			if client, exists := m.clients[name]; exists {
 				m.transitionLocked(name, StateUnloading, "")
-				delete(m.clients, name) // 先摘除，令退出监控忽略
+				m.runStopHooksLocked(name) // 跑 stop hook 並清 m.stopHooks[name]，避免殘留鉤子
+				delete(m.clients, name)    // 先摘除，令退出监控忽略
 				client.Kill()
 				m.markDisposedLocked(name)
 			}
 			delete(m.typeMap, name)
+			delete(m.plugins, name)
 			delete(m.coreMetadata, name)
+			// 撤销 policy 桥接的流水线监听器（防切模式後殘留 policy 監聽/死引用）
+			for _, off := range m.policyOff[name] {
+				off()
+			}
+			delete(m.policyOff, name)
+			delete(m.policyClients, name)
 
 			// 從工具註冊表中移除該插件註冊的所有工具，
 			// 否則 ListTools 仍會返回已下線插件的工具，模型會誤報多餘的工具

@@ -63,6 +63,10 @@ type ReactLoopAgent struct {
 	contextWindow    int         // 總容量（token 數），0 表示未設置（不做自動壓縮）
 	lastPromptTokens int32       // 最近一次 LLM 請求的 prompt token 數 ≈ 當前已用容量
 	lastUsage        *core.Usage // 最近一次 LLM 請求的完整 usage 信息
+	// usageMu 保護 lastPromptTokens/lastUsage：串流 loop 喺唔持 sessMu 時寫入，
+	// 而 DebugSnapshot（另一 goroutine）要讀 lastPromptTokens，故用專鎖避免跨 goroutine
+	// 競爭（P2.6）。
+	usageMu sync.Mutex
 
 	// 沙箱策略（宿主經 DSC_SANDBOX_POLICY 傳入，缺省 workspace-write）：渲染进
 	// system prompt 的 sandbox:policy 上下文片段（对齐 DSH），让模型知道当前文件
@@ -411,7 +415,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*c
 					Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
 				}, &session.SurfaceOp{Op: session.SurfaceReplace, Start: nodes[0], End: nodes[keep-1]})
 				// 压缩后已用容量无法精确获取，重置为 0（下一轮服务端 usage 会更新为真实值）
+				a.usageMu.Lock()
 				a.lastPromptTokens = 0
+				a.usageMu.Unlock()
 				compacted = true
 			}
 		}
@@ -463,12 +469,12 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*c
 					emit(&core.RunStreamResponse{Status: "error", Error: cr.Error})
 					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
 				}
-				// [DEBUG] 打印接收到的 ChatStreamResponse
-				fmt.Fprintf(os.Stderr, "[REACT-LOOP-DEBUG] Frame: Content=%q, Reasoning=%q, FinishReason=%q, Error=%q\n", cr.Content, cr.Reasoning, cr.FinishReason, cr.Error)
 				// 記錄 prompt 用量（≈ 當前上下文已用容量）；該值在 finish 分片由服務端返回
 				if cr.Usage != nil {
+					a.usageMu.Lock()
 					a.lastPromptTokens = cr.Usage.PromptTokens
 					a.lastUsage = core.UsageFromProto(cr.Usage)
+					a.usageMu.Unlock()
 				}
 				content += cr.Content
 				if cr.Content != "" {
@@ -1106,11 +1112,16 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*core.AgentDebugSna
 		return nil, fmt.Errorf("debug snapshot: session not loaded")
 	}
 
+	// lastPromptTokens 由串流 loop 在 usageMu 下寫入（不在 sessMu 下），故分開取鎖讀
+	a.usageMu.Lock()
+	lastPromptTokens := a.lastPromptTokens
+	a.usageMu.Unlock()
+
 	snap := &core.AgentDebugSnapshot{
 		SessionID:        a.sess.ID(),
 		TurnCount:        a.turnCounter,
 		PlanActive:       a.planActive,
-		LastPromptTokens: a.lastPromptTokens,
+		LastPromptTokens: lastPromptTokens,
 	}
 
 	// goal 状态由事件日志折叠
