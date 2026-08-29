@@ -2184,6 +2184,10 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*plugin.GRPCBroker, 
 		return a.Shutdown(context.Background(), false)
 	})
 	m.transitionLocked(entry.Name, StateReady, "")
+	// 登记 agent 当前二进制到 loadedBinaries：StartHotReloadWatcher 的 addWatchDir 与
+	// collectUpgrades 都遍历 loadedBinaries——漏掉这一步会让 agent 目录永不被 watch，
+	// 自动版本化热重载对 agent 永不触发（其他类型 LLM/tool/plugin 加载时已 record）。
+	m.recordLoadedBinaryLocked(entry.Name, binaryPath)
 	go m.monitorExit(entry.Name, client)
 
 	m.logger.Info("agent core loaded for broker", "name", entry.Name)
