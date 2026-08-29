@@ -38,7 +38,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | plan/goal/todo | plan-mode、goal、todo 領域 | 對齊：宿主托管 plan/goal/todo 工具，狀態經事件日誌折疊 |
 | UI | Web UI（`apps/web`） | TUI（bubbletea）+ Web UI（`tool-harness-webui`） |
 
-**PTC（程序化工具呈现）差异**：两者概念同构——模型写一段程序组合多步工具调用、一把过执行。但实现语言不同：DSH 的原生 PTC 用 **TypeScript**（其 runtime 本身就是 TS/Node）；DSC 用 **严格 Lua**（go-lua，带类型注解、可空 `T?`、联集、流式收窄的受检方言）。且 DSC 当前提供的 PTC 是「引导优先 + 保留单个工具 fallback」的**有界呈现**（`-mode ptc` / `DSC_PTC=1`），而非 DSH 那种 run_code-only 的高度隐藏。
+**PTC（程序化工具呈现）差异**：两者概念同构，且呈现方式现也已对齐——模型写一段程序组合多步工具调用、一把过执行；`ptc` 下把直接工具调用**折叠为唯一 `run_code`**（其余工具仅经其程序内 SDK 可调），native 模式则对模型**隐藏 `run_code`、也不可执行**（run_code-only 的高隐藏）。仅实现语言不同：DSH 的原生 PTC 用 **TypeScript**（runtime 本身 TS/Node）；DSC 用 **严格 Lua**（go-lua，带类型注解、可空 `T?`、联集、流式收窄的受检方言）。
 
 ### 功能對齊程度
 
