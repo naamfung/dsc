@@ -27,6 +27,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/toon-format/toon-go v0.0.0
 	github.com/valyala/fasttemplate v1.2.2
+	github.com/wippyai/go-lua v1.5.17
 	github.com/yuin/goldmark v1.8.5
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/text v0.37.0
@@ -104,3 +105,5 @@ replace github.com/toon-format/toon-go => ./libs/toon-go
 replace github.com/valyala/fasttemplate => ./libs/fasttemplate
 
 replace github.com/valyala/bytebufferpool => ./libs/bytebufferpool
+
+replace github.com/wippyai/go-lua => ./libs/go-lua

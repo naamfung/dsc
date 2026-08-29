@@ -186,6 +186,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	_ = m.toolRegistry.Register(&subagentTool{m: m})
 	// 内建 workflow 工具（宿主侧 JS 编排脚本，可扇出 subagent；支持后台运行）
 	_ = m.toolRegistry.Register(&workflowTool{m: m})
+	// 内建 run_code 工具（宿主侧 Lua 程序组合多步工具调用，PTC code-runtime 载体）
+	_ = m.toolRegistry.Register(&runCodeTool{m: m})
 	// 内建 job 工具族（后台任务查询/取消，对齐 DSH tool-jobs：job_output/job_list/job_kill）
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_output"})
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_list"})
