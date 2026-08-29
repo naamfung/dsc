@@ -106,13 +106,19 @@ func writeCallInfo(toolName, argsJSON string) (path string, write bool) {
 // 使用同一根目录（对齐 DSH 单一策略归属：fs 围栏与流水线判定不漂移）。
 func workspacePathToRoot(p string) string {
 	for _, prefix := range []string{"/workspace", `\workspace`} {
-		if strings.HasPrefix(p, prefix) {
-			rest := strings.TrimPrefix(p, prefix)
-			if rest == "" {
-				return WorkspaceRoot
-			}
-			return filepath.Join(WorkspaceRoot, strings.TrimLeft(rest, `/\\`))
+		if !strings.HasPrefix(p, prefix) {
+			continue
 		}
+		rest := p[len(prefix):]
+		// 边界检查：前綴後必須是分隔符或結尾，否則 /workspacefoo 之類唔應被當作
+		// /workspace 別名（P3-1），維持其係獨立絕對路徑嘅語義。
+		if rest != "" && !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, `\`) {
+			continue
+		}
+		if rest == "" {
+			return WorkspaceRoot
+		}
+		return filepath.Join(WorkspaceRoot, strings.TrimLeft(rest, `/\\`))
 	}
 	return p
 }

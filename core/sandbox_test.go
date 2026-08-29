@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,28 @@ import (
 // fixedPolicy 返回固定策略的读取函数（测试简化用）。
 func fixedPolicy(p SandboxPolicy) func() SandboxPolicy {
 	return func() SandboxPolicy { return p }
+}
+
+// TestWorkspacePathToRootBoundary 验证 P3-1：/workspace 别名前缀须跟分隔符或结尾，
+// /workspacefoo 之类不应被映射。
+func TestWorkspacePathToRootBoundary(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = "/root/ws"
+	defer func() { WorkspaceRoot = orig }()
+
+	cases := []struct{ in, want string }{
+		{"/workspace", "/root/ws"},
+		{"/workspace/a.txt", filepath.Join("/root/ws", "a.txt")},
+		{`\workspace\b.txt`, filepath.Join("/root/ws", "b.txt")},
+		// 前綴後直接接字符 → 唔係別名，維持原樣
+		{"/workspacefoo/x", "/workspacefoo/x"},
+		{"/workspacex", "/workspacex"},
+	}
+	for _, c := range cases {
+		if got := workspacePathToRoot(c.in); got != c.want {
+			t.Errorf("workspacePathToRoot(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
 }
 
 // jsonPath 将路径转义后嵌入 JSON 字面量：Windows 的 t.TempDir() 含反斜杠，

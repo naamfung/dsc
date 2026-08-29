@@ -6,8 +6,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 )
+
+// spillDefaultThreshold 外置阈值的默认字符数（对齐 DSH spill）。
+const spillDefaultThreshold = 4000
+
+// spillThreshold 返回工具结果外置阈值（字符数）：可用 DSC_SPILL_THRESHOLD 覆盖（P3-3）。
+func spillThreshold() int {
+	if s := os.Getenv("DSC_SPILL_THRESHOLD"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return spillDefaultThreshold
+}
 
 // Spill 超大工具输出外置（对齐 DSH spill 子系统）：工具流水线 post-execute
 // 阶段把超过阈值的纯文本结果保存到本地，模型侧只看到「头尾预览 + 定位符 +

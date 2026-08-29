@@ -233,7 +233,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	}
 	if store, err := NewSpillStore(spillDir); err == nil {
 		_ = m.toolRegistry.Register(&readSpillTool{store: store})
-		m.events.OnWaterfall(EventToolPostExecute, spillLargeResult(store, 4000))
+		// 默认 4000 字符；可用 DSC_SPILL_THRESHOLD 覆盖（P3-3）
+		m.events.OnWaterfall(EventToolPostExecute, spillLargeResult(store, spillThreshold()))
 	} else {
 		logger.Warn("spill store unavailable", "error", err)
 	}
