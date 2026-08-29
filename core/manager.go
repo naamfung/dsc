@@ -843,14 +843,14 @@ func (m *Manager) HotReload(name string, newBinaryPath string) error {
 	}
 }
 
-// reloadSnapshotAgent 快照 agent 重载准备阶段所需的只读 serviceID（短读锁）。
-func (m *Manager) reloadSnapshotAgent(name string, typ string) (llmID, toolID, userQID uint32, ok bool) {
+// reloadSnapshotAgent 快照 agent 重载准备阶段所需的只读 serviceID 与 primary LLM（短读锁）。
+func (m *Manager) reloadSnapshotAgent(name string, typ string) (llmID, toolID, userQID uint32, primary string, ok bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.typeMap[name] != typ {
-		return 0, 0, 0, false
+		return 0, 0, 0, "", false
 	}
-	return m.agentLLMServiceID, m.agentToolServiceID, m.userQuestionsServiceID, true
+	return m.agentLLMServiceID, m.agentToolServiceID, m.userQuestionsServiceID, m.agentLLMName, true
 }
 
 // setReloadConnecting 在准备阶段短暂持锁置 StateConnecting（插件若已被卸载则跳过）。
@@ -940,7 +940,7 @@ func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, ha
 // 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
 func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger) error {
 	// 快照只读的 serviceID（短读锁），供准备阶段的 RPC 注依赖使用。
-	llmID, toolID, userQID, ok := m.reloadSnapshotAgent(name, "agent")
+	llmID, toolID, _, primary, ok := m.reloadSnapshotAgent(name, "agent")
 	if !ok {
 		return fmt.Errorf("no serviceID recorded for agent %s", name)
 	}
@@ -950,6 +950,14 @@ func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, han
 	if execDir != "" {
 		cmd.Dir = execDir
 	}
+	// 新 agent 进程须继承完整宿主环境（含 DSC_* 部署变量）：加载路径用
+	// buildEnv(entry.Env) 构造，这里保持一致。漏设时 cmd.Env 为 nil，go-plugin 仅
+	// 追加握手变量会丢失 os.Environ，导致 Windows 下 CreateProcess 失败
+	//（ERROR_INVALID_PARAMETER）且新进程缺少 DSC_WORKSPACE_ROOT 等部署配置。
+	m.mu.RLock()
+	entry := m.agentEntries[name]
+	m.mu.RUnlock()
+	cmd.Env = m.coreEnv(entry)
 	newClient := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: handshake,
 		Plugins: map[string]plugin.Plugin{
@@ -974,18 +982,24 @@ func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, han
 		m.setReloadFailed(name, fmt.Errorf("new agent core is not a gRPC client"))
 		return fmt.Errorf("new agent core is not a gRPC client")
 	}
+	// 新 agent 拥有全新的连接；go-plugin broker 的 (id,addr) 连接信息是 per-connection 的
+	// （AcceptAndServe 仅通告给绑定该 broker 的唯一对端），复用旧 serviceID 会因新连接
+	// 无通告而 Dial 超时（P1-2 热重载失联）。故聚合服务须在「新 agent 自己的 broker」
+	// 上重挂，并以新 id 注入新 agent。
+	newBroker := grpcClient.Broker()
+	newLLM, newTool, newUQ := m.attachAgentAggregatesOnBroker(newBroker, llmID != 0, primary, toolID != 0)
 
-	// 透過 RPC 重新注冊服务ID（tool 沿用聚合 Tool 服务；LLM 走聚合多 provider 路由）
+	// 透過 RPC 重新注冊服务ID（聚合 LLM/Tool 用本次挂载到新 broker 上的新 id）
 	agentClient := proto.NewAgentServiceClient(grpcClient.Conn)
-	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: llmID, ToolServiceId: toolID})
+	_, err = agentClient.RegisterServices(context.Background(), &proto.RegisterServicesRequest{LlmServiceId: newLLM, ToolServiceId: newTool})
 	if err != nil {
 		newClient.Kill()
 		m.setReloadFailed(name, err)
 		return fmt.Errorf("failed to register service IDs on agent: %w", err)
 	}
-	// 重新注入用户评审通道 serviceID（同一 broker，沿用挂载的服务）
-	if userQID != 0 {
-		_, _ = agentClient.SetUserQuestionsService(context.Background(), &proto.SetUserQuestionsServiceRequest{ServiceId: userQID})
+	// 重新注入用户评审通道 serviceID（挂在新 agent 的 broker 上）
+	if newUQ != 0 {
+		_, _ = agentClient.SetUserQuestionsService(context.Background(), &proto.SetUserQuestionsServiceRequest{ServiceId: newUQ})
 	}
 
 	raw, err := rpcClient.Dispense("agent")
@@ -1013,6 +1027,21 @@ func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, han
 	m.runStopHooksLocked(name) // 优雅关闭旧实例
 	oldServiceID := m.agentServiceIDs[name]
 	oldClient := m.clients[name]
+	// 聚合服务已挂到新 client 的 broker 上：若重载的是 broker 提供者（主 agent），
+	// 把 broker 身份切换到新连接，并将聚合 id 回写为本次挂载的新 id（旧 id 挂在旧
+	// client 的 broker 上，随旧进程关闭而失效）。
+	if m.mainAgentName == name {
+		m.broker = newBroker
+	}
+	if newLLM != 0 {
+		m.agentLLMServiceID = newLLM
+	}
+	if newTool != 0 {
+		m.agentToolServiceID = newTool
+	}
+	if newUQ != 0 {
+		m.userQuestionsServiceID = newUQ
+	}
 	m.clients[name] = newClient
 	m.agents[name] = newImpl
 	m.typeMap[name] = "agent"
@@ -1878,40 +1907,37 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	// 挂载并随即 RegisterServices，把 ConnInfo 发送到 agent Dial 的间隔压缩到毫秒级，彻底
 	// 避开超时窗口——与 PENDING 的「依赖就绪才激活」语义一致：agent 在 LLM 就绪前保持等待。
 	hasLLM := false
-	llmID := uint32(0)
-	toolID := uint32(0)
-
-	// LLM 走多 provider 路由：agent 连接聚合 LLM 服务，primary 为声明的 provider。
+	primaryLLM := ""
 	if agentEntry.DependsOn != nil {
-		if _, ok := m.llms[agentEntry.DependsOn.LLM]; ok {
+		primaryLLM = agentEntry.DependsOn.LLM
+		if _, ok := m.llms[primaryLLM]; ok {
 			hasLLM = true
 		}
 	}
-	if hasLLM {
-		if id, err := m.serveAggregateLLMLocked(agentEntry.DependsOn.LLM); err == nil {
-			llmID = id
-		} else {
-			m.logger.Warn("aggregate llm service unavailable", "error", err)
-		}
-	}
 	// 有工具插件加载或 agent 声明了工具依赖时，才提供聚合 Tool 服务
-	if len(m.toolServiceIDs) > 0 || (agentEntry.DependsOn != nil && len(agentEntry.DependsOn.Tools) > 0) {
-		if id, err := m.serveAggregateToolLocked(); err == nil {
-			toolID = id
-		} else {
-			m.logger.Warn("aggregate tool service unavailable", "error", err)
+	attachTool := len(m.toolServiceIDs) > 0 || (agentEntry.DependsOn != nil && len(agentEntry.DependsOn.Tools) > 0)
+
+	// 统一挂载：聚合 LLM / 聚合 Tool / 用户评审全部挂到主 agent 的 broker 上，并以本次
+	// 返回的新 id 登记（broker 连接信息 per-connection，绝不能沿用其他连接上的旧 id）。
+	llmID, toolID, uqID := m.attachAgentAggregatesOnBroker(m.broker, hasLLM, primaryLLM, attachTool)
+	if hasLLM {
+		m.agentLLMName = primaryLLM
+	}
+	if llmID != 0 {
+		m.agentLLMServiceID = llmID
+	}
+	if toolID != 0 {
+		m.agentToolServiceID = toolID
+	}
+	if uqID != 0 {
+		m.userQuestionsServiceID = uqID
+		if agent, ok := m.agents[agentEntry.Name]; ok {
+			_ = agent.SetUserQuestionsService(context.Background(), uqID)
 		}
 	}
 	// 插件通知 / 用户评审通道：provider 就绪后统一挂载（避免提前发 ConnInfo 超时）
 	if _, err := m.servePluginNotifyLocked(); err != nil {
 		m.logger.Warn("core notify service unavailable", "error", err)
-	}
-	if uqID, err := m.serveUserQuestionsLocked(); err == nil {
-		if agent, ok := m.agents[agentEntry.Name]; ok {
-			_ = agent.SetUserQuestionsService(context.Background(), uqID)
-		}
-	} else {
-		m.logger.Warn("user-questions service unavailable", "error", err)
 	}
 
 	if hasLLM {

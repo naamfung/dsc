@@ -6,7 +6,6 @@ import (
 
 	"dsc/proto"
 	"dsc/userquestions"
-	"google.golang.org/grpc"
 )
 
 // 用户评审通道（对齐 DSH user-questions）：宿主在 broker 上挂载
@@ -30,19 +29,13 @@ func (m *Manager) RegisterUserQuestionProvider(p UserQuestionProvider) error {
 }
 
 // serveUserQuestionsLocked 在 broker 上挂载 UserQuestionsService 并返回 serviceID
-// （需已持有 m.mu）。
+// （需已持有 m.mu）。复用 serveUserQuestionsOnBroker 的实际挂载，此处额外登记字段。
 func (m *Manager) serveUserQuestionsLocked() (uint32, error) {
-	if m.broker == nil {
-		return 0, fmt.Errorf("broker not available, cannot serve user-questions service")
+	serviceID, err := m.serveUserQuestionsOnBroker(m.broker)
+	if err == nil {
+		m.userQuestionsServiceID = serviceID
 	}
-	serviceID := m.broker.NextId()
-	go m.broker.AcceptAndServe(serviceID, func(opts []grpc.ServerOption) *grpc.Server {
-		s := grpc.NewServer(opts...)
-		proto.RegisterUserQuestionsServiceServer(s, &userQuestionsGRPCServer{m: m})
-		return s
-	})
-	m.userQuestionsServiceID = serviceID
-	return serviceID, nil
+	return serviceID, err
 }
 
 // Ask 宿主侧 Ask 实现：校验请求 → 调 provider → 返回回答。
