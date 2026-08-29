@@ -36,6 +36,20 @@ var globalSessionManager = &SessionManager{
 	sessions: make(map[string]*Session),
 }
 
+// maxSessions 上限：防持久 shell 会话 map 无限增长（P1-5）。
+const maxSessions = 64
+
+// shellCommandTimeout 单条 shell 命令的执行上限（P1-5：无超时将挂死插件）。
+// 可用环境变量 DSC_SHELL_TIMEOUT 覆盖（Go duration 语法，如 "30s"）。
+var shellCommandTimeout = func() time.Duration {
+	if s := os.Getenv("DSC_SHELL_TIMEOUT"); s != "" {
+		if d, err := time.ParseDuration(s); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 1 * time.Minute
+}()
+
 // main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
 // PluginMetadata / PluginHookService 与 go-core 组装（重写自旧的
 // ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
@@ -107,7 +121,7 @@ func main() {
 		}
 
 		// 執行命令到 session
-		output, exitCode, err := execSessionCommand(session, params.Command)
+		output, exitCode, err := execSessionCommand(ctx, session, params.Command)
 		if err != nil {
 			return "", fmt.Errorf("failed to execute command in session: %w", err)
 		}
@@ -184,14 +198,22 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 	}
 
 	globalSessionManager.mu.Lock()
+	// 达上限时任删一个会话，避免 map 无限增长（P1-5）。
+	if len(globalSessionManager.sessions) >= maxSessions {
+		for k := range globalSessionManager.sessions {
+			delete(globalSessionManager.sessions, k)
+			break
+		}
+	}
 	globalSessionManager.sessions[sessionID] = session
 	globalSessionManager.mu.Unlock()
 
 	return session, nil
 }
 
-// execSessionCommand 在 session 中執行命令，返回輸出和退出碼
-func execSessionCommand(session *Session, command string) (string, int32, error) {
+// execSessionCommand 在 session 中執行命令，返回輸出和退出碼。
+// ctx 用于传播调用方取消；并叠加 shellCommandTimeout 防止命令挂死（P1-5）。
+func execSessionCommand(ctx context.Context, session *Session, command string) (string, int32, error) {
 	session.mu.Lock()
 	session.StdoutBuf.Reset()
 	session.StderrBuf.Reset()
@@ -209,9 +231,10 @@ func execSessionCommand(session *Session, command string) (string, int32, error)
 		}
 	}
 
-	// 執行命令
-	ctx := context.Background()
-	err = session.Runner.Run(ctx, file)
+	// 執行命令（ctx 取消 + 超時都汇入 runCtx）
+	runCtx, cancel := context.WithTimeout(ctx, shellCommandTimeout)
+	defer cancel()
+	err = session.Runner.Run(runCtx, file)
 	exitCode := int32(0)
 	if err != nil {
 		if exitErr, ok := err.(interp.ExitStatus); ok {
