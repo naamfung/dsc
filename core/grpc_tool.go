@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
 
 	"dsc/proto"
 )
@@ -30,12 +32,16 @@ func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteTool
 	return &proto.ExecuteToolResponse{Content: result}, nil
 }
 
+// ListTools 返回当前 presentation mode 下模型可直接调用的工具目录。
+// 对齐 DSH presentation mode：native 只给业务工具（run_code transport 隐藏）；
+// PTC 则把直接工具调用折叠为唯一 run_code，其描述承载程序内可调的工具清单。
 func (s *ToolGRPCServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {
-	return &proto.ListToolsResponse{Tools: s.mgr.AllToolsProto()}, nil
+	return &proto.ListToolsResponse{Tools: s.mgr.AgentDirectTools()}, nil
 }
 
-// AllToolsProto 返回宿主聚合工具目录（proto.Tool 列表），供子代理 LLM 请求等
-// 复用（与主 agent 从 ListTools 拿到的一致）。
+// AllToolsProto 返回宿主业务工具目录（proto.Tool 列表），供子代理 LLM 请求与
+// run_code 的 SDK 注入复用。run_code 属 PTC presentation transport，不在普通业务
+// 工具目录中（对齐 DSH：run_code 名被保留、仅由 presentation 层暴露）。
 func (m *Manager) AllToolsProto() []*proto.Tool {
 	openaiTools := m.GetToolRegistry().ToOpenAITools()
 	out := make([]*proto.Tool, 0, len(openaiTools))
@@ -45,6 +51,9 @@ func (m *Manager) AllToolsProto() []*proto.Tool {
 			continue
 		}
 		name, _ := fn["name"].(string)
+		if name == runCodeToolName {
+			continue
+		}
 		desc, _ := fn["description"].(string)
 		paramsJSON, _ := json.Marshal(fn["parameters"])
 		out = append(out, &proto.Tool{
@@ -54,6 +63,39 @@ func (m *Manager) AllToolsProto() []*proto.Tool {
 		})
 	}
 	return out
+}
+
+// isPTC 当前是否为 PTC 呈现模式（短读锁）。
+func (m *Manager) isPTC() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.ptc
+}
+
+// AgentDirectTools 返回当前 presentation mode 下模型可直接调用的工具目录。
+// 由聚合 ListTools 使用（gen agent 的 LLM tools 参数与 prompt 工具清单来源）。
+// 对齐 DSH presentation：native 只暴露业务工具（run_code 隐藏）；PTC 折叠直接
+// 调用为唯一 run_code，并把业务工具名作为 SDK 清单并入 run_code 描述。
+func (m *Manager) AgentDirectTools() []*proto.Tool {
+	native := m.AllToolsProto() // 不含 run_code
+	if !m.isPTC() {
+		return native
+	}
+	def, ok := m.toolRegistry.Get(runCodeToolName)
+	if !ok {
+		return native
+	}
+	names := make([]string, 0, len(native))
+	for _, t := range native {
+		names = append(names, t.Name)
+	}
+	sort.Strings(names)
+	desc := def.Description() + "\n\nAvailable to call inside the program (SDK): " + strings.Join(names, ", ")
+	return []*proto.Tool{{
+		Name:           runCodeToolName,
+		Description:    desc,
+		ParametersJson: string(def.ParametersSchema()),
+	}}
 }
 
 // ListContext 聚合所有工具插件贡献的上下文片段（如技能索引），供 agent 拼接到 system prompt

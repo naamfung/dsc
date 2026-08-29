@@ -12,6 +12,10 @@ import (
 	"dsc/proto"
 )
 
+// runCodeToolName PTC 呈现模式的 run_code presentation transport 名称（对齐 DSH：该名保留给
+// presentation 层，普通业务工具不能注册或 shadow；native 模式不对模型暴露）。
+const runCodeToolName = "run_code"
+
 // runCodeTool 宿主内置 run_code 工具：执行一段 Lua 程序来组合多步工具调用
 // （PTC code-runtime 的对外载体）。程序内每个可用工具以「同名 Lua 函数」呈现
 // （由工具目录经 coderuntime.GenerateSDK 生成，见 Execute），外加全局 args
@@ -19,7 +23,7 @@ import (
 // （StopError/Cancelled）以结构化 Result JSON 作为数据返回，不硬失败。
 type runCodeTool struct{ m *Manager }
 
-func (t *runCodeTool) Name() string { return "run_code" }
+func (t *runCodeTool) Name() string { return runCodeToolName }
 
 func (t *runCodeTool) Description() string {
 	return "Write and run a Lua program that composes multiple tool calls into a single step. " +
@@ -56,7 +60,7 @@ func (t *runCodeTool) Execute(ctx context.Context, args json.RawMessage) (string
 	}
 
 	// 由工具目录生成 SDK，拼接在用户脚本之前执行。
-	sdk := coderuntime.GenerateSDK(toolSpecsFromProto(t.m.AllToolsProto(), "run_code"))
+	sdk := coderuntime.GenerateSDK(toolSpecsFromProto(t.m.AllToolsProto(), runCodeToolName))
 	var timeout time.Duration
 	if p.TimeoutMs > 0 {
 		timeout = time.Duration(p.TimeoutMs) * time.Millisecond

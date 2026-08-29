@@ -797,7 +797,8 @@ func ptcEnabled() bool {
 }
 
 // ptcSDKContext 返回 PTC 呈现模式下的系统提示段落：引导模型用 run_code 组合多步，
-// 并把 run_code 可调用工具（不含自身）的 SDK 清单注入，让模型知道程序内可 call 哪些。
+// 并把 SDK 工具清单注入。宿主在 PTC 折叠下只返回 run_code，其描述已承载「程序内
+// 可调工具」（对齐 DSH presentation：直接调用折叠为唯一 run_code，其余经 SDK）。
 // 非 PTC 模式返回空串（不注入，保持既有 prompt 不变）。
 func (a *ReactLoopAgent) ptcSDKContext(ctx context.Context, toolClient proto.ToolServiceClient) string {
 	if !ptcEnabled() {
@@ -809,7 +810,20 @@ func (a *ReactLoopAgent) ptcSDKContext(ctx context.Context, toolClient proto.Too
 	if err != nil {
 		return ""
 	}
-	return formatPTCTools(resp.Tools) + "\n\n" + ptcLanguageSpec()
+	var sdk string
+	for _, t := range resp.Tools {
+		if t.Name == "run_code" {
+			sdk = t.Description
+			break
+		}
+	}
+	if sdk == "" {
+		sdk = formatPTCTools(resp.Tools)
+	}
+	return "You are in PTC (programmatic tool composition) presentation mode. For multi-step or batched " +
+		"work, prefer composing ONE Lua program and running it via run_code instead of issuing many " +
+		"individual tool calls; the tools callable inside the program are declared in run_code's SDK.\n\n" +
+		sdk + "\n\n" + ptcLanguageSpec()
 }
 
 // ptcLanguageSpec 返回 go-lua 严格 Lua 方言的语言规范速查，便于模型快速上手写 run_code 程序。

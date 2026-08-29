@@ -116,6 +116,11 @@ type Manager struct {
 	// 版本化自动热重载据此判定「当前版本」，从而检测目录内是否出现更高版本的二进制。
 	// 在加载与热重载完成点统一记录（需已持有 m.mu；watcher 读侧持读锁快照）。
 	loadedBinaries map[string]string
+
+	// ptc PTC 呈现模式（对齐 DSH presentation）：native（false）下 run_code transport
+	// 对模型不可见/不可执行；ptc（true）时把直接工具调用折叠为唯一 run_code。
+	// 由 ManagerConfig.PTC 初始化，SwitchMode 运行时同步。读/写均在 m.mu 保护下。
+	ptc bool
 }
 
 type ManagerConfig struct {
@@ -132,6 +137,11 @@ type ManagerConfig struct {
 	// 开启后，插件目录中出现「比当前二进制版本更高」的 <基名>-v<版本><ext> 文件时，
 	// 自动经 Manager.HotReload 换成新进程（解决 Windows 下运行中 .exe 被占用无法覆盖的问题）。
 	EnableHotReload bool
+	// PTC 呈现模式（programmatic tool composition presentation）。对齐 DSH：native
+	// （默认）向模型直接暴露全部业务工具、隐藏 run_code transport；PTC 则把直接工具
+	// 调用折叠为唯一 run_code（其余工具仅经 run_code SDK 程序内可调）。由 main 按
+	// -mode=ptc / DSC_PTC 置位，运行时 /mode ptc 经 SwitchMode 同步更新。
+	PTC bool
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {
@@ -181,6 +191,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		jobs:                jobs.NewRegistry(),
 	}
 	m.jobs.SetLogger(m.logger)
+	m.ptc = cfg.PTC
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
 	// 内建 subagent 工具（宿主侧子代理，委派任务给独立小循环）
@@ -2554,10 +2565,14 @@ func (m *Manager) LoadToolsAndPoliciesFromConfig(cfg *Config) error {
 	return nil
 }
 
-// SwitchMode 實時切換工作模式（minimal / standard）
+// SwitchMode 實時切換工作模式（minimal / standard / creation / ptc）
 func (m *Manager) SwitchMode(mode string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// run_code 呈现门控随模式同步：ptc → PTC presentation（折叠直接调用）；其余 native。
+	// 须在锁内，供 AgentDirectTools/ExecuteTool 的读锁一致观测。
+	m.ptc = mode == "ptc"
 
 	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
 	// 使用基於 ExecDir 或可執行文件所在目錄的絕對路徑

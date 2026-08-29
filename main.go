@@ -216,6 +216,15 @@ func runInputMode(agent core.Agent, ctx context.Context, input string) int {
 	return runStdinLoop(agent, ctx)
 }
 
+// ptcEnvEnabled 是否由环境变量 DSC_PTC 显式开启 PTC 呈现（判定与 agent 侧 ptcEnabled 一致）。
+func ptcEnvEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_PTC"))) {
+	case "1", "true", "on", "ptc", "yes":
+		return true
+	}
+	return false
+}
+
 func main() {
 	// 捕获 panic：打印完整堆栈而非仅值，并以非零码退出——否则 recover 后 main
 	// 落到 os.Exit(exitCode) 时 exitCode 仍为默认 0，CI 会把崩溃误判为成功（P2.5）。
@@ -418,6 +427,8 @@ func main() {
 		PluginLogger:    coreLogger,
 		DebuggerEnabled: debuggerOpen,
 		EnableHotReload: mainCfg != nil && mainCfg.HotReload,
+		// PTC 呈现：-mode=ptc 或显式 DSC_PTC 开启（与 agent 侧 ptcEnabled 判定一致）
+		PTC: mode == "ptc" || ptcEnvEnabled(),
 	})
 	defer mgr.Shutdown()
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，

@@ -69,6 +69,12 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 			inv.Err = veto
 			return veto
 		}
+		// run_code 是 PTC presentation transport：native 模式不对模型暴露，也不可执行
+		// （对齐 DSH“native agent must not find run_code”；ptc 折叠时才允许经其组合）。
+		if toolName == runCodeToolName && !m.isPTC() {
+			inv.Err = fmt.Errorf("tool %s is only available in PTC (programmatic tool composition) mode", runCodeToolName)
+			return inv.Err
+		}
 		tool, ok := m.toolRegistry.Get(toolName)
 		if !ok {
 			inv.Err = fmt.Errorf("tool not found: %s", toolName)

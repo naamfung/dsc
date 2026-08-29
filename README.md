@@ -14,7 +14,7 @@
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
 - **TUI 工具調用顯示增強**：在 TUI 界面中，針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `Edit(View, /root/file/path)`、`Edit(Create, /root/file/path)`、`Edit(StrReplace, /root/file/path)`、`Edit(Insert, /root/file/path)` 等格式，提供更清晰的操作方向性展示。
 - **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 Lua 编排脚本，由 go-lua 的**协程排程器**执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子）；子代理默认无迭代上限，何时完成由模型自行决定；`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
-- **程序化工具呈现（PTC）**：宿主内置 `run_code` 工具（对齐 DSH 的 PTC 概念）——模型写一段**严格 Lua** 程序一把过组合多步工具调用，而不再逐个 call：程序里每个可用工具以同名 Lua 函数呈现（`mytool{...}`），顶层 `return` 即结果；语言是带类型注解、可空 `T?`、联集、流式收窄的受检方言（基于 go-lua）。`-mode ptc`（或 `DSC_PTC=1`）开启呈现模式：system prompt 引导模型优先用 `run_code` 整合多步，并注入「可用工具 SDK 清单 + 严格 Lua 方言规范」助其快速上手；单个工具仍保留作 fallback，不强求隐藏。
+- **程序化工具呈现（PTC）**：宿主内置 `run_code` 工具（对齐 DSH 的 PTC 概念）——模型写一段**严格 Lua** 程序一把过组合多步工具调用，而不再逐个 call：程序里每个可用工具以同名 Lua 函数呈现（`mytool{...}`），顶层 `return` 即结果；语言是带类型注解、可空 `T?`、联集、流式收窄的受检方言（基于 go-lua）。`-mode ptc`（或 `DSC_PTC=1`）开启**呈现模式**：把直接工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调（对齐 DSH presentation；native/其余模式下 `run_code` 对模型隐藏、也不可执行）；system prompt 引入 PTC 引导，`run_code` 描述携带「程序内可调工具」清单与严格 Lua 方言规范，助模型一把过组合多步。
 - **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
 
@@ -99,14 +99,14 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | `/session <id>\|new\|delete <id>` · `/sessions` | 多會話管理 |
 | `/cron add\|remove\|on\|off` · `/crons` | 定時任務 |
 | `/plan [off]` | plan 模式開關 |
-| `/mode minimal\|standard\|creation\|ptc` | 切換模式（`ptc` 开启程序化工具呈现） |
+| `/mode minimal\|standard\|creation\|ptc` | 切換模式（`ptc` 开启 PTC 程序化工具组合呈现：直接把工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调；其余模式为 native，`run_code` 对模型隐藏） |
 | `/skills` · `/help` · `/clear` · `/export` · `/mouse` | 技能 / 幫助 / 清屏 / 導出 / 鼠標 |
 
 ## 啟動參數（CLI 旗標）
 
 | 旗標 | 用途 |
 | --- | --- |
-| `-mode minimal\|standard\|creation\|ptc` | 切換模式（默認 `standard`；`ptc` 开启程序化工具呈现） |
+| `-mode minimal\|standard\|creation\|ptc` | 切換模式（默認 `standard`；`ptc` 开启 PTC 程序化工具组合呈现，直接把工具调用折叠为唯一 `run_code`；其余模式 `run_code` 对模型隐藏） |
 | `-input <text>` | 非 TUI 自動化入口：執行一單輪後退出；stdin 為管道/文件重定向時進入多輪 stdin 驅動，直到 EOF |
 | `-headless` | 精简单发模式（对齐 DSH harness headless）：仅执行 `-input` 指定的**单个任务**一次后退出，不启动后续 stdin 多轮；任务须非空白（否则 stderr 报错并以码 1 退出）；**不开** ADMIN API 端口、热重载 watcher 与 cron，专为 CI 脚本 |
 | `-admin <addr>` | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认回环 `127.0.0.1:9999`；需远程管理时用 `-admin :9999` 并配置 `DSC_ADMIN_TOKEN`）。未配置 `DSC_ADMIN_TOKEN` 不开认证 |
