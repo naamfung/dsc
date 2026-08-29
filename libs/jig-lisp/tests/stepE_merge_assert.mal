@@ -1,0 +1,112 @@
+(merge {} {})
+;=>{}
+(merge {:a 1} {})
+;=>{:a 1}
+(merge {:a 1} {:a 1})
+;=>{:a 1}
+
+;; second takes precedence
+(merge {:a 1} {:a 111})
+;=>{:a 111}
+(merge {} {:a 1})
+;=>{:a 1}
+
+;; note: this implementation does not keep keys in order
+(get (merge {:a 1 :b 2} {:a 111}) :a)
+;=>111
+(get (merge {:x 1 :y 2} {:y 3 :z 4}) :x)
+;=>1
+(get (merge {:x 1 :y 2} {:y 3 :z 4}) :y)
+;=>3
+(get (merge {:x 1 :y 2} {:y 3 :z 4}) :z)
+;=>4
+
+;; nil maps supported
+(merge nil {:a 1})
+;=>{:a 1}
+(merge {:a 1} nil)
+;=>{:a 1}
+(merge nil nil)
+;=>nil
+
+(def m1 {:a 1})
+(def m2 {:a 2})
+(def m3 {:a 3})
+(merge m1 m2)
+;=>{:a 2}
+
+(merge {:m1 m1} {:m1 m2})
+;=>{:m1 {:a 2}}
+
+;; assert
+(assert)
+;/.*wrong number of arguments \(0 instead of 1…2\)"»$
+(assert true)
+;=>nil
+;/^$
+(assert 0)
+;=>nil
+;/^$
+(assert 1)
+;=>nil
+;/^$
+(assert [1 2 3])
+;=>nil
+;/^$
+(assert ())
+;=>nil
+;/^$
+(assert {})
+;=>nil
+;/^$
+(assert nil)
+;/assertion failed: nil"»$
+(assert false)
+;/assertion failed: false"»$
+
+
+;; with specific error
+(assert true "boom!")
+;=>nil
+;/^$
+(assert 0 "boom!")
+;=>nil
+;/^$
+(assert 1 "boom!")
+;=>nil
+;/^$
+(assert [1 2 3] "boom!")
+;=>nil
+;/^$
+(assert () "boom!")
+;=>nil
+;/^$
+(assert {} "boom!")
+;=>nil
+;/^$
+(assert nil "boom!")
+;/^.+boom!"»$
+(assert false "boom!")
+;/^.+boom!"»$
+
+(assert nil 3)
+;/^.+3$
+(assert nil [3])
+;/^.+\[3\]$
+(assert nil '(3))
+;/^.+\(3\)$
+(assert nil {:3 3})
+;/^.+{:3 3}$
+(assert nil 'assert)
+;/^.+assert$
+
+(rename-keys {} {})
+;=>{}
+(rename-keys {:a 1} {})
+;=>{:a 1}
+(rename-keys {:a 1} {:a "mimi"})
+;=>{"mimi" 1}
+(get (rename-keys {:a 1 :b 3} {:a "mimi"}) "mimi")
+;=>1
+(get (rename-keys {:a 1 :b 3} {:a "mimi"}) :b)
+;=>3

@@ -1,0 +1,91 @@
+(json-encode {})
+;=>"{}"
+
+(json-encode {:a 1})
+;=>¬{"ʞa":1}¬
+
+(get (json-decode {} (json-encode {:a 1 :b 2})) :a)
+;=>1
+(get (json-decode {} (json-encode {:a 1 :b 2})) :b)
+;=>2
+
+(get (json-decode {} (json-encode {:a 1 :b {}})) :b)
+;=>{}
+
+(get-in (json-decode {} (json-encode {:a 1 :b {:c 3}})) [:b :c])
+;=>3
+
+(json-encode #{})
+;=>"[]"
+
+;; TODO(jig): conversion of keywords to JSON
+(json-encode #{:a})
+;=>"[\"ʞa\"]"
+
+(get (json-decode #{} (json-encode #{:a :b})) :a)
+;=>:a
+
+(contains? (json-decode #{} (json-encode #{:a :b})) :a)
+;=>true
+
+(json-encode [])
+;=>"[]"
+
+;; TODO(jig): conversion of keywords to JSON
+(json-encode [:a])
+;=>"[\"ʞa\"]"
+
+;; TODO(jig): conversion of keywords to JSON
+(json-encode [:a :b])
+;=>"[\"ʞa\",\"ʞb\"]"
+
+(json-encode 1984)
+;=>"1984"
+
+(json-encode "hello world!")
+;=>"\"hello world!\""
+
+(json-encode nil)
+;=>"null"
+
+(json-encode true)
+;=>"true"
+
+(json-encode false)
+;=>"false"
+
+(get (json-decode [] "[1984, 1011, 4004]") 1)
+;=>1011
+
+(get (json-decode () "[1984, 1011, 4004]") 1)
+;=>1011
+
+;; TODO(jig): deprecate this:
+(hash-map)
+;=>{}
+
+;; creates a plain hash map
+(hash-map :a 1)
+;=>{:a 1}
+
+;; creates hash map from a Go object
+(get (hash-map (json-decode (new-marshalexample) ¬{"a":1, "b":"mieow"}¬)) :a)
+;=>1
+(get (hash-map (json-decode (new-marshalexample) ¬{"a":1, "b":"mieow"}¬)) :b)
+;=>"mieow"
+
+(spew 1)
+;=>nil
+
+;; hash-map-decode
+(get (hash-map (hash-map-decode (new-marshalexample) (hash-map (json-decode (new-marshalexample) ¬{"a":1, "b":"mieow"}¬)))) :a)
+;=>1
+(get (hash-map (hash-map-decode (new-marshalexample) (hash-map (json-decode (new-marshalexample) ¬{"a":1, "b":"mieow"}¬)))) :b)
+;=>"mieow"
+
+;; go struct is decoded to map when printed (if marshaler for hash maps is implemented)
+(get (hash-map (json-decode (new-marshalexample) ¬{"a":1,"b":"patapam!"}¬)) :a)
+;=>1
+(get (hash-map (json-decode (new-marshalexample) ¬{"a":1,"b":"patapam!"}¬)) :b)
+;=>"patapam!"
+

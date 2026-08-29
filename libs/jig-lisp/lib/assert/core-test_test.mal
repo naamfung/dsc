@@ -1,0 +1,11 @@
+;; use maltest ./core-test-test.mal to test it
+
+(test.suite "test test library"
+    (assert-true :equals (= 1 1))
+    (assert-false :differs  (= 1 2))
+    (assert-throws :throws (/ 0 0))
+    (assert-true "assert-throws on true tests must fail" (get (assert-throws :true-do-not-trow (= 1 1)) :failed))
+    (assert-true "assert-throws on failed tests must fail" (get (assert-throws :false-do-not-trow (= 2 1)) :failed)))
+
+;; _test.mal files receive variable below:
+(println *test-params*)

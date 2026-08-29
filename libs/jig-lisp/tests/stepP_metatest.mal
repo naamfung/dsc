@@ -1,0 +1,6 @@
+;; in some tests an error is unexpected but if the error does not use ;/ and only uses ;=>nil
+;; then the test framework cannot distinguish between an expected error and an unexpected error.
+;; So we add this line to make sure that there is at least one expected error in this test file.
+(throw "hello")
+;/"hello"
+;=>nil

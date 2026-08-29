@@ -1,0 +1,22 @@
+;; Testing "split" function
+
+;; split for string
+(split "abc-abc" "-")
+;=>["abc" "abc"]
+(split "abc-abc" " ")
+;=>["abc-abc"]
+(split "abc-abc-abc-0-s" "-")
+;=>["abc" "abc" "abc" "0" "s"]
+(split "abc-abc" "")
+;=>["a" "b" "c" "-" "a" "b" "c"]
+(split "" "-")
+;=>[""]
+(split "abc abc-abc" "-")
+;=>["abc abc" "abc"]
+(split "abc abc-abc" " ")
+;=>["abc" "abc-abc"]
+(split "abcabc-abc" "ab")
+;=>["" "c" "c-" "c"]
+;; compatible with first
+(first (split "abc-abc" "-"))
+;=>"abc"

@@ -50,6 +50,8 @@ replace dsc => ../..
 
 replace github.com/hashicorp/go-plugin => ../../plugin
 
+replace github.com/jig/lisp => ../../libs/jig-lisp
+
 replace github.com/toon-format/toon-go => ../../libs/toon-go
 
 replace github.com/wippyai/go-lua => ../../libs/go-lua

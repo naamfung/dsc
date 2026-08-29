@@ -65,7 +65,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `tool-filesystem`
 - `tool-str-replace-editor`
 - `tool-browser-use`
-- `tool-lisp-eval`
+- `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱）
 - `tool-skill`
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify）
 - `tool-memory-service`（记忆库工具：原生 RPC 工具 + AfterTool 自动记忆钩子，落点宿主可执行目录 `memory/`，跨会话共享）
@@ -88,6 +88,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `session/` — 事件溯源會話（按項目路徑命名存儲，跨項目隔離）
 - `proto/` — gRPC 定義與生成代碼
 - `tui/` — 終端界面（Bubble Tea）
+- `libs/` — vendored 本地依赖 fork（`go-lua`、`jig-lisp` 精确有理数解释器等），经各插件 `go.mod` 的 `replace` 指入
 
 ## TUI 斜杆命令
 

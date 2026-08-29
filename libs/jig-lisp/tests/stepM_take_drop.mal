@@ -1,0 +1,109 @@
+(throw 3)
+;/3
+;=>nil
+
+3
+;/
+;=>3
+
+;; return a (non) lazy seq of the first 3 items
+(take 3 '(1 2 3 4 5 6))
+;=>(1 2 3)
+
+(take 3 [1 2 3 4 5 6])
+;=>(1 2 3)
+
+;; returns all items if there are fewer than n
+(take 3 [1 2])
+;=>(1 2)
+
+(take 1 [])
+;=>()
+
+(take 1 nil)
+;=>()
+
+(take 0 [1])
+;=>()
+
+(take -1 [1])
+;=>()
+
+
+
+;; although negative (or zero) drop-item-counts are accepted they do nothing
+(drop -1 [1 2 3 4])
+;=>(1 2 3 4)
+
+(drop 0 [1 2 3 4])
+;=>(1 2 3 4)
+
+(drop 2 [1 2 3 4])
+;=>(3 4)
+
+;; dropping more items than are present is allowed, and all items are dropped.
+(drop 5 [1 2 3 4])
+;=>()
+
+
+
+;; similar to subvec but lazy and with seqs
+(take 3 (drop 5 (range 1 11)))
+;=>(6 7 8)
+
+(take-last 2 [1 2 3 4])
+;=>(3 4)
+
+(take-last 2 [4])
+;=>(4)
+
+(take-last 2 [])
+;=>nil
+
+
+(take-last 2 nil)
+;=>nil
+
+(take-last 0 [1])
+;=>nil
+
+(take-last -1 [1])
+;=>nil
+
+
+
+;; Unsupported default n=1
+(drop-last [1 2 3 4])
+;/wrong number of arguments
+;=>nil
+
+(drop-last -1 [1 2 3 4])
+;=>(1 2 3 4)
+
+(drop-last 0 [1 2 3 4])
+;=>(1 2 3 4)
+
+(drop-last 5 [1 2 3 4])
+;=>()
+
+;; works differently with any seq.
+;; but with some the last items become ambiguous.
+(drop-last 2 [1 2 3 4])
+;=>(1 2)
+(drop-last 2 '(1 2 3 4 ))
+;=>(1 2)
+
+;; Unsupported with hash-maps
+(drop-last 2 {:a 1 :b 2 :c 3 :d 4})
+;/drop called on non-list and non-vector
+;=>nil
+
+
+
+;; not supplying 'end' returns vector from 'start' to (count vector)
+(subvec [1 2 3 4 5 6 7] 2)
+;=>[3 4 5 6 7]
+
+;; supplying 'end' returns vector from 'start' to element (- end 1)
+(subvec [1 2 3 4 5 6 7] 2 4)
+;=>[3 4]

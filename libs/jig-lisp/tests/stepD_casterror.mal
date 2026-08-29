@@ -1,0 +1,26 @@
+(/ 0 0)
+;/.*division by zero"»
+;=>nil
+
+(/ 1 0)
+;/^.*division by zero.*$
+;=>nil
+
+(+ 1 :hello)
+;/^.*arithmetic operation \+ on non-number.*$
+;=>nil
+
+(+ 1 "hello")
+;/^.*arithmetic operation \+ on non-number.*$
+;=>nil
+
+(try (/ 1 0))
+;/.*division by zero"»
+;=>nil
+
+(try (/ 1 0) (catch e e))
+;/^$
+;=>«go-error "division by zero"»
+
+«go-error "simple error"»
+;=>«go-error "simple error"»

@@ -1,0 +1,122 @@
+
+(try (throw "sample") (catch err err))
+;=>"sample"
+(try (throw "sample") (catch err (type? err)))
+;=>"string"
+
+(try (throw {:a 1}) (catch err err))
+;=>{:a 1}
+
+(def a (fn [] (throw (go-error "wrapped %w" (go-error "sample")))))
+(a)
+;/Error: «go-error "wrapped sample"»
+;=>nil
+(try (a) (catch err err))
+;=>«go-error "wrapped sample"»
+(try (a) (catch err (str err)))
+;=>"«go-error \"wrapped sample\"»"
+(try (/ 0 0) (catch err err))
+;=>«go-error "division by zero"»
+(type? (try (a) (catch err err)))
+;=>"go-error"
+(def b (fn [] (a)))
+(a)
+;/Error: «go-error "wrapped sample"»
+
+(def b (fn [] (throw 9)))
+(b)
+;/Error: 9
+;=>nil
+
+;; go error generation from lisp itself
+(go-error "simple")
+;=>«go-error "simple"»
+(go-error "simple %s" (go-error "wrapped"))
+;=>«go-error "simple wrapped"»
+(go-error "simple %w" (go-error "wrapped"))
+;=>«go-error "simple wrapped"»
+(def compo-err (go-error "simple %w" (go-error "wrapped")))
+;=>«go-error "simple wrapped"»
+(unwrap-error compo-err)
+;=>«go-error "wrapped"»
+(def non-compo-err (go-error "simple %s" (go-error "wrapped")))
+;=>«go-error "simple wrapped"»
+(unwrap-error non-compo-err)
+;/^$
+;=>nil
+
+;; throw go errors
+(try (throw compo-err) (catch err err))
+;=>«go-error "simple wrapped"»
+(try (throw compo-err) (catch err (str err)))
+;=>"«go-error \"simple wrapped\"»"
+(try (throw compo-err) (catch err (unwrap-error err)))
+;=>«go-error "wrapped"»
+
+(go-error "simple")
+;=>«go-error "simple"»
+(try (panic "simple") (catch e e))
+;=>"simple"
+
+;; TODO(jig): this test were actually not passing: either fix or delete
+;; catch receives a string
+;; (unwrap-error (try (panic "simple") (catch e e)))
+;; ;=>nil
+(try (panic (go-error "simple")) (catch e e))
+;=>«go-error "github.com/jig/lisp/lib/core[panic]: simple"»
+(unwrap-error (try (panic (go-error "simple")) (catch e e)))
+;=>«go-error "simple"»
+
+(try (panic 3) (catch e e))
+;=>3
+
+;; TODO(jig): this test were actually not passing: either fix or delete
+;; catch receives an integer
+;; (unwrap-error (try (panic 3) (catch e e)))
+;; ;=>nil
+
+;; type?
+(type? nil)
+;=>"nil"
+(type? false)
+;=>"boolean"
+(type? :idx)
+;=>"keyword"
+(type? 3)
+;=>"integer"
+(type? "hello 世界!")
+;=>"string"
+(type? (atom 3))
+;=>"atom"
+(type? (future 3))
+;=>"future-call"
+(type? (try (throw 3) (catch e e)))
+;=>"integer"
+(type? '(1 2 3))
+;=>"list"
+(type? {:a 1 :b 2 :c 3})
+;=>"hash-map"
+(type? [0 1 :c []])
+;=>"vector"
+(type? #{:a :b})
+;=>"set"
+;; panic wraps on go error
+(type? (try (panic 3) (catch e e)))
+;=>"integer"
+(type? (go-error "pum"))
+;=>"go-error"
+(type? (go-error "pum %s" (go-error "pum!")))
+;=>"go-error"
+(type? (go-error "pum %w" (go-error "pum!")))
+;=>"go-error"
+(def zero 0)
+(type? 'zero)
+;=>"symbol"
+(type? (fn [] 0))
+;=>"function"
+(type? type?)
+;=>"go-function"
+(type? (go-error "simple"))
+;=>"go-error"
+(type? (try (panic "simple") (catch err err)))
+;=>"string"

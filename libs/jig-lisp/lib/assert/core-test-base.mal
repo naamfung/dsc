@@ -1,0 +1,153 @@
+;; prerequisites
+
+;; Trivial but convenient functions.
+
+;; Integer predecessor (number -> number)
+(def inc (fn [a] (+ a 1)))
+
+;; Integer predecessor (number -> number)
+(def dec (fn (a) (- a 1)))
+
+;; Integer nullity test (number -> boolean)
+(def zero? (fn (n) (= 0 n)))
+
+;; Returns the unchanged argument.
+(def identity (fn (x) x))
+
+;; Generate a hopefully unique symbol. See section "Plugging the Leaks"
+;; of http://www.gigamonkeys.com/book/macros-defining-your-own.html
+(def gensym
+  (let [counter (atom 0)]
+    (fn []
+      (symbol (str "G__" (swap! counter inc))))))
+
+;; Left and right folds.
+
+;; Left fold (f (.. (f (f init x1) x2) ..) xn)
+(def reduce
+  (fn (f init xs)
+    ;; f      : Accumulator Element -> Accumulator
+    ;; init   : Accumulator
+    ;; xs     : sequence of Elements x1 x2 .. xn
+    ;; return : Accumulator
+    (if (empty? xs)
+      init
+      (reduce f (f init (first xs)) (rest xs)))))
+
+;; Left fold for maps (f (.. (f (f init x1) x2) ..) xn)
+(def reduce-kv
+	(fn [f init xs]
+	;; f      : Accumulator Element -> Accumulator
+	;; init   : Accumulator
+	;; xs     : sequence of key-value pairs k1-v1 k2-v2...
+	;; return : Accumulator
+	(if (empty? xs)
+		init
+		(reduce-kv f (f init (nth xs 0) (nth xs 1)) (rest (rest xs))))))
+
+;; Right fold (f x1 (f x2 (.. (f xn init)) ..))
+;; The natural implementation for `foldr` is not tail-recursive, and
+;; the one based on `reduce` constructs many intermediate functions, so we
+;; rely on efficient `nth` and `count`.
+(def foldr
+  (let [
+    rec (fn [f xs acc index]
+      (if (< index 0)
+        acc
+        (rec f xs (f (nth xs index) acc) (- index 1))))
+    ]
+
+    (fn [f init xs]
+      ;; f      : Element Accumulator -> Accumulator
+      ;; init   : Accumulator
+      ;; xs     : sequence of Elements x1 x2 .. xn
+      ;; return : Accumulator
+      (rec f xs init (- (count xs) 1)))))
+
+;; Search for first evaluation returning `nil` or `false`.
+;; Rewrite `x1 x2 .. xn x` as
+;;   (let [r1 x1]
+;;     (if r1 test1
+;;       (let [r2 x2]
+;;         ..
+;;         (if rn
+;;           x
+;;           rn) ..)
+;;       r1))
+;; Without arguments, returns `true`.
+(defmacro and
+  (fn (& xs)
+    ;; Arguments and the result are interpreted as boolean values.
+    (cond (empty? xs)      true
+          (= 1 (count xs)) (first xs)
+          true             (let (condvar (gensym))
+                             `(let (~condvar ~(first xs))
+                               (if ~condvar (and ~@(rest xs)) ~condvar))))))
+
+;; assert macros
+
+(defmacro assert-true
+    (fn [name expr]
+        (list
+            'if (try expr (catch err err))
+                nil
+                {   :failed true
+                    :name name
+                    :expr (str expr)})))
+
+(defmacro assert-false
+    (fn [name expr]
+        (list
+            'if (try expr (catch err err))
+                {   :failed true
+                    :name name
+                    :expr (str expr)}
+                nil)))
+
+(defmacro assert-throws
+    (fn [name expr]
+        (let [failureError {   :failed true
+                                :name (str name)
+                                :expr (str expr)}]
+        `(try
+            (do
+                ~expr
+                ~failureError)
+            (catch err nil)))))
+
+;; (println 1 (macroexpand (assert-true :hello (= 1 1))))
+;; (println 2 (macroexpand (assert-throws :hello (/ 0 0))))
+;; (println 3 (macroexpand (assert-throws :hello (= 1 1))))
+
+(assert-true :equals (= 1 1))
+(assert-false :differs  (= 1 2))
+(assert-throws :throws (/ 0 0))
+(assert-true "assert-throws on true tests must fail" (get (assert-throws :true-do-not-trow (= 1 1)) :failed))
+(assert-true "assert-throws on failed tests must fail" (get (assert-throws :false-do-not-trow (= 2 1)) :failed))
+
+(def test.suite (fn [name & assert-cases]
+     (if
+        (reduce and true
+            (map
+                (fn [x]
+                    (if  (not (nil? x))
+                        (println "TEST SUITE FAIL" name ">" (get x :name) ">>" (get x :expr))
+                        true))
+                assert-cases))
+        (println "TEST SUITE PASS" name "PASS"))))
+
+(test.suite :complete-tests-ok
+    (assert-true :equals (= 1 1))
+    (assert-false :differs  (= 1 2))
+    (assert-throws :throws (/ 0 0))
+    (assert-true "assert-throws on true tests must fail" (get (assert-throws :true-do-not-trow (= 1 1)) :failed))
+    (assert-true "assert-throws on failed tests must fail" (get (assert-throws :false-do-not-trow (= 2 1)) :failed)))
+
+(test.suite :complete-tests-that-fail
+    (assert-true "ok" true)
+    (assert-true "ok" true)
+    (assert-true "ok" true)
+    (assert-true "I must fail 1" false)
+    (assert-true "ok" true)
+    (assert-true "ok" true)
+    (assert-true "I must fail 2" false))

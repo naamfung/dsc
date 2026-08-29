@@ -1,0 +1,39 @@
+;; Testing defn macro
+
+(macroexpand (defn name args b))
+;=>(def name (fn args b))
+
+(defn f [x] 1 2 x)
+(f 3)
+;=>3
+
+(defn super-str [& s] (apply str s))
+;=>(fn [& s] (do (apply str s)))
+(str "hello" "world")
+;=>"helloworld"
+(super-str "hello" "world")
+;=>"helloworld"
+
+;; Testing when
+(macroexpand (when condition a b))
+;=>(if condition (do a b))
+(when false (nth () 0) a)
+;=>nil
+(when true 3 2)
+;=>2
+
+;; Testing partial
+((partial +) 1 2)
+;=>3
+((partial + 1) 2)
+;=>3
+((partial + 1 2))
+;=>3
+((partial not) false)
+;=>true
+((partial not false))
+;=>true
+((partial (fn [x y] (+ x y)) 1) 2)
+;=>3
+((partial str 1 2) 3 4)
+;=>"1234"

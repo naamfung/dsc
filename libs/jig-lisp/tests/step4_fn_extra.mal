@@ -1,0 +1,18 @@
+;; -----------------------------------------------------
+
+(def f (fn [x] nil))
+(f 3)
+;=>nil
+
+;; this must not panic
+(f)
+;/.*too few arguments passed.*
+
+(def f (fn [x y] nil))
+;; this must not panic
+(f 3)
+;/.*too few arguments passed.*
+(f)
+;/.*too few arguments passed.*
+(f 1 2 3)
+;/.*too many arguments passed.*

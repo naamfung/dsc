@@ -87,6 +87,23 @@ func TestE2EWithHostClient(t *testing.T) {
 	if resp := run("(sum (range 10))"); resp.Error != "" || !strings.Contains(resp.Content, "45") {
 		t.Fatalf("(sum (range 10)) = %+v", resp)
 	}
+	// 精確有理數：除法返回分數而非整數除法的截斷
+	if resp := run("(/ 10 3)"); resp.Error != "" || !strings.Contains(resp.Content, "10/3") {
+		t.Fatalf("(/ 10 3) = %+v", resp)
+	}
+	if resp := run("(+ 1/2 1/3)"); resp.Error != "" || !strings.Contains(resp.Content, "5/6") {
+		t.Fatalf("(+ 1/2 1/3) = %+v", resp)
+	}
+	if resp := run("(* 1/3 3)"); resp.Error != "" || !strings.Contains(resp.Content, "1") {
+		t.Fatalf("(* 1/3 3) = %+v", resp)
+	}
+	// 精確 mod 修復了 preamble 中 even?/odd? 的潛在缺陷
+	if resp := run("(even? 4)"); resp.Error != "" || !strings.Contains(resp.Content, "true") {
+		t.Fatalf("(even? 4) = %+v", resp)
+	}
+	if resp := run("(odd? 3)"); resp.Error != "" || !strings.Contains(resp.Content, "true") {
+		t.Fatalf("(odd? 3) = %+v", resp)
+	}
 	if resp := run("(sqrt 16)"); resp.Error != "" || !strings.Contains(resp.Content, "4") {
 		t.Fatalf("(sqrt 16) = %+v", resp)
 	}

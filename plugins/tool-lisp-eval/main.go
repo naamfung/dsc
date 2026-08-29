@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 	"time"
 
@@ -140,46 +141,6 @@ func registerMathFuncs(e types.EnvType) {
 	_ = e.Set(types.Symbol{Val: "PI"}, 3.141592653589793)
 	_ = e.Set(types.Symbol{Val: "E"}, 2.718281828459045)
 
-	// ---- 可變參數整數算術（覆蓋核心二元版本）----
-	_ = e.Set(types.Symbol{Val: "+"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
-		result := 0
-		for _, a := range args {
-			result += toInt(a)
-		}
-		return result, nil
-	}})
-	_ = e.Set(types.Symbol{Val: "-"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
-		if len(args) == 0 {
-			return 0, nil
-		}
-		result := toInt(args[0])
-		for _, a := range args[1:] {
-			result -= toInt(a)
-		}
-		return result, nil
-	}})
-	_ = e.Set(types.Symbol{Val: "*"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
-		result := 1
-		for _, a := range args {
-			result *= toInt(a)
-		}
-		return result, nil
-	}})
-	_ = e.Set(types.Symbol{Val: "/"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
-		if len(args) == 0 {
-			return 0, nil
-		}
-		result := toInt(args[0])
-		for _, a := range args[1:] {
-			d := toInt(a)
-			if d == 0 {
-				return nil, fmt.Errorf("division by zero")
-			}
-			result /= d
-		}
-		return result, nil
-	}})
-
 	// ---- 浮點算術（f+ f- f* f/）----
 	_ = e.Set(types.Symbol{Val: "f+"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
 		result := 0.0
@@ -237,10 +198,60 @@ func registerMathFuncs(e types.EnvType) {
 	_ = e.Set(types.Symbol{Val: "acos"}, types.Func{Fn: makeMathFunc1(math.Acos)})
 	_ = e.Set(types.Symbol{Val: "atan"}, types.Func{Fn: makeMathFunc1(math.Atan)})
 
+	// ---- 精確整數運算 mod/quot/rem ----
+	// 整數參數（int 或分母為 1 的 Rat）走 big.Int 精確計算；浮點參數回退 float64。
+	_ = e.Set(types.Symbol{Val: "mod"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("mod expects 2 arguments, got %d", len(args))
+		}
+		if a, ok := toInt64(args[0]); ok {
+			if b, ok := toInt64(args[1]); ok {
+				if b == 0 {
+					return nil, fmt.Errorf("division by zero")
+				}
+				// Clojure mod：結果符號跟隨除數（floor 語義）
+				ba, bb := big.NewInt(a), big.NewInt(b)
+				m := new(big.Int).Rem(ba, bb)
+				if m.Sign() != 0 && ((m.Sign() < 0) != (b < 0)) {
+					m.Add(m, bb)
+				}
+				return int(m.Int64()), nil
+			}
+		}
+		return math.Mod(toFloat64(args[0]), toFloat64(args[1])), nil
+	}})
+	_ = e.Set(types.Symbol{Val: "quot"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("quot expects 2 arguments, got %d", len(args))
+		}
+		if a, ok := toInt64(args[0]); ok {
+			if b, ok := toInt64(args[1]); ok {
+				if b == 0 {
+					return nil, fmt.Errorf("division by zero")
+				}
+				return int(new(big.Int).Quo(big.NewInt(a), big.NewInt(b)).Int64()), nil
+			}
+		}
+		return math.Trunc(toFloat64(args[0]) / toFloat64(args[1])), nil
+	}})
+	_ = e.Set(types.Symbol{Val: "rem"}, types.Func{Fn: func(_ context.Context, args []types.MalType) (types.MalType, error) {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("rem expects 2 arguments, got %d", len(args))
+		}
+		if a, ok := toInt64(args[0]); ok {
+			if b, ok := toInt64(args[1]); ok {
+				if b == 0 {
+					return nil, fmt.Errorf("division by zero")
+				}
+				return int(new(big.Int).Rem(big.NewInt(a), big.NewInt(b)).Int64()), nil
+			}
+		}
+		return math.Remainder(toFloat64(args[0]), toFloat64(args[1])), nil
+	}})
+
 	// ---- 雙參數數學函數 ----
 	_ = e.Set(types.Symbol{Val: "pow"}, types.Func{Fn: makeMathFunc2(math.Pow)})
 	_ = e.Set(types.Symbol{Val: "atan2"}, types.Func{Fn: makeMathFunc2(math.Atan2)})
-	_ = e.Set(types.Symbol{Val: "mod"}, types.Func{Fn: makeMathFunc2(math.Mod)})
 	_ = e.Set(types.Symbol{Val: "remainder"}, types.Func{Fn: makeMathFunc2(math.Remainder)})
 
 	// ---- 可變參數數學函數（至少 1 個參數）----
@@ -285,7 +296,7 @@ func makeMathNaryFunc(name string, fn func(float64, float64) float64) types.Exte
 }
 
 // toFloat64 將 MalType 轉換為 float64
-// 支持 int, float64, float32（jig/lisp reader 將浮點字面量解析為 float32）
+// 支持 int, float64, float32（jig/lisp reader 將浮點字面量解析為 float32）與精確 Rat
 func toFloat64(v types.MalType) float64 {
 	switch v := v.(type) {
 	case int:
@@ -294,6 +305,12 @@ func toFloat64(v types.MalType) float64 {
 		return v
 	case float32:
 		return float64(v)
+	case types.Rat:
+		f, _ := v.R.Float64()
+		return f
+	case *types.Rat:
+		f, _ := v.R.Float64()
+		return f
 	case bool:
 		if v {
 			return 1.0
@@ -304,23 +321,25 @@ func toFloat64(v types.MalType) float64 {
 	}
 }
 
-// toInt 將 MalType 轉換為 int
-func toInt(v types.MalType) int {
+// toInt64 將 MalType 轉換為 int64；僅接受原生 int 或分母為 1 的 Rat（即整數值）
+func toInt64(v types.MalType) (int64, bool) {
 	switch v := v.(type) {
 	case int:
-		return v
-	case float64:
-		return int(v)
-	case float32:
-		return int(v)
-	case bool:
-		if v {
-			return 1
+		return int64(v), true
+	case types.Rat:
+		if v.R.IsInt() {
+			if i := v.R.Num(); i.IsInt64() {
+				return i.Int64(), true
+			}
 		}
-		return 0
-	default:
-		return 0
+	case *types.Rat:
+		if v.R.IsInt() {
+			if i := v.R.Num(); i.IsInt64() {
+				return i.Int64(), true
+			}
+		}
 	}
+	return 0, false
 }
 
 // ============================================================
@@ -331,7 +350,7 @@ func toInt(v types.MalType) int {
 func main() {
 	// 定義 lisp_eval 工具的元数据与处理器
 	name := "lisp_eval"
-	description := "Evaluate a Lisp/Scheme expression with exact integer arithmetic (Clojure-dialect interpreter). Supported: integer + - * /, float f+ f- f* f/, math functions sqrt abs floor ceil round log exp sin cos tan asin acos atan pow min max mod, and list helpers filter range sum product reverse last. NOT supported: rationals (e.g. 3/4) and big integers (e.g. biginteger) — use plain integers or floats instead. Do NOT quote the expression: pass (+ 1 2), not '(+ 1 2)."
+	description := "Evaluate a Lisp/Scheme expression with exact rational arithmetic (Clojure-dialect interpreter). + - * / are exact and variadic: (/ 10 3) = 10/3, 3/4 literals (no spaces) are exact fractions, integral results print as ints, arbitrary-precision integers supported. Supported: exact + - * /, comparisons < <= > >= =, mod/quot/rem, list helpers filter range sum product reverse last; float escape hatch f+ f- f* f/ and math functions sqrt sin cos tan exp log pow min max (floats are NOT accepted by the exact + - * /). Do NOT quote the expression: pass (+ 1 2), not '(+ 1 2)."
 	schema := json.RawMessage(`{
 		"type": "object",
 		"properties": {

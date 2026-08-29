@@ -1,0 +1,79 @@
+(deref (future (+ 1 1)))
+;=>2
+@(future (+ 1 1))
+;=>2
+(deref (future (do (sleep 10) (+ 1 1))))
+;=>2
+
+;; TODO(fxor): this is not supported (notice (do) has been removed)
+;; (deref (future (sleep 10) (+ 1 1)))
+;; ;=>2
+
+(def async-sum (future (do (sleep 10) (+ 1 1))))
+@async-sum
+;=>2
+
+;; simultaneuous
+(def async-sum (future (do (sleep 10) (+ 1 1))))
+(def async-sum2 (future (do (sleep 10) (+ 2 2))))
+(future? async-sum)
+;=>true
+(future? async-sum2)
+;=>true
+(future? 2)
+;=>false
+@async-sum
+;=>2
+(deref async-sum2)
+;=>4
+(future-done? async-sum)
+;=>true
+(future-done? async-sum2)
+;=>true
+(future? async-sum)
+;=>true
+(future? async-sum2)
+;=>true
+(future-cancelled? async-sum)
+;=>false
+(future-cancelled? async-sum2)
+;=>false
+(future-cancel async-sum)
+;=>false
+(future-cancel async-sum2)
+;=>false
+
+(def async-sum3 (future (do (sleep 5000) (+ 1 1))))
+(future-cancel async-sum3)
+;=>true
+(future-cancelled? async-sum3)
+;=>true
+
+@(future (/ 1 0))
+;/.*division by zero"»$
+;=>nil
+
+(def async-bad (future (/ 1 0)))
+(future-cancelled? async-bad)
+;=>false
+(sleep 10)
+(future-done? async-bad)
+;=>true
+@async-bad
+;/.*division by zero"»$
+;=>nil
+(future-cancelled? async-bad)
+;=>false
+(future-done? async-bad)
+;=>true
+
+;; passing data
+(def a 2)
+(def b 3)
+@(future (+ a b))
+;=>5
+
+(def a (future 2))
+(def b (future 3))
+@(future (+ @a @b))
+;=>5
