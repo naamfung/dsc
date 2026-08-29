@@ -1424,6 +1424,11 @@ func (m *Manager) UnloadPlugin(name string) error {
 	// 对称清理：执行已注册的 stopHook（tool 插件撤销其工具、agent 优雅关闭）；
 	// llm 的 serviceID 映射不依赖 hook，此处保留
 	if m.typeMap[name] == "llm" {
+		// P2.2(b)：停掉宿主 broker 上该 per-provider 服务（在 broker 上 serve、引用本
+		// 插件），防僵尸服务继续 serving、残留死连接；不触及聚合 LLM/Tool/Notify 等共享服务。
+		if id := m.llmServiceIDs[name]; id != 0 && m.broker != nil {
+			m.broker.StopService(id)
+		}
 		delete(m.llmServiceIDs, name)
 	}
 	m.transitionLocked(name, StateUnloading, "")

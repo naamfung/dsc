@@ -297,6 +297,10 @@ type GRPCBroker struct {
 	clientStreams map[uint32]*gRPCBrokerPending
 	serverStreams map[uint32]*gRPCBrokerPending
 
+	// servers 记录由 AcceptAndServe 挂起的每个 id 对应的 *grpc.Server，供
+	// StopService 单独停止单个服务（P2.2(b)），不影响 broker 上其他共享服务。
+	servers map[uint32]*grpc.Server
+
 	unixSocketCfg  UnixSocketConfig
 	addrTranslator runner.AddrTranslator
 
@@ -322,6 +326,7 @@ func newGRPCBroker(s streamer, tls *tls.Config, unixSocketCfg UnixSocketConfig, 
 
 		clientStreams: make(map[uint32]*gRPCBrokerPending),
 		serverStreams: make(map[uint32]*gRPCBrokerPending),
+		servers:       make(map[uint32]*grpc.Server),
 		muxer:         muxer,
 
 		unixSocketCfg:  unixSocketCfg,
@@ -416,6 +421,11 @@ func (b *GRPCBroker) AcceptAndServe(id uint32, newGRPCServer func([]grpc.ServerO
 
 	server := newGRPCServer(opts)
 
+	// 记录 server，供 StopService 单独停止（P2.2(b)）
+	b.Lock()
+	b.servers[id] = server
+	b.Unlock()
+
 	// Here we use a run group to close this goroutine if the server is shutdown
 	// or the broker is shutdown.
 	var g run.Group
@@ -444,6 +454,20 @@ func (b *GRPCBroker) AcceptAndServe(id uint32, newGRPCServer func([]grpc.ServerO
 
 	// Block until we are done
 	_ = g.Run()
+}
+
+// StopService 单独优雅停止某个已由 AcceptAndServe 挂起的 gRPC 服务，不影响
+// broker 上其他共享服务。宿主在卸载插件时回收其 per-plugin 服务（在宿主 broker
+// 上 serve、引用该插件的服务），避免僵尸服务继续 serving、残留死连接（P2.2(b)）。
+// 幂等：对未注册的 id 是 no-op；对已停止的服务再次调用同样安全。
+func (b *GRPCBroker) StopService(id uint32) {
+	b.Lock()
+	srv := b.servers[id]
+	delete(b.servers, id)
+	b.Unlock()
+	if srv != nil {
+		srv.GracefulStop()
+	}
 }
 
 // Close closes the stream and all servers.
