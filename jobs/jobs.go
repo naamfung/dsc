@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/go-hclog"
 )
 
 // JobStatus 任务生命周期（对齐 DSH：running、可选 stopping，随后恰好一个终态）。
@@ -98,6 +100,14 @@ type Registry struct {
 	seq           int
 	doneListeners map[int]func(JobSnapshot) // 完成监听器（contained，落定时通知）
 	nextListener  int
+	logger        hclog.Logger // 监听器 panic 等内部错误的日志出口；nil 则静默
+}
+
+// SetLogger 注入注册表内部日志出口（监听器 panic 等），便于问题可追溯。
+func (r *Registry) SetLogger(l hclog.Logger) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logger = l
 }
 
 // NewRegistry 创建空注册表。
@@ -208,7 +218,13 @@ func (r *Registry) Start(spec StartSpec) (string, error) {
 		r.mu.Unlock()
 		for _, fn := range listeners {
 			func() {
-				defer func() { _ = recover() }()
+				defer func() {
+					if p := recover(); p != nil {
+						if r.logger != nil {
+							r.logger.Error("job done listener panic", "job", snap.ID, "panic", p)
+						}
+					}
+				}()
 				fn(snap)
 			}()
 		}

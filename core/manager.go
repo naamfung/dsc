@@ -180,6 +180,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		policyOff:           make(map[string][]func()),
 		jobs:                jobs.NewRegistry(),
 	}
+	m.jobs.SetLogger(m.logger)
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具
 	// 内建 subagent 工具（宿主侧子代理，委派任务给独立小循环）
