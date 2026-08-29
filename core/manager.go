@@ -1628,16 +1628,13 @@ func (s *toolProxyServer) ListContext(ctx context.Context, req *proto.ListContex
 }
 
 // normalizeBinaryPath 跨平台處理二進制路徑
-// 分隔符統一為平台原生（Windows「\」、非 Windows「/」），避免把 Windows 絕對
-// 盤符路徑硬轉成正斜杠，傳給 CreateProcess 時可能無法正確解析（P2.9）。
-// Windows 系統：確保有 .exe 後綴；非 Windows 系統：移除 .exe 後綴。
+// 統一將路徑中的「\」轉換為「/」
+// Windows 系統：確保有 .exe 後綴
+// 非 Windows 系統：移除 .exe 後綴
 func normalizeBinaryPath(path string) string {
-	sep := "/"
-	if runtime.GOOS == "windows" {
-		sep = `\`
-	}
-	path = strings.ReplaceAll(path, `/`, sep)
-	path = strings.ReplaceAll(path, `\`, sep)
+	// 統一將反斜槓轉換為正斜槓
+	path = strings.ReplaceAll(path, `\\`, "/")
+	path = strings.ReplaceAll(path, "\\", "/")
 
 	pathLower := strings.ToLower(path)
 	if runtime.GOOS == "windows" {
