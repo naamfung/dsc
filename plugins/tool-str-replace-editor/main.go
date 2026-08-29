@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,8 +48,13 @@ func (s *editorState) updateObservation(filePath, state, version, lastContent st
 	}
 }
 
-// withinBase 判斷 real 路徑是否在 base 目錄（含 base 自身）之內
+// withinBase 判斷 real 路徑是否在 base 目錄（含 base 自身）之內。
+// Windows 文件系統大小寫不敏感，故忽略大小寫比較（對齊宿主 containsPath）。
 func withinBase(real, realBase string) bool {
+	if runtime.GOOS == "windows" {
+		real = strings.ToLower(real)
+		realBase = strings.ToLower(realBase)
+	}
 	return strings.HasPrefix(real, realBase+string(os.PathSeparator)) || real == realBase
 }
 
@@ -88,23 +94,7 @@ func makeAbsPath(reqPath string) (string, error) {
 	return filepath.Abs(cleanReq)
 }
 
-// resolveExistingAncestor 從 dir 開始向上逐級查找第一個存在的路徑並解析符號鏈接；
-// 返回其真實路徑。所有層級都不存在時返回 false。
-func resolveExistingAncestor(dir string) (string, bool) {
-	for {
-		real, err := filepath.EvalSymlinks(dir)
-		if err == nil {
-			return real, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
-}
-
-// safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接繞過）。
+// safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接/junction 繞過）。
 // base 若不存在會先創建；目標路徑或其父目錄不存在時也能正常解析（中間目錄可由調用方自行創建）。
 func safePath(base, reqPath string) (string, error) {
 	// 如果 reqPath 已經是絕對路徑（包括 Windows 盤符絕對路徑如 C:\ 或 C:/，以及 Unix 絕對路徑如 /xxx），則直接基於它進行安全校驗，絕不與 base 拼接
@@ -121,7 +111,8 @@ func safePath(base, reqPath string) (string, error) {
 			if symlinksErr != nil {
 				return "", symlinksErr
 			}
-			// 對於絕對路徑，返回解析後的絕對路徑（不強制要求它在 base 下）
+			// 對於絕對路徑，返回解析後的絕對路徑（不強制要求它在 base 下；是否允許
+			// 寫 workspace 之外由宿主 pipeline 的 sandbox 策略統一判定）
 			return absReq, nil
 		}
 		return realReq, nil
@@ -132,11 +123,12 @@ func safePath(base, reqPath string) (string, error) {
 		return "", err
 	}
 	// 工作目錄（base）可能尚未創建（首次使用時），先確保它存在，
-	// 否則 EvalSymlinks 會報 “The system cannot find the file specified”
+	// 否則解析真實路徑會報 “The system cannot find the file specified”
 	if err := os.MkdirAll(absBase, 0755); err != nil {
 		return "", err
 	}
-	realBase, err := filepath.EvalSymlinks(absBase)
+	// 根也經 CanonicalPath 解析真實路徑（穿透 junction/符號鏈接）
+	realBase, err := core.CanonicalPath(absBase)
 	if err != nil {
 		return "", err
 	}
@@ -155,27 +147,16 @@ func safePath(base, reqPath string) (string, error) {
 		return "", os.ErrPermission
 	}
 
-	// 目標本身若已存在，解析其真實路徑並檢查仍在 base 內（防符號鏈接逃逸）
-	if _, statErr := os.Lstat(absReq); statErr == nil {
-		realReq, err := filepath.EvalSymlinks(absReq)
-		if err != nil {
-			return "", err
-		}
-		if !withinBase(realReq, realBase) {
-			return "", os.ErrPermission
-		}
-		return realReq, nil
+	// 把目標整條 canonical 化（穿透 junction/符號鏈接至真實落點），再校驗真實
+	// 路徑仍在 base 內——防 workspace 內指向外部的 junction 寫穿沙箱（P0-3）。
+	realReq, err := core.CanonicalPath(absReq)
+	if err != nil {
+		return "", err
 	}
-
-	// 目標不存在：解析其最深的已存在祖先，確保真實路徑仍在 base 內
-	realAncestor, ok := resolveExistingAncestor(filepath.Dir(absReq))
-	if !ok {
+	if !withinBase(realReq, realBase) {
 		return "", os.ErrPermission
 	}
-	if !withinBase(realAncestor, realBase) {
-		return "", os.ErrPermission
-	}
-	return absReq, nil
+	return realReq, nil
 }
 
 // normalizeWorkspacePath 剝離模型按工具描述傳入的 /workspace 前綴，

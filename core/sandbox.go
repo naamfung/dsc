@@ -3,9 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -111,25 +109,28 @@ func canonicalWorkspaceRoot() string {
 }
 
 // inWorkspace 判断路径是否位于 WorkspaceRoot 之下（含 /workspace 虚拟根映射）。
-// Windows 文件系统大小写不敏感，词法前缀比较忽略大小写（对齐 DSH containment 的
-// comparablePath）；workspace 根先解析真实路径，避免模型按 pwd 或自身推断回传的
-// 真实路径（如小写盘符 d:\agents\dsc\...）因大小写/别名差异被误拦——这正是「换成
-// 真实路径访问被拦截、被迫退回 /workspace 虚拟前缀（shell 中又不存在）」死循环的根源。
+// 先把根与目标都经 CanonicalPath 解析到真实路径（Windows 上用
+// GetFinalPathNameByHandle 穿透 junction/symlink，Unix 用 EvalSymlinks），
+// 再做包含判定——从而避免 workspace 内指向外部的 junction/symlink 令词法前缀
+// 比较误判为「在根内」而写穿沙箱（P0-3）。
 func inWorkspace(path string) bool {
 	abs, err := filepath.Abs(workspacePathToRoot(path))
 	if err != nil {
 		return false
 	}
-	abs = filepath.Clean(abs)
-	absBase := canonicalWorkspaceRoot()
-	if abs == absBase {
-		return true
+	root, rerr := filepath.Abs(WorkspaceRoot)
+	if rerr != nil {
+		root = WorkspaceRoot
 	}
-	prefix := absBase + string(os.PathSeparator)
-	if runtime.GOOS == "windows" {
-		return strings.HasPrefix(strings.ToLower(abs), strings.ToLower(prefix))
+	realRoot, cerr := CanonicalPath(root)
+	if cerr != nil {
+		realRoot = root
 	}
-	return strings.HasPrefix(abs, prefix)
+	realTarget, terr := CanonicalPath(abs)
+	if terr != nil {
+		return false
+	}
+	return containsPath(realRoot, realTarget)
 }
 
 // SetSandboxPolicy 运行时切换沙箱策略（TUI /sandbox 命令用；线程安全）。
