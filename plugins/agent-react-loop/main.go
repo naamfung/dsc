@@ -742,6 +742,12 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	// 工具指引（DSC 是工具型 agent，需提示模型按任务选用工具）
 	parts = append(parts, "根据任务选择合适的工具，逐步完成用户的请求。")
 
+	// PTC 呈现模式（DSC_PTC=1 开启）：引导用 run_code 组合多步 + 注入 run_code
+	// 可调用工具 SDK 清单；个别工具仍可照 call（fallback，不强求隐藏）。
+	if s := a.ptcSDKContext(ctx, toolClient); s != "" {
+		parts = append(parts, s)
+	}
+
 	// plan 模式引导（仅激活时注入；对齐 DSH plan:policy 段落，软引导不强制任何限制）
 	if a.planActive {
 		if s := strings.TrimSpace(a.planSection); s != "" {
@@ -769,6 +775,58 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 		parts = append(parts, policy)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// ptcEnabled 是否开启 PTC 呈现模式（环境变量 DSC_PTC）。
+func ptcEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_PTC"))) {
+	case "1", "true", "on", "ptc", "yes":
+		return true
+	}
+	return false
+}
+
+// ptcSDKContext 返回 PTC 呈现模式下的系统提示段落：引导模型用 run_code 组合多步，
+// 并把 run_code 可调用工具（不含自身）的 SDK 清单注入，让模型知道程序内可 call 哪些。
+// 非 PTC 模式返回空串（不注入，保持既有 prompt 不变）。
+func (a *ReactLoopAgent) ptcSDKContext(ctx context.Context, toolClient proto.ToolServiceClient) string {
+	if !ptcEnabled() {
+		return ""
+	}
+	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := toolClient.ListTools(lctx, &proto.ListToolsRequest{})
+	cancel()
+	if err != nil {
+		return ""
+	}
+	return formatPTCTools(resp.Tools)
+}
+
+// formatPTCTools 把 run_code 可调用工具（不含 run_code 自身）格式化为 PTC SDK 清单。
+func formatPTCTools(tools []*proto.Tool) string {
+	var b strings.Builder
+	b.WriteString("You are in PTC (programmatic tool composition) presentation mode. For any " +
+		"multi-step or batched operation, prefer composing ONE Lua script and running it via " +
+		"run_code instead of issuing many individual tool calls (individual tools remain " +
+		"available as fallback). Inside run_code every tool below is exposed as a same-name Lua " +
+		"function (call it as <name>{args}); the script's top-level return is the result.\n" +
+		"run_code SDK (tools callable inside a program):")
+	for _, t := range tools {
+		if t.Name == "run_code" {
+			continue
+		}
+		desc := oneLinePrompt(t.Description)
+		if len(desc) > 90 {
+			desc = desc[:87] + "..."
+		}
+		fmt.Fprintf(&b, "\n- %s: %s", t.Name, desc)
+	}
+	return b.String()
+}
+
+// oneLinePrompt 把多行描述压成单行（用空行分隔，供 prompt 内紧凑展示）。
+func oneLinePrompt(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // sandboxPolicyContext 渲染当前沙箱策略上下文片段。workspace-write 时携带工作区
