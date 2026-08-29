@@ -129,7 +129,10 @@ func unmarshalData(typ EventType, raw json.RawMessage) (any, error) {
 		}
 		return &d, nil
 	default:
-		return nil, fmt.Errorf("session: unknown event type %q", typ)
+		// 未知类型：DSH fail-closed 守则——拒绝重建而非静默丢弃。日志里出现
+		// 本构建不认识的事件，通常由更新的运行时所写；由调用方（Load）补上
+		// 事件序列号与原始文件路径后一并上报。
+		return nil, fmt.Errorf("unknown event type %q (likely written by a newer DSC runtime)", typ)
 	}
 }
 
@@ -192,16 +195,16 @@ func Load(path string) (*Session, error) {
 			return nil, fmt.Errorf("session: line %d: %w", line, err)
 		}
 		if ej.Seq != len(s.events) {
-			return nil, fmt.Errorf("session: line %d seq = %d, want %d (non-contiguous log)", line, ej.Seq, len(s.events))
+			return nil, fmt.Errorf("session: %s: event seq %d, want %d (non-contiguous log)", path, ej.Seq, len(s.events))
 		}
 		data, err := unmarshalData(ej.Type, ej.Data)
 		if err != nil {
-			return nil, fmt.Errorf("session: line %d: %w", line, err)
+			return nil, fmt.Errorf("session: %s: event seq %d: %w", path, ej.Seq, err)
 		}
 		ev := &Event{Seq: ej.Seq, Time: ej.Time, Type: ej.Type, Data: data, Surface: ej.Surface}
 		if ev.Surface != nil {
 			if !surfaceEventTypes[ev.Type] {
-				return nil, fmt.Errorf("session: line %d: non-surface event %q carries surface op", line, ev.Type)
+				return nil, fmt.Errorf("session: %s: event seq %d: non-surface event %q carries surface op", path, ev.Seq, ev.Type)
 			}
 			s.applySurfaceLocked(ev)
 		}

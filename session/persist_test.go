@@ -1,8 +1,10 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"dsc/proto"
@@ -103,11 +105,28 @@ func TestLoadRejectsNonContiguousSeq(t *testing.T) {
 func TestLoadRejectsUnknownType(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.jsonl")
-	if err := writeLines(path, `{"seq":0,"time":1,"type":"future/event","data":{},"surface":null}`); err != nil {
+	// 首条为合法事件（seq 0），第二条在 seq 1 处放置未知类型事件，
+	// 以便验证诊断携带事件名、序列号与原始文件路径（而非先触发非连续校验）。
+	seq := 1
+	err := writeLines(path,
+		`{"seq":0,"time":1,"type":"user/message","data":{"content":"u","source":"user"},"surface":{"op":"append"}}`,
+		fmt.Sprintf(`{"seq":%d,"time":1,"type":"future/event","data":{},"surface":null}`, seq))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil {
+	_, err = Load(path)
+	if err == nil {
 		t.Fatal("expected error for unknown event type")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "future/event") {
+		t.Fatalf("diagnostic should name the unknown event type, got: %s", msg)
+	}
+	if !strings.Contains(msg, fmt.Sprintf("seq %d", seq)) {
+		t.Fatalf("diagnostic should include the event sequence, got: %s", msg)
+	}
+	if !strings.Contains(msg, path) {
+		t.Fatalf("diagnostic should include the raw artifact path, got: %s", msg)
 	}
 }
 
