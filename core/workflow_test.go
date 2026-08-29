@@ -30,7 +30,7 @@ func TestWorkflowToolExecute(t *testing.T) {
 	// 合法脚本（不调用 agent，无需 LLM）→ 成功包络
 	args, _ := json.Marshal(map[string]any{
 		"meta":   map[string]any{"name": "tally", "description": "sum two args"},
-		"script": `return {sum: args.a + args.b};`,
+		"script": `return {sum = args.a + args.b}`,
 		"args":   map[string]any{"a": 2, "b": 3},
 	})
 	out, err := tool.Execute(context.Background(), args)
@@ -45,7 +45,7 @@ func TestWorkflowToolExecute(t *testing.T) {
 	// 非法 meta（name 非 kebab-case）→ 错误
 	badMeta, _ := json.Marshal(map[string]any{
 		"meta":   map[string]any{"name": "Bad Name", "description": "x"},
-		"script": `return 1;`,
+		"script": `return 1`,
 	})
 	if _, err := tool.Execute(context.Background(), badMeta); err == nil {
 		t.Fatal("invalid meta should fail")
@@ -75,7 +75,7 @@ func TestWorkflowToolBackground(t *testing.T) {
 	// background=true：立即返回 job id，不阻塞
 	args, _ := json.Marshal(map[string]any{
 		"meta":       map[string]any{"name": "bg", "description": "background tally"},
-		"script":     `return {sum: args.a + args.b};`,
+		"script":     `return {sum = args.a + args.b}`,
 		"args":       map[string]any{"a": 2, "b": 3},
 		"background": true,
 	})

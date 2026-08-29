@@ -43,12 +43,12 @@ func (r *recSink) OnPhase(_ string, t string) {
 	r.mu.Unlock()
 }
 func (r *recSink) OnLog(_ string, m string) { r.mu.Lock(); r.logs = append(r.logs, m); r.mu.Unlock() }
-func (r *recSink) OnAgentStart(_ string, seq int, l string) {
+func (r *recSink) OnAgentStart(_ string, _ int, l string) {
 	r.mu.Lock()
 	r.agents = append(r.agents, "start:"+l)
 	r.mu.Unlock()
 }
-func (r *recSink) OnAgentEnd(_ string, seq int, o string) {
+func (r *recSink) OnAgentEnd(_ string, _ int, o string) {
 	r.mu.Lock()
 	r.agents = append(r.agents, "end:"+o)
 	r.mu.Unlock()
@@ -67,6 +67,21 @@ func run(t *testing.T, req StartRequest) Result {
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not settle within 3s")
 		return Result{}
+	}
+}
+
+// envelopeValue 断言数组里第 i 个信封 (ok=true,value=want)。
+func envelopeValue(t *testing.T, arr []any, i int, want any) {
+	t.Helper()
+	m, ok := arr[i].(map[string]any)
+	if !ok {
+		t.Fatalf("arr[%d] = %#v, want envelope", i, arr[i])
+	}
+	if m["ok"] != true {
+		t.Fatalf("arr[%d].ok = %v", i, m["ok"])
+	}
+	if m["value"] != want {
+		t.Fatalf("arr[%d].value = %v, want %v", i, m["value"], want)
 	}
 }
 
@@ -90,7 +105,7 @@ func TestValidateMeta(t *testing.T) {
 }
 
 func TestStartInvalidScript(t *testing.T) {
-	req := StartRequest{Meta: Meta{Name: "x", Description: "y"}, Script: "return (", Runner: &fakeRunner{}}
+	req := StartRequest{Meta: Meta{Name: "x", Description: "y"}, Script: "local x =", Runner: &fakeRunner{}}
 	_, err := Start(context.Background(), req)
 	re, ok := err.(*RunError)
 	if !ok || re.Code != ErrScriptParse {
@@ -101,7 +116,7 @@ func TestStartInvalidScript(t *testing.T) {
 func TestRunCompleted(t *testing.T) {
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "simple", Description: "returns an object"},
-		Script: `return {ok: true, n: 3};`,
+		Script: `return {ok = true, n = 3}`,
 		Runner: &fakeRunner{},
 	})
 	if r.StopReason != StopCompleted {
@@ -121,7 +136,7 @@ func TestRunAgentHook(t *testing.T) {
 	sink := &recSink{}
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "fanout", Description: "two agents"},
-		Script: `const x = await agent("a"); const y = await agent("b"); return [x, y];`,
+		Script: `local x = agent("a"); local y = agent("b"); return {x, y}`,
 		Runner: fr,
 		Events: sink,
 	})
@@ -146,7 +161,7 @@ func TestRunAgentChildFailureReturnsNull(t *testing.T) {
 	fr := &fakeRunner{errs: map[string]error{"boom": context.Canceled}}
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "fail", Description: "child fails"},
-		Script: `const x = await agent("boom"); return x === null;`,
+		Script: `local x = agent("boom"); return x == nil`,
 		Runner: fr,
 	})
 	if r.StopReason != StopCompleted || r.Value != true {
@@ -158,7 +173,7 @@ func TestRunAgentCap(t *testing.T) {
 	fr := &fakeRunner{resps: map[string]string{"a": "x"}}
 	r := run(t, StartRequest{
 		Meta:           Meta{Name: "cap", Description: "cap test"},
-		Script:         `await agent("a"); await agent("a"); return 1;`,
+		Script:         `agent("a"); agent("a"); return 1`,
 		Runner:         fr,
 		MaxTotalAgents: 1,
 	})
@@ -172,7 +187,7 @@ func TestRunPhaseValidation(t *testing.T) {
 	// 声明了 phases 时，未声明的标题报错
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "ph", Description: "x", Phases: []Phase{{Title: "build"}}},
-		Script: `phase("nope"); return 1;`,
+		Script: `phase("nope"); return 1`,
 		Runner: fr,
 	})
 	if r.StopReason != StopError || !strings.Contains(r.Error, "not declared") {
@@ -182,7 +197,7 @@ func TestRunPhaseValidation(t *testing.T) {
 	sink := &recSink{}
 	r = run(t, StartRequest{
 		Meta:   Meta{Name: "ph2", Description: "x", Phases: []Phase{{Title: "build"}}},
-		Script: `phase("build"); log("hello"); return 1;`,
+		Script: `phase("build"); log("hello"); return 1`,
 		Runner: fr,
 		Events: sink,
 	})
@@ -199,7 +214,7 @@ func TestRunPhaseValidation(t *testing.T) {
 func TestRunArgs(t *testing.T) {
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "args", Description: "x"},
-		Script: `return {got: args.query};`,
+		Script: `return {got = args.query}`,
 		Args:   map[string]any{"query": "dsc"},
 		Runner: &fakeRunner{},
 	})
@@ -212,22 +227,11 @@ func TestRunArgs(t *testing.T) {
 	}
 }
 
-func TestRunResultUnserializable(t *testing.T) {
-	r := run(t, StartRequest{
-		Meta:   Meta{Name: "bad", Description: "x"},
-		Script: `return function(){};`,
-		Runner: &fakeRunner{},
-	})
-	if r.StopReason != StopError || !strings.Contains(r.Error, ErrResultUnserializable) {
-		t.Fatalf("function return should be unserializable, got %+v", r)
-	}
-}
-
 func TestRunCancelled(t *testing.T) {
 	fr := &fakeRunner{}
 	run, err := Start(context.Background(), StartRequest{
 		Meta:    Meta{Name: "hang", Description: "x"},
-		Script:  `while (Date.now() < 1e15) {} return 1;`,
+		Script:  `while true do end`,
 		Runner:  fr,
 		Timeout: 5 * time.Second,
 	})
@@ -262,7 +266,7 @@ type countingRunner struct {
 	max    int
 }
 
-func (c *countingRunner) RunAgent(_ context.Context, prompt string) (string, error) {
+func (c *countingRunner) RunAgent(_ context.Context, _ string) (string, error) {
 	c.mu.Lock()
 	c.active++
 	if c.active > c.max {
@@ -276,20 +280,31 @@ func (c *countingRunner) RunAgent(_ context.Context, prompt string) (string, err
 	return "ok", nil
 }
 
+func testParallel3() string {
+	return `return parallel({
+		function() return agent("a") end,
+		function() return agent("b") end,
+		function() return agent("c") end
+	})`
+}
+
 func TestRunParallel(t *testing.T) {
 	fr := &fakeRunner{resps: map[string]string{"a": "ra", "b": "rb", "c": "rc"}}
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "para", Description: "concurrent fan-out"},
-		Script: `return await parallel([() => agent("a"), () => agent("b"), () => agent("c")]);`,
+		Script: testParallel3(),
 		Runner: fr,
 	})
 	if r.StopReason != StopCompleted {
 		t.Fatalf("stop reason = %q, err = %s", r.StopReason, r.Error)
 	}
 	arr, _ := r.Value.([]any)
-	if len(arr) != 3 || arr[0] != "ra" || arr[1] != "rb" || arr[2] != "rc" {
+	if len(arr) != 3 {
 		t.Fatalf("value = %+v", r.Value)
 	}
+	envelopeValue(t, arr, 0, "ra")
+	envelopeValue(t, arr, 1, "rb")
+	envelopeValue(t, arr, 2, "rc")
 	if r.AgentsStarted != 3 || len(fr.calls) != 3 {
 		t.Fatalf("agents = %d, calls = %v", r.AgentsStarted, fr.calls)
 	}
@@ -301,8 +316,13 @@ func TestRunParallelConcurrency(t *testing.T) {
 	fr := &slowRunner{delay: 60 * time.Millisecond}
 	start := time.Now()
 	r := run(t, StartRequest{
-		Meta:   Meta{Name: "conc", Description: "concurrency check"},
-		Script: `return await parallel([() => agent("a"), () => agent("b"), () => agent("c"), () => agent("d")]);`,
+		Meta: Meta{Name: "conc", Description: "concurrency check"},
+		Script: `return parallel({
+			function() return agent("a") end,
+			function() return agent("b") end,
+			function() return agent("c") end,
+			function() return agent("d") end
+		})`,
 		Runner: fr,
 	})
 	elapsed := time.Since(start)
@@ -319,8 +339,14 @@ func TestRunParallelConcurrency(t *testing.T) {
 func TestRunParallelConcurrencyLimit(t *testing.T) {
 	fr := &countingRunner{}
 	r := run(t, StartRequest{
-		Meta:                Meta{Name: "lim", Description: "concurrency limit"},
-		Script:              `return await parallel([() => agent("a"), () => agent("b"), () => agent("c"), () => agent("d"), () => agent("e")]);`,
+		Meta: Meta{Name: "lim", Description: "concurrency limit"},
+		Script: `return parallel({
+			function() return agent("a") end,
+			function() return agent("b") end,
+			function() return agent("c") end,
+			function() return agent("d") end,
+			function() return agent("e") end
+		})`,
 		Runner:              fr,
 		MaxConcurrentAgents: 2,
 	})
@@ -338,9 +364,9 @@ func TestRunParallelConcurrencyLimit(t *testing.T) {
 func TestRunParallelValidation(t *testing.T) {
 	fr := &fakeRunner{}
 	cases := []struct{ script, code, want string }{
-		{`return await parallel("no");`, ErrInvalidArgument, "requires an array"},
-		{`return await parallel([3]);`, ErrInvalidArgument, "item 0 is not a function"},
-		{`return await parallel([() => 1, () => 2, () => 3]);`, ErrItemCap, "maxItemsPerCall"},
+		{`return parallel("no")`, ErrInvalidArgument, "requires an array"},
+		{`return parallel({3})`, ErrInvalidArgument, "item 1 is not a function"},
+		{`return parallel({function() return 1 end, function() return 2 end, function() return 3 end})`, ErrItemCap, "maxItemsPerCall"},
 	}
 	for _, c := range cases {
 		r := run(t, StartRequest{
@@ -360,8 +386,11 @@ func TestRunParallelValidation(t *testing.T) {
 func TestRunParallelFatalEscapes(t *testing.T) {
 	fr := &fakeRunner{resps: map[string]string{"a": "x"}}
 	r := run(t, StartRequest{
-		Meta:           Meta{Name: "pe", Description: "x"},
-		Script:         `return await parallel([() => agent("a"), () => agent("a")]);`,
+		Meta: Meta{Name: "pe", Description: "x"},
+		Script: `return parallel({
+			function() return agent("a") end,
+			function() return agent("a") end
+		})`,
 		Runner:         fr,
 		MaxTotalAgents: 1,
 	})
@@ -374,54 +403,62 @@ func TestRunPipeline(t *testing.T) {
 	fr := &fakeRunner{resps: map[string]string{"read a": "ra", "read b": "rb"}}
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "pipe", Description: "staged fan-out"},
-		Script: `const answers = await pipeline(["a", "b"], (prev, item) => agent("read " + item)); return answers;`,
+		Script: `local answers = pipeline({"a", "b"}, function(prev, item) return agent("read " .. item) end); return answers`,
 		Runner: fr,
 	})
 	if r.StopReason != StopCompleted {
 		t.Fatalf("stop reason = %q, err = %s", r.StopReason, r.Error)
 	}
 	arr, _ := r.Value.([]any)
-	if len(arr) != 2 || arr[0] != "ra" || arr[1] != "rb" {
+	if len(arr) != 2 {
 		t.Fatalf("value = %+v", r.Value)
 	}
+	envelopeValue(t, arr, 0, "ra")
+	envelopeValue(t, arr, 1, "rb")
 	if r.AgentsStarted != 2 || len(fr.calls) != 2 {
 		t.Fatalf("agents = %d, calls = %v", r.AgentsStarted, fr.calls)
 	}
 }
 
 // TestRunPipelinePreviousAndIndex 验证 stage 签名 (previous, item, index)：
-// previous 为上一 stage 输出（首个 stage 为 item 本身）。
+// previous 为上一 stage 输出（首个 stage 为 item 本身）；index 0-based。
 func TestRunPipelinePreviousAndIndex(t *testing.T) {
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "pipe2", Description: "prev chain"},
-		Script: `return await pipeline([10, 20], (prev, item, i) => prev + item, (prev, item, i) => prev * (i + 1));`,
+		Script: `return pipeline({10, 20}, function(prev, item, i) return prev + item end, function(prev, item, i) return prev * (i + 1) end)`,
 		Runner: &fakeRunner{},
 	})
 	if r.StopReason != StopCompleted {
 		t.Fatalf("got %+v", r)
 	}
-	// item10: stage1=10+10=20, stage2=20*(0+1)=20；item20: stage1=20+20=40, stage2=40*(1+1)=80
+	// item10(id0): stage1=10+10=20, stage2=20*(0+1)=20；item20(id1): 20+20=40, 40*(1+1)=80
 	arr, _ := r.Value.([]any)
-	if len(arr) != 2 || arr[0] != int64(20) || arr[1] != int64(80) {
+	if len(arr) != 2 {
 		t.Fatalf("value = %+v", r.Value)
 	}
+	envelopeValue(t, arr, 0, int64(20))
+	envelopeValue(t, arr, 1, int64(80))
 }
 
-// TestRunPipelineStageErrorNullsItem 验证普通 stage 错误 → 该 item 为 null，
-// 其余 item 不受影响（对齐 DSH per-item null）。
+// TestRunPipelineStageErrorNullsItem 验证普通 stage 错误 → 该 item 为 {ok:false}，
+// 其余 item 不受影响（信封保证数组位置）。
 func TestRunPipelineStageErrorNullsItem(t *testing.T) {
 	r := run(t, StartRequest{
 		Meta:   Meta{Name: "pipe3", Description: "item null"},
-		Script: `return await pipeline([10, 20], (prev, item) => { if (item === 10) throw new Error("ordinary failure"); return "kept-" + item; });`,
+		Script: `return pipeline({10, 20}, function(prev, item) if item == 10 then error("ordinary failure") end return "kept-" .. item end)`,
 		Runner: &fakeRunner{},
 	})
 	if r.StopReason != StopCompleted {
 		t.Fatalf("got %+v", r)
 	}
 	arr, _ := r.Value.([]any)
-	if len(arr) != 2 || arr[0] != nil || arr[1] != "kept-20" {
+	if len(arr) != 2 {
 		t.Fatalf("value = %+v", r.Value)
 	}
+	if m, ok := arr[0].(map[string]any); !ok || m["ok"] != false {
+		t.Fatalf("arr[0] = %#v, want {ok:false}", arr[0])
+	}
+	envelopeValue(t, arr, 1, "kept-20")
 }
 
 // TestRunPipelineValidation 校验 pipeline 参数契约：非数组、无 stage、
@@ -429,10 +466,10 @@ func TestRunPipelineStageErrorNullsItem(t *testing.T) {
 func TestRunPipelineValidation(t *testing.T) {
 	fr := &fakeRunner{}
 	cases := []struct{ script, code, want string }{
-		{`return await pipeline("no", () => 1);`, ErrInvalidArgument, "requires an items array"},
-		{`return await pipeline([1]);`, ErrInvalidArgument, "at least one stage"},
-		{`return await pipeline([1], "x");`, ErrInvalidArgument, "stage 0 is not a function"},
-		{`return await pipeline([1, 2, 3], (x) => x);`, ErrItemCap, "maxItemsPerCall"},
+		{`return pipeline("no", function(x) return x end)`, ErrInvalidArgument, "requires an items array"},
+		{`return pipeline({1})`, ErrInvalidArgument, "at least one stage"},
+		{`return pipeline({1}, "x")`, ErrInvalidArgument, "stage 1 is not a function"},
+		{`return pipeline({1, 2, 3}, function(x) return x end)`, ErrItemCap, "maxItemsPerCall"},
 	}
 	for _, c := range cases {
 		r := run(t, StartRequest{
@@ -453,7 +490,7 @@ func TestRunPipelineFatalEscapes(t *testing.T) {
 	fr := &fakeRunner{resps: map[string]string{"a": "x"}}
 	r := run(t, StartRequest{
 		Meta:           Meta{Name: "pf", Description: "x"},
-		Script:         `return await pipeline([1, 2], (prev, item) => agent("a"));`,
+		Script:         `return pipeline({1, 2}, function(prev, item) return agent("a") end)`,
 		Runner:         fr,
 		MaxTotalAgents: 1,
 	})

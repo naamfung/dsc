@@ -18,20 +18,21 @@ type workflowTool struct{ m *Manager }
 func (t *workflowTool) Name() string { return "workflow" }
 
 func (t *workflowTool) Description() string {
-	return "Write and run a JavaScript orchestration script that fans work out across many " +
+	return "Write and run a Lua orchestration script that fans work out across many " +
 		"subagents with phases and structured results. Use ONLY when the user explicitly asks " +
 		"for a workflow or for large multi-agent orchestration; for one or two delegations, " +
 		"prefer the subagent tool.\n" +
-		"Script conventions: the script is async JavaScript (await supported). " +
+		"Script conventions: the script is plain Lua. " +
 		"Globals: args (the JSON input object passed as `args`); agent(prompt, options?) runs " +
-		"one subagent and returns a Promise resolving to its result text, or null if the subagent " +
-		"failed (await it; options may include `label`); parallel(thunks) runs thunks concurrently " +
-		"under the configured agent concurrency limit and resolves to an array of their results in " +
-		"order (each thunk is typically () => agent(prompt)); pipeline(items, ...stages) passes " +
-		"each item through the stage functions (previous, item, index) in order with items " +
-		"processed concurrently — a stage failure drops that item to null, fatal errors abort the " +
-		"whole run; phase(title) and log(msg) record progress (phase titles must match the declared " +
-		"meta.phases). The script ends with `return <json-value>`, which becomes the workflow result. " +
+		"one subagent synchronously and returns its result text (a string), or nil if the subagent " +
+		"failed (options may include `label`); parallel(thunks) runs thunks concurrently " +
+		"under the configured agent concurrency limit and returns an array of {ok,value} envelopes " +
+		"in order (each thunk is typically function() return agent(prompt) end); " +
+		"pipeline(items, ...stages) passes each item through the stage functions " +
+		"(previous, item, index) with items processed concurrently — a stage failure drops that " +
+		"item to {ok=false}, fatal errors abort the whole run; phase(title) and log(msg) record " +
+		"progress (phase titles must match the declared meta.phases). " +
+		"The script ends with `return <value>`, which becomes the workflow result. " +
 		"Set background:true to start it as a background job and get its job id immediately; track " +
 		"it with job_output / job_kill instead of blocking the current turn."
 }
