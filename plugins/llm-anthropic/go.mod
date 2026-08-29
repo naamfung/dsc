@@ -8,6 +8,8 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.63.1
 )
 
+require github.com/wippyai/go-lua v1.5.17 // indirect
+
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
@@ -23,7 +25,7 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
-	github.com/hashicorp/go-plugin v1.8.0 // indirect
+	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
@@ -39,7 +41,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/toon-format/toon-go v0.0.0
+	github.com/toon-format/toon-go v0.0.0 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
@@ -63,3 +65,5 @@ replace github.com/hashicorp/go-plugin => ../../plugin
 replace github.com/anthropics/anthropic-sdk-go => ../../libs/anthropic-sdk-go
 
 replace github.com/toon-format/toon-go => ../../libs/toon-go
+
+replace github.com/wippyai/go-lua => ../../libs/go-lua

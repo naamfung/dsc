@@ -11,13 +11,14 @@ replace github.com/hashicorp/go-plugin => ../../plugin
 replace github.com/toon-format/toon-go => ../../libs/toon-go
 
 require (
+	dsc v0.0.0
 	dsc-sdk v0.0.0
 	github.com/ebitengine/oto/v3 v3.4.1
 	github.com/hajimehoshi/go-mp3 v0.3.4
+	github.com/hashicorp/go-plugin v1.8.0
 )
 
 require (
-	dsc v0.0.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6 // indirect
 	github.com/ebitengine/purego v0.9.0 // indirect
@@ -31,7 +32,6 @@ require (
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
-	github.com/hashicorp/go-plugin v1.8.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
@@ -41,6 +41,7 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/toon-format/toon-go v0.0.0 // indirect
+	github.com/wippyai/go-lua v1.5.17 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
@@ -52,3 +53,5 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/wippyai/go-lua => ../../libs/go-lua

@@ -7,8 +7,10 @@ require (
 	github.com/jig/lisp v0.2.24
 )
 
+require github.com/wippyai/go-lua v1.5.17 // indirect
+
 require (
-	dsc v0.0.0 // indirect
+	dsc v0.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6 // indirect
@@ -23,7 +25,7 @@ require (
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
-	github.com/hashicorp/go-plugin v1.8.0 // indirect
+	github.com/hashicorp/go-plugin v1.8.0
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/jig/scanner v1.2.0 // indirect
@@ -33,7 +35,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
-	github.com/toon-format/toon-go v0.0.0
+	github.com/toon-format/toon-go v0.0.0 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
@@ -53,3 +55,5 @@ replace dsc => ../..
 replace github.com/hashicorp/go-plugin => ../../plugin
 
 replace github.com/toon-format/toon-go => ../../libs/toon-go
+
+replace github.com/wippyai/go-lua => ../../libs/go-lua
