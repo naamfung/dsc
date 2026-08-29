@@ -48,8 +48,6 @@ replace github.com/anthropics/anthropic-sdk-go => ../libs/anthropic-sdk-go
 
 replace github.com/sashabaranov/go-openai => ../libs/go-openai
 
-replace github.com/ollama/ollama => ../libs/ollama
-
 replace github.com/robfig/cron/v3 => ../libs/cron
 
 replace github.com/toon-format/toon-go => ../libs/toon-go

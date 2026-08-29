@@ -52,8 +52,6 @@ replace dsc => ../..
 
 replace github.com/hashicorp/go-plugin => ../../plugin
 
-replace github.com/ollama/ollama => ../../libs/ollama
-
 replace github.com/toon-format/toon-go => ../../libs/toon-go
 
 replace github.com/wippyai/go-lua => ../../libs/go-lua
