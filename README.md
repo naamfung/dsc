@@ -8,7 +8,9 @@
 - **熱重載（Hot Reload）**：支持 dsc / agent / llm / tool / policy 五類插件的在線熱重載，無需重啟主程序即可更新插件版本；幾乎全程不持全局鎖，失敗不影響舊實例。
 - **多 LLM 支持**：支持 OpenAI、Anthropic、Ollama 等主流 LLM 提供商；其中 `llm-openai` 與 `llm-anthropic` 插件支持本地 LlamaCpp 推理引擎。
 - **ReAct 循環**：實現 Agent 的 Reasoning and Acting 循環，支持多輪推理與工具執行。
-- **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（不额外拦截）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控。
+- **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（不额外拦截）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控；`read-only` 同时会禁用「命令无法从参数判定是否只读」的解释器/执行器（如 shell），防止 `echo x > /anywhere` 绕开只读档。
+- **工具調用超時（活躍續命）**：shell 与命令型工具采用「十分鐘起步、活躍續命」超时（对齐 rex shell）——启动 10 分钟预算（`DSC_SHELL_TIMEOUT` 可覆盖），只要 stdout/stderr 持续有新输出就不间断续命，仅对「长时间完全无新输出」才判定超时，避免一刀切固定时长方误杀仍在产出嘅长编译/测试。
+- **凭据隔离**：插件子进程 env 白名单化——仅 LLM 插件放行凭据类键（`*_API_KEY`/`*_TOKEN`/`*_SECRET` 等），其余 tool/policy/agent 插件一律滤除（`DSC_*` 宿主配置保留），防止 API key 经 shell 等工具进程被模型读进会话历史。
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
 - **TUI 工具調用顯示增強**：在 TUI 界面中，針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `Edit(View, /root/file/path)`、`Edit(Create, /root/file/path)`、`Edit(StrReplace, /root/file/path)`、`Edit(Insert, /root/file/path)` 等格式，提供更清晰的操作方向性展示。
 - **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 Lua 编排脚本，由 go-lua 的**协程排程器**执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子）；子代理默认无迭代上限，何时完成由模型自行决定；`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
@@ -27,7 +29,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | 宿主/插件架構 | cordis 插件框架，一切皆插件 | go-plugin + gRPC，一切皆插件，支持熱插拔/熱重載 |
 | 沙箱隔離 | 內核級：bwrap（bind mount）/ Landlock（`sandbox-local` + 各 runner profile） | 宿主工具級攔截（Windows 兼容）：工具流水線 pre-execute 瀑布，三檔 `read-only / workspace-write / full-access` |
 | 沙箱策略歸屬 | `ctx.sandboxPolicy` 單一歸屬（mode + workspace 根）；`renderPolicyContext` 以真實路徑呈現給模型 | 宿主 `Manager.sandboxPolicyVal` 單一歸屬；TUI `/sandbox` 即時切換；system prompt 注入 `sandbox:policy` 上下文（同樣以真實根路徑呈現） |
-| 路徑圍欄 | `fs-sandbox` containment：詞法快速路徑（Windows 忽略大小寫）+ 文件身份（dev/ino）回退（識別 8.3 短名、大小寫別名） | `inWorkspace`：詞法前綴（Windows 忽略大小寫）+ 根路徑 `EvalSymlinks`；`/workspace` 虛擬前綴映射到統一根 |
+| 路徑圍欄 | `fs-sandbox` containment：詞法快速路徑（Windows 忽略大小寫）+ 文件身份（dev/ino）回退（識別 8.3 短名、大小寫別名） | `inWorkspace`：`CanonicalPath` 解析真實路徑（Windows 用 `GetFinalPathNameByHandle` 穿透 junction/symlink，Unix 用 EvalSymlinks）再做包含判定，防 workspace 內指向外部的連結寫穿；`/workspace` 虛擬前綴映射到統一根 |
 | 會話 | 事件日誌（event log）+ `deriveMessages()` 派生模型歷史 | 事件溯源 `session` 包 + `DeriveMessages`（同構） |
 | 上下文壓縮 | `compaction-basic`：thresholdRatio / retainRatio | 80% 閾值觸發、16% 尾部保留（≥1024 token）、字符估算兜底 |
 | token 計量 | TokenMeter：本地精確 tokenizer，缺省字符估算回退 | 以服務端上報 usage（精確）為準；服務端不可用（重啟）或低估（提示緩存命中）時回退字符估算 + 提示緩存感知（`input_tokens + cache_read_input_tokens`） |
@@ -107,7 +109,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | `-mode minimal\|standard\|creation\|ptc` | 切換模式（默認 `standard`；`ptc` 开启程序化工具呈现） |
 | `-input <text>` | 非 TUI 自動化入口：執行一單輪後退出；stdin 為管道/文件重定向時進入多輪 stdin 驅動，直到 EOF |
 | `-headless` | 精简单发模式（对齐 DSH harness headless）：仅执行 `-input` 指定的**单个任务**一次后退出，不启动后续 stdin 多轮；任务须非空白（否则 stderr 报错并以码 1 退出）；**不开** ADMIN API 端口、热重载 watcher 与 cron，专为 CI 脚本 |
-| `-admin <addr>` | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认 `:9999`） |
+| `-admin <addr>` | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认回环 `127.0.0.1:9999`；需远程管理时用 `-admin :9999` 并配置 `DSC_ADMIN_TOKEN`）。未配置 `DSC_ADMIN_TOKEN` 不开认证 |
 | `-debugger` | 开放 `/debugger` 观察路由（含完整会话历史，敏感，默认不开放） |
 | `-log [<file>]` | 日志：带文件名写文件；仅 `-log` 时输出到屏幕 |
 
