@@ -1,5 +1,5 @@
-// Package workflow 提供 DSH 风格的工作流 seam：模型编写的 JS 编排脚本，
-// 经 goja 进程内执行，可扇出 subagent（agent() 钩子），返回脚本最终值。
+// Package workflow 提供 DSH 风格的工作流 seam：模型编写的 Lua 编排脚本，
+// 经 go-lua 进程内执行，可扇出 subagent（agent() 钩子），返回脚本最终值。
 //
 // 对齐 DSH workflow 家族的核心契约：
 //   - Start 同步完成足够校验（meta 块 + 脚本语法），运行创建前拒绝格式错误

@@ -12,10 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"dsc/libs/vodka/jsr"
 	"dsc/libs/vodka/libraries/ini.v1"
-
-	"github.com/dop251/goja"
 )
 
 type (
@@ -30,8 +27,6 @@ type (
 		namedRoutes map[string]*Route
 		stores      map[string]routeStore
 		data        *sync.Map // data items managed by Key , Value
-
-		JSR *goja.Runtime
 
 		QueuesMap  *sync.Map //map[string]*prior.PriorityQueue
 		FiltersMap *sync.Map //map[string][]byte // Global Filters
@@ -313,13 +308,9 @@ func New() (m *Vodka) {
 		namedRoutes: make(map[string]*Route),
 		stores:      make(map[string]routeStore),
 
-		JSR: jsr.JSR(),
-
 		QueuesMap:  new(sync.Map),
 		FiltersMap: new(sync.Map),
 	}
-
-	//m.jsRequire = m.jsRegistry.Enable(m.JSR)
 
 	m.Server.Handler = m
 	m.RouteGroup = *newRouteGroup("", m, make([]Handler, 0))

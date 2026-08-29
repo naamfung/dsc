@@ -10,7 +10,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"mime"
 	"mime/multipart"
@@ -28,9 +27,6 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/zeebo/blake3"
 	"golang.org/x/time/rate"
-
-	"github.com/dop251/goja"
-	"github.com/fsnotify/fsnotify"
 )
 
 const (
@@ -48,12 +44,9 @@ type (
 		Response *Response     // the response writer
 		ktx      ktx.Context   // standard context
 		Localer
-		Flash   *Flash
-		Session Sessioner
-		vodka   *Vodka
-		JSR     *goja.Runtime
-		// jsRegistry *require.Registry
-		// jsRequire  *require.RequireModule
+		Flash      *Flash
+		Session    Sessioner
+		vodka      *Vodka
 		pnames     []string  // list of route parameter names
 		pvalues    []string  // list of parameter values corresponding to pnames
 		data       *sync.Map // data items managed by Get and Set
@@ -79,9 +72,6 @@ func (c *Context) Reset(w http.ResponseWriter, r *http.Request) {
 	c.Response.reset(w)
 	c.Request = r
 	c.ktx = ktx.Background()
-	c.JSR = c.vodka.JSR //继承
-	// c.jsRegistry = new(require.Registry)     //重置
-	// c.jsRequire = c.jsRegistry.Enable(c.JSR) //重置
 	c.data = nil
 	c.FiltersMap = new(sync.Map)
 	c.index = -1
@@ -1380,196 +1370,6 @@ func (c *Context) String(s string, status ...int) (err error) {
 	err = c.WriteWithStatus(s, code)
 	c.Abort()
 	return
-}
-
-var objr *goja.Object
-var cache = make(map[string]string)
-var jk *fsnotify.Watcher
-
-func watcher(dir string) {
-	var err error
-	jk, err = fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer jk.Close()
-
-	if err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if info.IsDir() {
-			path, err := filepath.Abs(path)
-			if err != nil {
-				return err
-			}
-			err = jk.Add(path)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		log.Fatal(err)
-	}
-
-	var n = make(map[int64]int)
-	for {
-		select {
-		case event, ok := <-jk.Events:
-			if !ok {
-				return
-			}
-			m := time.Now().Unix()
-			if n[m]++; n[m] > 1 {
-				n = make(map[int64]int)
-				continue
-			}
-			for t := range n {
-				if t != m {
-					n = make(map[int64]int)
-					continue
-				}
-			}
-			log.Println("event:", event)
-
-			if err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-				if !info.IsDir() {
-					if strings.Contains(info.Name(), ".js") || strings.Contains(info.Name(), ".html") {
-						var f, e = os.OpenFile(path, os.O_RDONLY, os.ModePerm)
-						if e != nil {
-							return e
-						}
-						defer f.Close()
-						var b, erro = io.ReadAll(f)
-						if erro != nil {
-							return erro
-						}
-						cache[path] = string(b)
-					}
-				}
-				return nil
-			}); err != nil {
-				log.Fatal(err)
-			}
-
-		case err, ok := <-jk.Errors:
-			if !ok {
-				return
-			}
-			log.Println("error:", err)
-		}
-	}
-}
-
-// Javascript @jsHandler是js的handler文件名称
-// 在JavaScript内容最后必须使用 module.exports 显式导出与jsHandler文件名称一致的handler
-func (c *Context) Javascript(jsHandler string) (err error) {
-	var dir = "template"
-	if jk == nil {
-		go watcher(dir)
-	}
-	var view string
-	var hPath = fmt.Sprintf("%v/view/%v.html", dir, jsHandler)
-	if v, okay := cache[hPath]; okay {
-		view = v
-	} else {
-		var f, e = os.OpenFile(hPath, os.O_RDONLY, os.ModePerm)
-		if e != nil {
-			return e
-		}
-		defer f.Close()
-		var b, erro = io.ReadAll(f)
-		if erro != nil {
-			return erro
-		}
-		cache[hPath] = string(b) //cache for html code
-		view = cache[hPath]
-	}
-
-	if objr == nil {
-		objr = c.JSR.NewObject()
-	}
-
-	objr.Set("View", view)
-
-	objr.Set("Query", c.Query)
-	objr.Set("Param", c.Param)
-	objr.Set("Form", c.Form)
-	objr.Set("Next", c.Next)
-	objr.Set("Abort", c.Abort)
-	objr.Set("Break", c.Break)
-	objr.Set("Request", c.Request)
-	objr.Set("Response", c.Response)
-	objr.Set("Redirect", c.Redirect)
-	objr.Set("String", c.String)
-
-	objr.Set("Set", c.Set)
-	objr.Set("Get", c.Get)
-	objr.Set("SetStore", c.SetStore)
-	objr.Set("GetStore", c.GetStore)
-	objr.Set("PullStore", c.PullStore)
-	objr.Set("PushStore", c.PushStore)
-
-	objr.Set("Println", fmt.Println)
-	objr.Set("Printf", fmt.Printf)
-	objr.Set("Print", fmt.Print)
-
-	objr.Set("Sprint", fmt.Sprint)
-	objr.Set("Sprintf", fmt.Sprintf)
-	objr.Set("Sprintln", fmt.Sprintln)
-
-	c.JSR.Set("self", objr)
-
-	_, err = c.JSR.RunString(JST)
-	if err != nil {
-		return fmt.Errorf("Javascript c.JSR.RunString(JST) Error => %v", err)
-	}
-
-	var jsc string
-	var jsf = fmt.Sprintf("%v/handler/%v.js", dir, jsHandler)
-	if v, okay := cache[jsf]; okay {
-		jsc = v
-	} else {
-		var f, e = os.OpenFile(jsf, os.O_RDONLY, os.ModePerm)
-		if e != nil {
-			return e
-		}
-		defer f.Close()
-		var b, erro = io.ReadAll(f)
-		if erro != nil {
-			return erro
-		}
-		jsc = string(b)
-		cache[jsf] = jsc
-	}
-	var jsv, erro = c.JSR.RunString(jsc)
-	if erro != nil {
-		return fmt.Errorf("JSPlugin c.JSR.RunString(jsc) Error => %v", erro)
-	}
-
-	// v, err = c.JSR.RunString(fmt.Sprintf("var m = require('%v');m.%v;", jsf, jsHandler))
-	// if err != nil {
-	// 	return fmt.Errorf("Javascript c.JSR.RunString[2] Error => %v", err)
-	// }
-	if jsv != nil {
-		if m, okay := jsv.Export().(map[string]interface{}); okay {
-			s := fmt.Sprintf("%v", m[jsHandler])
-			return c.Blob(MIMETextHTMLCharsetUTF8, []byte(s))
-		} else {
-			if jsv.Export() != nil {
-				if s, okay := jsv.Export().(string); okay {
-					return c.Blob(MIMETextHTMLCharsetUTF8, []byte(s))
-				} else {
-					if b, okay := jsv.Export().([]byte); okay {
-						return c.Blob(MIMETextHTMLCharsetUTF8, b)
-					} else {
-						ss := fmt.Sprintf("%v", jsv.Export())
-						return c.Blob(MIMETextHTMLCharsetUTF8, []byte(ss))
-					}
-				}
-			}
-			return
-		}
-	}
-	return fmt.Errorf("Javascript %v", "Error")
 }
 
 func (c *Context) JSON(i interface{}, status ...int) (err error) {

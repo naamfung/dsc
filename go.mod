@@ -9,7 +9,6 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/casbin/casbin v1.9.1
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/flosch/pongo2/v6 v6.1.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/garyburd/redigo v1.6.4
@@ -49,14 +48,11 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/gopherjs/gopherjs v1.17.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
