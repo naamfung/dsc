@@ -119,9 +119,11 @@ func TestLLMRouteOrderPrimaryFirst(t *testing.T) {
 	m.llmOrder = []string{"primary", "backup", "other"}
 	m.agentLLMName = "backup" // primary 声明为 backup
 
-	m.mu.Lock()
-	order := m.llmRouteOrderLocked()
-	m.mu.Unlock()
+	nap := m.llmRouteSnapshot()
+	order := make([]string, 0, len(nap))
+	for _, np := range nap {
+		order = append(order, np.name)
+	}
 	want := []string{"backup", "primary", "other"}
 	if len(order) != len(want) {
 		t.Fatalf("order = %v, want %v", order, want)
@@ -139,9 +141,11 @@ func TestLLMRouteOrderSkipsUnloaded(t *testing.T) {
 	m.llmOrder = []string{"a", "ghost"} // ghost 未加载
 	m.agentLLMName = ""
 
-	m.mu.Lock()
-	order := m.llmRouteOrderLocked()
-	m.mu.Unlock()
+	nap := m.llmRouteSnapshot()
+	order := make([]string, 0, len(nap))
+	for _, np := range nap {
+		order = append(order, np.name)
+	}
 	if len(order) != 1 || order[0] != "a" {
 		t.Fatalf("order = %v, want [a] (unloaded skipped)", order)
 	}

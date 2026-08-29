@@ -22,17 +22,14 @@ type llmAggregateServer struct {
 }
 
 // Chat 依次尝试 provider（primary 优先），首个成功即返回；全部失败返回最后的错误。
+// 路由顺序与 provider 在 llmRouteSnapshot 的 RLock 下打成快照，调用期间不持锁
+// （避免长调用阻塞热重载，同时消除与热重载写 m.llms 的并发 map 竞态，P1-1）。
 func (s *llmAggregateServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
 	var lastErr error
-	for _, name := range s.m.llmRouteOrderLocked() {
-		call := &LLMCall{Provider: name, Request: req}
+	for _, np := range s.m.llmRouteSnapshot() {
+		call := &LLMCall{Provider: np.name, Request: req}
 		err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
-			provider, ok := s.m.llms[name]
-			if !ok {
-				call.Err = fmt.Errorf("llm provider %q not loaded", name)
-				return call.Err
-			}
-			resp, err := chatWithProvider(provider, ctx, req)
+			resp, err := chatWithProvider(np.p, ctx, req)
 			call.Response, call.Err = resp, err
 			return err
 		})
@@ -55,15 +52,10 @@ func (s *llmAggregateServer) Chat(ctx context.Context, req *proto.ChatRequest) (
 // （已发帧后失败不切换，避免重复输出）。
 func (s *llmAggregateServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
 	var lastErr error
-	for _, name := range s.m.llmRouteOrderLocked() {
-		call := &LLMCall{Provider: name, Request: req}
+	for _, np := range s.m.llmRouteSnapshot() {
+		call := &LLMCall{Provider: np.name, Request: req}
 		err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
-			provider, ok := s.m.llms[name]
-			if !ok {
-				call.Err = fmt.Errorf("llm provider %q not loaded", name)
-				return call.Err
-			}
-			return chatStreamWithProvider(provider, req, stream, call)
+			return chatStreamWithProvider(np.p, req, stream, call)
 		})
 		if err == nil {
 			return nil
@@ -87,19 +79,29 @@ func (s *llmAggregateServer) ChatStream(req *proto.ChatRequest, stream proto.LLM
 	return lastErr
 }
 
-// llmRouteOrderLocked 返回路由顺序：primary（agent 声明）置顶，其余按加载顺序
-// （需已持有 m.mu）。
-func (m *Manager) llmRouteOrderLocked() []string {
-	order := make([]string, 0, len(m.llmOrder)+1)
-	if _, ok := m.llms[m.agentLLMName]; ok {
-		order = append(order, m.agentLLMName)
+// namedLLMProvider 路由快照中的单个 provider。
+type namedLLMProvider struct {
+	name string
+	p    LLMProvider
+}
+
+// llmRouteSnapshot 在 RLock 下取路由顺序与 provider 快照后立即释放锁：
+// 返回 [primary（若已加载）+ 其余按加载顺序] 的有序列表。供 Chat/ChatStream 在
+// 调用期间不持锁（避免长调用阻塞热重载），同時消除 handler 侧无锁读 m.llms 与
+// 热重载写 m.llms 的并发 map 竞态（P1-1）。
+func (m *Manager) llmRouteSnapshot() []namedLLMProvider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	order := make([]namedLLMProvider, 0, len(m.llmOrder)+1)
+	if p, ok := m.llms[m.agentLLMName]; ok {
+		order = append(order, namedLLMProvider{name: m.agentLLMName, p: p})
 	}
 	for _, n := range m.llmOrder {
 		if n == m.agentLLMName {
 			continue
 		}
-		if _, ok := m.llms[n]; ok {
-			order = append(order, n)
+		if p, ok := m.llms[n]; ok {
+			order = append(order, namedLLMProvider{name: n, p: p})
 		}
 	}
 	return order
