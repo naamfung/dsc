@@ -11,6 +11,8 @@ if exist webui\package.json (
     echo harness-webui: building frontend (bun)...
     cd webui
     bun install --frozen-lockfile >nul 2>&1 || bun install >nul
+    :: 生成 .svelte-kit 配置（tsconfig.json extends 依赖；全新克隆时必需）
+    bunx svelte-kit sync
     bun run build
     cd ..
 )

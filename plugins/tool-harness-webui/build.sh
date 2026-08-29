@@ -11,6 +11,8 @@ cd "$(dirname "$0")"
 if [ -d "webui" ] && [ -f "webui/package.json" ]; then
     echo "harness-webui: building frontend (bun)..."
     (cd webui && bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null)
+    # 生成 .svelte-kit 配置（tsconfig.json extends 依赖；全新克隆时必需）
+    (cd webui && bunx svelte-kit sync)
     (cd webui && bun run build)
 fi
 

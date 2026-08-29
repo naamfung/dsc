@@ -1,2 +1,8 @@
 # dependencies
 node_modules/
+
+# SvelteKit 构建产物：全新拉取后由构建脚本 `bunx svelte-kit sync` 重新生成
+.svelte-kit/
+
+# 前端构建输出（go:embed 嵌入源）
+dist/
