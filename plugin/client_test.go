@@ -1590,7 +1590,9 @@ func TestServerLogPanic(t *testing.T) {
 	stackLines := 0
 
 	for _, line := range strings.Split(buffer.String(), "\n") {
-		if strings.Contains(line, "[ERROR] test-logger.go-core.test: panic: invalid foo bar") {
+		// 只匹配 panic 消息本身，不依赖 logger 名——模块名/平台/扩展名不同（如
+		// go-plugin.test.exe vs go-core.test）都会改写前缀，hardcode 会误判（测试健壮性）。
+		if strings.Contains(line, "panic: invalid foo bar") {
 			panicFound = true
 			continue
 		}

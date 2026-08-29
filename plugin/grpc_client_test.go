@@ -6,6 +6,7 @@ package core
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 
 	grpctest "github.com/hashicorp/go-plugin/test/grpc"
@@ -164,6 +165,9 @@ func testGRPCClientReflection(t *testing.T, multiplex bool) {
 	// TODO: maybe only assert some specific services here to make test more resilient
 	expectedSvcs := []string{"grpc.health.v1.Health", "grpc.reflection.v1.ServerReflection", "grpc.reflection.v1alpha.ServerReflection", "grpctest.Test", "core.GRPCBroker", "core.GRPCController", "core.GRPCStdio"}
 
+	// grpc reflection 的 ListServices 返回顺序不保证，按集合（排序后）比较
+	sort.Strings(svcs)
+	sort.Strings(expectedSvcs)
 	if !reflect.DeepEqual(svcs, expectedSvcs) {
 		t.Fatalf("expected: %v\ngot: %v", expectedSvcs, svcs)
 	}
