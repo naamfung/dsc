@@ -235,10 +235,13 @@ type LState struct {
 	ctxDone      <-chan struct{}
 	frameExt     map[int16]*callFrameExt // lazy-allocated frame extensions keyed by Idx
 	yieldState   uint8                   // 0=not yielded, 1=system yield, 2=user yield
-	yieldCont    uint8                   // pending yield continuation type for Lua frames
-	yieldContRA  int32                   // target register for continuation result
-	yieldContRB  int32                   // call's ReturnBase (where the result lands)
-	yieldContIdx int16                   // frame Idx that owns this continuation
+	// tailYieldPending 记录「上一次 resume 是 tail 位置 Go 函数 yield、且协程栈
+	// 已被清空」；下次 resume 的传入值即整个协程的最终返回。
+	tailYieldPending bool
+	yieldCont        uint8 // pending yield continuation type for Lua frames
+	yieldContRA      int32 // target register for continuation result
+	yieldContRB      int32 // call's ReturnBase (where the result lands)
+	yieldContIdx     int16 // frame Idx that owns this continuation
 }
 
 func (ls *LState) String() string   { return fmt.Sprintf("thread: %p", ls) }

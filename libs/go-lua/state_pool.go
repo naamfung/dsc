@@ -44,6 +44,7 @@ func resetLState(ls *LState) {
 	ls.hasErrorFunc = false
 	ls.wrapped = false
 	ls.yieldState = yieldNone
+	ls.tailYieldPending = false
 
 	// Clear frame extensions to prevent stale continuations from being invoked
 	ls.frameExt = nil
@@ -80,6 +81,7 @@ func newLStateWithGlobal(options Options, G *Global, env *LTable) *LState {
 		ls.mainLoop = mainLoop
 		ls.stop = 0
 		ls.yieldState = yieldNone
+		ls.tailYieldPending = false
 		ls.ctx = nil
 		ls.ctxDone = nil
 

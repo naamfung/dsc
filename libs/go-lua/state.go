@@ -2018,6 +2018,17 @@ func (ls *LState) Status(th *LState) string {
 }
 
 func (ls *LState) Resume(th *LState, fn *LFunction, args ...LValue) (ResumeState, []LValue, error) {
+	// tail-yield pending：上一次 resume 是「tail 位置 Go 函数 yield 且已将协程栈
+	// 清空」，本次传入的 args 即整个协程的最终返回值（不再驱动任何 Lua 代码）。
+	if th.tailYieldPending {
+		th.tailYieldPending = false
+		th.Dead = true
+		if len(args) == 0 {
+			return ResumeOK, []LValue{LNil}, nil
+		}
+		return ResumeOK, args, nil
+	}
+
 	isstarted := th.isStarted()
 	if !isstarted {
 		base := 0
@@ -2079,10 +2090,16 @@ func (ls *LState) Resume(th *LState, fn *LFunction, args ...LValue) (ResumeState
 
 	if haserror {
 		return ResumeError, nil, newApiError(ApiErrorRun, ret[0])
-	} else if th.stack.IsEmpty() {
-		return ResumeOK, ret, nil
 	}
-	return ResumeYield, ret, nil
+	if th.yieldState != yieldNone {
+		// 确实 yield 了。若协程栈被（tail 位置 Go 函数 yield 的 TCO）清空，
+		// 记 tailYieldPending，下次 resume 的传入值即最终返回。
+		if th.stack.IsEmpty() {
+			th.tailYieldPending = true
+		}
+		return ResumeYield, ret, nil
+	}
+	return ResumeOK, ret, nil
 }
 
 func (ls *LState) Yield(values ...LValue) int {
@@ -2096,6 +2113,16 @@ func (ls *LState) Yield(values ...LValue) int {
 // ResumeInto is like Resume but uses a pre-allocated buffer for return values.
 // This avoids allocations in the hot path.
 func (ls *LState) ResumeInto(th *LState, fn *LFunction, retBuf []LValue, args ...LValue) (ResumeState, []LValue, error) {
+	// 同 Resume：tail-yield pending 时，本次传入 args 即最终返回。
+	if th.tailYieldPending {
+		th.tailYieldPending = false
+		th.Dead = true
+		if len(args) == 0 {
+			return ResumeOK, []LValue{LNil}, nil
+		}
+		return ResumeOK, args, nil
+	}
+
 	isstarted := th.isStarted()
 	if !isstarted {
 		base := 0
@@ -2165,10 +2192,16 @@ func (ls *LState) ResumeInto(th *LState, fn *LFunction, retBuf []LValue, args ..
 
 	if haserror {
 		return ResumeError, nil, newApiError(ApiErrorRun, ret[0])
-	} else if th.stack.IsEmpty() {
-		return ResumeOK, ret, nil
 	}
-	return ResumeYield, ret, nil
+	if th.yieldState != yieldNone {
+		// 确实 yield 了。若协程栈被（tail 位置 Go 函数 yield 的 TCO）清空，
+		// 记 tailYieldPending，下次 resume 的传入值即最终返回。
+		if th.stack.IsEmpty() {
+			th.tailYieldPending = true
+		}
+		return ResumeYield, ret, nil
+	}
+	return ResumeOK, ret, nil
 }
 
 func (ls *LState) XMoveTo(other *LState, n int) {
