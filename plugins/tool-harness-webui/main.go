@@ -41,7 +41,7 @@ func webuiAddr() string {
 	if a := os.Getenv("HARNESS_WEBUI_ADDR"); a != "" {
 		return a
 	}
-	return ":8899"
+	return ":8118"
 }
 
 // ---------- HTTP 服务（探路版） ----------
