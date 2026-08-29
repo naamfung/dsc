@@ -79,9 +79,24 @@ func NewStore(dir string) (*Store, error) {
 	return s, nil
 }
 
-// path 返回指定会话的文件路径。
-func (s *Store) path(id string) string {
-	return filepath.Join(s.dir, id+".jsonl")
+// path 返回指定会话的文件路径；id 须为安全的单组件文件名，拒绝路径穿越。
+func (s *Store) path(id string) (string, error) {
+	if !safeSessionID(id) {
+		return "", fmt.Errorf("session store: invalid session id %q", id)
+	}
+	return filepath.Join(s.dir, id+".jsonl"), nil
+}
+
+// safeSessionID 校验会话 id 是否为安全的单组件文件名：非空、不含路径分隔符、
+// 不含路径穿越段（..）或绝对路径特征，避免 <id>.jsonl 逃逸 sessions 目录。
+func safeSessionID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return false
+	}
+	return true
 }
 
 // Create 创建新会话，id 为 session-<n>（按内存计数器递增，避免未落盘会话重复编号）。
@@ -96,7 +111,11 @@ func (s *Store) Create() (*Session, error) {
 
 // Load 加载指定会话；不存在返回 (nil, nil)。
 func (s *Store) Load(id string) (*Session, error) {
-	sess, err := Load(s.path(id))
+	p, err := s.path(id)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := Load(p)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +143,20 @@ func (s *Store) Save(sess *Session) error {
 	if sess.id == "" {
 		return fmt.Errorf("session store: cannot save session without id")
 	}
-	return sess.Save(s.path(sess.id))
+	p, err := s.path(sess.id)
+	if err != nil {
+		return err
+	}
+	return sess.Save(p)
 }
 
 // Delete 删除指定会话；不存在视为幂等成功。
 func (s *Store) Delete(id string) error {
-	if err := os.Remove(s.path(id)); err != nil && !os.IsNotExist(err) {
+	p, err := s.path(id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("session store: remove %s: %w", id, err)
 	}
 	return nil

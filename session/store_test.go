@@ -185,3 +185,26 @@ func TestStoreLoadMissing(t *testing.T) {
 		t.Fatalf("expected nil for missing session, got %+v", sess)
 	}
 }
+
+// TestStoreRejectsTraversal 校验 Load/Delete/Save 拒绝路径穿越 id（P3-6）。
+func TestStoreRejectsTraversal(t *testing.T) {
+	st, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	for _, id := range []string{
+		"../../evil", "..", ".", "a/../b", `a\..\b`, "/etc/passwd", "C:/Windows/x",
+	} {
+		if _, err := st.Load(id); err == nil {
+			t.Fatalf("Load(%q) should be rejected", id)
+		}
+		if err := st.Delete(id); err == nil {
+			t.Fatalf("Delete(%q) should be rejected", id)
+		}
+	}
+	sess := New()
+	sess.id = "../evil"
+	if err := st.Save(sess); err == nil {
+		t.Fatal("Save with traversal id should be rejected")
+	}
+}
