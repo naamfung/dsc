@@ -151,11 +151,11 @@ func (s *sched) installBindings() {
 	// agent(prompt, options?)：异步跑子代理；结果 string，失败 → nil。
 	agent := func(L *lua.LState) int {
 		if s.req.Runner == nil {
-			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("runner is required")})
+			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("runner is required; 这是宿主未注入编排 Runner，模型无需修改，请重试")})
 		}
 		prompt := strings.TrimSpace(L.CheckString(1))
 		if prompt == "" {
-			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("agent(prompt) requires a non-empty prompt")})
+			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("agent(prompt) requires a non-empty prompt; 正确用法: local r = agent(\"子代理的任务描述，例: 调研这个仓库里并行是怎么实现的\")")})
 		}
 		label := prompt
 		if o := L.Get(2); o != lua.LNil {
@@ -184,7 +184,7 @@ func (s *sched) installBindings() {
 	parallel := func(L *lua.LState) int {
 		arr, ok := L.Get(1).(*lua.LTable)
 		if !ok {
-			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("parallel() requires an array")})
+			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("parallel() requires an array; 正确用法: parallel({function() return agent(\"任务甲\") end, function() return agent(\"任务乙\") end})")})
 		}
 		n := arr.Len()
 		maxItems := s.req.MaxItemsPerCall
@@ -192,13 +192,13 @@ func (s *sched) installBindings() {
 			maxItems = defaultMaxItemsPerCall
 		}
 		if n > maxItems {
-			return s.yieldFatal(L, &RunError{Code: ErrItemCap, Err: fmt.Errorf("parallel() exceeds maxItemsPerCall (%d)", maxItems)})
+			return s.yieldFatal(L, &RunError{Code: ErrItemCap, Err: fmt.Errorf("parallel() exceeds maxItemsPerCall (%d); 正确用法: 把这批 %d 个任务拆成多个 ≤%d 条的 parallel 依次执行后拼接，或调大 maxItemsPerCall", maxItems, n, maxItems)})
 		}
 		thunks := make([]*lua.LFunction, n)
 		for i := 1; i <= n; i++ {
 			lf, ok := arr.RawGetInt(i).(*lua.LFunction)
 			if !ok {
-				return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("parallel() item %d is not a function", i)})
+				return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("parallel() item %d is not a function; 并行数组的每一项都必须是零参函数（内部再经 agent()/工具分工），例如: parallel({function() return agent(\"A\") end})", i)})
 			}
 			thunks[i-1] = lf
 		}
@@ -217,7 +217,7 @@ func (s *sched) installBindings() {
 	pipeline := func(L *lua.LState) int {
 		items, ok := L.Get(1).(*lua.LTable)
 		if !ok {
-			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("pipeline() requires an items array")})
+			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("pipeline() requires an items array; 正确用法: pipeline(items, function(prev, item, idx) return item end)，即第一参数为数据表，随后跟一个或多个 stage 函数")})
 		}
 		n := items.Len()
 		maxItems := s.req.MaxItemsPerCall
@@ -225,15 +225,15 @@ func (s *sched) installBindings() {
 			maxItems = defaultMaxItemsPerCall
 		}
 		if n > maxItems {
-			return s.yieldFatal(L, &RunError{Code: ErrItemCap, Err: fmt.Errorf("pipeline() exceeds maxItemsPerCall (%d)", maxItems)})
+			return s.yieldFatal(L, &RunError{Code: ErrItemCap, Err: fmt.Errorf("pipeline() exceeds maxItemsPerCall (%d); 正确用法: 把 %d 个 items 拆成多个 ≤%d 的批次逐个 pipeline（结果再拼接），或调大 maxItemsPerCall", maxItems, n, maxItems)})
 		}
 		if L.GetTop() < 2 {
-			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("pipeline() requires at least one stage")})
+			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("pipeline() requires at least one stage; 正确用法: pipeline(items, function(prev, item, idx) return item end)")})
 		}
 		stages := L.NewTable()
 		for i := 2; i <= L.GetTop(); i++ {
 			if _, ok := L.Get(i).(*lua.LFunction); !ok {
-				return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("pipeline() stage %d is not a function", i-1)})
+				return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("pipeline() stage %d is not a function; stage 签名 (prev, item, idx) → 返回处理后的 value（idx 从 0 起），例如 pipeline(items, function(p, i, x) return p + i end)", i-1)})
 			}
 			stages.RawSetInt(i-1, L.Get(i))
 		}
@@ -268,7 +268,7 @@ func (s *sched) installBindings() {
 	phase := func(L *lua.LState) int {
 		title := L.CheckString(1)
 		if strings.TrimSpace(title) == "" {
-			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("phase(title) requires a non-empty title")})
+			return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("phase(title) requires a non-empty title; 正确用法: phase(\"build\")（标题用于进度叙事，须简洁可读）")})
 		}
 		if len(s.req.Meta.Phases) > 0 {
 			found := false
@@ -279,7 +279,7 @@ func (s *sched) installBindings() {
 				}
 			}
 			if !found {
-				return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("phase %q not declared in meta.phases", title)})
+				return s.yieldFatal(L, &RunError{Code: ErrInvalidArgument, Err: fmt.Errorf("phase %q not declared in meta.phases; 正确用法: 只调用 meta.phases 声明过的标题（如 phase(\"build\")）；若需新阶段，先到编排 meta.phases 里声明", title)})
 			}
 		}
 		s.emit(func(sf EventSink) { sf.OnPhase(s.id, title) })

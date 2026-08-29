@@ -802,7 +802,19 @@ func (a *ReactLoopAgent) ptcSDKContext(ctx context.Context, toolClient proto.Too
 	if err != nil {
 		return ""
 	}
-	return formatPTCTools(resp.Tools)
+	return formatPTCTools(resp.Tools) + "\n\n" + ptcLanguageSpec()
+}
+
+// ptcLanguageSpec 返回 go-lua 严格 Lua 方言的语言规范速查，便于模型快速上手写 run_code 程序。
+func ptcLanguageSpec() string {
+	return "Strict Lua dialect (go-lua: Lua 5.1 syntax, 5.3 integers, flow-sensitive type checker) quick reference:\n" +
+		"- Tables/arrays are 1-based: items[1] is the first element (not items[0]); '#t' is sequence length; absent keys read as nil.\n" +
+		"- nil != false; '--' starts a comment; 'local' scopes a variable; no trailing semicolons.\n" +
+		"- Typed annotations are supported and recommended: local n:number = 1; local xs:{string} = {...}; " +
+		"type P = {x:number, y:number}; local f:(number,number)->number = function(a,b) return a+b end.\n" +
+		"- Nullable/optional and union types: T? ; type Event = Exit | Message. The checker narrows after a nil/type test " +
+		"(e.g. 'if not x then return end' then use x.field safely; 'assert(x ~= nil)').\n" +
+		"- Call a tool as its same-name function with ONE table argument (mytool{arg=...}); a failed tool resolves to nil, not an error."
 }
 
 // formatPTCTools 把 run_code 可调用工具（不含 run_code 自身）格式化为 PTC SDK 清单。

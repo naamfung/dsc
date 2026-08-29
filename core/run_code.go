@@ -49,10 +49,10 @@ func (t *runCodeTool) Execute(ctx context.Context, args json.RawMessage) (string
 		TimeoutMs int    `json:"timeout_ms"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
-		return "", fmt.Errorf("run_code: invalid args: %w", err)
+		return "", fmt.Errorf("run_code: invalid args: %w; 正确用法: 参数形如 {\"source\": \"local n = grep{pattern=\\\"TODO\\\"}; return n.count\", \"args\": {...}, \"timeout_ms\": 30000}", err)
 	}
 	if strings.TrimSpace(p.Source) == "" {
-		return "", fmt.Errorf("run_code: source is required")
+		return "", fmt.Errorf("run_code: source is required; 正确用法: {\"source\": \"return args.query\"}，其中 source 是 Lua 程序，顶层 return 即结果")
 	}
 
 	// 由工具目录生成 SDK，拼接在用户脚本之前执行。

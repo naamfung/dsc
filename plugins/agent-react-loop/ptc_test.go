@@ -50,6 +50,15 @@ func TestOneLinePrompt(t *testing.T) {
 	}
 }
 
+func TestPTCLanguageSpec(t *testing.T) {
+	s := ptcLanguageSpec()
+	for _, want := range []string{"1-based", "number", "nil", "T?", "mytool{arg=...}"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("language spec missing %q:\n%s", want, s)
+		}
+	}
+}
+
 func TestFormatPTCTools(t *testing.T) {
 	tools := []*proto.Tool{
 		{Name: "run_code", Description: "execute a Lua program"},
