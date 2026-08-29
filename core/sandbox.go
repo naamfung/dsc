@@ -40,22 +40,42 @@ func ParseSandboxPolicy(s string) SandboxPolicy {
 	}
 }
 
+// writeCapableExecutors 是无法从参数路径判断写入目标、却可对文件系统任意写/执行
+// 命令的解释器/执行器工具（如 tool-filesystem 的 shell，内部为 mvdan/sh）。
+// read-only 下必须整体禁用——因为无法从命令文本判定某条命令是否只读，放行即等于
+// 允许「echo x > /anywhere」绕开只读沙箱（P0-1）。workspace-write 下放行（缺省档，
+// 运行 shell 是其主要用途；其工作区写入边界由工具/OS 层约束）。
+//
+// 长期正解：由工具插件自声明「可执行的写能力」（自声明式写入语义），替换此处的
+// 名称枚举。暂以此作为 read-only 缺口的最小封堵。
+var writeCapableExecutors = map[string]bool{
+	"shell": true,
+}
+
+// isWriteCapableExecutor 判断工具是否为不可定位写入路径的解释器/执行器。
+func isWriteCapableExecutor(name string) bool {
+	return writeCapableExecutors[name]
+}
+
 // sandboxCheck 判定一次工具调用是否被当前策略允许。返回允许时的 nil，或拒绝原因。
 func sandboxCheck(policy SandboxPolicy, toolName, argsJSON string) error {
 	if policy == SandboxFullAccess {
 		return nil
 	}
 	path, write := writeCallInfo(toolName, argsJSON)
-	if !write {
-		return nil
-	}
 	switch policy {
 	case SandboxReadOnly:
-		return fmt.Errorf("sandbox: read-only policy blocks write to %q via %s", path, toolName)
-	case SandboxWorkspaceWrite:
-		if path == "" || !inWorkspace(path) {
-			return fmt.Errorf("sandbox: workspace-write policy blocks write outside workspace to %q via %s", path, toolName)
+		// read-only：任何可写操作一律拒绝；无法定位写路径的解释器/执行器整体禁用。
+		if write || isWriteCapableExecutor(toolName) {
+			return fmt.Errorf("sandbox: read-only policy blocks write via %s", toolName)
 		}
+	case SandboxWorkspaceWrite:
+		if write {
+			if path == "" || !inWorkspace(path) {
+				return fmt.Errorf("sandbox: workspace-write policy blocks write outside workspace to %q via %s", path, toolName)
+			}
+		}
+		// 不可定位写路径的执行器在 workspace-write 下放行（缺省档，见 writeCapableExecutors 注释）。
 	}
 	return nil
 }

@@ -35,6 +35,30 @@ func TestSandboxReadOnlyAllowsView(t *testing.T) {
 	}
 }
 
+func TestSandboxReadOnlyBlocksShellExecutor(t *testing.T) {
+	m := newRouterManager()
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxReadOnly)))
+	_ = m.toolRegistry.Register(&mockTool{name: "shell"})
+
+	// shell 是解释器/执行器，read-only 下即使命令看似只读也须整体禁用（无法判定是否写文件）。
+	if _, err := m.ExecuteTool(context.Background(), "shell",
+		json.RawMessage(`{"command":"echo hello"}`)); err == nil || !strings.Contains(err.Error(), "read-only policy blocks write") {
+		t.Fatalf("shell should be blocked under read-only: %v", err)
+	}
+}
+
+func TestSandboxWorkspaceAllowsShellExecutor(t *testing.T) {
+	m := newRouterManager()
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxWorkspaceWrite)))
+	_ = m.toolRegistry.Register(&mockTool{name: "shell"})
+
+	// workspace-write（缺省档）下 shell 放行：运行 shell 是其主要用途。
+	if _, err := m.ExecuteTool(context.Background(), "shell",
+		json.RawMessage(`{"command":"echo hi"}`)); err != nil {
+		t.Fatalf("shell should pass workspace-write policy: %v", err)
+	}
+}
+
 func TestSandboxWorkspaceAllowsInside(t *testing.T) {
 	orig := WorkspaceRoot
 	WorkspaceRoot = t.TempDir() + "/ws"
