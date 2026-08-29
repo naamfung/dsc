@@ -67,6 +67,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `tool-skill`
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify）
 - `tool-memory-service`（记忆库工具：原生 RPC 工具 + AfterTool 自动记忆钩子，落点宿主可执行目录 `memory/`，跨会话共享）
+- `tool-notify`（通知音效工具：`notify` 播放内置音效 success/error/warning/info 或自定义 `.mp3/.wav`）
 - `tool-harness-webui`（独立 HTTP 服务，代理宿主 admin API 的前端）
 
 ### Policy 插件
