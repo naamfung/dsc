@@ -11,7 +11,8 @@
 - **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（不额外拦截）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控。
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
 - **TUI 工具調用顯示增強**：在 TUI 界面中，針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `Edit(View, /root/file/path)`、`Edit(Create, /root/file/path)`、`Edit(StrReplace, /root/file/path)`、`Edit(Insert, /root/file/path)` 等格式，提供更清晰的操作方向性展示。
-- **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 JS 编排脚本经 goja 执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子）；子代理默认无迭代上限，何时完成由模型/进度自行决定（返回纯文本即收尾）；`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI 新增 `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
+- **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 Lua 编排脚本，由 go-lua 的**协程排程器**执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子）；子代理默认无迭代上限，何时完成由模型自行决定；`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
+- **程序化工具呈现（PTC）**：宿主内置 `run_code` 工具（对齐 DSH 的 PTC 概念）——模型写一段**严格 Lua** 程序一把过组合多步工具调用，而不再逐个 call：程序里每个可用工具以同名 Lua 函数呈现（`mytool{...}`），顶层 `return` 即结果；语言是带类型注解、可空 `T?`、联集、流式收窄的受检方言（基于 go-lua）。`-mode ptc`（或 `DSC_PTC=1`）开启呈现模式：system prompt 引导模型优先用 `run_code` 整合多步，并注入「可用工具 SDK 清单 + 严格 Lua 方言规范」助其快速上手；单个工具仍保留作 fallback，不强求隐藏。
 - **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
 
@@ -34,6 +35,8 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | 技能 | `skill/` provider registry + catalog/loader tool（`ctx.skills`） | `skills/builtin` + `skills/installed`，`read_skill` 按需加載、`install_skill`/`uninstall_skill` 管理 |
 | plan/goal/todo | plan-mode、goal、todo 領域 | 對齊：宿主托管 plan/goal/todo 工具，狀態經事件日誌折疊 |
 | UI | Web UI（`apps/web`） | TUI（bubbletea）+ Web UI（`tool-harness-webui`） |
+
+**PTC（程序化工具呈现）差异**：两者概念同构——模型写一段程序组合多步工具调用、一把过执行。但实现语言不同：DSH 的原生 PTC 用 **TypeScript**（其 runtime 本身就是 TS/Node）；DSC 用 **严格 Lua**（go-lua，带类型注解、可空 `T?`、联集、流式收窄的受检方言）。且 DSC 当前提供的 PTC 是「引导优先 + 保留单个工具 fallback」的**有界呈现**（`-mode ptc` / `DSC_PTC=1`），而非 DSH 那种 run_code-only 的高度隐藏。
 
 ### 功能對齊程度
 
@@ -75,7 +78,8 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `plugin/` — 定制版 go-plugin 庫（module path 仍 `github.com/hashicorp/go-plugin`，含宿主掛載聚合服務必需的 `GRPCClient.Broker()` 擴展）
 - `plugins/` — 各插件實現（`llm-*` / `tool-*` / `agent-*` / `policy-*`）
 - `sdk/` — `dsc-sdk`：聲明式插件構建器（獨立 module，插件作者只需導入 SDK）
-- `workflow/` — 多 Agent JS 編排引擎（goja 執行模型編寫的腳本）
+- `workflow/` — 多 Agent Lua 编排引擎（go-lua 协程排程器执行模型编写的脚本）
+- `coderuntime/` — `run_code` 的实现：go-lua 隔离执行程序 + 按工具目录生成 Lua SDK
 - `jobs/` — 後台任務註冊表（workflow 後台運行承載）
 - `session/` — 事件溯源會話（按項目路徑命名存儲，跨項目隔離）
 - `proto/` — gRPC 定義與生成代碼
@@ -91,14 +95,14 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | `/session <id>\|new\|delete <id>` · `/sessions` | 多會話管理 |
 | `/cron add\|remove\|on\|off` · `/crons` | 定時任務 |
 | `/plan [off]` | plan 模式開關 |
-| `/mode minimal\|standard\|creation` | 切換模式 |
+| `/mode minimal\|standard\|creation\|ptc` | 切換模式（`ptc` 开启程序化工具呈现） |
 | `/skills` · `/help` · `/clear` · `/export` · `/mouse` | 技能 / 幫助 / 清屏 / 導出 / 鼠標 |
 
 ## 啟動參數（CLI 旗標）
 
 | 旗標 | 用途 |
 | --- | --- |
-| `-mode minimal\|standard\|creation` | 切換模式（默認 `standard`） |
+| `-mode minimal\|standard\|creation\|ptc` | 切換模式（默認 `standard`；`ptc` 开启程序化工具呈现） |
 | `-input <text>` | 非 TUI 自動化入口：執行一單輪後退出；stdin 為管道/文件重定向時進入多輪 stdin 驅動，直到 EOF |
 | `-headless` | 精简单发模式（对齐 DSH harness headless）：仅执行 `-input` 指定的**单个任务**一次后退出，不启动后续 stdin 多轮；任务须非空白（否则 stderr 报错并以码 1 退出）；**不开** ADMIN API 端口、热重载 watcher 与 cron，专为 CI 脚本 |
 | `-admin <addr>` | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认 `:9999`） |
