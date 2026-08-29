@@ -534,11 +534,12 @@ func (c *Client) Kill() {
 		if err == nil {
 			err = client.Close()
 
-			// If there is no error, then we attempt to wait for a graceful
-			// exit. If there was an error, we assume that graceful cleanup
-			// won't happen and just force kill.
-			graceful = err == nil
-			if err != nil {
+			// 连接已被对端/进程以 EOF 或连接关闭错误结束（Windows 上 reattach 后 Kill
+			// 常见）：这实质是进程正在退出的信号，不应视为「非优雅」而立即强杀——否则
+			// killed() 会误报、reattach 测试 flaky。仍按优雅路径等待进程退出，真不退出
+			// 才在下方强杀。
+			graceful = err == nil || isConnClosedError(err)
+			if err != nil && !graceful {
 				// If there was an error just log it. We're going to force
 				// kill in a moment anyways.
 				c.logger.Warn("error closing client during Kill", "err", err)
@@ -569,6 +570,21 @@ func (c *Client) Kill() {
 	c.l.Lock()
 	c.processKilled = true
 	c.l.Unlock()
+}
+
+// isConnClosedError 报告 err 是否表示连接已被对端关闭（EOF / 使用已关闭的连接）。
+// Kill 时这种错误说明对端（插件进程）正在/已经关闭连接，应视为可优雅等待进程退出，
+// 而非立即强杀——否则 killed() 会误报非优雅、导致 Windows 上 reattach 测试 flaky。
+func isConnClosedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unexpected EOF") ||
+		strings.Contains(msg, "use of closed network connection")
 }
 
 // Start the underlying subprocess, communicating with it to negotiate
