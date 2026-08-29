@@ -15,12 +15,11 @@ package coderuntime
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
 
+	"dsc/lualib"
 	lua "github.com/wippyai/go-lua"
 )
 
@@ -126,7 +125,7 @@ func Run(ctx context.Context, opts Options) Result {
 		}
 		argsJSON := "{}"
 		if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-			if b, err := json.Marshal(fromLua(L.Get(2))); err == nil {
+			if b, err := json.Marshal(lualib.FromLua(L.Get(2))); err == nil {
 				argsJSON = string(b)
 			} else {
 				L.RaiseError("tool() args must be JSON-serializable: %v", err)
@@ -155,7 +154,7 @@ func Run(ctx context.Context, opts Options) Result {
 
 	// Bindings 作为全局暴露（如 args）。
 	for k, v := range opts.Bindings {
-		L.SetGlobal(k, toLua(L, v))
+		L.SetGlobal(k, lualib.ToLua(L, v))
 	}
 
 	// 把脚本包成 `__cr_entry` 函数（顶层 return 即函数 return），
@@ -187,7 +186,7 @@ func Run(ctx context.Context, opts Options) Result {
 			state, vals, err = L.Resume(co, entry, lua.LFalse, lua.LString(toolErr.Error()))
 		} else {
 			snap.Result = result
-			state, vals, err = L.Resume(co, entry, lua.LTrue, toLua(L, reviveJSON(result)))
+			state, vals, err = L.Resume(co, entry, lua.LTrue, lualib.ToLua(L, reviveJSON(result)))
 		}
 	}
 
@@ -212,11 +211,11 @@ func Run(ctx context.Context, opts Options) Result {
 // materialize 把程序回传值物化：单值 -> 原值；多值 -> 数组。
 func materialize(vals []lua.LValue) any {
 	if len(vals) == 1 {
-		return fromLua(vals[0])
+		return lualib.FromLua(vals[0])
 	}
 	out := make([]any, len(vals))
 	for i, v := range vals {
-		out[i] = fromLua(v)
+		out[i] = lualib.FromLua(v)
 	}
 	return out
 }
@@ -231,120 +230,4 @@ func reviveJSON(s string) any {
 		return s
 	}
 	return v
-}
-
-// fromLua 把 LValue 转成 Go 值（表 -> map/[]，数字区分 int/float）。
-func fromLua(v lua.LValue) any {
-	switch t := v.(type) {
-	case *lua.LTable:
-		return tableToGo(t)
-	case lua.LString:
-		return string(t)
-	case lua.LNumber:
-		return float64(t)
-	case lua.LInteger:
-		return int64(t)
-	case lua.LBool:
-		return bool(t)
-	default:
-		if v == lua.LNil {
-			return nil
-		}
-		return v.String()
-	}
-}
-
-// tableToGo 把 Lua 表转成 Go 值：整数键 1..n 连续 -> []any，否则 -> map[string]any。
-func tableToGo(t *lua.LTable) any {
-	var keys []lua.LValue
-	t.ForEach(func(k, _ lua.LValue) { keys = append(keys, k) })
-	isArray := true
-	arrLen := 0
-	for _, k := range keys {
-		i, ok := k.(lua.LInteger)
-		if !ok || int64(i) < 1 {
-			isArray = false
-			break
-		}
-		if int64(i) > int64(arrLen) {
-			arrLen = int(i)
-		}
-	}
-	if isArray && arrLen > 0 {
-		out := make([]any, arrLen)
-		for i := 1; i <= arrLen; i++ {
-			if v := t.RawGetInt(i); v != lua.LNil {
-				out[i-1] = fromLua(v)
-			}
-		}
-		return out
-	}
-	out := make(map[string]any, len(keys))
-	t.ForEach(func(k, v lua.LValue) { out[k.String()] = fromLua(v) })
-	return out
-}
-
-// toLua 把 Go 值转成 LValue（供绑定与工具结果回填）。
-func toLua(L *lua.LState, v any) lua.LValue {
-	switch t := v.(type) {
-	case nil:
-		return lua.LNil
-	case bool:
-		if t {
-			return lua.LTrue
-		}
-		return lua.LFalse
-	case string:
-		return lua.LString(t)
-	case int:
-		return lua.LInteger(t)
-	case int64:
-		return lua.LInteger(t)
-	case float64:
-		if i, ok := integral(t); ok {
-			return lua.LInteger(i)
-		}
-		return lua.LNumber(t)
-	case json.Number:
-		if i, err := t.Int64(); err == nil {
-			return lua.LInteger(i)
-		}
-		if f, err := t.Float64(); err == nil {
-			return lua.LNumber(f)
-		}
-		return lua.LString(t.String())
-	case []any:
-		tbl := L.NewTable()
-		for i, e := range t {
-			tbl.RawSetInt(i+1, toLua(L, e))
-		}
-		return tbl
-	case map[string]any:
-		tbl := L.NewTable()
-		for k, e := range t {
-			tbl.RawSetString(k, toLua(L, e))
-		}
-		return tbl
-	default:
-		// 其余类型：按 JSON 走（struct -> 表），失败退回字符串。
-		if b, err := json.Marshal(t); err == nil {
-			var j any
-			if json.Unmarshal(b, &j) == nil {
-				return toLua(L, j)
-			}
-			return lua.LString(string(b))
-		}
-		return lua.LString(fmt.Sprintf("%v", t))
-	}
-}
-
-// integral 若浮点可精确表示整数则返回其整数值。
-func integral(f float64) (int64, bool) {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, false
-	}
-	if math.Trunc(f) != f {
-		return 0, false
-	}
-	return int64(f), true
 }

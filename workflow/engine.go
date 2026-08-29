@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"runtime"
 	"strings"
 	"time"
 
+	"dsc/lualib"
 	lua "github.com/wippyai/go-lua"
 	"github.com/wippyai/go-lua/compiler/parse"
 )
@@ -296,7 +296,7 @@ func (s *sched) installBindings() {
 
 	// args 全局。
 	if s.req.Args != nil {
-		s.L.SetGlobal("args", toLua(s.L, s.req.Args))
+		s.L.SetGlobal("args", lualib.ToLua(s.L, s.req.Args))
 	} else {
 		s.L.SetGlobal("args", s.L.NewTable())
 	}
@@ -421,7 +421,7 @@ func (s *sched) finish(u *unit, vals []lua.LValue) {
 		val = vals[0]
 	}
 	if u.grp == "" {
-		s.finalValue = fromLua(val)
+		s.finalValue = lualib.FromLua(val)
 		return
 	}
 	g := s.groups[u.grp]
@@ -462,131 +462,5 @@ func envTable(L *lua.LState, r lua.LValue) *lua.LTable {
 	return t
 }
 
-// fromLua 把 LValue 转成 JSON 兼容的 Go 值。
-func fromLua(v lua.LValue) any {
-	switch t := v.(type) {
-	case *lua.LTable:
-		return tableToGo(t)
-	case lua.LString:
-		return string(t)
-	case lua.LNumber:
-		return float64(t)
-	case lua.LInteger:
-		return int64(t)
-	case lua.LBool:
-		return bool(t)
-	default:
-		if v == lua.LNil {
-			return nil
-		}
-		return v.String()
-	}
-}
-
-// tableToGo 把 Lua 表转成 Go 值：全部键为正整数 → 按最大下标生成 []any；
-// 否则 → map[string]any。
-func tableToGo(t *lua.LTable) any {
-	isArray := true
-	arrLen := 0
-	t.ForEach(func(k, _ lua.LValue) {
-		n, ok := intKey(k)
-		if !ok || n < 1 {
-			isArray = false
-			return
-		}
-		if n > arrLen {
-			arrLen = n
-		}
-	})
-	if isArray && arrLen > 0 {
-		out := make([]any, arrLen)
-		for i := 1; i <= arrLen; i++ {
-			if rv := t.RawGetInt(i); rv != lua.LNil {
-				out[i-1] = fromLua(rv)
-			}
-		}
-		return out
-	}
-	out := make(map[string]any, 4)
-	t.ForEach(func(k, v lua.LValue) { out[k.String()] = fromLua(v) })
-	return out
-}
-
-// intKey 把整数下标 key（LInteger 或整数值 LNumber）归一成 int。
-func intKey(k lua.LValue) (int, bool) {
-	switch t := k.(type) {
-	case lua.LInteger:
-		return int(int64(t)), true
-	case lua.LNumber:
-		f := float64(t)
-		if f != float64(int(f)) {
-			return 0, false
-		}
-		return int(f), true
-	}
-	return 0, false
-}
-
-// toLua 把 Go 值转成 LValue（供 args 绑定）。
-func toLua(L *lua.LState, v any) lua.LValue {
-	switch t := v.(type) {
-	case nil:
-		return lua.LNil
-	case bool:
-		if t {
-			return lua.LTrue
-		}
-		return lua.LFalse
-	case string:
-		return lua.LString(t)
-	case int:
-		return lua.LInteger(t)
-	case int64:
-		return lua.LInteger(t)
-	case float64:
-		if i, ok := integral(t); ok {
-			return lua.LInteger(i)
-		}
-		return lua.LNumber(t)
-	case json.Number:
-		if i, err := t.Int64(); err == nil {
-			return lua.LInteger(i)
-		}
-		if f, err := t.Float64(); err == nil {
-			return lua.LNumber(f)
-		}
-		return lua.LString(t.String())
-	case []any:
-		tbl := L.NewTable()
-		for i, e := range t {
-			tbl.RawSetInt(i+1, toLua(L, e))
-		}
-		return tbl
-	case map[string]any:
-		tbl := L.NewTable()
-		for k, e := range t {
-			tbl.RawSetString(k, toLua(L, e))
-		}
-		return tbl
-	default:
-		if b, err := json.Marshal(t); err == nil {
-			var j any
-			if json.Unmarshal(b, &j) == nil {
-				return toLua(L, j)
-			}
-			return lua.LString(string(b))
-		}
-		return lua.LString(fmt.Sprintf("%v", t))
-	}
-}
-
-// integral 若浮点可精确表示整数则返回其整数值。
-func integral(f float64) (int64, bool) {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, false
-	}
-	if math.Trunc(f) != f {
-		return 0, false
-	}
-	return int64(f), true
-}
+// Lua↔JSON 转换（fromLua/toLua/tableToGo/intKey/integral）已抽入 dsc/lualib
+// （见 FromLua / ToLua），避免与 coderuntime 重复维护同一套逻辑。

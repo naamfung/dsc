@@ -81,6 +81,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `sdk/` — `dsc-sdk`：聲明式插件構建器（獨立 module，插件作者只需導入 SDK）
 - `workflow/` — 多 Agent Lua 编排引擎（go-lua 协程排程器执行模型编写的脚本）
 - `coderuntime/` — `run_code` 的实现：go-lua 隔离执行程序 + 按工具目录生成 Lua SDK
+- `lualib/` — go-lua 值与 Go/JSON 互转的共享工具包（coderuntime 与 workflow 共用，避免重复实现）
 - `jobs/` — 後台任務註冊表（workflow 後台運行承載）
 - `session/` — 事件溯源會話（按項目路徑命名存儲，跨項目隔離）
 - `proto/` — gRPC 定義與生成代碼
