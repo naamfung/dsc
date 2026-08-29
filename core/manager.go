@@ -1583,10 +1583,8 @@ func (s *llmProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServ
 		if err != nil {
 			return err
 		}
-		// [DEBUG] 打印轉發的 ChatStreamResponse
-		if msg.Reasoning != "" || msg.Content != "" {
-			fmt.Fprintf(os.Stderr, "[LLM-PROXY-DEBUG] Send: Content=%q, Reasoning=%q, FinishReason=%q\n", msg.Content, msg.Reasoning, msg.FinishReason)
-		}
+		// 不再无条件向 stderr 打印消息正文/推理（原 [LLM-PROXY-DEBUG]）：会话内容
+		// 会经日志/重定向落盘造成凭据与隐私泄漏（P2.3）。
 		if err := stream.Send(msg); err != nil {
 			return err
 		}

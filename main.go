@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -216,10 +217,12 @@ func runInputMode(agent core.Agent, ctx context.Context, input string) int {
 }
 
 func main() {
-	// 捕獲 panic 並輸出到 stderr，以便在日誌靜默時能調試啟動失敗原因
+	// 捕获 panic：打印完整堆栈而非仅值，并以非零码退出——否则 recover 后 main
+	// 落到 os.Exit(exitCode) 时 exitCode 仍为默认 0，CI 会把崩溃误判为成功（P2.5）。
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "panic recovered: %v\n", r)
+			fmt.Fprintf(os.Stderr, "panic: %v\n%s\n", r, debug.Stack())
+			os.Exit(1)
 		}
 	}()
 

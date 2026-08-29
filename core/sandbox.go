@@ -83,13 +83,16 @@ func sandboxCheck(policy SandboxPolicy, toolName, argsJSON string) error {
 // writeCallInfo 提取工具调用的目标路径与写操作判定。
 // 仅对已知写语义的工具生效：str_replace_editor 的 command != view 视为写。
 // 其余工具视为非写（不做额外拦截，避免误伤读操作）。
+// 参数无法解析为合法 JSON 时按「写」处理（fail-closed），避免解析失败被当成
+// 非写放行而与沙箱 fail-closed 声称矛盾（P2.4）。
 func writeCallInfo(toolName, argsJSON string) (path string, write bool) {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
-		return "", false
-	}
 	switch toolName {
 	case "str_replace_editor":
+		var m map[string]any
+		if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
+			// 无法判定写意图：fail-closed 视作写，sandboxCheck 会据此拒绝。
+			return "", true
+		}
 		path, _ = m["path"].(string)
 		cmd, _ := m["command"].(string)
 		return path, cmd != "view"

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"dsc-sdk"
 	"dsc/core"
@@ -869,18 +870,31 @@ const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史
 	"保留用户意图、已执行的工具调用及其结果、以及所有关键的中间结论，以便在后续对话中无需原始记录也能继续。" +
 	"只输出压缩后的摘要，不要输出任何解释、前言或结尾。"
 
+// estimateTextTokens 估算一段文本的 token 数（对齐 rex guardian/estimateTokens）：
+// 取「字节数/4」与「rune 数」的较大者。英文按 /4（约 4 字符 1 token）；CJK（UTF-8
+// 每字 3 字节）字节/4 会低估，故回调为 rune 数（每字按 1 token），避免中文会话被
+// 笼统 /4 低估约 4 倍而撑爆上下文（P2.8）。
+func estimateTextTokens(s string) int {
+	bytes := len(s)
+	runes := utf8.RuneCountInString(s)
+	if byBytes := (bytes + 3) / 4; byBytes > runes {
+		return byBytes
+	}
+	return runes
+}
+
 // estimateMessageTokens 估算单条消息的 token 数（对齐 DSH tokenMeter 的
-// "字符数 + 结构开销" 回退，不依赖精确 tokenizer）：字符数 /4 + 每条消息的固定
+// "字符数 + 结构开销" 回退，不依赖精确 tokenizer）：文本估算 + 每条消息的固定
 // 结构开销（角色、tool_call_id 等），工具调用额外计入名称与参数。
 func estimateMessageTokens(m *proto.Message) int {
-	toks := len([]rune(m.Content)) / 4
+	toks := estimateTextTokens(m.Content)
 	if m.Role == "tool" {
 		toks += 6 // tool 角色 + tool_call_id 开销
 	} else {
 		toks += 4
 	}
 	for _, tc := range m.ToolCalls {
-		toks += len([]rune(tc.Name))/4 + len([]rune(tc.ArgumentsJson))/4 + 8
+		toks += estimateTextTokens(tc.Name) + estimateTextTokens(tc.ArgumentsJson) + 8
 	}
 	return toks
 }

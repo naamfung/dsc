@@ -12,6 +12,12 @@ func fixedPolicy(p SandboxPolicy) func() SandboxPolicy {
 	return func() SandboxPolicy { return p }
 }
 
+// jsonPath 将路径转义后嵌入 JSON 字面量：Windows 的 t.TempDir() 含反斜杠，
+// 直接拼进 JSON 会是非法转义序列，导致沙箱把解析失败当写拦截（P2.4 fail-closed）。
+func jsonPath(p string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(p, `\`, `\\`), `"`, `\"`)
+}
+
 func TestSandboxReadOnlyBlocksWrite(t *testing.T) {
 	m := newRouterManager()
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxReadOnly)))
@@ -68,7 +74,7 @@ func TestSandboxWorkspaceAllowsInside(t *testing.T) {
 	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
 
 	if _, err := m.ExecuteTool(context.Background(), "str_replace_editor",
-		json.RawMessage(`{"command":"str_replace","path":"`+WorkspaceRoot+`/a.txt","old_str":"a","new_str":"b"}`)); err != nil {
+		json.RawMessage(`{"command":"str_replace","path":"`+jsonPath(WorkspaceRoot)+`/a.txt","old_str":"a","new_str":"b"}`)); err != nil {
 		t.Fatalf("write inside workspace should pass: %v", err)
 	}
 }
@@ -99,7 +105,7 @@ func TestSandboxWorkspaceAcceptsVirtualPrefix(t *testing.T) {
 	// 模型按工具描述传入 /workspace/<rel> 虚拟根前缀，应与真实 WorkspaceRoot 等价放行
 	for _, p := range []string{"/workspace/a.txt", `\workspace\b.txt`, "/workspace"} {
 		if _, err := m.ExecuteTool(context.Background(), "str_replace_editor",
-			json.RawMessage(`{"command":"str_replace","path":"`+p+`","old_str":"a","new_str":"b"}`)); err != nil {
+			json.RawMessage(`{"command":"str_replace","path":"`+jsonPath(p)+`","old_str":"a","new_str":"b"}`)); err != nil {
 			t.Fatalf("write under virtual /workspace prefix %q should pass: %v", p, err)
 		}
 	}
