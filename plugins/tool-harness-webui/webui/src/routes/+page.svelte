@@ -98,7 +98,7 @@
 				{#each plugins as p}
 					{@const name = p.name ?? '(unnamed)'}
 					{@const st = (p.state ?? '?').toLowerCase()}
-					{@const live = st === 'ready' || st === 'running'}
+					{@const live = st === 'ready' || st === 'active'}
 					<div class="item">
 						<div class="name">{name}</div>
 						<div class="state {live ? 'live' : 'stop'}">{st} · {p.type ?? ''}</div>

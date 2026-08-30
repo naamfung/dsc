@@ -189,39 +189,39 @@ hot_reload: true
 
 | 狀態 | 含義 | 對應 DSH |
 | --- | --- | --- |
-| `pending` | 配置已聲明但依賴未滿足（如 DependsOn 的 LLM/Tool 尚未就緒），尚不拉起子進程 | PENDING |
-| `spawned` | 子進程已創建，尚未握手（DSH 無直譯） | — |
-| `connecting` | go-plugin/gRPC 握手、建鏈中 | LOADING 前半段 |
-| `ready` | 業務對象已 Dispense 並註冊到 Manager，依賴/健康檢查尚未就緒 | — |
-| `active` | 依賴與健康檢查就緒，可對外服務 | ACTIVE |
-| `unloading` | 卸載中，嘗試優雅關閉（stop hooks 先執行） | UNLOADING |
-| `disposed` | 已停止/已卸載（終態，不可再啟，除非重新加載） | DISPOSED |
-| `failed` | 加載或運行失敗（終態，可被熱重載重新走一遍流程） | FAILED |
+| `PENDING` | 配置已聲明但依賴未滿足（如 DependsOn 的 LLM/Tool 尚未就緒），尚不拉起子進程 | PENDING |
+| `SPAWNED` | 子進程已創建，尚未握手（DSH 無直譯） | — |
+| `CONNECTING` | go-plugin/gRPC 握手、建鏈中 | LOADING 前半段 |
+| `READY` | 業務對象已 Dispense 並註冊到 Manager，依賴/健康檢查尚未就緒 | — |
+| `ACTIVE` | 依賴與健康檢查就緒，可對外服務 | ACTIVE |
+| `UNLOADING` | 卸載中，嘗試優雅關閉（stop hooks 先執行） | UNLOADING |
+| `DISPOSED` | 已停止/已卸載（終態，不可再啟，除非重新加載） | DISPOSED |
+| `FAILED` | 加載或運行失敗（終態，可被熱重載重新走一遍流程） | FAILED |
 
 ### 合法遷移
 
 非法遷移會被記錄告警，便於及早暴露流程漏步：
 
 ```
-pending    → spawned / connecting / active / failed / disposed
-spawned    → connecting / failed / disposed
-connecting → ready / failed / disposed
-ready      → active / pending / unloading / failed / disposed
-active     → unloading / failed / disposed
-unloading  → disposed / failed
-disposed / failed（終態，不再遷移）
+PENDING    → SPAWNED / CONNECTING / ACTIVE / FAILED / DISPOSED
+SPAWNED    → CONNECTING / FAILED / DISPOSED
+CONNECTING → READY / FAILED / DISPOSED
+READY      → ACTIVE / PENDING / UNLOADING / FAILED / DISPOSED
+ACTIVE     → UNLOADING / FAILED / DISPOSED
+UNLOADING  → DISPOSED / FAILED
+DISPOSED / FAILED（終態，不再遷移）
 ```
 
 ### 啟動到結束的完整流程
 
 1. **聲明與環檢**：`LoadFromConfig` 先以 `CheckCircularDependencies` 攔截環形依賴，再統計「已啟用插件集」供依賴判定（見 [core/manager.go](core/manager.go)）。
-2. **Agent 先行**：agent 作為 broker 提供者**最先**拉起子進程以取得 broker（狀態 `spawned → connecting → ready`），但暫不激活——它依賴的 LLM/聚合 Tool 服務要等 provider 就緒後才掛載，避免 broker ConnInfo 5 秒超時窗口。
-3. **Provider 依賴拓撲排序**：其餘 llm/tool/policy 依 `DependsOn` 做穩定拓撲排序（Kahn，`topoSortPlugins`）；依賴滿足的按序加載（LLM 原生加載後掛載為 broker 上的 gRPC 服務；Tool/Policy 走 `loadPluginWithBroker`），依賴未滿足的進入 `pending` 並記錄待辦。
-4. **握手與校驗**：provider 加載時 `spawned → connecting`（建鏈）→ `ready`（元數據校驗：API 版本 `>=1.0, <2.0` + 類型一致；Tool 再經「暫存 + 提交」兩階段完成 broker 掛載、互通注入與工具列清單）。
-5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的 `DependsOn` 一次性 `RegisterServices` 注入並置 `active`；若 agent 聲明的 LLM 缺失則退回 `pending` 等待。
-6. **運行期**：插件以 `active` 對外服務；故障進入 `failed`（可被熱重載重新走流程）；熱重載採用「暫存 + 提交」兩階段，pre-commit 任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**（見「Golang 插件熱更新實操」）。
-7. **卸載/關機**：`Shutdown` 先停熱重載 watch 與 cron，再逐個插件 `active → unloading`（先執行對稱清理 stop hooks，如 agent 的 `Shutdown`）→ Kill 子進程 → `disposed`（終態）。
-8. **動態注入與 PENDING 修復**：運行期經 ADMIN `/plugins/load` 注入的條目若依賴未滿足同樣進入 `pending`；後續注入補足缺口後，`repairPendingLocked` 會提升等待中的 provider、並把因缺 LLM 而 `pending` 的 agent 重新注入 `RegisterServices` 並激活（見 [core/inject.go](core/inject.go)）。
+2. **Agent 先行**：agent 作為 broker 提供者**最先**拉起子進程以取得 broker（狀態 `SPAWNED → CONNECTING → READY`），但暫不激活——它依賴的 LLM/聚合 Tool 服務要等 provider 就緒後才掛載，避免 broker ConnInfo 5 秒超時窗口。
+3. **Provider 依賴拓撲排序**：其餘 llm/tool/policy 依 `DependsOn` 做穩定拓撲排序（Kahn，`topoSortPlugins`）；依賴滿足的按序加載（LLM 原生加載後掛載為 broker 上的 gRPC 服務；Tool/Policy 走 `loadPluginWithBroker`），依賴未滿足的進入 `PENDING` 並記錄待辦。
+4. **握手與校驗**：provider 加載時 `SPAWNED → CONNECTING`（建鏈）→ `READY`（元數據校驗：API 版本 `>=1.0, <2.0` + 類型一致；Tool 再經「暫存 + 提交」兩階段完成 broker 掛載、互通注入與工具列清單）。
+5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的 `DependsOn` 一次性 `RegisterServices` 注入並置 `ACTIVE`；若 agent 聲明的 LLM 缺失則退回 `PENDING` 等待。
+6. **運行期**：插件以 `ACTIVE` 對外服務；故障進入 `FAILED`（可被熱重載重新走流程）；熱重載採用「暫存 + 提交」兩階段，pre-commit 任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**（見「Golang 插件熱更新實操」）。
+7. **卸載/關機**：`Shutdown` 先停熱重載 watch 與 cron，再逐個插件 `ACTIVE → UNLOADING`（先執行對稱清理 stop hooks，如 agent 的 `Shutdown`）→ Kill 子進程 → `DISPOSED`（終態）。
+8. **動態注入與 PENDING 修復**：運行期經 ADMIN `/plugins/load` 注入的條目若依賴未滿足同樣進入 `PENDING`；後續注入補足缺口後，`repairPendingLocked` 會提升等待中的 provider、並把因缺 LLM 而 `PENDING` 的 agent 重新注入 `RegisterServices` 並激活（見 [core/inject.go](core/inject.go)）。
 
 ## 許可證
 

@@ -19,21 +19,21 @@ type PluginState string
 const (
 	// StatePending 配置已声明但依赖未满足（如 DependsOn 的 LLM/Tool 尚未就绪），
 	// 尚不拉起子进程（对应 DSH PENDING）。
-	StatePending PluginState = "pending"
+	StatePending PluginState = "PENDING"
 	// StateSpawned 进程已创建，尚未握手（无 DSH 直译）。
-	StateSpawned PluginState = "spawned"
+	StateSpawned PluginState = "SPAWNED"
 	// StateConnecting go-core 握手/建链中（DSH LOADING 的前半段）。
-	StateConnecting PluginState = "connecting"
+	StateConnecting PluginState = "CONNECTING"
 	// StateReady 业务对象已 Dispense 并注册到 Manager，依赖/健康检查尚未就绪。
-	StateReady PluginState = "ready"
+	StateReady PluginState = "READY"
 	// StateActive 依赖与健康检查就绪，可对外服务（对应 DSH ACTIVE）。
-	StateActive PluginState = "active"
+	StateActive PluginState = "ACTIVE"
 	// StateUnloading 卸载中，尝试优雅关闭（对应 DSH UNLOADING）。
-	StateUnloading PluginState = "unloading"
+	StateUnloading PluginState = "UNLOADING"
 	// StateDisposed 已停止/已卸载（对应 DSH DISPOSED，终态）。
-	StateDisposed PluginState = "disposed"
+	StateDisposed PluginState = "DISPOSED"
 	// StateFailed 加载或运行失败（对应 DSH FAILED；可被热重载重新走流程）。
-	StateFailed PluginState = "failed"
+	StateFailed PluginState = "FAILED"
 )
 
 // coreStateTransitions 定义合法的状态迁移表：from -> {to: true}。
