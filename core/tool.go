@@ -24,6 +24,14 @@ type TimeoutProvider interface {
 	TimeoutMs() int
 }
 
+// ViewExecutor 可选接口：工具额外返回结构化视图 spec（ViewJson 字符串）。
+// RemoteTool（插件工具）据此透传插件 Tool.ViewFn 的产物；宿主工具（run_code 等）
+// 自行构造视图；由 ToolGRPCServer 统一填充 ExecuteToolResponse.ViewJson，使宿主
+// 聚合路径（agent → ToolGRPCServer → TUI）与插件直连路径的视图传播一致。
+type ViewExecutor interface {
+	ExecuteWithView(ctx context.Context, args json.RawMessage) (result string, viewJSON string, err error)
+}
+
 // PluginToolCall 表示 LLM 發起的一次工具調用
 type PluginToolCall struct {
 	ID        string          `json:"id"`

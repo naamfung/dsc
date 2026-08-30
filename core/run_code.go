@@ -86,6 +86,69 @@ func (t *runCodeTool) Execute(ctx context.Context, args json.RawMessage) (string
 	return string(b), nil
 }
 
+// ExecuteWithView 与 Execute 语义相同，额外把运行结果声明为结构化视图（RunCode plain 块：
+// 徽标 = stop_reason，正文 = 返回值/错误）。视图构造失败不影响执行结果。
+func (t *runCodeTool) ExecuteWithView(ctx context.Context, args json.RawMessage) (string, string, error) {
+	result, err := t.Execute(ctx, args)
+	if err != nil {
+		return "", "", err
+	}
+	view, vErr := runCodeView(ctx, args, result)
+	if vErr != nil {
+		return result, "", nil
+	}
+	return result, view, nil
+}
+
+// runCodeView 把 coderuntime.Result 的 JSON 渲染为 RunCode plain 视图：
+// stop_reason 语义着色（completed 绿 / error 红 / cancelled 黄），正文优先展示程序
+// 顶层返回值（错误时展示错误信息），工具调用数/日志数作为元信息行。
+func runCodeView(_ context.Context, _ json.RawMessage, result string) (string, error) {
+	var r struct {
+		Value      any    `json:"value"`
+		StopReason string `json:"stop_reason"`
+		Error      string `json:"error"`
+		ToolCalls  []any  `json:"tool_calls"`
+		Logs       []any  `json:"logs"`
+	}
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return "", err
+	}
+	tone := "green"
+	switch r.StopReason {
+	case "error":
+		tone = "red"
+	case "cancelled":
+		tone = "yellow"
+	}
+	body := r.Error
+	if body == "" && r.Value != nil {
+		if b, err := json.MarshalIndent(r.Value, "", "  "); err == nil {
+			body = string(b)
+		} else {
+			body = fmt.Sprintf("%v", r.Value)
+		}
+	}
+	if body == "" {
+		body = "completed (no return value)"
+	}
+	var meta []string
+	if n := len(r.ToolCalls); n > 0 {
+		meta = append(meta, fmt.Sprintf("tool calls: %d", n))
+	}
+	if n := len(r.Logs); n > 0 {
+		meta = append(meta, fmt.Sprintf("logs: %d", n))
+	}
+	if len(meta) > 0 {
+		body = strings.Join(meta, " · ") + "\n" + body
+	}
+	v, err := json.Marshal(ToolView{Kind: "plain", Title: "RunCode", Badge: &ViewBadge{Text: r.StopReason, Tone: tone}, Body: body})
+	if err != nil {
+		return "", err
+	}
+	return string(v), nil
+}
+
 // toolSpecsFromProto 把宿主工具目录（[]*proto.Tool）转成 SDK 用的 ToolSpec 列表，
 // 按工具名排序（稳定、前缀缓存友好）；skip 指定的工具（如 run_code 自身）排除，
 // 避免在同名 Lua 全局下造成嵌套/遮蔽歧义。

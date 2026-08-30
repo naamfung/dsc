@@ -33,6 +33,7 @@ type ToolInvocation struct {
 	CallID        string
 	Result        string // post-execute 阶段：执行结果
 	Err           error  // 执行错误或 pre 阶段 veto 原因
+	ViewJSON      string // 工具声明的结构化视图 spec（可选，见 ViewExecutor）
 }
 
 // filePathFromArgs 从工具参数 JSON 中提取 file_path 字段（观测策略用）。
@@ -60,7 +61,16 @@ func (e *ToolTimeoutError) Error() string {
 // ExecuteTool 以流水线方式执行工具：pre-execute(waterfall) → execute → post-execute(waterfall)。
 // 任何阶段返回错误即中止；post 阶段的监听器可改写 inv.Result。
 // 声明 TimeoutProvider 的工具在 execute 阶段获得协作式单次调用截止时间（timeout-policy）。
+// 视图信息（插件 ViewJson / 宿主 ViewExecutor）不在此返回，见 ExecuteToolWithView。
 func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, error) {
+	result, _, err := m.ExecuteToolWithView(ctx, toolName, argsJSON)
+	return result, err
+}
+
+// ExecuteToolWithView 与 ExecuteTool 语义相同，额外返回工具声明的结构化视图 spec
+// （ViewJson）：插件工具透传 Tool.ViewFn 产物（经 RemoteTool），宿主工具按需实现
+// ViewExecutor。聚合 Tool 服务（ToolGRPCServer）据此把视图一并回给调用方。
+func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, error) {
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON)}
 	// pre-execute + execute：next 为实际执行；pre 监听器不调 next 即 veto
 	runErr := m.events.Waterfall(EventToolPreExecute, EventContext{Data: inv}, func(EventContext) error {
@@ -90,7 +100,13 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 				defer cancel()
 			}
 		}
-		result, err := tool.Execute(execCtx, json.RawMessage(inv.ArgumentsJSON))
+		var result string
+		var err error
+		if ev, ok := tool.(ViewExecutor); ok {
+			result, inv.ViewJSON, err = ev.ExecuteWithView(execCtx, json.RawMessage(inv.ArgumentsJSON))
+		} else {
+			result, err = tool.Execute(execCtx, json.RawMessage(inv.ArgumentsJSON))
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = &ToolTimeoutError{Tool: toolName, Ms: timeoutMs}
 		}
@@ -106,9 +122,9 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 		m.runPluginAfterTool(ctx, inv)
 		return inv.Err
 	}); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return inv.Result, inv.Err
+	return inv.Result, inv.ViewJSON, inv.Err
 }
 
 // bridgePolicyToPipeline 把已加载的 policy 插件观测服务桥接为工具流水线监听器：

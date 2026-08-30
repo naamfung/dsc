@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -214,8 +216,33 @@ func main() {
 	}
 
 	sdk := dsc.New(dsc.Config{Name: "filesystem", Version: "1.0.0", Type: dsc.TypeTool})
-	sdk.Tool(dsc.Tool{Name: "shell", Description: description, Schema: schema, Handler: handler})
+	sdk.Tool(dsc.Tool{Name: "shell", Description: description, Schema: schema, Handler: handler, ViewFn: shellView})
 	sdk.Serve()
+}
+
+// exitCodeMarkRe 匹配结果里追加的退出码标记（[exit_code: N]，见 formatShellResult）。
+var exitCodeMarkRe = regexp.MustCompile(`\[exit_code\s*:\s*(-?\d+)\]`)
+
+// shellView 为 shell 工具声明结构化视图：标题 Shell + 退出码徽标（0 绿 / 非 0 红）
+// + 命令输出正文（去掉追加的 [exit_code: N] 标记，避免与徽标重复）。
+func shellView(_ context.Context, _ json.RawMessage, result string) (json.RawMessage, error) {
+	body := strings.TrimSpace(result)
+	exitCode := int64(0)
+	if m := exitCodeMarkRe.FindStringSubmatch(body); len(m) == 2 {
+		if n, err := strconv.ParseInt(m[1], 10, 32); err == nil {
+			exitCode = n
+		}
+		body = exitCodeMarkRe.ReplaceAllString(body, "")
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		body = "(no output)"
+	}
+	tone := "green"
+	if exitCode != 0 {
+		tone = "red"
+	}
+	return dsc.PlainView("Shell", &dsc.ViewBadge{Text: fmt.Sprintf("exit %d", exitCode), Tone: tone}, body), nil
 }
 
 // formatShellResult 根據命令輸出與退出碼組裝最終返回文本：
