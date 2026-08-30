@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -260,6 +261,35 @@ func TestWheelDetachesAndRepins(t *testing.T) {
 	}
 	if !m2.viewport.AtBottom() {
 		t.Fatal("滚回底部后视口应位于底部")
+	}
+}
+
+// TestToolResultReasoningSeparated 结构断言：工具结果块（末行无结尾换行）与紧随其后的
+// 助手思考块之间应有空行分隔，避免上一块末行与 ✦ DSC 身份头紧贴粘连。
+func TestToolResultReasoningSeparated(t *testing.T) {
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
+		{Status: "tool", Output: "60.0K src/llama-grammar.cpp\n32.0K src/llama-model.h"},
+		{Status: "reasoning", Reasoning: "分析"},
+		{Status: "success"},
+	}}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
+
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	var model tea.Model = m
+	var cmd tea.Cmd
+	cmd = model.(*Model).submitCmd("你好")
+	firstMsg := cmd()
+	model, cmd = model.Update(firstMsg)
+	for i := 0; i < 20 && cmd != nil; i++ {
+		msg := cmd()
+		model, cmd = model.Update(msg)
+	}
+	m2 := model.(*Model)
+	stripFull := ansi.Strip(strings.Join(m2.lines, "\n"))
+	// 末行可能被宽度对齐补尾随空格，故以「非换行字符 + 空行 + ✦ DSC」判定分隔。
+	sep := regexp.MustCompile(`llama-model\.h[^\n]*\n\n\s*✦ DSC`)
+	if !sep.MatchString(stripFull) {
+		t.Fatalf("工具结果与思考块之间应有空行分隔，实际:\n%q", stripFull)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
@@ -64,6 +65,11 @@ var (
 	assistantNameSty = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#05A5A5")).
 				Bold(true)
+
+	// cardHeadSty 工具调用卡片动词与目标卡片头部的统一粗体青色样式。
+	cardHeadSty = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#05A5A5"))
 
 	dimSty = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#888888"))
@@ -852,8 +858,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				body = reasoning
 			}
-			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
-			m.invalidateLines(m.streamMsgIdx)
+			m.setAssistantBlock(body)
 			m.render()
 			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
@@ -872,8 +877,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.streamBuffer += f.Output
 			body := joinReasoningAnswer(m.reasoningCommitted, renderMarkdown(m.streamBuffer, max(m.width-4, 20)))
-			m.lines[m.streamMsgIdx] = m.renderAssistant(body)
-			m.invalidateLines(m.streamMsgIdx)
+			m.setAssistantBlock(body)
 			m.render()
 			m.scrollToBottomIfPinned()
 			return m, m.pumpStream(msg.input, msg.ch)
@@ -901,7 +905,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 调用帧（ToolName 非空）以「● Verb(arg)」卡片展示；均无结构化信息时回退原文。
 			toolLine := ""
 			if f.ToolResult != "" {
-				toolLine = renderToolResult(f.ToolResult, f.Error != "")
+				toolLine = renderToolResultFrame(f.ToolView, f.ToolResult, f.Error != "")
 			} else {
 				toolLine = renderToolCall(f.ToolName, f.ToolArgs)
 			}
@@ -1255,8 +1259,23 @@ func (m *Model) finalizeAssistant() {
 	if m.streamBuffer != "" {
 		body = joinReasoningAnswer(body, renderMarkdown(m.streamBuffer, w))
 	}
-	m.lines[m.streamMsgIdx] = m.renderAssistant(body)
-	m.invalidateLines(m.streamMsgIdx)
+	m.setAssistantBlock(body)
+}
+
+// setAssistantBlock 就地更新当前助手块（思考/流式/收尾共用）。openAssistantBlock
+// 以 appendMessage 建立块时已按「非首块」规则带上前导 \n 空行分隔；此处就地重写
+// 正文时须保留该前导 \n，否则与上一条内容（如工具结果）紧贴，视觉上粘连。
+func (m *Model) setAssistantBlock(body string) {
+	idx := m.streamMsgIdx
+	if idx < 0 || idx >= len(m.lines) {
+		return
+	}
+	prefix := ""
+	if idx > 0 {
+		prefix = "\n"
+	}
+	m.lines[idx] = prefix + m.renderAssistant(body)
+	m.invalidateLines(idx)
 }
 
 // openAssistantBlock 新建一个助手正文块：重置思考/答案累积状态并追加身份头占位。
@@ -1300,21 +1319,6 @@ func renderReasoning(raw string, width int) string {
 	return out + "\x1b[m\n"
 }
 
-// toolVerb 把工具名映射为卡片动词（REX 式）：shell → Shell、str_replace_editor → Edit 等。
-var toolVerb = map[string]string{
-	"shell":              "Shell",
-	"str_replace_editor": "Edit",
-	"lisp_eval":          "Lisp",
-	"fetch_url":          "Fetch",
-	"web_search":         "Search",
-	"browser_click":      "Click",
-	"browser_type":       "Type",
-	"browser_screenshot": "Shot",
-	"read_skill":         "Read",
-	"install_skill":      "Install",
-	"uninstall_skill":    "Uninstall",
-}
-
 // toolArgKey 是各工具在卡片括号中展示的主参键；未收录的工具不显示括号参数。
 var toolArgKey = map[string]string{
 	"shell":              "command",
@@ -1330,12 +1334,24 @@ var toolArgKey = map[string]string{
 	"uninstall_skill":    "name",
 }
 
-// toolDisplayName 返回工具卡片动词：已收录映射则用之，否则回退到原始工具名。
+// toolDisplayName 将内部原始工具名统一转换为卡片显示的 PascalCase 名称：
+// read_skill → ReadSkill、update_goal → UpdateGoal、shell → Shell。
+// 对下划线/连字符/点号分隔的各段逐段首字母大写，保证所有工具风格一致
+// （不再依赖手维护的映射表，避免新工具回退到原始蛇形名造成风格不一）。
 func toolDisplayName(name string) string {
-	if v, ok := toolVerb[name]; ok {
-		return v
+	if name == "" {
+		return ""
 	}
-	return name
+	var b strings.Builder
+	for _, seg := range strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == '-' || r == '.' }) {
+		if seg == "" {
+			continue
+		}
+		r := []rune(seg)
+		r[0] = unicode.ToUpper(r[0])
+		b.WriteString(string(r))
+	}
+	return b.String()
 }
 
 // toolArgValue 从参数 JSON 中提取工具卡片括号内展示的主参；无法解析或缺失时返回空串。
@@ -1378,7 +1394,7 @@ func renderToolCall(name, argsJSON string) string {
 		return ""
 	}
 
-	// 針對 str_replace_editor 工具，解析 command 和 path，顯示為 Edit(View, path) 等格式
+	// 針對 str_replace_editor 工具，解析 command 和 path，顯示為 StrReplaceEditor(View, path) 等格式
 	if name == "str_replace_editor" || strings.Contains(name, "editor") {
 		var argsMap map[string]interface{}
 		if err := json.Unmarshal([]byte(argsJSON), &argsMap); err == nil {
@@ -1402,12 +1418,12 @@ func renderToolCall(name, argsJSON string) string {
 					cmdDisplay = string(runes)
 				}
 
-				verb := "Edit"
-				head := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#05A5A5")).Render(verb)
+				verb := toolDisplayName(name)
+				head := cardHeadSty.Render(verb)
 
 				if path, ok := argsMap["path"].(string); ok && strings.TrimSpace(path) != "" {
 					clampedPath := clampToolArg(path, 60)
-					// 顯示格式：Edit(View, /root/file/path)
+					// 顯示格式：StrReplaceEditor(View, /root/file/path)
 					argStr := "(" + cmdDisplay + ", " + clampedPath + ")"
 					head += dimSty.Render(argStr)
 				} else {
@@ -1421,7 +1437,7 @@ func renderToolCall(name, argsJSON string) string {
 	// 默認顯示邏輯
 	verb := toolDisplayName(name)
 	dot := lipgloss.NewStyle().Foreground(accent).Render("●")
-	head := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#05A5A5")).Render(verb)
+	head := cardHeadSty.Render(verb)
 	if arg := toolArgValue(name, argsJSON); arg != "" {
 		// 参数本身已是带括号的表达式（如 Lisp 的 (+ 1 2)）时不再叠加括号，
 		// 避免出现 ● Lisp((+ 1 2)) 的双括号；否则按 ● Verb(arg) 包裹展示。
@@ -1471,14 +1487,19 @@ func renderToolResult(result string, isErr bool) string {
 	}
 	result = ensureExitCodeLine(result)
 
-	// 嘗試將結果格式化為 JSON（如果它是有效的 JSON 且不是錯誤）
+	// 嘗試將結果格式化為 JSON（如果它是有效的 JSON 且不是錯誤）：
+	// 对象走「键值卡片」排版（去掉引号/花括号等原始数据痕迹），非对象回退缩进排版。
 	formattedResult := result
 	if !isErr {
 		if isJSON(result) {
-			var prettyJSON bytes.Buffer
-			err := json.Indent(&prettyJSON, []byte(result), "", "  ")
-			if err == nil {
-				formattedResult = prettyJSON.String()
+			if card := renderJSONCard([]byte(result)); card != "" {
+				formattedResult = card
+			} else {
+				var prettyJSON bytes.Buffer
+				err := json.Indent(&prettyJSON, []byte(result), "", "  ")
+				if err == nil {
+					formattedResult = prettyJSON.String()
+				}
 			}
 		}
 	}
@@ -1520,6 +1541,332 @@ func renderToolResult(result string, isErr bool) string {
 func isJSON(s string) bool {
 	var js map[string]any
 	return json.Unmarshal([]byte(s), &js) == nil
+}
+
+// renderJSONCard 将 JSON 对象渲染为可读的键值卡片，替代原始 JSON 排版：
+// 标量以「key: value」展示（同层值列对齐）、嵌套对象作子节缩进、数组折叠为内联列表。
+// 无法解析为对象时返回空串（由调用方回退原文）。
+func renderJSONCard(raw []byte) string {
+	var root map[string]any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	writeJSONObject(&b, root, 0)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// writeJSONValue 写一个 JSON 值：对象递归展开子节、数组折叠、标量内联。
+// key 已含本层缩进前缀；depth 表示其层级，用于计算嵌套缩进。
+func writeJSONValue(b *strings.Builder, key string, v any, depth int) {
+	switch val := v.(type) {
+	case map[string]any:
+		b.WriteString(key + ":\n")
+		writeJSONObject(b, val, depth+1)
+	case []any:
+		writeJSONArray(b, key, val, depth)
+	default:
+		b.WriteString(key + ": " + jsonScalar(val) + "\n")
+	}
+}
+
+// writeJSONObject 以「key: value」逐行写出对象（按键名排序保证输出稳定），
+// 同层标量值列对齐：先算本层最宽标量键，再补空格使各值起点对齐，观感更接近表格。
+func writeJSONObject(b *strings.Builder, obj map[string]any, depth int) {
+	indent := strings.Repeat("  ", depth)
+	keys := sortedJSONKeys(obj)
+	width := 0
+	for _, k := range keys {
+		if isJSONScalar(obj[k]) {
+			if l := runeLen(k); l > width {
+				width = l
+			}
+		}
+	}
+	for _, k := range keys {
+		v := obj[k]
+		if isJSONScalar(v) {
+			pad := strings.Repeat(" ", width-runeLen(k))
+			b.WriteString(indent + k + pad + ": " + jsonScalar(v) + "\n")
+			continue
+		}
+		writeJSONValue(b, indent+k, v, depth)
+	}
+}
+
+// writeJSONArray 写一个数组：全标量时内联为 [a, b, c]；含对象/数组时逐项展开。
+func writeJSONArray(b *strings.Builder, key string, arr []any, depth int) {
+	if len(arr) == 0 {
+		b.WriteString(key + ": []\n")
+		return
+	}
+	allScalar := true
+	for _, it := range arr {
+		switch it.(type) {
+		case map[string]any, []any:
+			allScalar = false
+		}
+	}
+	if allScalar {
+		parts := make([]string, 0, len(arr))
+		for _, it := range arr {
+			parts = append(parts, jsonScalar(it))
+		}
+		b.WriteString(key + ": [" + strings.Join(parts, ", ") + "]\n")
+		return
+	}
+	b.WriteString(key + ":\n")
+	indent := strings.Repeat("  ", depth+1)
+	for _, it := range arr {
+		switch val := it.(type) {
+		case map[string]any:
+			// 对象项：首键以「- 」开头，其余键对齐，子节递归缩进
+			first := true
+			for _, k := range sortedJSONKeys(val) {
+				marker := "- "
+				if !first {
+					marker = "  "
+				}
+				first = false
+				writeJSONValue(b, indent+marker+k, val[k], depth+1)
+			}
+		default:
+			b.WriteString(indent + "- " + jsonScalar(it) + "\n")
+		}
+	}
+}
+
+// isJSONScalar 报告 JSON 值是否为标量（string/number/bool/null）。
+func isJSONScalar(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return false
+	}
+	return true
+}
+
+// runeLen 返回字符串按 rune 计的长度（用于对齐计算，兼容非 ASCII 键名）。
+func runeLen(s string) int {
+	return len([]rune(s))
+}
+
+// sortedJSONKeys 返回 map 按键名排序后的切片，保证卡片输出顺序稳定。
+func sortedJSONKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// jsonScalar 将 JSON 标量（string/number/bool/null）转为可读的纯文本值。
+func jsonScalar(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return x
+	case bool:
+		return strconv.FormatBool(x)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+// renderToolResultFrame 渲染工具结果帧：优先用插件声明的结构化视图 spec（对齐 DSH
+// 显示契约，TUI 统一渲染保证风格一致）；缺失时回退到通用 gutter 渲染。错误走错误样式。
+func renderToolResultFrame(view, result string, isErr bool) string {
+	if !isErr {
+		if card := renderViewSpec(view); card != "" {
+			return card
+		}
+	}
+	return renderToolResult(result, isErr)
+}
+
+// viewToneColor 视图色板：插件在 spec 里用语义 tone 声明着色，TUI 统一映射为颜色，
+// 避免插件各自输出 ANSI 造成风格不一。未知 tone 回退灰色。
+var viewToneColor = map[string]string{
+	"teal":   "#05A5A5",
+	"green":  "#4ADE80",
+	"yellow": "#E5C07B",
+	"red":    "#FF5F87",
+	"gray":   "#888888",
+}
+
+// viewToneSty 返回 tone 对应的文字样式（badge 用粗体，字段值用常规）。
+func viewToneSty(tone string, bold bool) lipgloss.Style {
+	hex, ok := viewToneColor[tone]
+	if !ok {
+		hex = "#888888"
+	}
+	s := lipgloss.NewStyle().Foreground(lipgloss.Color(hex))
+	if bold {
+		s = s.Bold(true)
+	}
+	return s
+}
+
+// viewHead 渲染视图头部：Title（粗体青）与 Badge（语义色）以「·」连接，返回 "" 表示无头部。
+func viewHead(v *core.ToolView) string {
+	var parts []string
+	if v.Title != "" {
+		parts = append(parts, cardHeadSty.Render(v.Title))
+	}
+	if v.Badge != nil && v.Badge.Text != "" {
+		parts = append(parts, viewToneSty(v.Badge.Tone, true).Render(v.Badge.Text))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, dimSty.Render(" · ")) + "\n"
+}
+
+// renderViewSpec 以单一渲染器按 kind 派发插件声明的结构化视图：
+// card（对齐键值卡片）/ table（对齐列表格）/ plain（纯文本块）。
+// kind 未实现或无法解析时返回空串（调用方回退到通用展示）。
+func renderViewSpec(viewJSON string) string {
+	if strings.TrimSpace(viewJSON) == "" {
+		return ""
+	}
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(viewJSON), &v); err != nil {
+		return ""
+	}
+	switch v.Kind {
+	case "", "card":
+		return renderCardView(&v)
+	case "table":
+		return renderTableView(&v)
+	case "plain":
+		return renderPlainView(&v)
+	default:
+		return "" // 未实现的 kind 交由回退链
+	}
+}
+
+// renderCardView 渲染键值卡片：头部「Title · Badge」，字段同层值列对齐。
+func renderCardView(v *core.ToolView) string {
+	maxKey := 0
+	for _, f := range v.Fields {
+		if l := runeLen(f.Key); l > maxKey {
+			maxKey = l
+		}
+	}
+	var b strings.Builder
+	b.WriteString(viewHead(v))
+	for _, f := range v.Fields {
+		pad := strings.Repeat(" ", maxKey-runeLen(f.Key))
+		val := f.Value
+		if f.Tone != "" {
+			val = viewToneSty(f.Tone, false).Render(val)
+		}
+		b.WriteString(f.Key + pad + ": " + val + "\n")
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return resultGutter(strings.TrimRight(b.String(), "\n"))
+}
+
+// tableColMax 表格单列最大宽度（rune 计）；超长单元格截断为「…」，
+// 避免单列撑爆终端。整表剩余部分由 viewport 折行兜底。
+const tableColMax = 40
+
+// tableCell 按列宽截断并对齐单元格：返回「样式化文本 + 补齐空格」。
+// 宽度按纯文本计（ANSI 转义零宽），保证带色单元格也对齐。
+func tableCell(cell string, width int, tone string, bold bool) string {
+	pad := width - runeLen(cell)
+	if pad < 0 {
+		// 超长：截断为 width-1 字符 + …（总显示宽恰为 width）
+		if width > 1 {
+			cell = string([]rune(cell)[:width-1]) + "…"
+		} else {
+			cell = "…"
+		}
+		pad = 0
+	}
+	styled := cell
+	if tone != "" {
+		styled = viewToneSty(tone, bold).Render(cell)
+	}
+	return styled + strings.Repeat(" ", pad)
+}
+
+// renderTableView 渲染表格：头部「Title · Badge」+ 对齐列头 + 对齐行。
+// 列宽 = max(列头宽, 各单元格宽)，限长 tableColMax；行按列 key 取值。
+func renderTableView(v *core.ToolView) string {
+	if len(v.Columns) == 0 || len(v.Rows) == 0 {
+		return ""
+	}
+	widths := make([]int, len(v.Columns))
+	for i, c := range v.Columns {
+		w := runeLen(colTitle(c))
+		for _, r := range v.Rows {
+			if cell, ok := r[c.Key]; ok && runeLen(cell) > w {
+				w = runeLen(cell)
+			}
+		}
+		if w > tableColMax {
+			w = tableColMax
+		}
+		widths[i] = w
+	}
+	var b strings.Builder
+	b.WriteString(viewHead(v))
+	// 列头
+	for i, c := range v.Columns {
+		b.WriteString(tableCell(colTitle(c), widths[i], "", true))
+		if i < len(v.Columns)-1 {
+			b.WriteString("  ")
+		}
+	}
+	b.WriteString("\n")
+	// 行
+	for _, r := range v.Rows {
+		for i, c := range v.Columns {
+			b.WriteString(tableCell(r[c.Key], widths[i], c.Tone, false))
+			if i < len(v.Columns)-1 {
+				b.WriteString("  ")
+			}
+		}
+		b.WriteString("\n")
+	}
+	return resultGutter(strings.TrimRight(b.String(), "\n"))
+}
+
+// colTitle 返回列的显示标题（缺省用 key）。
+func colTitle(c core.ViewColumn) string {
+	if c.Title != "" {
+		return c.Title
+	}
+	return c.Key
+}
+
+// renderPlainView 渲染纯文本块：可选标题 + 正文。
+func renderPlainView(v *core.ToolView) string {
+	if v.Body == "" {
+		return ""
+	}
+	return resultGutter(viewHead(v) + strings.TrimRight(v.Body, "\n"))
+}
+
+// resultGutter 为多行结果/卡片套用「└」gutter 与续行缩进（首行带 gutter，后续行对齐）。
+func resultGutter(body string) string {
+	lines := strings.Split(body, "\n")
+	indent := strings.Repeat(" ", len(connector))
+	var b strings.Builder
+	b.WriteString(dimSty.Render(connector))
+	for i, ln := range lines {
+		if i > 0 {
+			b.WriteString("\n" + indent)
+		}
+		b.WriteString(ln)
+	}
+	return b.String()
 }
 
 // 内置斜杆命令列表（当前为宿主可直接执行的命令）。
