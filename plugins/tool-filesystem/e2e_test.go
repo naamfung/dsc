@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,22 @@ import (
 	"dsc/proto/metadata"
 	plugin "github.com/hashicorp/go-plugin"
 )
+
+// assertView 校验工具结果经完整 gRPC 链路透传的 ViewJson：非空且可解析为合法视图。
+func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
+	t.Helper()
+	if resp.ViewJson == "" {
+		t.Fatalf("ViewJson 为空（ViewFn 未生效或 gRPC 透传缺失）: %+v", resp)
+	}
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &v); err != nil {
+		t.Fatalf("ViewJson 非法: %v", err)
+	}
+	if v.Kind == "" {
+		t.Fatalf("ViewJson 缺 kind: %q", resp.ViewJson)
+	}
+	return v
+}
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的插件能被宿主侧正常拉起并调用：
 // 以 go-core 客户端 spawn 本插件 exe，经 gRPC 验证元数据、工具目录、shell 执行
@@ -87,14 +104,20 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("pwd err = %+v", resp)
 	} else if got := strings.TrimSpace(resp.Content); filepath.Clean(got) != filepath.Clean(ws) {
 		t.Fatalf("pwd = %q（应返回 workspace 根 %s）", got, ws)
+	} else if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Shell" || v.Badge == nil || v.Badge.Text != "exit 0" || v.Badge.Tone != "green" {
+		t.Fatalf("pwd view = %+v", v)
 	}
 	// echo 输出与退出码
 	if resp := run(`{"command":"echo hello"}`); resp.Error != "" || !strings.Contains(resp.Content, "hello") {
 		t.Fatalf("echo = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Shell" || v.Badge == nil || v.Badge.Text != "exit 0" || !strings.Contains(v.Body, "hello") {
+		t.Fatalf("echo view = %+v", v)
 	}
-	// 非零退出码：结果应带 [exit_code: N]
+	// 非零退出码：结果应带 [exit_code: N]，视图徽标为 exit N（红）
 	if resp := run(`{"command":"exit 3"}`); resp.Error != "" || !strings.Contains(resp.Content, "[exit_code: 3]") {
 		t.Fatalf("exit 3 = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Shell" || v.Badge == nil || v.Badge.Text != "exit 3" || v.Badge.Tone != "red" {
+		t.Fatalf("exit 3 view = %+v", v)
 	}
 
 	// 7. 空钩子：宿主调用无副作用（SDK 默认注册 PluginHookService）
