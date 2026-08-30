@@ -215,7 +215,7 @@ DISPOSED / FAILED（終態，不再遷移）
 ### 啟動到結束的完整流程
 
 1. **聲明與環檢**：`LoadFromConfig` 先以 `CheckCircularDependencies` 攔截環形依賴，再統計「已啟用插件集」供依賴判定（見 [core/manager.go](core/manager.go)）。
-2. **Agent 先行**：agent 作為 broker 提供者**最先**拉起子進程以取得 broker（狀態 `SPAWNED → CONNECTING → READY`），但暫不激活——它依賴的 LLM/聚合 Tool 服務要等 provider 就緒後才掛載，避免 broker ConnInfo 5 秒超時窗口。
+2. **Agent 先行**：agent 作為 broker 提供者**最先**拉起子進程以取得 broker（狀態 `SPAWNED → CONNECTING → READY`），但暫不激活——它依賴的 LLM/聚合 Tool 服務要等 provider 就緒後才掛載，避免 broker ConnInfo 超時窗口（宿主已把庫默認 5 秒放大為 5 分鐘，見 `PLUGIN_BROKER_CONN_TIMEOUT`）。
 3. **Provider 依賴拓撲排序**：其餘 llm/tool/policy 依 `DependsOn` 做穩定拓撲排序（Kahn，`topoSortPlugins`）；依賴滿足的按序加載（LLM 原生加載後掛載為 broker 上的 gRPC 服務；Tool/Policy 走 `loadPluginWithBroker`），依賴未滿足的進入 `PENDING` 並記錄待辦。
 4. **握手與校驗**：provider 加載時 `SPAWNED → CONNECTING`（建鏈）→ `READY`（元數據校驗：API 版本 `>=1.0, <2.0` + 類型一致；Tool 再經「暫存 + 提交」兩階段完成 broker 掛載、互通注入與工具列清單）。
 5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的 `DependsOn` 一次性 `RegisterServices` 注入並置 `ACTIVE`；若 agent 聲明的 LLM 缺失則退回 `PENDING` 等待。
