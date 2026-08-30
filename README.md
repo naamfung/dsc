@@ -137,7 +137,7 @@ DSC 的 Go 插件（基於 go-plugin / gRPC）支持**版本化二進制的在�
 - **啟動選版**：`LoadFromConfig` 用 `ResolveLatestBinary` 在每個插件的二進制目錄內挑選「版本號最高」的版本化文件作為初始載入（見 [core/hot_reload_version.go](core/hot_reload_version.go)）。
 - **運行監測**：配置 `hot_reload: true` 時，宿主經 `StartHotReloadWatcher` 啟動 fsnotify + 週期掃描（見 [core/hot_reload_watch.go](core/hot_reload_watch.go)）。一旦某插件目錄內出現比當前運行版本更高的 `<插件名>-v<版本><擴展名>` 文件（fsnotify 即時 + ≤5s 週期兜底，≥500ms 節流防抖），即自動調用 `HotReload` 換進程，不中斷宿主與其他插件。
 - **支援類型**：dsc / agent / llm / tool / policy 五類全部可熱重載。
-- **原子「暂存 + 提交」**：tool/policy 等熱重載採用兩階段。先在不持鎖階段拉起新進程並完成全部慢速 RPC（broker 掛載、互通注入、工具列清單/策略對齊），確證體康後才在極短臨界持鎖區一次性交換地圖引用並殺舊進程；`pre-commit` 任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**。
+- **原子「暂存 + 提交」**：dsc / agent / llm / tool / policy 五類插件均採用兩階段熱重載。先在不持鎖階段拉起新進程並完成全部慢速 RPC（handshake、broker 掛載、互通注入、工具列清單/策略對齊，agent 另含依賴注入），確證體康後才在極短臨界持鎖區一次性交換地圖引用並殺舊進程；預備/驗證任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**。
 
 ### 版本化文件命名約定
 
@@ -172,7 +172,7 @@ hot_reload: true
    go build -o plugins/tool-filesystem/tool-filesystem-v2.3.1.exe ./plugins/tool-filesystem
    ```
 
-3. 宿主較短時間內檢測到更高版本，日誌輸出 `hot-reload detected higher version binary ...`；自動卸載舊進程並以 `-v2.3.1.exe` 啟動新進程。
+3. 宿主較短時間內檢測到更高版本，日誌輸出 `hot-reload detected higher version binary ...`；**先拉起並驗證新進程，成功後才同步卸載（殺）舊進程**並以 `-v2.3.1.exe` 持續提供服務；新進程準備/驗證任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**。
 4. 確認日誌 `hot-reload applied` 且新行為生效。
 
 ### 注意事項
@@ -219,7 +219,7 @@ DISPOSED / FAILED（終態，不再遷移）
 3. **Provider 依賴拓撲排序**：其餘 llm/tool/policy 依 `DependsOn` 做穩定拓撲排序（Kahn，`topoSortPlugins`）；依賴滿足的按序加載（LLM 原生加載後掛載為 broker 上的 gRPC 服務；Tool/Policy 走 `loadPluginWithBroker`），依賴未滿足的進入 `PENDING` 並記錄待辦。
 4. **握手與校驗**：provider 加載時 `SPAWNED → CONNECTING`（建鏈）→ `READY`（元數據校驗：API 版本 `>=1.0, <2.0` + 類型一致；Tool 再經「暫存 + 提交」兩階段完成 broker 掛載、互通注入與工具列清單）。
 5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的 `DependsOn` 一次性 `RegisterServices` 注入並置 `ACTIVE`；若 agent 聲明的 LLM 缺失則退回 `PENDING` 等待。
-6. **運行期**：插件以 `ACTIVE` 對外服務；故障進入 `FAILED`（可被熱重載重新走流程）；熱重載採用「暫存 + 提交」兩階段，pre-commit 任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**（見「Golang 插件熱更新實操」）。
+6. **運行期**：插件以 `ACTIVE` 對外服務；故障進入 `FAILED`（可被熱重載重新走流程）；熱重載採用「暫存 + 提交」兩階段，先拉起並驗證新進程，成功後才交換並卸載舊進程，預備/驗證任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**（見「Golang 插件熱更新實操」）。
 7. **卸載/關機**：`Shutdown` 先停熱重載 watch 與 cron，再逐個插件 `ACTIVE → UNLOADING`（先執行對稱清理 stop hooks，如 agent 的 `Shutdown`）→ Kill 子進程 → `DISPOSED`（終態）。
 8. **動態注入與 PENDING 修復**：運行期經 ADMIN `/plugins/load` 注入的條目若依賴未滿足同樣進入 `PENDING`；後續注入補足缺口後，`repairPendingLocked` 會提升等待中的 provider、並把因缺 LLM 而 `PENDING` 的 agent 重新注入 `RegisterServices` 並激活（見 [core/inject.go](core/inject.go)）。
 
