@@ -417,6 +417,38 @@ func notifyTool(ctx context.Context, args json.RawMessage) (string, error) {
 	return string(res), nil
 }
 
+// notifyView 构造 notify 结果的结构化视图（卡片）：徽标按音效类型着色。
+func notifyView(result string) (json.RawMessage, error) {
+	var r struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		File    string `json:"file"`
+		Time    string `json:"time"`
+	}
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	tone := "gray"
+	switch r.Type {
+	case "success":
+		tone = "green"
+	case "error":
+		tone = "red"
+	case "warning":
+		tone = "yellow"
+	case "info":
+		tone = "teal"
+	}
+	fields := []dsc.ViewField{{Key: "message", Value: r.Message}}
+	if r.File != "" {
+		fields = append(fields, dsc.ViewField{Key: "file", Value: r.File})
+	} else {
+		fields = append(fields, dsc.ViewField{Key: "type", Value: r.Type, Tone: tone})
+	}
+	fields = append(fields, dsc.ViewField{Key: "time", Value: r.Time})
+	return dsc.CardView("Notify", &dsc.ViewBadge{Text: r.Type, Tone: tone}, fields), nil
+}
+
 // main 以公共 SDK（dsc-sdk）启动插件：注册 notify 工具，经原生插件 RPC 供
 // 宿主/模型调用，替代原型的独立 HTTP 服务（通知能力保留，供将来按需使用）。
 func main() {
@@ -427,6 +459,9 @@ func main() {
 			"参数 type 指定内置音效类型，file 指定自定义音频文件路径（优先于 type）。",
 		Schema:  notifyToolSchema,
 		Handler: notifyTool,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return notifyView(result)
+		},
 	})
 	sdk.OnStart(func(ctx context.Context) error {
 		initSoundCache()

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,6 +321,58 @@ func handleAdd(ctx context.Context, args json.RawMessage) (string, error) {
 	return string(out), nil
 }
 
+// memorySearchView 构造 memory_search 结果的结构化视图（表格）。
+func memorySearchView(result string) (json.RawMessage, error) {
+	var out struct {
+		Results []struct {
+			ID      int64   `json:"id"`
+			Content string  `json:"content"`
+			Source  string  `json:"source"`
+			Score   float64 `json:"score"`
+		} `json:"results"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		return nil, nil
+	}
+	rows := make([]dsc.ViewRow, 0, len(out.Results))
+	for _, r := range out.Results {
+		rows = append(rows, dsc.ViewRow{
+			"id":      strconv.FormatInt(r.ID, 10),
+			"content": r.Content,
+			"score":   strconv.FormatFloat(r.Score, 'f', 2, 64),
+			"source":  r.Source,
+		})
+	}
+	return dsc.TableView("Memory", &dsc.ViewBadge{Text: fmt.Sprintf("%d hit(s)", out.Total), Tone: "teal"}, []dsc.ViewColumn{
+		{Key: "id", Title: "id"},
+		{Key: "content", Title: "content"},
+		{Key: "score", Title: "score", Tone: "green"},
+		{Key: "source", Title: "source"},
+	}, rows), nil
+}
+
+// memoryAddView 构造 memory_add 结果的结构化视图（卡片）。
+func memoryAddView(result string) (json.RawMessage, error) {
+	var out struct {
+		ID    int64 `json:"id"`
+		Dedup bool  `json:"dedup"`
+	}
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		return nil, nil
+	}
+	badge := &dsc.ViewBadge{Text: "saved", Tone: "green"}
+	status := "saved"
+	if out.Dedup {
+		badge = &dsc.ViewBadge{Text: "duplicate", Tone: "yellow"}
+		status = "skipped (duplicate content)"
+	}
+	return dsc.CardView("Memory", badge, []dsc.ViewField{
+		{Key: "id", Value: strconv.FormatInt(out.ID, 10)},
+		{Key: "status", Value: status, Tone: badge.Tone},
+	}), nil
+}
+
 // recordToolResult 是 AfterTool 钩子：把其他工具的成功执行结果自动写入记忆库
 // （源标记为 tool），使记忆库随工具活动自动积累；跳过记忆服务自身的工具避免回环。
 func recordToolResult(toolName, result, toolErr string) {
@@ -368,12 +421,18 @@ func main() {
 		Schema:      searchSchema,
 		Handler:     handleSearch,
 		Context:     "记忆服务：可用 memory_search 检索历史记忆、memory_add 保存值得长期保留的信息（用户偏好、项目约定、重要结论）。其他工具的执行结果会自动写入记忆库，无需手动重复添加。",
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return memorySearchView(result)
+		},
 	})
 	sdk.Tool(dsc.Tool{
 		Name:        "memory_add",
 		Description: "添加一条记忆到记忆库：把值得长期保留的信息（如用户偏好、项目约定、重要结论）写入记忆库，供后续 memory_search 检索。参数 content 为记忆内容，source 可选（默认 user）。",
 		Schema:      addSchema,
 		Handler:     handleAdd,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return memoryAddView(result)
+		},
 	})
 	// 钩子：工具执行成功后自动沉淀为记忆（原 HTTP 实现没有钩子，SDK 化时补齐，
 	// 使记忆库能随工具活动自动积累，而非仅依赖模型显式调用 memory_add）。

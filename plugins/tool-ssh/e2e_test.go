@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os"
 	osexec "os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"dsc/core"
@@ -31,27 +29,19 @@ func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
 	return v
 }
 
-// TestE2EWithHostClient 端到端验证 SDK 化后的记忆服务插件能被宿主侧正常拉起并调用：
-// 以 go-plugin 客户端 spawn 本插件 exe，经 gRPC 验证元数据、工具目录，并真实执行
-// memory_add → memory_search（记忆库落在宿主可执行目录 memory/ 下，跨会话共享）。
+// TestE2EWithHostClient 端到端验证 tool-ssh 能被宿主侧正常拉起并调用，且各工具结果
+// 的 ViewJson 穿透完整 gRPC 链路。ssh_list/ssh_close 不依赖真实 SSH 服务器；
+// ssh_connect 以本地关闭端口触发确定性失败，验证失败态卡片。
 func TestE2EWithHostClient(t *testing.T) {
 	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "tool-memory-service.exe")
+	exe := filepath.Join(dir, "tool-ssh.exe")
 	if out, err := osexec.Command("go", "build", "-o", exe, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 
-	// 2. 准备宿主可执行目录（记忆库落点 <exeDir>/memory/memory.db）
-	hostDir := filepath.Join(dir, "host")
-	if err := os.MkdirAll(hostDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// 3. 以宿主侧客户端拉起插件进程（工作目录=宿主可执行目录，模拟宿主注入 ExecDir）
+	// 2. 以宿主侧客户端拉起插件进程
 	cmd := osexec.Command(exe)
-	cmd.Dir = hostDir
-	cmd.Env = os.Environ()
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  core.Handshake,
 		Plugins:          map[string]plugin.Plugin{},
@@ -71,14 +61,14 @@ func TestE2EWithHostClient(t *testing.T) {
 	conn := grpcClient.Conn
 	ctx := context.Background()
 
-	// 4. 元数据（SDK 自动提供）
+	// 3. 元数据（SDK 自动提供）
 	meta := metadata.NewPluginMetadataClient(conn)
 	info, err := meta.GetInfo(ctx, &metadata.Empty{})
-	if err != nil || info.Type != "tool" || info.Name != "memory-service" || info.ApiVersion != "1.0" {
+	if err != nil || info.Type != "tool" || info.Name != "ssh" || info.ApiVersion != "1.0" {
 		t.Fatalf("GetInfo = %+v, err %v", info, err)
 	}
 
-	// 5. 工具目录（SDK 自动聚合 memory_search + memory_add）
+	// 4. 工具目录（SDK 自动聚合 4 个工具）
 	tc := proto.NewToolServiceClient(conn)
 	list, err := tc.ListTools(ctx, &proto.ListToolsRequest{})
 	if err != nil {
@@ -88,11 +78,13 @@ func TestE2EWithHostClient(t *testing.T) {
 	for _, tool := range list.Tools {
 		names[tool.Name] = true
 	}
-	if len(list.Tools) != 2 || !names["memory_search"] || !names["memory_add"] {
-		t.Fatalf("ListTools = %+v", list.Tools)
+	for _, want := range []string{"ssh_connect", "ssh_exec", "ssh_list", "ssh_close"} {
+		if !names[want] {
+			t.Fatalf("missing tool %s, got %+v", want, list.Tools)
+		}
 	}
 
-	// 6. 真实执行：memory_add → memory_search
+	// 5. 真实执行（均无需真实 SSH 服务器）
 	run := func(tool, args string) *proto.ExecuteToolResponse {
 		t.Helper()
 		resp, err := tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{ToolName: tool, ArgumentsJson: args})
@@ -101,19 +93,25 @@ func TestE2EWithHostClient(t *testing.T) {
 		}
 		return resp
 	}
-	if resp := run("memory_add", `{"content":"用户偏好：用粤语交流","source":"user"}`); resp.Error != "" {
-		t.Fatalf("memory_add = %+v", resp)
-	} else if v := assertView(t, resp); v.Kind != "card" || v.Title != "Memory" || v.Badge == nil || v.Badge.Text != "saved" {
-		t.Fatalf("memory_add view = %+v", v)
-	}
-	if resp := run("memory_search", `{"query":"粤语"}`); resp.Error != "" || !strings.Contains(resp.Content, "粤语") {
-		t.Fatalf("memory_search = %+v", resp)
-	} else if v := assertView(t, resp); v.Kind != "table" || v.Title != "Memory" || len(v.Rows) == 0 || v.Rows[0]["content"] == "" {
-		t.Fatalf("memory_search view = %+v", v)
+
+	// ssh_list：空会话 → 表格视图（列定义 + "0" 徽标）
+	if resp := run("ssh_list", `{}`); resp.Error != "" {
+		t.Fatalf("ssh_list = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "table" || v.Title != "SSH Sessions" || v.Badge == nil || v.Badge.Text != "0" || len(v.Columns) != 1 {
+		t.Fatalf("ssh_list view = %+v", v)
 	}
 
-	// 7. 记忆库落点校验：<hostDir>/memory/memory.db（跨会话，非项目级）
-	if _, err := os.Stat(filepath.Join(hostDir, "memory", "memory.db")); err != nil {
-		t.Fatalf("memory.db 未创建于宿主可执行目录 memory 下: %v", err)
+	// ssh_connect：本地关闭端口 → 失败态卡片（badge=failed red，error 字段）
+	if resp := run("ssh_connect", `{"host":"127.0.0.1","port":1,"username":"nobody"}`); resp.Error != "" {
+		t.Fatalf("ssh_connect = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "card" || v.Title != "SSH" || v.Badge == nil || v.Badge.Text != "failed" || v.Badge.Tone != "red" || len(v.Fields) < 1 {
+		t.Fatalf("ssh_connect view = %+v", v)
+	}
+
+	// ssh_close：不存在的会话 → 卡片徽标 not found
+	if resp := run("ssh_close", `{"session_id":"ghost"}`); resp.Error != "" {
+		t.Fatalf("ssh_close = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "card" || v.Title != "SSH" || v.Badge == nil || v.Badge.Text != "not found" || v.Fields[0].Value != "ghost" {
+		t.Fatalf("ssh_close view = %+v", v)
 	}
 }

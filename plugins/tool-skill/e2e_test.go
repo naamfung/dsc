@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,22 @@ import (
 	"dsc/proto/metadata"
 	plugin "github.com/hashicorp/go-plugin"
 )
+
+// assertView 校验工具结果经完整 gRPC 链路透传的 ViewJson：非空且可解析为合法视图。
+func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
+	t.Helper()
+	if resp.ViewJson == "" {
+		t.Fatalf("ViewJson 为空（ViewFn 未生效或 gRPC 透传缺失）: %+v", resp)
+	}
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &v); err != nil {
+		t.Fatalf("ViewJson 非法: %v", err)
+	}
+	if v.Kind == "" {
+		t.Fatalf("ViewJson 缺 kind: %q", resp.ViewJson)
+	}
+	return v
+}
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的插件能被宿主侧正常拉起并调用：
 // 以 go-core 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，经 gRPC
@@ -109,14 +126,20 @@ func TestE2EWithHostClient(t *testing.T) {
 	}
 	if resp := execTool("read_skill", `{"name":"flat-skill"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文 B") {
 		t.Fatalf("read_skill = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Skill" || v.Badge == nil || v.Badge.Text != "flat-skill" || !strings.Contains(v.Body, "正文 B") {
+		t.Fatalf("read_skill view = %+v", v)
 	}
 	if resp := execTool("read_skill", `{"name":"git-commit"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文内置") {
 		t.Fatalf("read_skill builtin = %+v", resp)
+	} else if v := assertView(t, resp); v.Badge.Text != "git-commit" {
+		t.Fatalf("read_skill builtin view = %+v", v)
 	}
 
 	// 8. 安装新技能 → 立即可读，且技能索引动态更新（ContextFn 每调用重算）
 	if resp := execTool("install_skill", `{"path":"`+filepath.ToSlash(candDir)+`"}`); resp.Error != "" || !strings.Contains(resp.Content, "pkg-new") {
 		t.Fatalf("install_skill = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "card" || v.Badge == nil || v.Badge.Text != "1 installed" || v.Fields[0].Value != "pkg-new" {
+		t.Fatalf("install_skill view = %+v", v)
 	}
 	if resp := execTool("read_skill", `{"name":"pkg-new"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文 C") {
 		t.Fatalf("read_skill pkg-new = %+v", resp)
@@ -129,6 +152,8 @@ func TestE2EWithHostClient(t *testing.T) {
 	// 9. 卸载 → 不再可读
 	if resp := execTool("uninstall_skill", `{"name":"pkg-new"}`); resp.Error != "" {
 		t.Fatalf("uninstall_skill = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "card" || v.Badge == nil || v.Badge.Text != "uninstalled" || v.Fields[0].Value != "pkg-new" {
+		t.Fatalf("uninstall_skill view = %+v", v)
 	}
 	if resp := execTool("read_skill", `{"name":"pkg-new"}`); resp.Error == "" {
 		t.Fatalf("卸载后 read_skill 应报错: %+v", resp)

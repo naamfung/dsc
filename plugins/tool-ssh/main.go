@@ -150,6 +150,70 @@ type SSHCloseResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// sshConnectView 构造 ssh_connect 结果的结构化视图（卡片）。
+func sshConnectView(result string) (json.RawMessage, error) {
+	var r SSHConnectResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	badge := &dsc.ViewBadge{Text: "connected", Tone: "green"}
+	if !r.Success {
+		badge = &dsc.ViewBadge{Text: "failed", Tone: "red"}
+	}
+	fields := []dsc.ViewField{{Key: "session_id", Value: r.SessionID}}
+	if r.Error != "" {
+		fields = append(fields, dsc.ViewField{Key: "error", Value: r.Error, Tone: "red"})
+	}
+	return dsc.CardView("SSH", badge, fields), nil
+}
+
+// sshExecView 构造 ssh_exec 结果的结构化视图（纯文本 + 退出码徽标）。
+func sshExecView(result string) (json.RawMessage, error) {
+	var r SSHExecResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	badge := &dsc.ViewBadge{Text: fmt.Sprintf("exit %d", r.ExitCode), Tone: "gray"}
+	if !r.Success {
+		badge = &dsc.ViewBadge{Text: "error", Tone: "red"}
+	}
+	body := r.Output
+	if !r.Success && r.Error != "" {
+		body = r.Error
+	}
+	return dsc.PlainView("SSH", badge, body), nil
+}
+
+// sshListView 构造 ssh_list 结果的结构化视图（表格）。
+func sshListView(result string) (json.RawMessage, error) {
+	var r SSHListResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	rows := make([]dsc.ViewRow, 0, len(r.Sessions))
+	for _, id := range r.Sessions {
+		rows = append(rows, dsc.ViewRow{"id": id})
+	}
+	return dsc.TableView("SSH Sessions", &dsc.ViewBadge{Text: fmt.Sprintf("%d", len(r.Sessions)), Tone: "teal"}, []dsc.ViewColumn{{Key: "id", Title: "id"}}, rows), nil
+}
+
+// sshCloseView 构造 ssh_close 结果的结构化视图（卡片），session_id 取自调用参数。
+func sshCloseView(args json.RawMessage, result string) (json.RawMessage, error) {
+	var r SSHCloseResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	var p struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal(args, &p)
+	badge := &dsc.ViewBadge{Text: "not found", Tone: "gray"}
+	if r.Closed {
+		badge = &dsc.ViewBadge{Text: "closed", Tone: "green"}
+	}
+	return dsc.CardView("SSH", badge, []dsc.ViewField{{Key: "session_id", Value: p.SessionID}}), nil
+}
+
 func main() {
 	// ssh_connect
 	connectSchema := json.RawMessage(`{
@@ -247,9 +311,25 @@ func main() {
 	}
 
 	sdk := dsc.New(dsc.Config{Name: "ssh", Version: "1.0.0", Type: dsc.TypeTool})
-	sdk.Tool(dsc.Tool{Name: "ssh_connect", Description: "Connect to a remote host over SSH and return a persistent session ID for subsequent commands", Schema: connectSchema, Handler: connectHandler})
-	sdk.Tool(dsc.Tool{Name: "ssh_exec", Description: "Run a command on an SSH session and return its combined output and exit code", Schema: execSchema, Handler: execHandler})
-	sdk.Tool(dsc.Tool{Name: "ssh_list", Description: "List active SSH session IDs", Schema: listSchema, Handler: listHandler})
-	sdk.Tool(dsc.Tool{Name: "ssh_close", Description: "Close an SSH session by ID", Schema: closeSchema, Handler: closeHandler})
+	sdk.Tool(dsc.Tool{Name: "ssh_connect", Description: "Connect to a remote host over SSH and return a persistent session ID for subsequent commands", Schema: connectSchema, Handler: connectHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return sshConnectView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "ssh_exec", Description: "Run a command on an SSH session and return its combined output and exit code", Schema: execSchema, Handler: execHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return sshExecView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "ssh_list", Description: "List active SSH session IDs", Schema: listSchema, Handler: listHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return sshListView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "ssh_close", Description: "Close an SSH session by ID", Schema: closeSchema, Handler: closeHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return sshCloseView(args, result)
+		},
+	})
 	sdk.Serve()
 }

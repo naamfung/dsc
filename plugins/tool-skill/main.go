@@ -459,6 +459,53 @@ func (t *UninstallSkillTool) Execute(ctx context.Context, args json.RawMessage) 
 	return string(res), nil
 }
 
+// readSkillView 构造 read_skill 结果的结构化视图（纯文本）：技能名作徽标、正文为 SKILL.md。
+func readSkillView(args json.RawMessage, result string) (json.RawMessage, error) {
+	var p struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || strings.TrimSpace(p.Name) == "" {
+		return nil, nil
+	}
+	return dsc.PlainView("Skill", &dsc.ViewBadge{Text: p.Name, Tone: "teal"}, result), nil
+}
+
+// installSkillView 构造 install_skill 结果的结构化视图（卡片）。
+func installSkillView(result string) (json.RawMessage, error) {
+	var r struct {
+		Installed    []string `json:"installed"`
+		InstalledDir string   `json:"installedDir"`
+		Note         string   `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	fields := []dsc.ViewField{{Key: "installed", Value: strings.Join(r.Installed, ", "), Tone: "green"}}
+	if r.InstalledDir != "" {
+		fields = append(fields, dsc.ViewField{Key: "dir", Value: r.InstalledDir})
+	}
+	if r.Note != "" {
+		fields = append(fields, dsc.ViewField{Key: "note", Value: r.Note})
+	}
+	return dsc.CardView("Skill", &dsc.ViewBadge{Text: fmt.Sprintf("%d installed", len(r.Installed)), Tone: "green"}, fields), nil
+}
+
+// uninstallSkillView 构造 uninstall_skill 结果的结构化视图（卡片）。
+func uninstallSkillView(result string) (json.RawMessage, error) {
+	var r struct {
+		Uninstalled string `json:"uninstalled"`
+		Note        string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	fields := []dsc.ViewField{{Key: "name", Value: r.Uninstalled, Tone: "yellow"}}
+	if r.Note != "" {
+		fields = append(fields, dsc.ViewField{Key: "note", Value: r.Note})
+	}
+	return dsc.CardView("Skill", &dsc.ViewBadge{Text: "uninstalled", Tone: "yellow"}, fields), nil
+}
+
 // main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
 // PluginMetadata / PluginHookService 与 go-core 组装（重写自旧的
 // ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
@@ -483,18 +530,27 @@ func main() {
 		Schema:      readTool.ParametersSchema(),
 		Handler:     readTool.Execute,
 		ContextFn:   store.indexBlock, // 技能索引动态注入 system prompt（对齐旧 ListContext 每调用重算）
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return readSkillView(args, result)
+		},
 	})
 	sdk.Tool(dsc.Tool{
 		Name:        installTool.Name(),
 		Description: installTool.Description(),
 		Schema:      installTool.ParametersSchema(),
 		Handler:     installTool.Execute,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return installSkillView(result)
+		},
 	})
 	sdk.Tool(dsc.Tool{
 		Name:        uninstallTool.Name(),
 		Description: uninstallTool.Description(),
 		Schema:      uninstallTool.ParametersSchema(),
 		Handler:     uninstallTool.Execute,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return uninstallSkillView(result)
+		},
 	})
 	sdk.Serve()
 }

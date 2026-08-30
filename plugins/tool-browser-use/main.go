@@ -121,6 +121,8 @@ func defaultUserDataDir() string {
 
 // tryLaunch 用给定 user-data-dir 启动浏览器并连接，返回是否成功。
 // 用 recover 捕获启动/连接异常（如 profile 被锁），供用户模式失败降级。
+// 环境变量 DSC_BROWSER_CDP_URL 指向现有 CDP 端点时跳过本地 chromium 启动，
+// 直接连接该端点（供 mock chromium 集成测试等场景复用，避免依赖本机浏览器）。
 func tryLaunch(userDataDir string) (b *rod.Browser, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -128,6 +130,10 @@ func tryLaunch(userDataDir string) (b *rod.Browser, ok bool) {
 			b = nil
 		}
 	}()
+	if u := os.Getenv("DSC_BROWSER_CDP_URL"); u != "" {
+		b = rod.New().ControlURL(u).MustConnect()
+		return b, true
+	}
 	l := launcher.New().UserDataDir(userDataDir)
 	b = rod.New().ControlURL(l.MustLaunch()).MustConnect()
 	return b, true
@@ -787,6 +793,98 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 	return string(jsonData), nil
 }
 
+// fetchUrlView 构造 fetch_url 结果的结构化视图（纯文本）。
+func fetchUrlView(result string) (json.RawMessage, error) {
+	var r FetchUrlResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	body := r.Content
+	if !r.Success {
+		body = r.Error
+	}
+	badge := &dsc.ViewBadge{Text: "ok", Tone: "green"}
+	if !r.Success {
+		badge = &dsc.ViewBadge{Text: "error", Tone: "red"}
+	}
+	return dsc.PlainView("Fetch", badge, body), nil
+}
+
+// webSearchView 构造 web_search 结果的结构化视图（表格）。
+func webSearchView(result string) (json.RawMessage, error) {
+	var r WebSearchResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	rows := make([]dsc.ViewRow, 0, len(r.Results))
+	for _, it := range r.Results {
+		rows = append(rows, dsc.ViewRow{
+			"title":       it.Title,
+			"url":         it.URL,
+			"description": it.Description,
+			"source":      it.Source,
+		})
+	}
+	return dsc.TableView("Search", &dsc.ViewBadge{Text: fmt.Sprintf("%d result(s)", len(r.Results)), Tone: "teal"}, []dsc.ViewColumn{
+		{Key: "title", Title: "title"},
+		{Key: "url", Title: "url"},
+		{Key: "description", Title: "description"},
+		{Key: "source", Title: "source"},
+	}, rows), nil
+}
+
+// browserClickView 构造 browser_click 结果的结构化视图（卡片）。
+func browserClickView(result string) (json.RawMessage, error) {
+	var r BrowserClickResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	badge := &dsc.ViewBadge{Text: "clicked", Tone: "green"}
+	if !r.Success {
+		badge = &dsc.ViewBadge{Text: "failed", Tone: "red"}
+	}
+	fields := []dsc.ViewField{{Key: "message", Value: r.Message}}
+	if r.URL != "" {
+		fields = append(fields, dsc.ViewField{Key: "url", Value: r.URL})
+	}
+	return dsc.CardView("Browser", badge, fields), nil
+}
+
+// browserTypeView 构造 browser_type 结果的结构化视图（卡片）。
+func browserTypeView(result string) (json.RawMessage, error) {
+	var r BrowserTypeResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	badge := &dsc.ViewBadge{Text: "typed", Tone: "green"}
+	if !r.Success {
+		badge = &dsc.ViewBadge{Text: "failed", Tone: "red"}
+	}
+	fields := []dsc.ViewField{{Key: "message", Value: r.Message}}
+	if r.Value != "" {
+		fields = append(fields, dsc.ViewField{Key: "value", Value: r.Value})
+	}
+	return dsc.CardView("Browser", badge, fields), nil
+}
+
+// browserScreenshotView 构造 browser_screenshot 结果的结构化视图（卡片）。
+func browserScreenshotView(result string) (json.RawMessage, error) {
+	var r BrowserScreenshotResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		return nil, nil
+	}
+	badge := &dsc.ViewBadge{Text: "saved", Tone: "green"}
+	if !r.Success {
+		badge = &dsc.ViewBadge{Text: "failed", Tone: "red"}
+	}
+	fields := []dsc.ViewField{
+		{Key: "url", Value: r.URL},
+		{Key: "file", Value: r.SavedFile},
+		{Key: "size", Value: fmt.Sprintf("%d × %d · %.0f KB", r.Width, r.Height, float64(r.Size)/1024)},
+	}
+	return dsc.CardView("Screenshot", badge, fields), nil
+}
+
 // ============================================================
 // 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
 // PluginMetadata / PluginHookService 与 go-core 组装（重写自旧的
@@ -1012,10 +1110,30 @@ func main() {
 	}
 
 	sdk := dsc.New(dsc.Config{Name: "browser-use", Version: "1.0.0", Type: dsc.TypeTool})
-	sdk.Tool(dsc.Tool{Name: "fetch_url", Description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering", Schema: fetchUrlSchema, Handler: fetchUrlHandler})
-	sdk.Tool(dsc.Tool{Name: "web_search", Description: "Perform a web search using a headless browser and extract search results", Schema: webSearchSchema, Handler: webSearchHandler})
-	sdk.Tool(dsc.Tool{Name: "browser_click", Description: "Click an element on the page by selector", Schema: browserClickSchema, Handler: browserClickHandler})
-	sdk.Tool(dsc.Tool{Name: "browser_type", Description: "Type text into an input field", Schema: browserTypeSchema, Handler: browserTypeHandler})
-	sdk.Tool(dsc.Tool{Name: "browser_screenshot", Description: "Take a screenshot of the current page or full page", Schema: browserScreenshotSchema, Handler: browserScreenshotHandler})
+	sdk.Tool(dsc.Tool{Name: "fetch_url", Description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering", Schema: fetchUrlSchema, Handler: fetchUrlHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return fetchUrlView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "web_search", Description: "Perform a web search using a headless browser and extract search results", Schema: webSearchSchema, Handler: webSearchHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return webSearchView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "browser_click", Description: "Click an element on the page by selector", Schema: browserClickSchema, Handler: browserClickHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return browserClickView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "browser_type", Description: "Type text into an input field", Schema: browserTypeSchema, Handler: browserTypeHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return browserTypeView(result)
+		},
+	})
+	sdk.Tool(dsc.Tool{Name: "browser_screenshot", Description: "Take a screenshot of the current page or full page", Schema: browserScreenshotSchema, Handler: browserScreenshotHandler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return browserScreenshotView(result)
+		},
+	})
 	sdk.Serve()
 }

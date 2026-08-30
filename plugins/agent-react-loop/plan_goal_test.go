@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"dsc/core"
 	"dsc/proto"
 	"dsc/session"
 	"google.golang.org/grpc"
@@ -393,5 +395,105 @@ func TestGoalRoundDriver(t *testing.T) {
 	if !strings.Contains(p, "<goal_round>") || !strings.Contains(p, `"build x"`) ||
 		!strings.Contains(p, "Round: 2/3") || !strings.Contains(p, "</goal_round>") {
 		t.Fatalf("prompt = %q", p)
+	}
+}
+
+// TestTodoAndAskViewSpec todo_write / ask_user_question 结果附带结构化视图 spec。
+func TestTodoAndAskViewSpec(t *testing.T) {
+	// todo_write：计数卡片视图
+	a := newTestAgent(t)
+	resp, _ := callTool(t, a, toolTodoWrite, `{"todos":[{"content":"a","status":"pending"},{"content":"b","status":"in_progress"}]}`)
+	if resp.Error != "" || resp.ViewJson == "" {
+		t.Fatalf("todo_write 应携带 ViewJson: %+v", resp)
+	}
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &v); err != nil {
+		t.Fatalf("todo ViewJson 非法: %v", err)
+	}
+	if v.Kind != "card" || v.Title != "Todos" || v.Badge == nil || len(v.Fields) != 3 {
+		t.Fatalf("todo view = %+v", v)
+	}
+
+	// ask_user_question：答案表格视图
+	a = newTestAgent(t)
+	a.uqServiceID = 1
+	a.uqClient = &fakeUQClient{resp: &proto.AskResponse{Answers: []*proto.AskAnswer{{Id: "q1", Selected: []string{"a"}}}}}
+	resp, _ = callTool(t, a, toolAskUserQuestion, `{"questions":[{"id":"q1","question":"?"}]}`)
+	if resp.Error != "" || resp.ViewJson == "" {
+		t.Fatalf("ask_user_question 应携带 ViewJson: %+v", resp)
+	}
+	var v2 core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &v2); err != nil {
+		t.Fatalf("ask ViewJson 非法: %v", err)
+	}
+	if v2.Kind != "table" || v2.Title != "Answers" || len(v2.Rows) != 1 {
+		t.Fatalf("ask view = %+v", v2)
+	}
+}
+
+// TestTodoWriteViewDirect 直接单测 todo_write 视图函数（计数卡片）。
+func TestTodoWriteViewDirect(t *testing.T) {
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(todoWriteView(2, 1, 3)), &v); err != nil {
+		t.Fatalf("视图 JSON 非法: %v", err)
+	}
+	if v.Kind != "card" || v.Title != "Todos" || v.Badge == nil || v.Badge.Text != "1 in progress" || v.Badge.Tone != "green" {
+		t.Fatalf("view 头 = %+v", v)
+	}
+	if len(v.Fields) != 3 || v.Fields[0].Value != "2" || v.Fields[1].Value != "1" || v.Fields[2].Value != "3" {
+		t.Fatalf("fields = %+v", v.Fields)
+	}
+}
+
+// TestAskQuestionViewDirect 直接单测 ask_user_question 视图函数（答案表格）。
+func TestAskQuestionViewDirect(t *testing.T) {
+	view := askQuestionView([]answerView{
+		{ID: "q1", Selected: []string{"Option A"}, Custom: "notes"},
+		{ID: "q2", Selected: []string{}},
+	})
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(view), &v); err != nil {
+		t.Fatalf("视图 JSON 非法: %v", err)
+	}
+	if v.Kind != "table" || v.Title != "Answers" || v.Badge == nil || v.Badge.Text != "2" || v.Badge.Tone != "teal" {
+		t.Fatalf("view 头 = %+v", v)
+	}
+	if len(v.Columns) != 3 || len(v.Rows) != 2 {
+		t.Fatalf("columns/rows = %d/%d", len(v.Columns), len(v.Rows))
+	}
+	if v.Rows[0]["id"] != "q1" || v.Rows[0]["selected"] != "Option A" || v.Rows[0]["custom"] != "notes" {
+		t.Fatalf("row0 = %+v", v.Rows[0])
+	}
+	if v.Rows[1]["selected"] != "" {
+		t.Fatalf("row1 selected 应为空: %+v", v.Rows[1])
+	}
+}
+
+// TestGoalViewSpec 目标工具结果附带结构化视图 spec（对齐 DSH 显示契约，
+// 供 TUI 统一渲染为目标卡片）。
+func TestGoalViewSpec(t *testing.T) {
+	a := newTestAgent(t)
+	resp, _ := callTool(t, a, toolCreateGoal, `{"objective":"build the dsc plan feature"}`)
+	if resp.Error != "" || resp.ViewJson == "" {
+		t.Fatalf("create_goal 应携带 ViewJson，实际 %+v", resp)
+	}
+	var view core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &view); err != nil {
+		t.Fatalf("ViewJson 非法: %v", err)
+	}
+	if view.Kind != "card" || view.Title != "Goal" || view.Badge == nil || view.Badge.Text != "active" || view.Badge.Tone != "green" {
+		t.Fatalf("view 头 = %+v", view)
+	}
+	found := false
+	for _, f := range view.Fields {
+		if f.Key == "rounds" && f.Value == "0/256" {
+			found = true
+		}
+		if f.Key == "activation" && f.Tone != "green" {
+			t.Fatalf("armed activation 应为 green tone: %+v", f)
+		}
+	}
+	if !found {
+		t.Fatalf("view.fields 应含 rounds: %+v", view.Fields)
 	}
 }

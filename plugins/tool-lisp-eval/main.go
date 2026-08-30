@@ -379,6 +379,26 @@ func main() {
 	}
 
 	sdk := dsc.New(dsc.Config{Name: "lisp-eval", Version: "1.0.0", Type: dsc.TypeTool})
-	sdk.Tool(dsc.Tool{Name: name, Description: description, Schema: schema, Handler: handler})
+	sdk.Tool(dsc.Tool{
+		Name: name, Description: description, Schema: schema, Handler: handler,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return lispEvalView(result)
+		},
+	})
 	sdk.Serve()
+}
+
+// lispEvalView 构造 lisp_eval 结果的结构化视图（纯文本）：把尾部
+// "\n\n[耗時 <elapsed>]" 拆成头部耗时徽标，正文为表达式结果。
+func lispEvalView(result string) (json.RawMessage, error) {
+	body := result
+	var badge *dsc.ViewBadge
+	if i := strings.LastIndex(result, "\n\n[耗時 "); i >= 0 {
+		body = result[:i]
+		rest := result[i+len("\n\n[耗時 "):]
+		if j := strings.Index(rest, "]"); j > 0 {
+			badge = &dsc.ViewBadge{Text: "耗时 " + rest[:j], Tone: "gray"}
+		}
+	}
+	return dsc.PlainView("Lisp", badge, body), nil
 }

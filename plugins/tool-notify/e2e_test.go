@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,22 @@ import (
 	"dsc/proto/metadata"
 	plugin "github.com/hashicorp/go-plugin"
 )
+
+// assertView 校验工具结果经完整 gRPC 链路透传的 ViewJson：非空且可解析为合法视图。
+func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
+	t.Helper()
+	if resp.ViewJson == "" {
+		t.Fatalf("ViewJson 为空（ViewFn 未生效或 gRPC 透传缺失）: %+v", resp)
+	}
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &v); err != nil {
+		t.Fatalf("ViewJson 非法: %v", err)
+	}
+	if v.Kind == "" {
+		t.Fatalf("ViewJson 缺 kind: %q", resp.ViewJson)
+	}
+	return v
+}
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的 tool-notify 能被宿主侧正常拉起并调用：
 // 以 go-core 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，经 gRPC 验证元数据、
@@ -80,9 +97,13 @@ func TestE2EWithHostClient(t *testing.T) {
 	}
 	if resp := execTool(`{}`); resp.Error != "" || !strings.Contains(resp.Content, "success") {
 		t.Fatalf("默认 success 执行 = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "card" || v.Title != "Notify" || v.Badge == nil || v.Badge.Tone != "green" {
+		t.Fatalf("success view = %+v", v)
 	}
 	if resp := execTool(`{"type":"warning"}`); resp.Error != "" || !strings.Contains(resp.Content, "warning") {
 		t.Fatalf("warning 执行 = %+v", resp)
+	} else if v := assertView(t, resp); v.Badge.Tone != "yellow" {
+		t.Fatalf("warning view = %+v", v)
 	}
 	// 未知音效类型应报错（错误经响应透传，而非 RPC 错误）
 	if resp := execTool(`{"type":"boom"}`); resp.Error == "" {

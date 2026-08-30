@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"dsc/core"
 	"dsc/proto"
 	"dsc/session"
 )
@@ -253,11 +255,6 @@ func (a *ReactLoopAgent) execAskUserQuestion(ctx context.Context, tc *proto.Tool
 		return &proto.ExecuteToolResponse{Error: mapAskError(resp.GetError(), resp.GetMessage())}, false
 	}
 	// 规范紧凑 JSON：selected 恒存在（零选择为 []），custom 为空时省略（对齐 DSH）
-	type answerView struct {
-		ID       string   `json:"id"`
-		Selected []string `json:"selected"`
-		Custom   string   `json:"custom,omitempty"`
-	}
 	var views []answerView
 	for _, ans := range resp.GetAnswers() {
 		sel := ans.GetSelected()
@@ -270,7 +267,39 @@ func (a *ReactLoopAgent) execAskUserQuestion(ctx context.Context, tc *proto.Tool
 	if err != nil {
 		return &proto.ExecuteToolResponse{Error: fmt.Sprintf("ask_user_question: encode answers: %v", err)}, false
 	}
-	return &proto.ExecuteToolResponse{Content: string(b)}, false
+	// 附带结构化视图 spec：答案表格（TUI 统一渲染）
+	return &proto.ExecuteToolResponse{Content: string(b), ViewJson: askQuestionView(views)}, false
+}
+
+// answerView 一次评审的规范紧凑视图：selected 恒存在、custom 空时省略。
+type answerView struct {
+	ID       string   `json:"id"`
+	Selected []string `json:"selected"`
+	Custom   string   `json:"custom,omitempty"`
+}
+
+// askQuestionView 构造 ask_user_question 结果的结构化视图（答案表格）。
+func askQuestionView(views []answerView) string {
+	rows := make([]core.ViewRow, 0, len(views))
+	for _, v := range views {
+		rows = append(rows, core.ViewRow{
+			"id":       v.ID,
+			"selected": strings.Join(v.Selected, ", "),
+			"custom":   v.Custom,
+		})
+	}
+	view, _ := json.Marshal(core.ToolView{
+		Kind:  "table",
+		Title: "Answers",
+		Badge: &core.ViewBadge{Text: fmt.Sprintf("%d", len(views)), Tone: "teal"},
+		Columns: []core.ViewColumn{
+			{Key: "id", Title: "id"},
+			{Key: "selected", Title: "selected"},
+			{Key: "custom", Title: "custom"},
+		},
+		Rows: rows,
+	})
+	return string(view)
 }
 
 // execTodoWrite 整表替换当前会话的任务清单（对齐 DSH tool-todo）：
@@ -308,9 +337,26 @@ func (a *ReactLoopAgent) execTodoWrite(tc *proto.ToolCall) (*proto.ExecuteToolRe
 			completed++
 		}
 	}
+	// 附带结构化视图 spec：任务清单计数卡片（TUI 统一渲染）
 	return &proto.ExecuteToolResponse{
-		Content: fmt.Sprintf("Updated todo list: %d pending, %d in progress, %d completed.", pending, inProgress, completed),
+		Content:  fmt.Sprintf("Updated todo list: %d pending, %d in progress, %d completed.", pending, inProgress, completed),
+		ViewJson: todoWriteView(pending, inProgress, completed),
 	}, false
+}
+
+// todoWriteView 构造 todo_write 结果的结构化视图（计数卡片）。
+func todoWriteView(pending, inProgress, completed int) string {
+	view, _ := json.Marshal(core.ToolView{
+		Kind:  "card",
+		Title: "Todos",
+		Badge: &core.ViewBadge{Text: fmt.Sprintf("%d in progress", inProgress), Tone: "green"},
+		Fields: []core.ViewField{
+			{Key: "pending", Value: strconv.Itoa(pending)},
+			{Key: "in_progress", Value: strconv.Itoa(inProgress), Tone: "green"},
+			{Key: "completed", Value: strconv.Itoa(completed), Tone: "teal"},
+		},
+	})
+	return string(view)
 }
 
 // validateTodos 校验并构造任务清单（对齐 DSH 稳定失败文本）：
@@ -371,7 +417,8 @@ func (a *ReactLoopAgent) execGetGoal(tc *proto.ToolCall) (*proto.ExecuteToolResp
 	if err != nil {
 		return &proto.ExecuteToolResponse{Error: err.Error()}, false
 	}
-	return &proto.ExecuteToolResponse{Content: content}, false
+	// 附带结构化视图 spec，供 TUI 统一渲染为目标卡片
+	return &proto.ExecuteToolResponse{Content: content, ViewJson: goalViewSpec(g, a.goalActivation, a.goalRounds)}, false
 }
 
 // execCreateGoal 为长程完成目标创建 goal（对齐 DSH create_goal）。
@@ -445,7 +492,8 @@ func (a *ReactLoopAgent) applyGoalOp(op session.GoalOp) (*proto.ExecuteToolRespo
 	if err != nil {
 		return &proto.ExecuteToolResponse{Error: err.Error()}, false
 	}
-	return &proto.ExecuteToolResponse{Content: content}, conclude
+	// 附带结构化视图 spec，供 TUI 统一渲染为目标卡片
+	return &proto.ExecuteToolResponse{Content: content, ViewJson: goalViewSpec(next, armed, a.goalRounds)}, conclude
 }
 
 // goalViewJSON 渲染 goal 工具的规范结果 JSON（对齐 DSH 紧凑 JSON 形状）：
@@ -468,6 +516,51 @@ func goalViewJSON(g *session.GoalSnapshot, activation bool, rounds int) (string,
 	}
 	b, err := json.Marshal(map[string]any{"goal": goal, "activation": act})
 	return string(b), err
+}
+
+// goalPhaseTone 把 goal 阶段映射到结构化视图色板（teal/green/yellow/red/gray）。
+func goalPhaseTone(phase string) string {
+	switch phase {
+	case "active":
+		return "green"
+	case "complete":
+		return "teal"
+	case "paused":
+		return "yellow"
+	case "blocked":
+		return "red"
+	}
+	return "gray"
+}
+
+// goalViewSpec 构建 goal 工具结果的结构化视图 spec（对齐 DSH 显示契约）：
+// 卡片头部「Goal · phase」（phase 按语义着色），字段按逻辑顺序对齐列出。
+// TUI 据此统一渲染，呈现为可读卡片而非原始 JSON。
+func goalViewSpec(g *session.GoalSnapshot, activation bool, rounds int) string {
+	act, actTone := "disarmed", "gray"
+	if activation {
+		act, actTone = "armed", "green"
+	}
+	fields := []core.ViewField{
+		{Key: "id", Value: g.ID},
+		{Key: "rounds", Value: fmt.Sprintf("%d/%d", rounds, g.MaxGoalRounds)},
+		{Key: "revision", Value: strconv.Itoa(g.Revision)},
+		{Key: "activation", Value: act, Tone: actTone},
+		{Key: "objective", Value: g.Objective},
+	}
+	if g.BlockedReason != nil {
+		fields = append(fields, core.ViewField{Key: "blocked", Value: g.BlockedReason.Message, Tone: "red"})
+	}
+	b, err := json.Marshal(core.ToolView{
+		Kind:   "card",
+		Title:  "Goal",
+		Badge:  &core.ViewBadge{Text: g.Phase, Tone: goalPhaseTone(g.Phase)},
+		Fields: fields,
+	})
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // goalRoundDriver 同会话 goal 续行驱动器判定（对齐 DSH goal-round-driver）：

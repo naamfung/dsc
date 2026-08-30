@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,22 @@ import (
 	"dsc/proto/metadata"
 	plugin "github.com/hashicorp/go-plugin"
 )
+
+// assertView 校验工具结果经完整 gRPC 链路透传的 ViewJson：非空且可解析为合法视图。
+func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
+	t.Helper()
+	if resp.ViewJson == "" {
+		t.Fatalf("ViewJson 为空（ViewFn 未生效或 gRPC 透传缺失）: %+v", resp)
+	}
+	var v core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &v); err != nil {
+		t.Fatalf("ViewJson 非法: %v", err)
+	}
+	if v.Kind == "" {
+		t.Fatalf("ViewJson 缺 kind: %q", resp.ViewJson)
+	}
+	return v
+}
 
 // TestE2EWithHostClient 端到端验证 SDK 重写后的插件能被宿主侧正常拉起并调用：
 // 以 go-core 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，经 gRPC
@@ -80,6 +97,8 @@ func TestE2EWithHostClient(t *testing.T) {
 	}
 	if resp := run("(+ 1 2)"); resp.Error != "" || !strings.Contains(resp.Content, "3") {
 		t.Fatalf("(+ 1 2) = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Lisp" || v.Badge == nil || !strings.Contains(v.Badge.Text, "耗时") || v.Body == "" {
+		t.Fatalf("lisp view = %+v", v)
 	}
 	if resp := run("(* 3 4)"); resp.Error != "" || !strings.Contains(resp.Content, "12") {
 		t.Fatalf("(* 3 4) = %+v", resp)
