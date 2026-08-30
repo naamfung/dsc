@@ -204,6 +204,52 @@ plugins:
 	}
 }
 
+// TestRunSetupDoesNotWriteUnexploredProvider 验证：仅存在于 plugins 目录、config
+// 未声明且用户未编辑的提供商，不应在保存时被写回 config.yaml（曾因菜单展示误用
+// setupEnv.env() 创建条目而把未编辑的 ollama 也新增进配置）。
+func TestRunSetupDoesNotWriteUnexploredProvider(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeTestConfig(t, dir, `
+# 顶部注释
+plugins:
+  - name: llm-anthropic
+    type: llm
+    enabled: true
+    env:
+      ANTHROPIC_BASE_URL: "http://old:8000"
+`)
+	pluginsDir := filepath.Join(dir, "plugins")
+	// 目录里有 ollama，但用户不编辑它
+	if err := os.MkdirAll(filepath.Join(pluginsDir, "llm-anthropic"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginsDir, "llm-ollama"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 主菜单: 1=配置, 2=设默认, 3=providers[0](llm-anthropic), 4=providers[1](llm-ollama),
+	// 5=保存, 6=取消。只编辑 llm-anthropic 并保存，ollama 不应被写入。
+	inputs := []string{
+		"3",               // 编辑 llm-anthropic
+		"http://new:9000", // 基址
+		"new-model",       // 模型
+		"new-key",         // key
+		"5",               // 保存
+		"y",               // 确认
+	}
+	rc := runSetup(scannerFromInputs(inputs), &strings.Builder{}, cfg, pluginsDir)
+	if rc != 0 {
+		t.Fatalf("runSetup 返回 %d", rc)
+	}
+	body, _ := os.ReadFile(cfg)
+	s := string(body)
+	if strings.Contains(s, "llm-ollama") {
+		t.Fatalf("未编辑的 llm-ollama 不应被写回 config: %s", s)
+	}
+	if !strings.Contains(s, "http://new:9000") {
+		t.Fatalf("llm-anthropic 编辑应写回: %s", s)
+	}
+}
+
 // TestRunSetupNewProviderEnable 验证 config 未声明（目录扫描发现）的提供商经
 // 向导编辑并启用后，会新增到 config.yaml 且 enabled=true。
 func TestRunSetupNewProviderEnable(t *testing.T) {

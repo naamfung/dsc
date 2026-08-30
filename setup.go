@@ -54,7 +54,7 @@ type setupProvider struct {
 // setupEnv 记录向导会话中的待写 env 键值（provider name -> key -> value）。
 type setupEnv map[string]map[string]string
 
-// env 返回 provider 的 env 映射；不存在时创建。
+// env 返回 provider 的 env 映射；不存在时创建（仅编辑路径使用）。
 func (s setupEnv) env(provider string) map[string]string {
 	m, ok := s[provider]
 	if !ok {
@@ -62,6 +62,12 @@ func (s setupEnv) env(provider string) map[string]string {
 		s[provider] = m
 	}
 	return m
+}
+
+// get 只读返回 provider 的 env 映射；不存在返回 nil（不创建条目）。
+// 用于菜单展示等只读场景，避免把未编辑的提供商误引入待写集合。
+func (s setupEnv) get(provider string) map[string]string {
+	return s[provider]
 }
 
 // semanticKey 按语义在 env 中挑选匹配子串的键名；不存在返回 ""。
@@ -302,7 +308,7 @@ func runSetup(in *bufio.Scanner, w io.Writer, configPath, pluginsDir string) int
 		// 主菜单
 		menu := []string{"配置 LLM 提供商…", "设置默认提供商…"}
 		for _, p := range providers {
-			menu = append(menu, fmt.Sprintf("%s（%s）", p.name, setupProviderStatus(pending.env(p.name), p)))
+			menu = append(menu, fmt.Sprintf("%s（%s）", p.name, setupProviderStatus(pending.get(p.name), p)))
 		}
 		menu = append(menu, "保存并退出", "取消")
 
