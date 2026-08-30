@@ -107,6 +107,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 | 旗標 | 用途 |
 | --- | --- |
+| `setup`（子命令） | 交互式配置向导：基于 config.yaml 的插件状态动态发现 LLM 提供商（并补充扫描 plugins 目录中未声明的 `llm-*` 插件），以行式菜单编辑基址/模型/API key、设置默认提供商，写回 config.yaml（保留注释），避免手动改配置文件的格式风险。仅配置 LLM 连接与 `default_llm`，为快速启动到可用状态；其他设置仍走 config.yaml |
 | `-mode minimal\|standard\|creation\|ptc` | 切換模式（默認 `standard`；`ptc` 开启 PTC 程序化工具组合呈现，直接把工具调用折叠为唯一 `run_code`；其余模式 `run_code` 对模型隐藏） |
 | `-input <text>` | 非 TUI 自動化入口：執行一單輪後退出；stdin 為管道/文件重定向時進入多輪 stdin 驅動，直到 EOF |
 | `-headless` | 精简单发模式（对齐 DSH harness headless）：仅执行 `-input` 指定的**单个任务**一次后退出，不启动后续 stdin 多轮；任务须非空白（否则 stderr 报错并以码 1 退出）；**不开** ADMIN API 端口、热重载 watcher 与 cron，专为 CI 脚本 |

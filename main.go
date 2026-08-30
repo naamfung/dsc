@@ -242,6 +242,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// dsc setup：交互式配置向导（不加载插件，直接读写 config.yaml）。
+	// 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
+	if isSetupCommand(os.Args[1:]) {
+		os.Exit(runSetup(bufio.NewScanner(os.Stdin), os.Stdout,
+			filepath.Join(execDir, "config", "config.yaml"),
+			filepath.Join(execDir, "plugins")))
+	}
+
 	// 啟動目錄（cwd）：默認 workspace 根。用戶在哪个目录启动 dsc，
 	// 就以哪个目录为工作区（对齐 REX/Claude Code）；獲取失敗時退化為可執行目錄。
 	cwd, err := os.Getwd()
