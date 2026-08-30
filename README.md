@@ -43,13 +43,13 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 ### 功能對齊程度
 
 - **完全對齊（概念同構）**：事件溯源會話、沙箱三檔策略語義、上下文壓縮（pre-step 壓力檢查 + 尾部保留）、plan/goal/todo 領域、以真實路徑呈現 workspace 根給模型、技能注入。
-- **部分對齊（同概念、異實現）**：沙箱從 DSH 的內核級（bwrap/Landlock）改為 DSC 的宿主工具級攔截（換取 Windows 兼容與可移植性，代價是「策略圍欄」而非「內核邊界」）；token 計量從 DSH 的 TokenMeter（本地精確 tokenizer）改為 DSC 的「服務端 usage + 字符估算回退」；技能注入從 DSH 的 provider registry 改為目錄掃描 + `ListContext` 索引。
+- **部分對齊（同概念、異實現）**：沙箱從 DSH 的內核級（bwrap/Landlock）改為 DSC 的宿主工具級攔截（換取 Windows 兼容與可移植性，代價是「策略圍欄」而非「內核邊界」）；雖為工具級，但對已知寫路徑、Windows junction/symlink 穿越、以及不可定位寫路徑的解釋器逃逸，均已於工具流水線 pre-execute 階段 fail-closed 封堵（見下方「各自獨特實現」）；token 計量從 DSH 的 TokenMeter（本地精確 tokenizer）改為 DSC 的「服務端 usage + 字符估算回退」；技能注入從 DSH 的 provider registry 改為目錄掃描 + `ListContext` 索引。
 - **DSC 擴展（DSH 沒有）**：`/settings history` 歷史注入條數限制（DSH 僅靠壓縮限界）+ 項目級會話隔離 + 配置持久化；提示緩存感知的容量計算（本地 llama.cpp 緩存命中時 `input_tokens` 僅含新增部分，須加回 `cache_read`）；`/sandbox` TUI 即時切換；多會話 TUI 管理（`/session new\|list\|switch\|delete`）；cron 定時任務；多 Agent workflow 後台運行（`background: true`）+ TUI `/jobs` 管理命令；`-input` 自動化多輪入口；`-headless` 精简单发模式；`-debugger` 管理 API 觀察端點。
 
 ### 各自獨特實現
 
 - **DSH 獨特**：內核級沙箱（真實 OS 邊界，不可信代碼經 `ctx.shell` 隔離）；跨能力族統一的可寫根集合（`writableRoots` 與 Seatbelt profile 共享，防止 fs 圍欄與 runner 漂移）；文件身份（dev/ino）圍欄回退；TokenMeter 精確計量；API 代理層（`api-proxy`：歷史分頁、子代理、投影）。
-- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
+- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
 
 ## 支持的插件
 
