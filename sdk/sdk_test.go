@@ -110,6 +110,44 @@ func TestToolServiceServer(t *testing.T) {
 	}
 }
 
+// TestToolServiceServerViewFn 校验 ViewFn：插件声明的结构化视图 spec 进入 ViewJson，
+// 供 TUI 统一渲染；未设置 ViewFn 时 ViewJson 为空。
+func TestToolServiceServerViewFn(t *testing.T) {
+	s := testSDK()
+	s.Tool(Tool{
+		Name:    "goal",
+		Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return `{"goal":{}}`, nil },
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			if result != `{"goal":{}}` {
+				t.Fatalf("ViewFn 应收到 Handler 结果, got %q", result)
+			}
+			return CardView("Goal", &ViewBadge{Text: "active", Tone: "green"}, []ViewField{{Key: "id", Value: "goal"}}), nil
+		},
+	})
+	s.Tool(Tool{
+		Name:    "plain",
+		Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "plain", nil },
+	})
+	srv := &toolServiceServer{sdk: s}
+
+	resp, err := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "goal", ArgumentsJson: `{}`})
+	if err != nil || resp.ViewJson == "" {
+		t.Fatalf("goal ExecuteTool = (%+v, %v), ViewJson 应为非空", resp, err)
+	}
+	var view core.ToolView
+	if err := json.Unmarshal([]byte(resp.ViewJson), &view); err != nil {
+		t.Fatalf("ViewJson 非法: %v", err)
+	}
+	if view.Kind != "card" || view.Title != "Goal" || view.Badge == nil || view.Badge.Text != "active" || len(view.Fields) != 1 {
+		t.Fatalf("view = %+v", view)
+	}
+	// 未设置 ViewFn → ViewJson 为空
+	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "plain", ArgumentsJson: `{}`})
+	if resp.ViewJson != "" {
+		t.Fatalf("无 ViewFn 时 ViewJson 应为空, got %q", resp.ViewJson)
+	}
+}
+
 // TestToolServiceServerContextFn 动态上下文优先于静态 Context（每次求值）。
 func TestToolServiceServerContextFn(t *testing.T) {
 	calls := 0

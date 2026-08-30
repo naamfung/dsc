@@ -109,6 +109,7 @@ message RunStreamResponse {
   string tool_result = 8; // 工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示
   int32 turn = 9; // 轮次编号（对齐 DSH：一次受理输入的排空）；随帧携带，供 TUI 显示
   int32 step = 10; // 步编号（对齐 DSH：一次模型请求及其引发的工具执行）
+  string tool_view = 11; // 工具结果帧可选携带的结构化视图 spec（JSON，对齐 DSH 显示契约）；TUI 统一渲染，缺失时回退
 }
 
 // token 用量统计（与 OpenAI usage 字段对应）
@@ -360,6 +361,7 @@ message ExecuteToolRequest {
 message ExecuteToolResponse {
   string content = 1;
   string error = 2;
+  string view_json = 3; // 可选：结构化视图 spec（JSON，对齐 DSH 显示契约）；供 TUI 统一渲染，缺失时回退到通用展示
 }
 
 message ListToolsRequest {

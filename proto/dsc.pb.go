@@ -594,6 +594,7 @@ type RunStreamResponse struct {
 	ToolResult    string                 `protobuf:"bytes,8,opt,name=tool_result,json=toolResult,proto3" json:"tool_result,omitempty"` // 工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示
 	Turn          int32                  `protobuf:"varint,9,opt,name=turn,proto3" json:"turn,omitempty"`                              // 轮次编号（对齐 DSH：一次受理输入的排空）；随帧携带，供 TUI 显示
 	Step          int32                  `protobuf:"varint,10,opt,name=step,proto3" json:"step,omitempty"`                             // 步编号（对齐 DSH：一次模型请求及其引发的工具执行）
+	ToolView      string                 `protobuf:"bytes,11,opt,name=tool_view,json=toolView,proto3" json:"tool_view,omitempty"`      // 工具结果帧可选携带的结构化视图 spec（JSON，对齐 DSH 显示契约）；TUI 统一渲染，缺失时回退
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -696,6 +697,13 @@ func (x *RunStreamResponse) GetStep() int32 {
 		return x.Step
 	}
 	return 0
+}
+
+func (x *RunStreamResponse) GetToolView() string {
+	if x != nil {
+		return x.ToolView
+	}
+	return ""
 }
 
 // token 用量统计（与 OpenAI usage 字段对应）
@@ -2941,6 +2949,7 @@ type ExecuteToolResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	ViewJson      string                 `protobuf:"bytes,3,opt,name=view_json,json=viewJson,proto3" json:"view_json,omitempty"` // 可选：结构化视图 spec（JSON，对齐 DSH 显示契约）；供 TUI 统一渲染，缺失时回退到通用展示
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2985,6 +2994,13 @@ func (x *ExecuteToolResponse) GetContent() string {
 func (x *ExecuteToolResponse) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *ExecuteToolResponse) GetViewJson() string {
+	if x != nil {
+		return x.ViewJson
 	}
 	return ""
 }
@@ -3445,7 +3461,7 @@ const file_dsc_proto_rawDesc = "" +
 	"\x05input\x18\x01 \x01(\tR\x05input\"=\n" +
 	"\vRunResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status\"\x9c\x02\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\xb9\x02\n" +
 	"\x11RunStreamResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x14\n" +
@@ -3459,7 +3475,8 @@ const file_dsc_proto_rawDesc = "" +
 	"toolResult\x12\x12\n" +
 	"\x04turn\x18\t \x01(\x05R\x04turn\x12\x12\n" +
 	"\x04step\x18\n" +
-	" \x01(\x05R\x04step\"\xf2\x01\n" +
+	" \x01(\x05R\x04step\x12\x1b\n" +
+	"\ttool_view\x18\v \x01(\tR\btoolView\"\xf2\x01\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\x12!\n" +
@@ -3615,10 +3632,11 @@ const file_dsc_proto_rawDesc = "" +
 	"\ftool_call_id\x18\x03 \x01(\tR\n" +
 	"toolCallId\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x04 \x01(\tR\tsessionId\"E\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\"b\n" +
 	"\x13ExecuteToolResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x12\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1b\n" +
+	"\tview_json\x18\x03 \x01(\tR\bviewJson\"\x12\n" +
 	"\x10ListToolsRequest\"4\n" +
 	"\x11ListToolsResponse\x12\x1f\n" +
 	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools\"\x14\n" +

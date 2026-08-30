@@ -59,6 +59,7 @@ func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentSer
 			ToolName:   item.ToolName,
 			ToolArgs:   item.ToolArgs,
 			ToolResult: item.ToolResult,
+			ToolView:   item.ToolView,
 			Turn:       item.Turn,
 			Step:       item.Step,
 		}); err != nil {
@@ -195,7 +196,7 @@ func (c *agentGRPCClient) RunStream(ctx context.Context, input string) (<-chan *
 				ch <- &RunStreamResponse{Status: "error", Error: err.Error()}
 				return
 			}
-			ch <- &RunStreamResponse{Output: resp.Output, Status: resp.Status, Error: resp.Error, Usage: UsageFromProto(resp.Usage), Reasoning: resp.Reasoning, ToolName: resp.ToolName, ToolArgs: resp.ToolArgs, ToolResult: resp.ToolResult, Turn: resp.Turn, Step: resp.Step}
+			ch <- &RunStreamResponse{Output: resp.Output, Status: resp.Status, Error: resp.Error, Usage: UsageFromProto(resp.Usage), Reasoning: resp.Reasoning, ToolName: resp.ToolName, ToolArgs: resp.ToolArgs, ToolResult: resp.ToolResult, ToolView: resp.ToolView, Turn: resp.Turn, Step: resp.Step}
 		}
 	}()
 	return ch, nil

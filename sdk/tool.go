@@ -24,6 +24,11 @@ type Tool struct {
 	Description string
 	Schema      json.RawMessage
 	Handler     func(ctx context.Context, args json.RawMessage) (string, error)
+	// ViewFn 可选：为本工具调用声明结构化视图 spec（JSON，见 dsc.CardView/dsc.TableView/dsc.PlainView）。
+	// 入参为调用参数 args 与 Handler 成功返回的结果 result，插件据此构造视图；返回的 spec 经
+	// ExecuteToolResponse.view_json 传给 TUI 统一渲染，使该工具的结果呈现为专用卡片而风格与其余
+	// 工具一致；缺失/出错时 TUI 回退到通用展示。
+	ViewFn func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error)
 	// Context 可选：向宿主贡献的 system prompt 片段（ListContext），
 	// 用于向模型说明本工具的使用约定（如沙箱边界）。
 	// ContextFn 可选：动态上下文（每次 ListContext 调用时求值，优先于 Context），
@@ -68,7 +73,14 @@ func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteT
 			if err != nil {
 				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
 			}
-			return &proto.ExecuteToolResponse{Content: res}, nil
+			resp := &proto.ExecuteToolResponse{Content: res}
+			// 可选结构化视图：插件基于参数与结果声明显示 spec，TUI 统一渲染（缺失/出错时回退）
+			if t.ViewFn != nil {
+				if v, verr := t.ViewFn(ctx, json.RawMessage(req.ArgumentsJson), res); verr == nil && len(v) > 0 {
+					resp.ViewJson = string(v)
+				}
+			}
+			return resp, nil
 		}
 	}
 	return &proto.ExecuteToolResponse{Error: fmt.Sprintf("tool not found: %s", req.ToolName)}, nil

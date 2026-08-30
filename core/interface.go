@@ -116,6 +116,9 @@ type RunStreamResponse struct {
 	ToolArgs string `json:"tool_args,omitempty"`
 	// ToolResult 是工具结果帧携带的结果内容，供 TUI 以「└」gutter 缩进展示。
 	ToolResult string `json:"tool_result,omitempty"`
+	// ToolView 是工具结果帧可选携带的结构化视图 spec（JSON，对齐 DSH 显示契约）：
+	// 由实现工具的插件声明"显示什么"，TUI 统一渲染保证风格一致；缺失时回退。
+	ToolView string `json:"tool_view,omitempty"`
 	// Turn/Step 是对齐 DSH 的轮/步编号：轮为一次受理输入的排空，步为一次模型请求
 	// 及其引发的工具执行。随每帧携带，供 TUI 状态行实时显示。
 	Turn int32 `json:"turn,omitempty"`
