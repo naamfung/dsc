@@ -68,7 +68,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `agent-react-loop`
 
 ### Tool 插件
-- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杠，边界 `/workspacefoo` 不当别名；与 sandbox 的 `/workspace` 别名语义一致）
+- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆，边界 `/workspacefoo` 不当别名；与 sandbox 的 `/workspace` 别名语义一致）
 - `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根）
 - `tool-browser-use`
 - `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱）

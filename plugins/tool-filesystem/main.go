@@ -231,8 +231,8 @@ func workspaceRoot() string {
 
 // mapWorkspacePath 把虚拟根前缀 /workspace 映射到真实工作区根，边界语义与
 // sandbox/str-replace-editor 一致：前綴後必須是分隔符或結尾，否则 /workspacefoo
-// 之类按独立路径处理。shell 是 mvdan POSIX 解释器，路径统一为正斜杠，故只处理
-// /workspace 正斜杠前缀，不涉及反斜杠。模型常先 `cd /workspace` 探索，原生命令
+// 之类按独立路径处理。shell 是 mvdan POSIX 解释器，路径统一为正斜杆，故只处理
+// /workspace 正斜杆前缀，不涉及反斜杆。模型常先 `cd /workspace` 探索，原生命令
 // （cd/ls/cat 等）不认虚拟根会报 no such file or directory，这里在 AST 层统一映射。
 func mapWorkspacePath(p string) string {
 	ws := workspaceRoot()

@@ -14,7 +14,7 @@ import (
 // 不登记 hook client，事件订阅只对 tool 型接线——此处用真实 dsc 插件进程补上这条
 // 链的宿主侧断言。登记走生产同款 registerDscCoreLocked（loadPluginWithBroker 的
 // case "dsc" 共用同一实现），spawn 用与本包 tool-filesystem 宿主链测试一致的直接
-// 路径（backslash 绝对路径，规避 normalizeBinaryPath 转前斜杠在测试环境 exec 的坑）。
+// 路径（backslash 绝对路径，规避 normalizeBinaryPath 转前斜杆在测试环境 exec 的坑）。
 
 // TestHostDscChainRegistersHook 验证真实 dsc 通用插件经 registerDscCoreLocked
 // 登记后，被接入 hookClientsSnapshot（事件订阅接线成立），类型映射/元数据正确。
