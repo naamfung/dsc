@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -223,6 +224,59 @@ func main() {
 // exitCodeMarkRe 匹配结果里追加的退出码标记（[exit_code: N]，见 formatShellResult）。
 var exitCodeMarkRe = regexp.MustCompile(`\[exit_code\s*:\s*(-?\d+)\]`)
 
+// workspaceRoot 返回统一工作区真实根（宿主注入的 DSC_WORKSPACE_ROOT），空串表示未注入。
+func workspaceRoot() string {
+	return os.Getenv("DSC_WORKSPACE_ROOT")
+}
+
+// mapWorkspacePath 把虚拟根前缀 /workspace 映射到真实工作区根，边界语义与
+// sandbox/str-replace-editor 一致：前綴後必須是分隔符或結尾，否则 /workspacefoo
+// 之类按独立路径处理。shell 是 mvdan POSIX 解释器，路径统一为正斜杠，故只处理
+// /workspace 正斜杠前缀，不涉及反斜杠。模型常先 `cd /workspace` 探索，原生命令
+// （cd/ls/cat 等）不认虚拟根会报 no such file or directory，这里在 AST 层统一映射。
+func mapWorkspacePath(p string) string {
+	ws := workspaceRoot()
+	if ws == "" {
+		return p
+	}
+	const prefix = "/workspace"
+	if !strings.HasPrefix(p, prefix) {
+		return p
+	}
+	rest := p[len(prefix):]
+	// 边界检查：前綴後必須是分隔符或結尾，否則 /workspacefoo 不當作 /workspace 別名
+	if rest != "" && !strings.HasPrefix(rest, "/") {
+		return p
+	}
+	root := strings.TrimRight(filepath.ToSlash(ws), "/")
+	sub := strings.TrimLeft(rest, "/")
+	if sub == "" {
+		return root
+	}
+	return root + "/" + sub
+}
+
+// mapWorkspacePaths 遍历 shell AST，把纯字面量词中的 /workspace 虚拟根前缀重写为真实路径。
+// 只改写词首的路径形状词（裸词 / 单双引号内无变量展开），变量展开/命令替换等复杂词不改，
+// 避免误伤。cd /workspace、ls -la /workspace/x、cat "/workspace/a b" 等均被覆盖。
+func mapWorkspacePaths(node syntax.Node) {
+	syntax.Walk(node, func(n syntax.Node) bool {
+		switch v := n.(type) {
+		case *syntax.Lit:
+			v.Value = mapWorkspacePath(v.Value)
+		case *syntax.SglQuoted:
+			v.Value = mapWorkspacePath(v.Value)
+		case *syntax.DblQuoted:
+			for _, part := range v.Parts {
+				if lit, ok := part.(*syntax.Lit); ok {
+					lit.Value = mapWorkspacePath(lit.Value)
+				}
+			}
+		}
+		return true
+	})
+}
+
 // shellView 为 shell 工具声明结构化视图：标题 Shell + 退出码徽标（0 绿 / 非 0 红）
 // + 命令输出正文（去掉追加的 [exit_code: N] 标记，避免与徽标重复）。
 func shellView(_ context.Context, _ json.RawMessage, result string) (json.RawMessage, error) {
@@ -343,6 +397,9 @@ func execSessionCommand(ctx context.Context, session *Session, command string) (
 			return "", 0, fmt.Errorf("failed to parse command: %w", err)
 		}
 	}
+	// 把 /workspace 虚拟根前缀映射为真实工作区根，使模型初期 `cd /workspace`、
+	// `ls /workspace/x` 等探索不再报 no such file or directory（对齐 sandbox 语义）。
+	mapWorkspacePaths(file)
 
 	// 活躍續命超時：持續有輸出就續命，只有長時間完全無輸出先超時（對齊 rex shell）。
 	err = runWithIdleTimeout(ctx, session, func(runCtx context.Context) error {
