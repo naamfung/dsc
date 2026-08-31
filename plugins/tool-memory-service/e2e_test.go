@@ -15,6 +15,25 @@ import (
 	plugin "github.com/hashicorp/go-plugin"
 )
 
+// TestJoinMatchTerms FTS5 转义：含标点的词须加引号、词内双引号翻倍、以 OR 连接。
+func TestJoinMatchTerms(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"config.yaml"}, `"config.yaml"`},
+		{[]string{"a.b", "c-d", "d/e"}, `"a.b" OR "c-d" OR "d/e"`},
+		{[]string{`say"hi`}, `"say""hi"`},
+		{[]string{"粤语", "config.yaml"}, `"粤语" OR "config.yaml"`},
+		{nil, ""},
+	}
+	for _, c := range cases {
+		if got := joinMatchTerms(c.in); got != c.want {
+			t.Fatalf("joinMatchTerms(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // assertView 校验工具结果经完整 gRPC 链路透传的 ViewJson：非空且可解析为合法视图。
 func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
 	t.Helper()
@@ -110,6 +129,16 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("memory_search = %+v", resp)
 	} else if v := assertView(t, resp); v.Kind != "table" || v.Title != "Memory" || len(v.Rows) == 0 || v.Rows[0]["content"] == "" {
 		t.Fatalf("memory_search view = %+v", v)
+	}
+	// 回归：带标点的检索词（如文件名 config.yaml、README.md）不应触发 FTS5 语法错误
+	//（裸词中的 '.' 会被 FTS5 当作语法字符）。修复前此类查询报 "fts5: syntax error near '.'"。
+	if resp := run("memory_add", `{"content":"项目约定：使用 config.yaml 与 README.md 描述规范","source":"user"}`); resp.Error != "" {
+		t.Fatalf("memory_add(punct) = %+v", resp)
+	}
+	if resp := run("memory_search", `{"query":"config.yaml"}`); resp.Error != "" {
+		t.Fatalf("带标点关键词 memory_search 不应报语法错误 = %+v", resp)
+	} else if v := assertView(t, resp); v.Kind != "table" {
+		t.Fatalf("带标点关键词 memory_search view = %+v", v)
 	}
 
 	// 7. 记忆库落点校验：<hostDir>/memory/memory.db（跨会话，非项目级）

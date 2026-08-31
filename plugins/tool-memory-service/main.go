@@ -143,6 +143,17 @@ func archiveIdleMemories(now time.Time) {
 		Update("archived", true)
 }
 
+// joinMatchTerms 把搜索关键词拼成 FTS5 MATCH 查询串：每个词按 FTS5 语法加双引号包裹
+// （词内双引号写成两个），以 OR 连接。加引号后含 `.`/`-`/`/` 等标点的词按短语解析，
+// 不再触发 "fts5: syntax error near '.'" 之类错误。
+func joinMatchTerms(keywords []string) string {
+	quoted := make([]string, 0, len(keywords))
+	for _, kw := range keywords {
+		quoted = append(quoted, `"`+strings.ReplaceAll(kw, `"`, `""`)+`"`)
+	}
+	return strings.Join(quoted, " OR ")
+}
+
 // searchMemories 执行记忆检索：FTS5 优先，LIKE 兜底；结果按相关度×时间衰减稳定排序。
 func searchMemories(query string, now time.Time) ([]resultItem, error) {
 	keywords := strings.Fields(query)
@@ -154,7 +165,10 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 	var results []resultItem
 
 	// ---- 第一层：FTS5 检索 ----
-	matchQuery := strings.Join(keywords, " OR ")
+	// 关键词必须按 FTS5 语法转义后加引号包裹：未加引号的裸词中，`.`/`-`/`/` 等标点
+	// 会被 FTS5 当作语法字符（如 `config.yaml` 解析成列引用 `config.yaml`）而报
+	// "fts5: syntax error"。加引号后按短语（phrase）解析，标点仅作分词边界、不再报错。
+	matchQuery := joinMatchTerms(keywords)
 	type ftsRow struct {
 		ID          int64
 		Content     string
@@ -173,7 +187,9 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
         ORDER BY rel_score DESC
         LIMIT 50`, matchQuery).Scan(&ftsRows).Error
 	if err != nil {
-		return nil, err
+		// FTS 查询失败（语法/分词问题等）：不使工具整体失败，降级到 LIKE 兜底。
+		// 真正需要保留的错误（如 memories 表缺失）会由下方 LIKE 查询再次报出。
+		ftsRows = nil
 	}
 
 	if len(ftsRows) > 0 {
