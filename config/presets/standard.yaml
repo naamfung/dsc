@@ -21,6 +21,10 @@ plugins:
   - name: tool-skill
     type: tool
     enabled: true
+  # 通知音效插件：回合完成时宿主自动播放 success 音效（程序性，经 Hook 订阅 agent/status 事件）
+  - name: tool-notify
+    type: tool
+    enabled: true
   # LUA HOST：空壳工具插件，加载 LUA 脚本（运行已创建的工具；新脚本仅在创造模式生效）
   - name: tool-lua-host
     type: tool

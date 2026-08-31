@@ -15,6 +15,7 @@ import (
 	"time"
 
 	dsc "dsc-sdk"
+	"dsc/core"
 	"github.com/ebitengine/oto/v3"
 	"github.com/hajimehoshi/go-mp3"
 )
@@ -451,6 +452,8 @@ func notifyView(result string) (json.RawMessage, error) {
 
 // main 以公共 SDK（dsc-sdk）启动插件：注册 notify 工具，经原生插件 RPC 供
 // 宿主/模型调用，替代原型的独立 HTTP 服务（通知能力保留，供将来按需使用）。
+// 同时注册 Hook.OnEvent 订阅宿主 agent/status 事件：回合完成（idle）时程序性
+// 播放 success 音效（对齐 DSH dsh-ding 的完成提醒），不依赖模型调用。
 func main() {
 	sdk := dsc.New(dsc.Config{Name: "notify", Version: "1.0.0", Type: dsc.TypeTool})
 	sdk.Tool(dsc.Tool{
@@ -461,6 +464,27 @@ func main() {
 		Handler: notifyTool,
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
 			return notifyView(result)
+		},
+	})
+	// 程序性完成提醒：宿主在 agent 回合完成时广播 agent/status(idle)，此处订阅
+	// 并播放 success 音效（对齐 DSH dsh-ding；不涉及模型的 notify 工具调用）。
+	sdk.Hook(dsc.Hook{
+		OnEvent: func(ctx context.Context, eventType, dataJSON string) {
+			if eventType != string(core.EventAgentStatus) {
+				return
+			}
+			if globalCtx == nil {
+				return // 音频未初始化（如无音频设备 / DSC_NOTIFY_NO_AUDIO），跳过
+			}
+			var ev core.AgentStatusEvent
+			if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
+				return
+			}
+			if ev.Status != core.AgentStatusIdle {
+				return // 仅回合完成提醒，运行中/起始不打扰
+			}
+			// 排队播放 success（完成后一次成功提示音）
+			playQueue <- PlayRequest{SoundType: "success"}
 		},
 	})
 	sdk.OnStart(func(ctx context.Context) error {

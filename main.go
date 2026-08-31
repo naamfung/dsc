@@ -639,12 +639,13 @@ func main() {
 		logger.Info("admin api started", "addr", adminAddr)
 	}
 
-	// 获取 Agent 并运行
+	// 获取 Agent 并运行（经事件包装：RunStream 回合完成时广播 agent/status，
+	// 供 notify 等程序性插件订阅；对齐 DSH agent-loop 原生发 agent/status）
 	agentName := mgr.GetMainAgentName()
 	if agentName == "" {
 		agentName = "agent-react-loop"
 	}
-	agent, ok := mgr.GetAgent(agentName)
+	agent, ok := mgr.EventAgent()
 	if !ok {
 		fail("agent %s not found after loading", agentName)
 	}
