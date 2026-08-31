@@ -12,7 +12,7 @@ import (
 // assembleMerged 把 config.yaml（llm/agent）+ preset（tool/policy/dsc）合并成
 // 交给 Manager 声明式加载的插件集，并做两件关键事：
 //  1. config.yaml 里启用的 tool/policy/dsc（含 install_go_plugin 安装的）也并入，
-//     与 preset 按名去重、config 优先——使模型安装的插件能跨重启生效（P1 修复）；
+//     与 preset 按名去重、config 优先——使模型安装的插件能跨重启生效；
 //  2. 为主路径与「失败回退续启」共用，避免重复的合并逻辑。
 func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry, mainCfg, presetCfg *core.Config, contextWindow int, headless bool, inputText string) *core.Config {
 	merged := &core.Config{}

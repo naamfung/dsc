@@ -186,7 +186,7 @@ func TestStoreLoadMissing(t *testing.T) {
 	}
 }
 
-// TestStoreRejectsTraversal 校验 Load/Delete/Save 拒绝路径穿越 id（P3-6）。
+// TestStoreRejectsTraversal 校验 Load/Delete/Save 拒绝路径穿越 id。
 func TestStoreRejectsTraversal(t *testing.T) {
 	st, err := NewStore(t.TempDir())
 	if err != nil {

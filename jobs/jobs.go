@@ -116,7 +116,7 @@ func NewRegistry() *Registry {
 }
 
 // maxRetainedJobs 保留的终态任务数上限；超过则淘汰最旧的终态任务，
-// 防止已完成 job 在 r.jobs/order 无限累积（P3-2）。
+// 防止已完成 job 在 r.jobs/order 无限累积。
 const maxRetainedJobs = 256
 
 // pruneLocked 淘汰最旧的终态 job，直到终态数量不超过 maxRetainedJobs（需已持有 r.mu）。
@@ -207,7 +207,7 @@ func (r *Registry) Start(spec StartSpec) (string, error) {
 		}
 		j.snapshot.Detail = outcome.Detail
 		close(j.settled)
-		// 终态任务淘汰：防已完成 job 在 r.jobs/order 无限累积（P3-2）
+		// 终态任务淘汰：防已完成 job 在 r.jobs/order 无限累积
 		r.pruneLocked()
 		// 完成监听器（contained）：在锁外逐个调用，异常隔离，不阻塞落定
 		listeners := make([]func(JobSnapshot), 0, len(r.doneListeners))

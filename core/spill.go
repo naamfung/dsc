@@ -13,7 +13,7 @@ import (
 // spillDefaultThreshold 外置阈值的默认字符数（对齐 DSH spill）。
 const spillDefaultThreshold = 4000
 
-// spillThreshold 返回工具结果外置阈值（字符数）：可用 DSC_SPILL_THRESHOLD 覆盖（P3-3）。
+// spillThreshold 返回工具结果外置阈值（字符数）：可用 DSC_SPILL_THRESHOLD 覆盖。
 func spillThreshold() int {
 	if s := os.Getenv("DSC_SPILL_THRESHOLD"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil && n > 0 {

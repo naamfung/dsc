@@ -70,7 +70,7 @@ var globalSessionManager = &SessionManager{
 	sessions: make(map[string]*Session),
 }
 
-// maxSessions 上限：防持久 shell 会话 map 无限增长（P1-5）。
+// maxSessions 上限：防持久 shell 会话 map 无限增长。
 const maxSessions = 64
 
 // shell 前台命令超时采用「十分鐘起步、活躍續命」方式（對齊 rex shell）：
@@ -309,7 +309,7 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 	}
 
 	globalSessionManager.mu.Lock()
-	// 达上限时任删一个会话，避免 map 无限增长（P1-5）。
+	// 达上限时任删一个会话，避免 map 无限增长。
 	if len(globalSessionManager.sessions) >= maxSessions {
 		for k := range globalSessionManager.sessions {
 			delete(globalSessionManager.sessions, k)
@@ -324,7 +324,7 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 
 // execSessionCommand 在 session 中執行命令，返回輸出和退出碼。
 // ctx 用于传播调用方取消；並用「十分鐘起步、活躍續命」idle 超時防止命令掛死
-// （對齊 rex shell，P1-5）：只要 stdout/stderr 持續有輸出就續命，只有長時間
+// （對齊 rex shell）：只要 stdout/stderr 持續有輸出就續命，只有長時間
 // 完全無輸出先超時，避免誤殺仍然活躍嘅長編譯/測試。
 func execSessionCommand(ctx context.Context, session *Session, command string) (string, int32, error) {
 	session.mu.Lock()

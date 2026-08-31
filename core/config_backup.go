@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
-// 配置自愈（P2）：config.yaml 与 preset <mode>.yaml 都是会被改写的配置文件。
+// 配置自愈：config.yaml 与 preset <mode>.yaml 都是会被改写的配置文件。
 // 每次成功启动后，把已生效的 config.yaml 与当前 mode 的 preset 各自独立备份到
 // config-backups/（旋转保留最近 N 份，互为独立、互不串扰）。当某份文件损坏、
 // 丢失或因坏插件导致启动失败时，宿主「分别还原」该文件自己的最近正常备份，

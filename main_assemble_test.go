@@ -6,7 +6,7 @@ import (
 	core "dsc/core"
 )
 
-// TestAssembleMergedConfigToolsDedup 验证 P1 修复：config.yaml 中启用的 tool/dsc 条目
+// TestAssembleMergedConfigToolsDedup 验证 config.yaml 中启用的 tool/dsc 条目
 // 并入合并集（模型安装的插件可跨重启生效），并与 preset 按名去重（config 优先）。
 func TestAssembleMergedConfigToolsDedup(t *testing.T) {
 	mainCfg := &core.Config{Plugins: []core.PluginEntry{

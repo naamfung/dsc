@@ -65,7 +65,7 @@ type ReactLoopAgent struct {
 	lastUsage        *core.Usage // 最近一次 LLM 請求的完整 usage 信息
 	// usageMu 保護 lastPromptTokens/lastUsage：串流 loop 喺唔持 sessMu 時寫入，
 	// 而 DebugSnapshot（另一 goroutine）要讀 lastPromptTokens，故用專鎖避免跨 goroutine
-	// 競爭（P2.6）。
+	// 競爭。
 	usageMu sync.Mutex
 
 	// 沙箱策略（宿主經 DSC_SANDBOX_POLICY 傳入，缺省 workspace-write）：渲染进
@@ -893,7 +893,7 @@ const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史
 // estimateTextTokens 估算一段文本的 token 数（对齐 rex guardian/estimateTokens）：
 // 取「字节数/4」与「rune 数」的较大者。英文按 /4（约 4 字符 1 token）；CJK（UTF-8
 // 每字 3 字节）字节/4 会低估，故回调为 rune 数（每字按 1 token），避免中文会话被
-// 笼统 /4 低估约 4 倍而撑爆上下文（P2.8）。
+// 笼统 /4 低估约 4 倍而撑爆上下文。
 func estimateTextTokens(s string) int {
 	bytes := len(s)
 	runes := utf8.RuneCountInString(s)

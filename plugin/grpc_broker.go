@@ -298,7 +298,7 @@ type GRPCBroker struct {
 	serverStreams map[uint32]*gRPCBrokerPending
 
 	// servers 记录由 AcceptAndServe 挂起的每个 id 对应的 *grpc.Server，供
-	// StopService 单独停止单个服务（P2.2(b)），不影响 broker 上其他共享服务。
+	// StopService 单独停止单个服务，不影响 broker 上其他共享服务。
 	servers map[uint32]*grpc.Server
 
 	unixSocketCfg  UnixSocketConfig
@@ -421,7 +421,7 @@ func (b *GRPCBroker) AcceptAndServe(id uint32, newGRPCServer func([]grpc.ServerO
 
 	server := newGRPCServer(opts)
 
-	// 记录 server，供 StopService 单独停止（P2.2(b)）
+	// 记录 server，供 StopService 单独停止
 	b.Lock()
 	b.servers[id] = server
 	b.Unlock()
@@ -458,7 +458,7 @@ func (b *GRPCBroker) AcceptAndServe(id uint32, newGRPCServer func([]grpc.ServerO
 
 // StopService 单独优雅停止某个已由 AcceptAndServe 挂起的 gRPC 服务，不影响
 // broker 上其他共享服务。宿主在卸载插件时回收其 per-plugin 服务（在宿主 broker
-// 上 serve、引用该插件的服务），避免僵尸服务继续 serving、残留死连接（P2.2(b)）。
+// 上 serve、引用该插件的服务），避免僵尸服务继续 serving、残留死连接。
 // 幂等：对未注册的 id 是 no-op；对已停止的服务再次调用同样安全。
 func (b *GRPCBroker) StopService(id uint32) {
 	b.Lock()

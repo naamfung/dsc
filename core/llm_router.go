@@ -23,7 +23,7 @@ type llmAggregateServer struct {
 
 // Chat 依次尝试 provider（primary 优先），首个成功即返回；全部失败返回最后的错误。
 // 路由顺序与 provider 在 llmRouteSnapshot 的 RLock 下打成快照，调用期间不持锁
-// （避免长调用阻塞热重载，同时消除与热重载写 m.llms 的并发 map 竞态，P1-1）。
+// （避免长调用阻塞热重载，同时消除与热重载写 m.llms 的并发 map 竞态）。
 func (s *llmAggregateServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
 	var lastErr error
 	for _, np := range s.m.llmRouteSnapshot() {
@@ -88,7 +88,7 @@ type namedLLMProvider struct {
 // llmRouteSnapshot 在 RLock 下取路由顺序与 provider 快照后立即释放锁：
 // 返回 [primary（若已加载）+ 其余按加载顺序] 的有序列表。供 Chat/ChatStream 在
 // 调用期间不持锁（避免长调用阻塞热重载），同時消除 handler 侧无锁读 m.llms 与
-// 热重载写 m.llms 的并发 map 竞态（P1-1）。
+// 热重载写 m.llms 的并发 map 竞态）。
 func (m *Manager) llmRouteSnapshot() []namedLLMProvider {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

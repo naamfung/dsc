@@ -13,7 +13,7 @@ import (
 	plugin "github.com/hashicorp/go-plugin"
 )
 
-// TestP1_2HotReloadAgentReconnect 是 P1-2（agent 热重载后"失联"）的修复验收：
+// TestHotReloadAgentReconnect 是 agent 热重载后"失联"缺陷的修复验收：
 //
 // 旧实现把"旧 agent 连接上挂载的聚合 serviceID"原样注入新 agent；但 go-plugin
 // broker 的 (id,addr) 连接信息是 per-connection 的，新 agent 的新连接没有旧 id
@@ -22,7 +22,7 @@ import (
 // 修复后 hotReloadAgent 会在「新 agent 自己的 broker」上重新挂载聚合服务，并以
 // 新 id 注入。本测试驱动真实 agent-react-loop：首次 RunStream 成功 → HotReload →
 // 二次 RunStream 成功，即证明热重载后新 agent 仍能连上宿主聚合 LLM/Tool。
-func TestP1_2HotReloadAgentReconnect(t *testing.T) {
+func TestHotReloadAgentReconnect(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestP1_2HotReloadAgentReconnect(t *testing.T) {
 		t.Fatal("重载后 agent 实例应被替换为新进程实例")
 	}
 	runTestAgentTurn(t, newImpl, "ping")
-	t.Log("P1-2 修复验证: 热重载后新 agent 能连通聚合 LLM/Tool (RunStream 成功)")
+	t.Log("修复验证: 热重载后新 agent 能连通聚合 LLM/Tool (RunStream 成功)")
 
 	// 收尾：终止插件进程
 	m.mu.Lock()

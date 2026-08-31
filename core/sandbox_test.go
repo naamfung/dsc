@@ -13,7 +13,7 @@ func fixedPolicy(p SandboxPolicy) func() SandboxPolicy {
 	return func() SandboxPolicy { return p }
 }
 
-// TestWorkspacePathToRootBoundary 验证 P3-1：/workspace 别名前缀须跟分隔符或结尾，
+// TestWorkspacePathToRootBoundary 验证 /workspace 别名前缀须跟分隔符或结尾，
 // /workspacefoo 之类不应被映射。
 func TestWorkspacePathToRootBoundary(t *testing.T) {
 	orig := WorkspaceRoot
@@ -36,7 +36,7 @@ func TestWorkspacePathToRootBoundary(t *testing.T) {
 }
 
 // jsonPath 将路径转义后嵌入 JSON 字面量：Windows 的 t.TempDir() 含反斜杠，
-// 直接拼进 JSON 会是非法转义序列，导致沙箱把解析失败当写拦截（P2.4 fail-closed）。
+// 直接拼进 JSON 会是非法转义序列，导致沙箱把解析失败当写拦截（fail-closed）。
 func jsonPath(p string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(p, `\`, `\\`), `"`, `\"`)
 }

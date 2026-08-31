@@ -255,7 +255,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	}
 	if store, err := NewSpillStore(spillDir); err == nil {
 		_ = m.toolRegistry.Register(&readSpillTool{store: store})
-		// 默认 4000 字符；可用 DSC_SPILL_THRESHOLD 覆盖（P3-3）
+		// 默认 4000 字符；可用 DSC_SPILL_THRESHOLD 覆盖
 		m.events.OnWaterfall(EventToolPostExecute, spillLargeResult(store, spillThreshold()))
 	} else {
 		logger.Warn("spill store unavailable", "error", err)
@@ -1015,7 +1015,7 @@ func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, han
 	}
 	// 新 agent 拥有全新的连接；go-plugin broker 的 (id,addr) 连接信息是 per-connection 的
 	// （AcceptAndServe 仅通告给绑定该 broker 的唯一对端），复用旧 serviceID 会因新连接
-	// 无通告而 Dial 超时（P1-2 热重载失联）。故聚合服务须在「新 agent 自己的 broker」
+	// 无通告而 Dial 超时（热重载后 agent 失联）。故聚合服务须在「新 agent 自己的 broker」
 	// 上重挂，并以新 id 注入新 agent。
 	newBroker := grpcClient.Broker()
 	newLLM, newTool, newUQ := m.attachAgentAggregatesOnBroker(newBroker, llmID != 0, primary, toolID != 0)
@@ -1489,7 +1489,7 @@ func (m *Manager) UnloadPlugin(name string) error {
 	// 对称清理：执行已注册的 stopHook（tool 插件撤销其工具、agent 优雅关闭）；
 	// llm 的 serviceID 映射不依赖 hook，此处保留
 	if m.typeMap[name] == "llm" {
-		// P2.2(b)：停掉宿主 broker 上该 per-provider 服务（在 broker 上 serve、引用本
+		// 停掉宿主 broker 上该 per-provider 服务（在 broker 上 serve、引用本
 		// 插件），防僵尸服务继续 serving、残留死连接；不触及聚合 LLM/Tool/Notify 等共享服务。
 		if id := m.llmServiceIDs[name]; id != 0 && m.broker != nil {
 			m.broker.StopService(id)
@@ -1677,7 +1677,7 @@ func (s *llmProxyServer) ChatStream(req *proto.ChatRequest, stream proto.LLMServ
 			return err
 		}
 		// 不再无条件向 stderr 打印消息正文/推理（原 [LLM-PROXY-DEBUG]）：会话内容
-		// 会经日志/重定向落盘造成凭据与隐私泄漏（P2.3）。
+		// 会经日志/重定向落盘造成凭据与隐私泄漏。
 		if err := stream.Send(msg); err != nil {
 			return err
 		}
@@ -2563,7 +2563,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 	return nil
 }
 
-// envSecretSuffixes 命中即视为凭据、不注入非 LLM 插件的键名后缀（P1-4：防 LLM/第三方
+// envSecretSuffixes 命中即视为凭据、不注入非 LLM 插件的键名后缀（防 LLM/第三方
 // API key 经 shell 等工具进程被模型读进会话历史）。
 var envSecretSuffixes = []string{
 	"_API_KEY", "_API_TOKEN", "_AUTH_TOKEN", "_SECRET", "_PASSWORD",
@@ -2624,7 +2624,7 @@ func buildEnv(custom map[string]string, allowSecrets bool) []string {
 // 互通服务 ID 不再经 env 注入（握手时序问题）：改为宿主加载工具插件后经
 // ToolService.SetInterconnect 把挂载在本插件 client broker 上的服务 ID 传入
 // 插件进程（互通机制 1/2）。
-// 仅 LLM 插件放行凭据类键（P1-4）；tool/policy/agent 等一律滤除，防凭据被
+// 仅 LLM 插件放行凭据类键；tool/policy/agent 等一律滤除，防凭据被
 // shell 等工具进程读出。
 func (m *Manager) coreEnv(entry PluginEntry) []string {
 	return buildEnv(entry.Env, entry.Type == "llm")
@@ -2698,7 +2698,7 @@ func (m *Manager) SwitchMode(mode string) error {
 	// 卸載不再需要的插件
 	for name := range currentTools {
 		if !targetTools[name] {
-			// 卸載 tool/core：與 UnloadPlugin 對稱清理（P2.2）
+			// 卸載 tool/core：與 UnloadPlugin 對稱清理
 			if client, exists := m.clients[name]; exists {
 				m.transitionLocked(name, StateUnloading, "")
 				m.runStopHooksLocked(name) // 跑 stop hook 並清 m.stopHooks[name]，避免殘留鉤子

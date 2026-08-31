@@ -84,7 +84,7 @@ func sandboxCheck(policy SandboxPolicy, toolName, argsJSON string) error {
 // 仅对已知写语义的工具生效：str_replace_editor 的 command != view 视为写。
 // 其余工具视为非写（不做额外拦截，避免误伤读操作）。
 // 参数无法解析为合法 JSON 时按「写」处理（fail-closed），避免解析失败被当成
-// 非写放行而与沙箱 fail-closed 声称矛盾（P2.4）。
+// 非写放行而与沙箱 fail-closed 声称矛盾。
 func writeCallInfo(toolName, argsJSON string) (path string, write bool) {
 	switch toolName {
 	case "str_replace_editor":
@@ -111,7 +111,7 @@ func workspacePathToRoot(p string) string {
 		}
 		rest := p[len(prefix):]
 		// 边界检查：前綴後必須是分隔符或結尾，否則 /workspacefoo 之類唔應被當作
-		// /workspace 別名（P3-1），維持其係獨立絕對路徑嘅語義。
+		// /workspace 別名，維持其係獨立絕對路徑嘅語義。
 		if rest != "" && !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, `\`) {
 			continue
 		}

@@ -16,8 +16,8 @@ import (
 // AcceptAndServe 仅把该元组沿「当前 broker 绑定的连接」通告给唯一对端插件进程；
 // 跨连接（另一插件进程）用同一 serviceID Dial 会因无通告而超时。因此无论初次加载
 // 还是热重载，聚合服务都必须挂载到「目标 agent 自己的 broker」上，并以本次返回的
-// 新 serviceID 注入该 agent——**不能沿用先前连接上的旧 id**。这正是 P1-2（热重载后
-// 新 agent 复用旧 serviceID 连不上聚合服务而失联）的修复锚点。
+// 新 serviceID 注入该 agent——**不能沿用先前连接上的旧 id**——否则会重现热重载
+// 后新 agent 复用旧 serviceID 连不上聚合服务而失联的缺陷。
 //
 // 注意：那些 id 的「连接信息」为一次性发送且有 connTimeout 窗口，故挂载后调用方
 // 须随即以返回的 id 调 RegisterServices / SetUserQuestionsService，让 agent 尽快 Dial。

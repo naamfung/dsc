@@ -246,7 +246,7 @@ func TestRegistryOnJobDone(t *testing.T) {
 	}
 
 	// 监听器异常被隔离（不影响落定与其他监听器）。panicFlag 用 channel 同步——
-	// 直接在监听器里写 bool、测试里读会有 data race（P3-8 附近 flaky 来源）。
+	// 直接在监听器里写 bool、测试里读会有 data race（易 flaky）。
 	panicFlag := make(chan struct{}, 1)
 	r.OnJobDone(func(s JobSnapshot) { panic("boom") })
 	r.OnJobDone(func(s JobSnapshot) { panicFlag <- struct{}{} })
@@ -263,7 +263,7 @@ func TestRegistryOnJobDone(t *testing.T) {
 		t.Fatal("second listener should be notified")
 	}
 	// contained listener 在 panicking listener 之后才触发，须带超时阻塞等待，
-	// 不能 peek——否则会在其执行前误判（P3-8 附近 flaky 来源）。
+	// 不能 peek——否则会在其执行前误判（易 flaky）。
 	select {
 	case <-panicFlag:
 		// contained listener 正常触发

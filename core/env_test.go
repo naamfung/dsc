@@ -36,7 +36,7 @@ func containsEnvKey(env []string, key string) bool {
 	return false
 }
 
-// TestBuildEnvStripsSecretsForNonLLM 验证 P1-4：非 LLM 插件过滤凭据，LLM 插件保留。
+// TestBuildEnvStripsSecretsForNonLLM 验证非 LLM 插件过滤凭据、LLM 插件保留。
 func TestBuildEnvStripsSecretsForNonLLM(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-secret")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-secret")

@@ -227,7 +227,7 @@ func ptcEnvEnabled() bool {
 
 func main() {
 	// 捕获 panic：打印完整堆栈而非仅值，并以非零码退出——否则 recover 后 main
-	// 落到 os.Exit(exitCode) 时 exitCode 仍为默认 0，CI 会把崩溃误判为成功（P2.5）。
+	// 落到 os.Exit(exitCode) 时 exitCode 仍为默认 0，CI 会把崩溃误判为成功。
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "panic: %v\n%s\n", r, debug.Stack())
@@ -575,7 +575,7 @@ func main() {
 	injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
-	// 失败则 P2 自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
+	// 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
 	// 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
 	mainConfigPath := filepath.Join(execDir, "config", "config.yaml")
 	pluginsDir := filepath.Join(execDir, "plugins")
@@ -629,7 +629,7 @@ func main() {
 		}
 	}
 
-	// 成功启动：把已生效的 config.yaml 与当前 preset 各自独立备份一次（P2 自愈基础——
+	// 成功启动：把已生效的 config.yaml 与当前 preset 各自独立备份一次（配置自愈基础——
 	// 之后若被改坏，可分别还原各自最近正常版本续启）
 	if _, err := core.BackupGoodFile(mainConfigPath, logger); err != nil {
 		logger.Warn("failed to backup config after successful start", "err", err)
@@ -637,7 +637,7 @@ func main() {
 	if _, err := core.BackupGoodFile(presetPath, logger); err != nil {
 		logger.Warn("failed to backup preset after successful start", "err", err)
 	}
-	// P3：维护 plugins 目录「上次正常」快照（二进制大，仅当有新内容才刷新）
+	// 维护 plugins 目录「上次正常」快照（二进制大，仅当有新内容才刷新）
 	if done, err := core.BackupPluginsDir(pluginsDir, pluginsSnap, logger); err != nil {
 		logger.Warn("failed to snapshot plugins dir", "err", err)
 	} else if done {
