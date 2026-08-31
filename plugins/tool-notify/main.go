@@ -452,8 +452,8 @@ func notifyView(result string) (json.RawMessage, error) {
 
 // main 以公共 SDK（dsc-sdk）启动插件：注册 notify 工具，经原生插件 RPC 供
 // 宿主/模型调用，替代原型的独立 HTTP 服务（通知能力保留，供将来按需使用）。
-// 同时注册 Hook.OnEvent 订阅宿主 agent/status 事件：回合完成（idle）时程序性
-// 播放 success 音效（对齐 DSH dsh-ding 的完成提醒），不依赖模型调用。
+// 同时注册 Hook.OnEvent 订阅宿主 agent 回合事件：回合完成（成功/失败）时程序性
+// 播放相应音效，不依赖模型调用。
 func main() {
 	sdk := dsc.New(dsc.Config{Name: "notify", Version: "1.0.0", Type: dsc.TypeTool})
 	sdk.Tool(dsc.Tool{
@@ -467,7 +467,7 @@ func main() {
 		},
 	})
 	// 程序性完成提醒：宿主在 agent 回合完成时广播 agent/status(idle) 或
-	// agent/error，此处订阅并播放相应音效（success/error，对齐 DSH dsh-ding；
+	// agent/error，此处订阅并播放相应音效（success/error；
 	// 不涉及模型的 notify 工具调用）。作为通用能力，任何插件都可独立订阅。
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) {
