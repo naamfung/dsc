@@ -47,6 +47,14 @@ gofmt -l .
 - **链路覆盖**：分层单测 / 直连 e2e 若各层用假数据接邻层，会漏掉中间衔接点。对关键链路（如「插件 → 宿主聚合 → agent → TUI」），必须在**宿主聚合层用真实插件进程**补一条端到端集成测试覆盖每一跳，杜绝「两端都测了、中间丢了」的盲点。
 - **先例**：结构化视图链路曾因 `RemoteTool.Execute` 只返回 `Content`、在宿主聚合层静默丢弃插件 `ViewJson`，导致真实运行中所有插件视图失效；现由字段保真往返（`TestRemoteToolRoundTripPreservesFields`）与真实插件进程的宿主链集成测试（`TestHostToolChainPropagatesPluginViewJson`）守住。
 
+### 4. 禁止保留 Deprecated 代码
+
+本项目仍在高速迭代，保留 Deprecated 代码只会造成代码膨胀、堆积大量无用代码，并让「旧实现是否仍在使用」的判断混乱。
+
+- **判据**：任何标为废弃的本项目手写代码——`// Deprecated:` 注释、函数/类型/字段命名带 `deprecated`/`legacy`/`old` 的旧实现、以及「用新替代后仅留作兼容」的分支——一律不得留存在仓库中。
+- **红线**：发现即删除其实现，并从调用点一并移除，不得通过再包一层或改名来规避废弃状态；删除后重新 `gofmt` 并确保 `go build ./...` 与相关 `go test` 通过。
+- **例外**：protoc-gen-go 在生成的 `*.pb.go` 里**自动附带**的 `// Deprecated: Use X.ProtoReflect.Descriptor instead.` 样板注释属生成物自带的固定模板（每个消息都会生成），不是我们需要维护的废弃代码，不在此列；且不得手改生成文件——该样板无法也不应被移除。
+
 ## 提交约定
 
 - 遵循一步一提交（一个特性/修复一次提交），便于回滚。
