@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1445,18 +1446,26 @@ func (m *Manager) ExportSession(id string) (string, error) {
 
 // ListContext 聚合所有已加載工具插件貢獻的上下文片段（如技能索引），
 // 供 agent 拼接到 system prompt。未實現 ListContext 的舊插件返回 Unimplemented，跳過即可。
+// 注意：插件是按 **名稱穩定排序** 再拼接——system prompt 直接進入模型輸入，若片段順序
+// 隨 map 遍歷隨機變動，會使請求前綴字節不穩定、命中前綴緩存失效（與 agent 端對工具
+// 目錄的排序一致）。順序不影響功能，但必須確定。
 func (m *Manager) ListContext(ctx context.Context) (string, error) {
+	type namedClient struct {
+		name string
+		cl   proto.ToolServiceClient
+	}
 	m.mu.Lock()
-	clients := make([]proto.ToolServiceClient, 0, len(m.toolClients))
-	for _, c := range m.toolClients {
-		clients = append(clients, c)
+	pairs := make([]namedClient, 0, len(m.toolClients))
+	for name, c := range m.toolClients {
+		pairs = append(pairs, namedClient{name: name, cl: c})
 	}
 	m.mu.Unlock()
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
 
 	var parts []string
-	for _, c := range clients {
+	for _, p := range pairs {
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		resp, err := c.ListContext(ctx, &proto.ListContextRequest{})
+		resp, err := p.cl.ListContext(ctx, &proto.ListContextRequest{})
 		cancel()
 		if err != nil {
 			// 舊插件未實現 ListContext（Unimplemented）或暂时不可用，跳过
