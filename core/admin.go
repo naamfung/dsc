@@ -47,6 +47,7 @@ func (m *Manager) StartAdmin(addr string) {
 	admin.Post("/unload", m.handleUnload)
 	admin.Post("/reload", m.handleReload)
 	admin.Get("/list", m.handleList)
+	admin.Get("/tools", m.handleTools)
 	admin.Get("/events", m.handleEvents)
 	admin.Post("/metadata", m.handleMetadata)
 	// 领域事件 SSE（Agent/tool 回合事件）与运行时日志 SSE：观察宿主 EventBus
@@ -139,6 +140,23 @@ func (m *Manager) handleList(c *vodka.Context) error {
 		"status":  "success",
 		"plugins": plugins,
 	})
+}
+
+// handleTools 返回当前模型可直接调用的工具目录（调试用）。
+// 数据源与 agent 从聚合 Tool 服务拿到的工具同一（AgentDirectTools），
+// 涵盖宿主内置工具与各插件工具（含 tool-lua-host 脚本注册等动态工具），
+// 供观察模型实际可用工具及其随插件/热加载的变化。
+func (m *Manager) handleTools(c *vodka.Context) error {
+	type item struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	tools := m.AgentDirectTools()
+	items := make([]item, 0, len(tools))
+	for _, t := range tools {
+		items = append(items, item{Name: t.Name, Description: t.Description})
+	}
+	return c.JSON(vodka.Map{"status": "success", "tools": items, "count": len(items)})
 }
 
 // handleEvents 以 Server-Sent Events 流推送插件的生命周期状态迁移事件。

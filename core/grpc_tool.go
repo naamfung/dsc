@@ -77,6 +77,7 @@ func (m *Manager) isPTC() bool {
 // 对齐 DSH presentation：native 只暴露业务工具（run_code 隐藏）；PTC 折叠直接
 // 调用为唯一 run_code，并把业务工具名作为 SDK 清单并入 run_code 描述。
 func (m *Manager) AgentDirectTools() []*proto.Tool {
+	m.syncPluginTools()         // 节流同步各 tool 插件最新工具（热加载的脚本工具立即可见）
 	native := m.AllToolsProto() // 不含 run_code
 	if !m.isPTC() {
 		return native

@@ -58,6 +58,7 @@ type Manager struct {
 	coreToolNames       map[string][]string                // tool core name -> list of tool names it provides
 	toolNameToServiceID map[string]uint32                  // tool name -> serviceID
 	toolClients         map[string]proto.ToolServiceClient // tool core name -> 插件 ToolService 客户端（供 ListContext 聚合）
+	lastToolSync        time.Time                          // 聚合工具目录节流同步的时间戳（脚本热加载工具同步）
 	// 互通机制 3：插件钩子回调客户端（toolHookClients，按加载顺序 toolHookOrder）。
 	// 宿主在工具流水线（BeforeTool/AfterTool）与事件广播（OnEvent）时回调插件，
 	// 使插件 A 无需通知主程序/其他插件即可钩子式改变插件 B 的工具行为。
