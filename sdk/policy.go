@@ -21,6 +21,8 @@ type policyGRPCPlugin struct {
 func (p *policyGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
 	proto.RegisterFsObservationPolicyServiceServer(s, p.sdk.policy)
 	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg})
+	// 任何插件类型都可声明 Hook 订阅宿主事件（对齐 DSH cordis：事件广播类型无关）
+	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})
 	return nil
 }
 

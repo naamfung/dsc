@@ -237,8 +237,11 @@ func (s *SDK) validate() error {
 func (s *SDK) plugins() map[string]plugin.Plugin {
 	switch s.cfg.Type {
 	case TypeLLM:
-		return map[string]plugin.Plugin{"llm": &core.LLMGRPCPlugin{
-			Impl: &llmMetaWrapper{LLMProvider: s.llm, name: s.cfg.Name, version: s.cfg.Version},
+		return map[string]plugin.Plugin{"llm": &llmGRPCPlugin{
+			LLMGRPCPlugin: core.LLMGRPCPlugin{
+				Impl: &llmMetaWrapper{LLMProvider: s.llm, name: s.cfg.Name, version: s.cfg.Version},
+			},
+			sdk: s,
 		}}
 	case TypeAgent:
 		return map[string]plugin.Plugin{"agent": &agentGRPCPlugin{sdk: s}}

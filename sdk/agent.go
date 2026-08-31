@@ -2,6 +2,7 @@ package dsc
 
 import (
 	"dsc/core"
+	"dsc/proto"
 	plugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
@@ -26,5 +27,10 @@ func (p *agentGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) 
 		}
 	}
 	p.AgentGRPCPlugin.Impl = &agentMetaWrapper{Agent: p.sdk.agent, name: p.sdk.cfg.Name, version: p.sdk.cfg.Version}
-	return p.AgentGRPCPlugin.GRPCServer(broker, s)
+	if err := p.AgentGRPCPlugin.GRPCServer(broker, s); err != nil {
+		return err
+	}
+	// 任何插件类型都可声明 Hook 订阅宿主事件（对齐 DSH cordis：事件广播类型无关）
+	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})
+	return nil
 }

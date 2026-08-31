@@ -790,6 +790,10 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 	m.llms[name] = impl
 	m.llmOrder = append(m.llmOrder, name) // 记录加载顺序（去重由加载前 unload 保证）
 	m.typeMap[name] = "llm"
+	// LLM 插件也可声明 Hook 订阅宿主事件（对齐 cordis：事件广播类型无关）
+	if gc, ok := rpcClient.(*plugin.GRPCClient); ok {
+		m.registerHookClientLocked(name, gc)
+	}
 	m.recordLoadedBinaryLocked(name, binaryPath)
 	m.transitionLocked(name, StateReady, "")
 	go m.monitorExit(name, client)
@@ -2198,6 +2202,9 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*plugin.GRPCBroker, 
 
 	broker := grpcClient.Broker()
 
+	// agent 插件也可声明 Hook 订阅宿主事件（对齐 cordis：事件广播类型无关）
+	m.registerHookClientLocked(entry.Name, grpcClient)
+
 	// 獲取 Agent 實例（但不需要立即設置 LLM 服務 ID）
 	raw, err := rpcClient.Dispense("agent")
 	if err != nil {
@@ -2404,6 +2411,7 @@ func (m *Manager) registerPolicyLocked(name string, info *metadata.PluginInfo, c
 	m.clients[name] = client
 	m.typeMap[name] = "policy"
 	m.coreMetadata[name] = info
+	m.registerHookClientLocked(name, grpcClient) // 策略插件也可声明 Hook 订阅事件（对齐 cordis）
 	pc := proto.NewFsObservationPolicyServiceClient(grpcClient.Conn)
 	m.policyClients[name] = pc
 	m.policyOff[name] = m.bridgePolicyToPipeline(name, pc)
@@ -2416,14 +2424,21 @@ func (m *Manager) registerPolicyLocked(name string, info *metadata.PluginInfo, c
 // 服务，仅登记 hook client 以接收宿主事件广播（OnEvent）。供纯后台插件（如通知、
 // 探针）订阅宿主事件；loadPluginWithBroker 的 case "dsc" 与宿主链测试共用（单一真源）。
 func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, client *plugin.Client, grpcClient *plugin.GRPCClient) {
-	m.toolHookClients[name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
-	m.putToolHookOrderLocked(name)
+	m.registerHookClientLocked(name, grpcClient)
 	m.clients[name] = client
 	m.typeMap[name] = "dsc"
 	m.coreMetadata[name] = info
 	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, client)
 	m.logger.Info("dsc core registered", "name", name)
+}
+
+// registerHookClientLocked 把插件接入宿主事件广播（OnEvent）：登记 hook client。
+// 对齐 DSH cordis 的「事件广播类型无关」——任意插件类型（tool/llm/agent/policy/dsc）
+// 只要声明了 Hook 都能订阅宿主事件，不再局限于 tool。
+func (m *Manager) registerHookClientLocked(name string, grpcClient *plugin.GRPCClient) {
+	m.toolHookClients[name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
+	m.putToolHookOrderLocked(name)
 }
 
 // loadPluginWithBroker 用於 LLM/Tool 插件加載，通過 broker 註冊服務
@@ -2507,6 +2522,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 		})
 		m.llmServiceIDs[entry.Name] = serviceID
 		m.clients[entry.Name] = client
+		m.registerHookClientLocked(entry.Name, grpcClient) // LLM 插件也可声明 Hook 订阅事件（对齐 cordis）
 		m.typeMap[entry.Name] = "llm"
 		m.coreMetadata[entry.Name] = info
 		m.transitionLocked(entry.Name, StateActive, "")

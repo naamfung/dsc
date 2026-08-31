@@ -3,6 +3,7 @@ package dsc
 import (
 	"context"
 
+	"dsc/core"
 	"dsc/proto"
 	"dsc/proto/metadata"
 	plugin "github.com/hashicorp/go-plugin"
@@ -26,4 +27,20 @@ func (p *dscGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) er
 
 func (p *dscGRPCPlugin) GRPCClient(context.Context, *plugin.GRPCBroker, *grpc.ClientConn) (interface{}, error) {
 	return nil, nil
+}
+
+// llmGRPCPlugin 是 llm 类型插件的 go-core 适配器：复用宿主 core.LLMGRPCPlugin
+// 注册 LLMService + 元数据，并额外注册 PluginHookService，使 LLM 插件也能声明
+// Hook 订阅宿主事件（对齐 DSH cordis：事件广播类型无关）。
+type llmGRPCPlugin struct {
+	core.LLMGRPCPlugin
+	sdk *SDK
+}
+
+func (p *llmGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
+	if err := p.LLMGRPCPlugin.GRPCServer(broker, s); err != nil {
+		return err
+	}
+	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})
+	return nil
 }
