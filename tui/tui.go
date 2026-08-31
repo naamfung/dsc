@@ -285,10 +285,11 @@ type Model struct {
 	reasoningOpen      bool
 	reasoningCommitted string
 
-	// 流式 markdown 增量渲染缓存：正文按段分块缓存，每帧只重渲染未稳定尾部，
-	// 避免整段流式正文每 token 全量 goldmark 解析（O(全文)→O(尾部)）。最终提交时
+	// 流式 markdown 增量渲染缓存：正文与思考块各自按段分块缓存，每帧只重渲染未稳定尾部，
+	// 避免整段流式正文/思考每 token 全量 goldmark 解析（O(全文)→O(尾部)）。最终提交时
 	// finalizeAssistant 仍做一次全量渲染，保证最终版式与逐 token 全量渲染一致。
-	streamMD *streamMarkdown
+	streamMD    *streamMarkdown
+	reasoningMD *streamMarkdown
 
 	// 当前一轮的取消句柄：Ctrl+C 在响应/流式输出期间中断本轮（终止当前操作）
 	turnCancel      context.CancelFunc
@@ -880,7 +881,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.reasoningBuffer += f.Reasoning
 			w := max(m.width-4, 20)
-			reasoning := renderReasoning(m.reasoningBuffer, w)
+			reasoning := m.renderStreamReasoningMD(m.reasoningBuffer, w)
 			// 思考块一般先于正文到达；但部分服务端会先发 text、后发 thinking。
 			// 若正文已先行输出，不要把思考块覆盖到正文上，而是作为前缀拼接到正文内容之前。
 			var body string
@@ -1413,6 +1414,17 @@ func (m *Model) renderStreamBodyMD(raw string, w int) string {
 	return m.streamMD.render(raw)
 }
 
+// renderStreamReasoningMD 增量渲染流式思考块：与正文共用 streamMarkdown 缓存思路，
+// 只对未稳定尾部做 markdown 渲染 + 暗色变换，而非每帧全文重渲染。
+func (m *Model) renderStreamReasoningMD(raw string, w int) string {
+	if m.reasoningMD == nil {
+		m.reasoningMD = newStreamMarkdown(w)
+	} else {
+		m.reasoningMD.setWidth(w)
+	}
+	return renderReasoningRendered(m.reasoningMD.render(raw))
+}
+
 // setAssistantBlock 就地更新当前助手块（思考/流式/收尾共用）。openAssistantBlock
 // 以 appendMessage 建立块时已按「非首块」规则带上前导 \n 空行分隔；此处就地重写
 // 正文时须保留该前导 \n，否则与上一条内容（如工具结果）紧贴，视觉上粘连。
@@ -1435,7 +1447,8 @@ func (m *Model) openAssistantBlock() {
 	m.reasoningBuffer = ""
 	m.reasoningOpen = false
 	m.reasoningCommitted = ""
-	m.streamMD = nil // 新块丢弃上一块的流式 markdown 增量缓存
+	m.streamMD = nil    // 新块丢弃上一块的流式 markdown 增量缓存
+	m.reasoningMD = nil // 新块丢弃上一块的思考增量缓存
 	m.streamOpen = true
 	header := assistantGutter + assistantNameSty.Render(assistantMark+" DSC · "+m.displayModelName())
 	m.appendMessage(header + "\n")
@@ -1451,7 +1464,16 @@ func renderReasoning(raw string, width int) string {
 	if width < 8 {
 		width = 8
 	}
-	rendered := renderMarkdown(raw, width)
+	return renderReasoningRendered(renderMarkdown(raw, width))
+}
+
+// renderReasoningRendered 对已渲染的 markdown 输出应用思考块暗色变换：
+// 「▎」标记与续行缩进 + 整体暗色。与 renderMarkdown 分离，便于流式思考块复用增量 markdown 缓存
+// （只对未稳定尾部做变换，而非每帧全文重渲染）。
+func renderReasoningRendered(rendered string) string {
+	if strings.TrimSpace(rendered) == "" {
+		return ""
+	}
 	lines := strings.Split(rendered, "\n")
 	var b strings.Builder
 	for i, line := range lines {

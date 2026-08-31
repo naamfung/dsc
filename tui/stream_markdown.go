@@ -51,20 +51,20 @@ func (s *streamMarkdown) render(raw string) string {
 		s.cut = cut
 	}
 	s.tailRend = renderMarkdown(raw[s.cut:], s.width)
-	return s.text(raw)
+	return s.text()
 }
 
 // text 拼接缓存分块与尾部渲染，还原当前原文的全量渲染输出。
-func (s *streamMarkdown) text(raw string) string {
+func (s *streamMarkdown) text() string {
 	if len(s.segs) == 0 {
 		return s.tailRend
 	}
 	var b strings.Builder
 	for i := range s.segs {
 		b.WriteString(s.segs[i].text)
-		// 分隔只在「分块之间」或「末分块与尾部之间」出现；尾部为空时省略末分隔，
-		// 与 renderMarkdown 的 TrimRight 一致，避免块尾多余空行。
-		if i < len(s.segs)-1 || s.cut < len(raw) {
+		// 分隔只在「分块之间」或「末分块与尾部之间」出现；尾部无可视内容（空串或纯空白/未
+		// 闭合围栏渲染为空）时省略末分隔，与 renderMarkdown 的 TrimRight 一致，避免块尾多空行。
+		if i < len(s.segs)-1 || s.tailRend != "" {
 			b.WriteString(s.segs[i].sep)
 		}
 	}

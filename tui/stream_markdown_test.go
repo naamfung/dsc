@@ -19,6 +19,10 @@ func TestStreamMarkdownEqualsFullWidth(t *testing.T) {
 		"> 引用第一行\n> 引用第二行\n\n普通段落。\n\n> 引用二\n",
 		// 单行无空行（无切点 → 增量退化为整段重渲染但仍须一致）
 		"只有一个超长段落没有空行分隔，" + strings.Repeat("填充文本", 200) + "。",
+		// 块末尾未闭合围栏（尾部渲染为空时末分隔须省略，避免块尾多空行）
+		"段落一。\n\n段落二。\n\n```go\nx := 1",
+		// 块后带多余空行
+		"段落一。\n\n段落二。\n\n\n\n",
 		// 空串
 		"",
 	}
@@ -42,6 +46,35 @@ func TestStreamMarkdownEqualsFullWidth(t *testing.T) {
 		got = md.render(doc) // 最终态
 		if got != want {
 			t.Fatalf("最终态增量渲染与全量不一致\n--- got ---\n%q\n--- want ---\n%q", got, want)
+		}
+	}
+}
+
+// TestStreamReasoningEqualsFullRender 思考块增量渲染（markdown 缓存 + 暗色 ▎ 变换）在任一
+// 中间态都必须与整段全量渲染逐字节一致：最终版式不被增量缓存改变。
+func TestStreamReasoningEqualsFullRender(t *testing.T) {
+	docs := []string{
+		"思考过程：\n1. 用户发了好\n2. 需要回应策略\n\n**关键**与`代码`以及围栏：\n\n```go\nx := 1\n```\n\n更多思考。",
+		// 思考块末尾未闭合围栏
+		"思考一\n\n思考二\n\n```go\ncode",
+		// 思考块带多余空行
+		"思考一。\n\n思考二。\n\n\n",
+	}
+	const width = 60
+	for _, doc := range docs {
+		md := newStreamMarkdown(width)
+		raw := ""
+		for i, r := range doc {
+			raw += string(r)
+			if i%3 == 0 { // 每 3 个字符校验一次（覆盖多个中间态）
+				got := renderReasoningRendered(md.render(raw))
+				if got != renderReasoning(raw, width) {
+					t.Fatalf("思考增量渲染与全量不一致 @len=%d\n--- got ---\n%q\n--- want ---\n%q", len(raw), got, renderReasoning(raw, width))
+				}
+			}
+		}
+		if got := renderReasoningRendered(md.render(raw)); got != renderReasoning(raw, width) {
+			t.Fatalf("思考最终态增量渲染与全量不一致\n--- got ---\n%q\n--- want ---\n%q", got, renderReasoning(raw, width))
 		}
 	}
 }
