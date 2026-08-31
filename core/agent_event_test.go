@@ -69,13 +69,21 @@ func TestEventAgentEmitsAgentStatusOnTurnComplete(t *testing.T) {
 	}
 }
 
-// TestEventAgentErrorTurnIsIdle 验证 error 终帧同样广播 idle（失败回合也触发完成提醒）。
-func TestEventAgentErrorTurnIsIdle(t *testing.T) {
+// TestEventAgentErrorEmitsAgentError 验证 error 终帧广播 agent/error 事件
+// （失败回合触发 error，而非 idle——供通知区分成败音效）。
+func TestEventAgentErrorEmitsAgentError(t *testing.T) {
 	m := NewManager(&ManagerConfig{ExecDir: t.TempDir()})
-	var got []AgentStatusEvent
+	var errs []AgentErrorEvent
+	var statuses []AgentStatusEvent
+	m.events.On(EventAgentError, func(ctx EventContext) (any, error) {
+		if ev, ok := ctx.Data.(AgentErrorEvent); ok {
+			errs = append(errs, ev)
+		}
+		return nil, nil
+	})
 	m.events.On(EventAgentStatus, func(ctx EventContext) (any, error) {
 		if ev, ok := ctx.Data.(AgentStatusEvent); ok {
-			got = append(got, ev)
+			statuses = append(statuses, ev)
 		}
 		return nil, nil
 	})
@@ -92,7 +100,13 @@ func TestEventAgentErrorTurnIsIdle(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("帧透传数 = %d, want 1", n)
 	}
-	if len(got) != 2 || got[1].Status != AgentStatusIdle {
-		t.Fatalf("error 终帧应广播 idle, got %+v", got)
+	// error 终帧：广播 agent/error，且不再广播 agent/status(idle)
+	if len(errs) != 1 || errs[0].Agent != "agent-react-loop" || errs[0].Error != "boom" {
+		t.Fatalf("error 终帧应广播 %d 个 agent/error, got %+v", 1, errs)
+	}
+	for _, s := range statuses {
+		if s.Status == AgentStatusIdle {
+			t.Fatalf("失败回合不应广播 idle, got %+v", statuses)
+		}
 	}
 }

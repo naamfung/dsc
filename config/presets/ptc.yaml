@@ -21,6 +21,10 @@ plugins:
   - name: tool-skill
     type: tool
     enabled: true
+  # 通知音效（回合完成程序性响铃）
+  - name: tool-notify
+    type: tool
+    enabled: true
   - name: tool-lua-host
     type: tool
     enabled: true

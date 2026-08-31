@@ -466,25 +466,29 @@ func main() {
 			return notifyView(result)
 		},
 	})
-	// 程序性完成提醒：宿主在 agent 回合完成时广播 agent/status(idle)，此处订阅
-	// 并播放 success 音效（对齐 DSH dsh-ding；不涉及模型的 notify 工具调用）。
+	// 程序性完成提醒：宿主在 agent 回合完成时广播 agent/status(idle) 或
+	// agent/error，此处订阅并播放相应音效（success/error，对齐 DSH dsh-ding；
+	// 不涉及模型的 notify 工具调用）。作为通用能力，任何插件都可独立订阅。
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) {
-			if eventType != string(core.EventAgentStatus) {
-				return
-			}
 			if globalCtx == nil {
 				return // 音频未初始化（如无音频设备 / DSC_NOTIFY_NO_AUDIO），跳过
 			}
-			var ev core.AgentStatusEvent
-			if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
-				return
+			switch eventType {
+			case string(core.EventAgentStatus):
+				var ev core.AgentStatusEvent
+				if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
+					return
+				}
+				if ev.Status != core.AgentStatusIdle {
+					return // 仅回合完成提醒，运行中/起始不打扰
+				}
+				// 回合成功完成 → success 音效
+				playQueue <- PlayRequest{SoundType: "success"}
+			case string(core.EventAgentError):
+				// 回合失败 → error 音效
+				playQueue <- PlayRequest{SoundType: "error"}
 			}
-			if ev.Status != core.AgentStatusIdle {
-				return // 仅回合完成提醒，运行中/起始不打扰
-			}
-			// 排队播放 success（完成后一次成功提示音）
-			playQueue <- PlayRequest{SoundType: "success"}
 		},
 	})
 	sdk.OnStart(func(ctx context.Context) error {

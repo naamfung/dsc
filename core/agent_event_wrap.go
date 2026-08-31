@@ -56,15 +56,14 @@ func (w *eventWrappedAgent) RunStream(ctx context.Context, input string) (<-chan
 	out := make(chan *RunStreamResponse)
 	go func() {
 		defer close(out)
-		started := false
 		for item := range ch {
-			if !started {
-				started = true
-			}
 			out <- item
-			// 回合完成：success 或 error 终帧
-			if item.Status == "success" || item.Status == "error" {
+			// 回合终态：success 广播 agent/status(idle)，error 广播 agent/error
+			switch item.Status {
+			case "success":
 				w.m.emitAgentStatus(w.name, AgentStatusIdle)
+			case "error":
+				w.m.emitAgentError(w.name, item.Error)
 			}
 		}
 	}()
@@ -76,5 +75,13 @@ func (m *Manager) emitAgentStatus(agent string, status AgentStatusValue) {
 	m.events.Emit(EventAgentStatus, EventContext{Data: AgentStatusEvent{
 		Agent:  agent,
 		Status: status,
+	}})
+}
+
+// emitAgentError 向宿主事件总线广播 agent/error 事件（线程安全）。
+func (m *Manager) emitAgentError(agent, errMsg string) {
+	m.events.Emit(EventAgentError, EventContext{Data: AgentErrorEvent{
+		Agent: agent,
+		Error: errMsg,
 	}})
 }

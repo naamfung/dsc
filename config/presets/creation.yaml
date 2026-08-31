@@ -22,6 +22,10 @@ plugins:
   - name: tool-skill
     type: tool
     enabled: true
+  # 通知音效（回合完成程序性响铃）
+  - name: tool-notify
+    type: tool
+    enabled: true
   # ===== 插件创造核心：LUA HOST（脚本经 dsc.register_tool 注册工具） =====
   - name: tool-lua-host
     type: tool
