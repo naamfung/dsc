@@ -121,6 +121,9 @@ type Manager struct {
 	// 对模型不可见/不可执行；ptc（true）时把直接工具调用折叠为唯一 run_code。
 	// 由 ManagerConfig.PTC 初始化，SwitchMode 运行时同步。读/写均在 m.mu 保护下。
 	ptc bool
+
+	// logFanout 宿主/插件日志扇出，供 ADMIN /logs SSE 消费；由 ManagerConfig 注入。
+	logFanout *LogFanout
 }
 
 type ManagerConfig struct {
@@ -142,6 +145,9 @@ type ManagerConfig struct {
 	// 调用折叠为唯一 run_code（其余工具仅经 run_code SDK 程序内可调）。由 main 按
 	// -mode=ptc / DSC_PTC 置位，运行时 /mode ptc 经 SwitchMode 同步更新。
 	PTC bool
+	// LogFanout 宿主/插件日志扇出 writer（作为 logger/coreLogger 的 Output 注入），
+	// 供 ADMIN /logs SSE 消费。nil 时 /logs 端点返回不可用。
+	LogFanout *LogFanout
 }
 
 func NewManager(cfg *ManagerConfig) *Manager {
@@ -180,6 +186,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		toolHookClients:     make(map[string]proto.PluginHookServiceClient),
 		states:              make(map[string]*RuntimeState),
 		coreLogger:          coreLogger,
+		logFanout:           cfg.LogFanout,
 		subscribers:         make(map[int]chan PluginEvent),
 		stopHooks:           make(map[string][]func() error),
 		agentEntries:        make(map[string]PluginEntry),
@@ -428,6 +435,7 @@ func (m *Manager) Load(name string, binaryPath string) error {
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           m.coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	// 建立 RPC 連接
@@ -540,6 +548,7 @@ func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) er
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           m.coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	// 建立 RPC 連接
@@ -642,6 +651,7 @@ func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           m.coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := client.Client()
@@ -749,6 +759,7 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           m.coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	// 建立 RPC 連接
@@ -899,6 +910,7 @@ func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, ha
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -977,6 +989,7 @@ func (m *Manager) hotReloadAgent(name, newBinaryPath string, execDir string, han
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -1088,6 +1101,7 @@ func (m *Manager) hotReloadLLM(name, newBinaryPath string, execDir string, hands
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -1153,6 +1167,7 @@ func (m *Manager) hotReloadTool(name, newBinaryPath string, execDir string, hand
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -1229,6 +1244,7 @@ func (m *Manager) hotReloadPolicy(name, newBinaryPath string, execDir string, ha
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := newClient.Client()
@@ -1509,6 +1525,21 @@ type PluginInfoSummary struct {
 	Version string      `json:"version"`
 	Enabled bool        `json:"enabled"`
 	State   PluginState `json:"state"`
+}
+
+// HasPlugin reports whether a plugin with the given name is present (loaded from
+// config), regardless of its runtime state. 供 main 判定是否需为程序性通知插件
+// （如 notify）保留回合完成音效的播放宽限。
+func (m *Manager) HasPlugin(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.states[name]; ok {
+		return true
+	}
+	if _, ok := m.plugins[name]; ok {
+		return true
+	}
+	return false
 }
 
 // ListPlugins 返回所有已加載插件的列表，并携带运行时状态。
@@ -2139,6 +2170,7 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*plugin.GRPCBroker, 
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           m.coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := client.Client()
@@ -2407,6 +2439,7 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 		Cmd:              cmd,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger:           m.coreLogger,
+		SyncStderr:       m.logFanout,
 	})
 
 	rpcClient, err := client.Client()

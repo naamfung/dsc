@@ -370,17 +370,34 @@ func main() {
 		})
 	} else {
 		// 無參數時，日誌静默放棄，不作記錄
+		logOutput = io.Discard
 		logger = hclog.New(&hclog.LoggerOptions{
 			Name:   "dsc-host",
 			Level:  hclog.NoLevel,
-			Output: io.Discard,
+			Output: logOutput,
 		})
 		coreLogger = hclog.New(&hclog.LoggerOptions{
 			Name:   "core",
 			Level:  hclog.NoLevel,
-			Output: io.Discard,
+			Output: logOutput,
 		})
 	}
+
+	// 统一把宿主日志与插件日志的扇出接到 ADMIN /logs SSE：`logOutput` 已锁定
+	// 最终目的地（os.Stderr / 日志文件 / io.Discard），以其构建一个 LogFanout，
+	// 让 logger 与 coreLogger 同时写原始目的地并广播给 /logs 订阅者。这样即便
+	// 默认静默模式（io.Discard），也能按需经 ADMIN API 观察运行时日志。
+	logFanout := core.NewLogFanout(logOutput)
+	logger = hclog.New(&hclog.LoggerOptions{
+		Name:   "dsc-host",
+		Level:  hclog.Info,
+		Output: logFanout,
+	})
+	coreLogger = hclog.New(&hclog.LoggerOptions{
+		Name:   "core",
+		Level:  hclog.Info,
+		Output: logFanout,
+	})
 
 	logger.Info("starting dsc", "mode", mode)
 
@@ -433,6 +450,7 @@ func main() {
 		Handshake:       core.Handshake,
 		Logger:          logger,
 		PluginLogger:    coreLogger,
+		LogFanout:       logFanout,
 		DebuggerEnabled: debuggerOpen,
 		EnableHotReload: mainCfg != nil && mainCfg.HotReload,
 		// PTC 呈现：-mode=ptc 或显式 DSC_PTC 开启（与 agent 侧 ptcEnabled 判定一致）
@@ -685,6 +703,16 @@ func main() {
 		logger.Info("running in input mode", "input", inputText)
 		exitCode = runInputMode(agent, ctx, inputText)
 		logger.Info("input mode finished", "exitCode", exitCode)
+
+		// 回合完成音效宽限：notify 等程序性通知插件在 agent 回合完成时异步播放完成音效
+		// （success/error，约 0.29s）。-input 单发回合结束后宿主随即回收插件子进程
+		// （Windows 上为强杀，不跑 defer），可能导致音效被截断。已加载通知插件且非
+		// headless（CI 单发无需报声）时，短暂宽限让音效播完再关闭；headless 保持快速退出。
+		if !headless && mgr.HasPlugin("tool-notify") {
+			const completionSoundGrace = 800 * time.Millisecond
+			logger.Info("draining completion sound", "grace", completionSoundGrace.String())
+			time.Sleep(completionSoundGrace)
+		}
 	} else {
 		if err := tui.Run(agent, mgr, ctx, llmModelName, mode, contextWindow); err != nil {
 			logger.Error("tui run failed", "error", err)

@@ -49,6 +49,11 @@ func (m *Manager) StartAdmin(addr string) {
 	admin.Get("/list", m.handleList)
 	admin.Get("/events", m.handleEvents)
 	admin.Post("/metadata", m.handleMetadata)
+	// 领域事件 SSE（Agent/tool 回合事件）与运行时日志 SSE：观察宿主 EventBus
+	// 的领域事件（agent/status、agent/error、tools/execute、tools/result 等）与
+	// 宿主/插件日志。用于自动化测试与排障时无障碍观察运行时状态。
+	admin.Get("/domain-events", m.handleDomainEvents)
+	admin.Get("/logs", m.handleLogs)
 
 	// DEBUGGER 观察渠道：读取 agent 插件当前运行时的调试快照（会话历史、token 用量、
 	// turn 与 plan/goal 状态）。为自动化测试提供无障碍观察代理运行内部状态的端点。
@@ -174,6 +179,98 @@ func (m *Manager) handleEvents(c *vodka.Context) error {
 			flusher.Flush()
 		case <-c.Request.Context().Done():
 			return nil // 客户端断开，结束订阅
+		}
+	}
+}
+
+// marshalDomainEvent 把一次领域事件包封为 SSE 载荷 JSON {"name","data"}。
+// 供 /domain-events handler 使用，也是其单元测试的序列化入口。
+func marshalDomainEvent(ctx EventContext) ([]byte, error) {
+	return json.Marshal(map[string]any{"name": ctx.Name, "data": ctx.Data})
+}
+
+// handleDomainEvents 以 SSE 流推送宿主 EventBus 的领域事件（agent/status、
+// agent/error、tools/execute、tools/result 等）。订阅者连接后，每次 Emit 都会收到
+// "event: domain" 帧，data 为 {"name": <事件名>, "data": <载荷>} 的 JSON。
+// 观察者通过 EventBus.OnAny 注册：回调仅做非阻塞入队，绝不阻塞事件发射路径，
+// 慢消费者溢出即丢弃（观察丢失不中断主机行为）。
+func (m *Manager) handleDomainEvents(c *vodka.Context) error {
+	c.Response.Header().Set("Content-Type", "text/event-stream")
+	c.Response.Header().Set("Cache-Control", "no-cache")
+	c.Response.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := c.Response.Writer.(http.Flusher)
+	if !ok {
+		return vodka.NewHTTPError(http.StatusInternalServerError, "streaming unsupported")
+	}
+	if _, err := fmt.Fprint(c.Response.Writer, ": connected\n\n"); err != nil {
+		return nil
+	}
+	flusher.Flush()
+
+	ch := make(chan EventContext, 256)
+	remove := m.events.OnAny(func(ctx EventContext) (any, error) {
+		select {
+		case ch <- ctx:
+		default: // 慢消费者溢出即丢弃，不阻塞事件发射路径
+		}
+		return nil, nil
+	})
+	defer remove()
+
+	for {
+		select {
+		case ev := <-ch:
+			b, err := marshalDomainEvent(ev)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(c.Response.Writer, "event: domain\ndata: %s\n\n", b); err != nil {
+				return nil
+			}
+			flusher.Flush()
+		case <-c.Request.Context().Done():
+			return nil
+		}
+	}
+}
+
+// handleLogs 以 SSE 流推送宿主/插件运行时日志。宿主 INFO 日志与经 go-plugin
+// 转发上来的插件子进程 stderr（如 notify 插件日志）汇聚到注入的 LogFanout，
+// 此处订阅并转发。每行一条 "event: log" 帧，data 为原始日志行（已含时间戳/级别）。
+func (m *Manager) handleLogs(c *vodka.Context) error {
+	if m.logFanout == nil {
+		return vodka.NewHTTPError(http.StatusServiceUnavailable, "log fanout not injected (enable with -log)")
+	}
+	c.Response.Header().Set("Content-Type", "text/event-stream")
+	c.Response.Header().Set("Cache-Control", "no-cache")
+	c.Response.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := c.Response.Writer.(http.Flusher)
+	if !ok {
+		return vodka.NewHTTPError(http.StatusInternalServerError, "streaming unsupported")
+	}
+	if _, err := fmt.Fprint(c.Response.Writer, ": connected\n\n"); err != nil {
+		return nil
+	}
+	flusher.Flush()
+
+	id, ch := m.logFanout.Subscribe()
+	defer m.logFanout.Unsubscribe(id)
+
+	for {
+		select {
+		case line := <-ch:
+			msg, err := json.Marshal(string(line))
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(c.Response.Writer, "event: log\ndata: %s\n\n", msg); err != nil {
+				return nil
+			}
+			flusher.Flush()
+		case <-c.Request.Context().Done():
+			return nil
 		}
 	}
 }
