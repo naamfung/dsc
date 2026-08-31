@@ -17,6 +17,7 @@ protoc_dir/
 plugins/tool-harness-webui/webui/dist/
 plugins/tool-novelforge/
 workspace/
+plugins-backup/
 
 # Agent session event log
 session.jsonl

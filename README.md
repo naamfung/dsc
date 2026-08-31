@@ -21,7 +21,8 @@
 
 - **插件安裝/管理（模型可自助）**：宿主內置 `install_go_plugin` / `uninstall_go_plugin` / `list_go_plugins` 三個模型工具（對齊 SKILL 安裝，經聚合 Tool 服務暴露給模型）。嚴格命約定（插件目錄 `plugins/<type>-<name>/`、執行檔 `<type>-<name><ext>`、`type`∈tool/llm/agent/policy/dsc、`name` 僅 `[A-Za-z0-9_-]`），寫 config 前先備份（`config.yaml.<ts>.bak`），並「干跑=live 加載」驗證類型/元數據一致才落盤、失敗回滾（刪已拷目錄、config 未變），防止模型寫壞配置導致起不來。新裝插件即時熱加載、無需重啟；模型據「能否加載 ACTIVE」判斷安裝是否正確，可再用 `uninstall_go_plugin` 清理。
 
-- **配置自癒（P2）**：每個成功啟動後，把已生效的 `config.yaml` 與當前 mode 的 preset（如 `standard.yaml`）**各自獨立備份**到同目錄的 `config-backups/`（旋轉保留最近 10 份、按各自前綴區分、互不串擾）。當某份配置因改壞或**壞插件（如 install_go_plugin 安裝後加載失敗）**導致啟動報錯時，宿主會先把壞版各自留檔，再**分別還原各自最近正常備份**、重建插件集重試一次並以降級模式繼續啟動——而非直接退出，避免「模型搞壞配置就再也起不來」。同時 config.yaml 中啟用的 tool/policy/dsc 插件正式併入啟動合併集（與 preset 按名去重、config 優先），使模型安裝的插件能跨重啟生效。
+- **配置自癒（P2）**：每個成功啟動後，把已生效的 `config.yaml` 與當前 mode 的 preset（如 `standard.yaml`）**各自獨立備份**到同目錄的 `config-backups/`（旋轉保留最近 10 份、按各自前綴區分、互不串擾）。當某份配置因改壞或壞插件導致啟動報錯時，宿主會先把壞版各自留檔，再**分別還原各自最近正常備份**、重建插件集重試一次並以降級模式繼續啟動——而非直接退出，避免「模型搞壞配置就再也起不來」。同時 config.yaml 中啟用的 tool/policy/dsc 插件正式併入啟動合併集（與 preset 按名去重、config 優先），使模型安裝的插件能跨重啟生效。
+- **插件目錄自癒（P3）**：維持 `plugins/` 的「上次正常」快照（兄弟目錄 `plugins-backup/`，二進制大故僅當有新內容才刷新）。當插件目錄與配置無法對齊（如插件二進制缺失/損壞）導致啟動加載失敗時，從快照回拷合併恢復（**容錯拷貝**：運行中的插件 .exe 被進程鎖住會跳過——本就正常；真正缺失/損壞、未運行的二進制會被回拷）後再續啟。
 
 ## 與 DSH（DeepSeek Harness）的對比
 

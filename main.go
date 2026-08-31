@@ -578,6 +578,8 @@ func main() {
 	// 失败则 P2 自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
 	// 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
 	mainConfigPath := filepath.Join(execDir, "config", "config.yaml")
+	pluginsDir := filepath.Join(execDir, "plugins")
+	pluginsSnap := pluginsDir + "-backup"
 	loadErr := mgr.LoadFromConfig(merged)
 	if loadErr != nil {
 		// 先锁定最近「正常」备份（避免把下面刚备份的坏版当成正常版回读），
@@ -596,6 +598,10 @@ func main() {
 			if err := core.RestoreGoodFile(presetPath, latestPreset, logger); err == nil && recovered == "" {
 				recovered = latestPreset
 			}
+		}
+		// 插件目录与配置无法对齐（如二进制缺失/损坏）时，从「上次正常」快照回拷合并
+		if err := core.RestorePluginsDir(pluginsSnap, pluginsDir, logger); err != nil {
+			logger.Warn("plugins dir restore skipped (no snapshot?)", "err", err)
 		}
 		if recovered != "" {
 			// 用还原后的 config.yaml / preset 重建插件集并重试
@@ -626,6 +632,12 @@ func main() {
 	}
 	if _, err := core.BackupGoodFile(presetPath, logger); err != nil {
 		logger.Warn("failed to backup preset after successful start", "err", err)
+	}
+	// P3：维护 plugins 目录「上次正常」快照（二进制大，仅当有新内容才刷新）
+	if done, err := core.BackupPluginsDir(pluginsDir, pluginsSnap, logger); err != nil {
+		logger.Warn("failed to snapshot plugins dir", "err", err)
+	} else if done {
+		logger.Info("plugins dir snapshot refreshed", "snap", pluginsSnap)
 	}
 
 	// 后台监听/调度仅在常规模式启用；-headless 精简无头模式不开端口、不起常驻轮询，
