@@ -35,7 +35,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 | 宿主/插件架構 | cordis 插件框架，一切皆插件 | go-plugin + gRPC，一切皆插件，支持熱插拔/熱重載 |
 | 沙箱隔離 | 內核級：bwrap（bind mount）/ Landlock（`sandbox-local` + 各 runner profile） | 宿主工具級攔截（Windows 兼容）：工具流水線 pre-execute 瀑布，三檔 `read-only / workspace-write / full-access` |
 | 沙箱策略歸屬 | `ctx.sandboxPolicy` 單一歸屬（mode + workspace 根）；`renderPolicyContext` 以真實路徑呈現給模型 | 宿主 `Manager.sandboxPolicyVal` 單一歸屬；TUI `/sandbox` 即時切換；system prompt 注入 `sandbox:policy` 上下文（同樣以真實根路徑呈現） |
-| 路徑圍欄 | `fs-sandbox` containment：詞法快速路徑（Windows 忽略大小寫）+ 文件身份（dev/ino）回退（識別 8.3 短名、大小寫別名） | `inWorkspace`：`CanonicalPath` 解析真實路徑（Windows 用 `GetFinalPathNameByHandle` 穿透 junction/symlink，Unix 用 EvalSymlinks）再做包含判定，防 workspace 內指向外部的連結寫穿；`/workspace` 虛擬前綴映射到統一根 |
+| 路徑圍欄 | `fs-sandbox` containment：詞法快速路徑（Windows 忽略大小寫）+ 文件身份（dev/ino）回退（識別 8.3 短名、大小寫別名） | `inWorkspace`：`CanonicalPath` 解析真實路徑（Windows 用 `GetFinalPathNameByHandle` 穿透 junction/symlink，Unix 用 EvalSymlinks）再做包含判定，防 workspace 內指向外部的連結寫穿；`/workspace` 虛擬前綴映射到統一根（sandbox 與 shell 工具、str-replace-editor 共用該別名語義） |
 | 會話 | 事件日誌（event log）+ `deriveMessages()` 派生模型歷史 | 事件溯源 `session` 包 + `DeriveMessages`（同構） |
 | 上下文壓縮 | `compaction-basic`：thresholdRatio / retainRatio | 80% 閾值觸發、16% 尾部保留（≥1024 token）、字节级启发式估算兜底 |
 | token 計量 | TokenMeter：本地精確 tokenizer，缺省字符估算回退 | 以服務端上報 usage（精確）為準；服務端不可用（重啟）或低估（提示緩存命中）時回退字节级启发式估算 + 提示緩存感知（`input_tokens + cache_read_input_tokens`） |
@@ -68,8 +68,8 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `agent-react-loop`
 
 ### Tool 插件
-- `tool-filesystem`
-- `tool-str-replace-editor`
+- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杠，边界 `/workspacefoo` 不当别名；与 sandbox 的 `/workspace` 别名语义一致）
+- `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根）
 - `tool-browser-use`
 - `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱）
 - `tool-skill`
