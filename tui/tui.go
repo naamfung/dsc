@@ -354,11 +354,23 @@ func New(agent core.Agent, manager *core.Manager, ctx context.Context, modelName
 		contextWindow:    contextWindow,
 		input:            input,
 		spinner:          s,
-		currentSessionID: "default",
+		currentSessionID: defaultSessionID(manager),
 		wakeBudget:       maxConsecutiveWakes,
 		mouseCaptureOff:  mouseCaptureOffByDefault(),
 		pinnedToBottom:   true,
 	}
+}
+
+// defaultSessionID 决定启动时的当前会话标识：优先取宿主的默认（项目）会话 id
+// （按工作区路径转换，与 agent 存档文件名一致），无宿主时回退 "default"。
+func defaultSessionID(m *core.Manager) string {
+	if m == nil {
+		return "default"
+	}
+	if id := m.DefaultSessionID(); id != "" {
+		return id
+	}
+	return "default"
 }
 
 // mouseCaptureOffByDefault 允许用户通过 DSC_DISABLE_MOUSE 环境变量在启动时默认
@@ -2456,11 +2468,19 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		default:
 			if rest == "" {
 				m.appendMessage(errorSty.Render("用法: /session <会话 id>，或 /session new，或 /session delete <id>"))
-			} else if err := m.agent.SwitchSession(m.ctx, rest); err != nil {
-				m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
 			} else {
-				m.currentSessionID = rest
-				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已切换到会话 %s。", rest))
+				// "default" 解析为宿主默认（项目）会话 id，避免切出一个不存在的假会话；
+				// 其余按用户输入的 id 原样切换（如 /session session-3）。
+				target := rest
+				if target == "default" && m.manager != nil {
+					target = m.manager.DefaultSessionID()
+				}
+				if err := m.agent.SwitchSession(m.ctx, target); err != nil {
+					m.appendMessage(errorSty.Render("切换会话失败: ") + err.Error())
+				} else {
+					m.currentSessionID = target
+					m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 会话") + fmt.Sprintf("\n已切换到会话 %s。", target))
+				}
 			}
 		}
 		m.input.SetValue("")
@@ -2856,7 +2876,9 @@ func (m *Model) View() tea.View {
 		return m.viewOf("加载中...")
 	}
 
-	title := titleSty.Render(" ◆ DSC  |  " + m.displayMode() + "  |  " + m.capacityTag() + "  |  " + m.currentSessionID + " ")
+	// 会话 id 不显示于标题（经 /sessions 与 /export 管理）：避免会话标识与存档名
+	// 不一致暴露到 UI，也省去长路径名的美化需求。
+	title := titleSty.Render(" ◆ DSC  |  " + m.displayMode() + "  |  " + m.capacityTag() + " ")
 	title = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, title)
 
 	var parts []string

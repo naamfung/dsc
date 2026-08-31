@@ -5,6 +5,26 @@ import (
 	"time"
 )
 
+// TestDefaultSessionIDFollowsWorkspaceRoot 校验默认会话 id 与工作区根一致性：
+// DefaultSessionID 应等于 SessionKeyForProject(WorkspaceRoot)，使 TUI 当前会话标识
+// 与 agent 存档文件名（项目隔离）吻合，不再出现映射不到存档的假 "default"。
+func TestDefaultSessionIDFollowsWorkspaceRoot(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	orig := WorkspaceRoot
+	defer func() { WorkspaceRoot = orig }()
+
+	WorkspaceRoot = `C:\Users\Administrator\Desktop\DeepClean`
+	if got := m.DefaultSessionID(); got != "C--Users-Administrator-Desktop-DeepClean" {
+		t.Errorf("DefaultSessionID() = %q, want project key", got)
+	}
+
+	// 空根回退为 "default"（与 SessionKeyForProject 语义一致）
+	WorkspaceRoot = ""
+	if got := m.DefaultSessionID(); got != "default" {
+		t.Errorf("DefaultSessionID() empty root = %q, want default", got)
+	}
+}
+
 // TestSubscribeReceivesTransition 校验事件总线：状态机每次推进都会发布 PluginEvent，
 // 订阅者可实时收到状态迁移事件。
 func TestSubscribeReceivesTransition(t *testing.T) {
