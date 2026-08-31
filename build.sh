@@ -135,4 +135,9 @@ echo "Building policy-fs-observation plugin..."
 (cd plugins/policy-fs-observation && go build -o policy-fs-observation.exe .)
 pack plugins/policy-fs-observation/policy-fs-observation.exe
 
+# 构建 tool-ssh 插件（独立 module，基于 dsc-sdk）
+echo "Building tool-ssh plugin..."
+(cd plugins/tool-ssh && go build -o tool-ssh.exe .)
+pack plugins/tool-ssh/tool-ssh.exe
+
 echo "Build completed successfully."
