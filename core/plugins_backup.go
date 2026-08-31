@@ -80,6 +80,51 @@ func RestorePluginsDir(backupDir, pluginsDir string, logger hclog.Logger) error 
 	return nil
 }
 
+// RequiredPluginDirBases 从合并插件集抽取每个插件的二进制**目录基名**（如 tool-filesystem）。
+// 供恢复后识别 plugin/ 下哪些目录「不在配置引用」（孤立插件）。
+func RequiredPluginDirBases(merged *Config) map[string]bool {
+	keep := map[string]bool{}
+	for _, p := range merged.Plugins {
+		if p.BinaryPath == "" {
+			// 空 binary_path：Manager 按约定解析为 ./plugins/<name>/<name><ext>，
+			// 目录基名即 name（preset 里 tool/policy/dsc 常只写 name 不写 binary_path）。
+			if p.Name != "" {
+				keep[p.Name] = true
+			}
+			continue
+		}
+		dir := filepath.Dir(filepath.FromSlash(p.BinaryPath))
+		base := filepath.Base(dir)
+		if base != "." && base != "" {
+			keep[base] = true
+		}
+	}
+	return keep
+}
+
+// ReportOrphanPlugins 检查 pluginsDir 下「不在配置引用」的顶层插件目录（孤立插件）。
+// 这些目录从未启用：不能保证用户将来不用，启用前也无法判断其能否正常启动——故仅告警、
+// 不删除、先保留，待日后用户启用后若果真导致启动失败，再由恢复机制兜底处理。
+// 返回孤立目录名列表；非空仅表示发现需排查项，不代表发生删除。
+func ReportOrphanPlugins(pluginsDir string, keep map[string]bool, logger hclog.Logger) []string {
+	entries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		return nil
+	}
+	var orphans []string
+	for _, e := range entries {
+		if !e.IsDir() || keep[e.Name()] {
+			continue
+		}
+		orphans = append(orphans, e.Name())
+	}
+	if len(orphans) > 0 && logger != nil {
+		logger.Warn("发现孤立插件目录（未被配置引用且未启用，未知其可用性，故保留不删除）",
+			"dirs", orphans)
+	}
+	return orphans
+}
+
 // copyDirTolerant 递归拷贝目录树，但单个文件因被占用/共享冲突而无法写时跳过该文件
 // 而非整体失败（供插件目录恢复用：运行中进程会锁住自身 .exe，但无需覆盖）。
 func copyDirTolerant(src, dst string) error {

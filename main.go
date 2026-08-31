@@ -599,10 +599,6 @@ func main() {
 				recovered = latestPreset
 			}
 		}
-		// 插件目录与配置无法对齐（如二进制缺失/损坏）时，从「上次正常」快照回拷合并
-		if err := core.RestorePluginsDir(pluginsSnap, pluginsDir, logger); err != nil {
-			logger.Warn("plugins dir restore skipped (no snapshot?)", "err", err)
-		}
 		if recovered != "" {
 			// 用还原后的 config.yaml / preset 重建插件集并重试
 			if newMain, _ := loadConfig(mainConfigPath); newMain != nil {
@@ -611,6 +607,14 @@ func main() {
 					newPreset = p
 				}
 				merged = assemblePluginSet(newMain, newPreset, contextWindow, headless, inputText)
+				// 对齐插件目录：先从「上次正常」快照回拷缺失/损坏（容错，跳过被运行进程锁住的）；
+				// 回拷完成后，报告「未被还原后配置引用」的孤立插件目录——仅告警、不删除。
+				// （孤立插件未启用过，无从判断其可用性，亦不能替用户保证将来不用，故先保留；
+				// 日后若用户启用其却导致启动失败，再由本恢复机制兜底处理。）
+				if err := core.RestorePluginsDir(pluginsSnap, pluginsDir, logger); err != nil {
+					logger.Warn("plugins dir restore skipped (no snapshot?)", "err", err)
+				}
+				core.ReportOrphanPlugins(pluginsDir, core.RequiredPluginDirBases(merged), logger)
 				injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
 				logger.Warn("启动加载失败，已还原最近正常配置并重试（降级模式）",
 					"cause", loadErr, "recovered", recovered, "badConfig", badCfg, "badPreset", badPreset)

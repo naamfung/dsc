@@ -65,3 +65,44 @@ func TestPluginsBackupAndRestore(t *testing.T) {
 		t.Fatalf("快照应含新插件: %v", err)
 	}
 }
+
+// TestRequiredPluginDirBases 校验从合并配置抽取「需要的插件目录基名」。
+func TestRequiredPluginDirBases(t *testing.T) {
+	merged := &Config{Plugins: []PluginEntry{
+		{Name: "tool-filesystem", BinaryPath: "./plugins/tool-filesystem/tool-filesystem.exe"},
+		{Name: "dsc-notify", BinaryPath: "./plugins/dsc-notify/dsc-notify.exe"},
+		{Name: "tool-browser-use"}, // 空 binary_path：Manager 约定解析为 ./plugins/<name>/。<name> 本身作为目录基名保留
+		{Name: ""},                 // 无 binary_path 也无 name：跳过
+	}}
+	keep := RequiredPluginDirBases(merged)
+	for _, want := range []string{"tool-filesystem", "dsc-notify", "tool-browser-use"} {
+		if !keep[want] {
+			t.Fatalf("keep 应含 %s, got %v", want, keep)
+		}
+	}
+	if len(keep) != 3 {
+		t.Fatalf("应只有 3 个, got %d: %v", len(keep), keep)
+	}
+}
+
+// TestReportOrphanPlugins 校验恢复时对「不在配置引用」的孤立插件目录仅告警、不删除。
+func TestReportOrphanPlugins(t *testing.T) {
+	dir := t.TempDir()
+	plugins := filepath.Join(dir, "plugins")
+	for _, d := range []string{"tool-a", "tool-stale", "dsc-old"} {
+		if err := os.MkdirAll(filepath.Join(plugins, d), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphans := ReportOrphanPlugins(plugins, map[string]bool{"tool-a": true}, nil)
+	// tool-stale 与 dsc-old 不在 keep → 报为孤立；tool-a 在 keep → 不报
+	if len(orphans) != 2 {
+		t.Fatalf("应报告 2 个孤立, got %v", orphans)
+	}
+	// 孤立插件仅告警、不删除：所有目录仍须保留
+	for _, d := range []string{"tool-a", "tool-stale", "dsc-old"} {
+		if _, err := os.Stat(filepath.Join(plugins, d)); err != nil {
+			t.Fatalf("%s 应被保留（仅告警不删除）: %v", d, err)
+		}
+	}
+}
