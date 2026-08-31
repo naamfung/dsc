@@ -285,6 +285,11 @@ type Model struct {
 	reasoningOpen      bool
 	reasoningCommitted string
 
+	// 流式 markdown 增量渲染缓存：正文按段分块缓存，每帧只重渲染未稳定尾部，
+	// 避免整段流式正文每 token 全量 goldmark 解析（O(全文)→O(尾部)）。最终提交时
+	// finalizeAssistant 仍做一次全量渲染，保证最终版式与逐 token 全量渲染一致。
+	streamMD *streamMarkdown
+
 	// 当前一轮的取消句柄：Ctrl+C 在响应/流式输出期间中断本轮（终止当前操作）
 	turnCancel      context.CancelFunc
 	streamCancelled bool // 中断标记：置位后丢弃后续 streamFrame，停止本轮泵取
@@ -880,7 +885,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 若正文已先行输出，不要把思考块覆盖到正文上，而是作为前缀拼接到正文内容之前。
 			var body string
 			if m.streamBuffer != "" {
-				body = joinReasoningAnswer(reasoning, renderMarkdown(m.streamBuffer, w))
+				body = joinReasoningAnswer(reasoning, m.renderStreamBodyMD(m.streamBuffer, w))
 			} else {
 				body = reasoning
 			}
@@ -902,7 +907,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.reasoningBuffer = ""
 			}
 			m.streamBuffer += f.Output
-			body := joinReasoningAnswer(m.reasoningCommitted, renderMarkdown(m.streamBuffer, max(m.width-4, 20)))
+			body := joinReasoningAnswer(m.reasoningCommitted, m.renderStreamBodyMD(m.streamBuffer, max(m.width-4, 20)))
 			m.setAssistantBlock(body)
 			m.render()
 			m.scrollToBottomIfPinned()
@@ -1392,9 +1397,20 @@ func (m *Model) finalizeAssistant() {
 		body += reasoning
 	}
 	if m.streamBuffer != "" {
-		body = joinReasoningAnswer(body, renderMarkdown(m.streamBuffer, w))
+		body = joinReasoningAnswer(body, m.renderStreamBodyMD(m.streamBuffer, w))
 	}
 	m.setAssistantBlock(body)
+}
+
+// renderStreamBodyMD 以当前宽度增量渲染流式 markdown 正文：缓存已稳定段落，仅重渲染
+// 未稳定尾部。每次调用按需对齐宽度（宽度变化时整体失效）。见 streamMarkdown。
+func (m *Model) renderStreamBodyMD(raw string, w int) string {
+	if m.streamMD == nil {
+		m.streamMD = newStreamMarkdown(w)
+	} else {
+		m.streamMD.setWidth(w)
+	}
+	return m.streamMD.render(raw)
 }
 
 // setAssistantBlock 就地更新当前助手块（思考/流式/收尾共用）。openAssistantBlock
@@ -1419,6 +1435,7 @@ func (m *Model) openAssistantBlock() {
 	m.reasoningBuffer = ""
 	m.reasoningOpen = false
 	m.reasoningCommitted = ""
+	m.streamMD = nil // 新块丢弃上一块的流式 markdown 增量缓存
 	m.streamOpen = true
 	header := assistantGutter + assistantNameSty.Render(assistantMark+" DSC · "+m.displayModelName())
 	m.appendMessage(header + "\n")
