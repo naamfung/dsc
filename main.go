@@ -565,67 +565,67 @@ func main() {
 	}
 	logger.Info("context window", "window", contextWindow)
 
-	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy（来自 preset）
-	merged := &core.Config{}
-	merged.Plugins = append(merged.Plugins, llmEntries...)
-	if agentEntry == nil {
-		// config.yaml 未声明 agent，用默认 agent-react-loop
-		merged.Plugins = append(merged.Plugins, core.PluginEntry{
-			Name:       "agent-react-loop",
-			Type:       "agent",
-			Enabled:    true,
-			BinaryPath: loadBinaryPath("", "./plugins/agent-react-loop/agent-react-loop"+ext),
-		})
-	} else {
-		// 为 agent 注入运行参数（上下文窗口、persona、单轮标记），再并入其声明 env
-		agentEnv := map[string]string{
-			"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow),
-		}
-		if presetCfg != nil && presetCfg.Persona != "" {
-			agentEnv["DSC_PRESET_PERSONA"] = presetCfg.Persona
-		}
-		if presetCfg != nil && presetCfg.PlanSection != "" {
-			agentEnv["DSC_PLAN_SECTION"] = presetCfg.PlanSection
-		}
-		// -input 且 stdin 为终端时锁定单轮（单发测试后自然退出）；
-		// 管道/文件重定向时走多轮 stdin 驱动，不锁单轮，让每一轮都能完整执行工具循环；
-		// -headless 精简无头模式恒为单发单轮，不受 stdin 重定向影响。
-		if (inputText != "" && !stdinIsRedirected()) || headless {
-			agentEnv["DSC_SINGLE_TURN"] = "1"
-		}
-		for k, v := range agentEntry.Env {
-			agentEnv[k] = v
-		}
-		agentEntry.Env = agentEnv
-		merged.Plugins = append(merged.Plugins, *agentEntry)
-	}
-	if presetCfg != nil {
-		for _, e := range presetCfg.Plugins {
-			if e.Enabled && (e.Type == "tool" || e.Type == "policy" || e.Type == "dsc") {
-				merged.Plugins = append(merged.Plugins, e)
+	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy/dsc
+	// （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_go_plugin
+	// 安装的 —— 亦并入，按名去重、config 优先，使模型安装的插件能跨重启生效）
+	merged := assembleMerged(llmEntries, agentEntry, mainCfg, presetCfg, contextWindow, headless, inputText)
+
+	// 注入当前模式 + 工作根 + 沙箱档到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
+	// 「插件创造」仅在创造模式（creation）下允许。
+	injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
+
+	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
+	// 失败则 P2 自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
+	// 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
+	mainConfigPath := filepath.Join(execDir, "config", "config.yaml")
+	loadErr := mgr.LoadFromConfig(merged)
+	if loadErr != nil {
+		// 先锁定最近「正常」备份（避免把下面刚备份的坏版当成正常版回读），
+		// 再把当前坏版各自备份留档，最后分别还原各自最近正常备份续启
+		latestCfg, _ := core.LatestGoodBackup(mainConfigPath)
+		latestPreset, _ := core.LatestGoodBackup(presetPath)
+		badCfg, _ := core.BackupGoodFile(mainConfigPath, logger)
+		badPreset, _ := core.BackupGoodFile(presetPath, logger)
+		recovered := ""
+		if latestCfg != "" {
+			if err := core.RestoreGoodFile(mainConfigPath, latestCfg, logger); err == nil {
+				recovered = latestCfg
 			}
 		}
-	}
-
-	// 注入当前模式到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
-	// 「插件创造」仅在创造模式（creation）下允许。
-	for i := range merged.Plugins {
-		e := &merged.Plugins[i]
-		if e.Env == nil {
-			e.Env = map[string]string{}
+		if latestPreset != "" {
+			if err := core.RestoreGoodFile(presetPath, latestPreset, logger); err == nil && recovered == "" {
+				recovered = latestPreset
+			}
 		}
-		e.Env["DSC_MODE"] = mode
-		// 注入統一工作空間根（對齊 DSH 單一策略歸屬：各能力族消費同一根）
-		e.Env["DSC_WORKSPACE_ROOT"] = core.WorkspaceRoot
-		// 注入沙箱策略档（agent 据此渲染 sandbox:policy 上下文，让模型知道
-		// 工作区真实根路径与写策略，避免臆造 /workspace 虚拟路径陷入死循环）
-		e.Env["DSC_SANDBOX_POLICY"] = sandboxPolicyEnv()
+		if recovered != "" {
+			// 用还原后的 config.yaml / preset 重建插件集并重试
+			if newMain, _ := loadConfig(mainConfigPath); newMain != nil {
+				newPreset := presetCfg
+				if p, _ := loadConfig(presetPath); p != nil {
+					newPreset = p
+				}
+				merged = assemblePluginSet(newMain, newPreset, contextWindow, headless, inputText)
+				injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
+				logger.Warn("启动加载失败，已还原最近正常配置并重试（降级模式）",
+					"cause", loadErr, "recovered", recovered, "badConfig", badCfg, "badPreset", badPreset)
+				if err := mgr.LoadFromConfig(merged); err != nil {
+					fail("failed to load plugins declaratively (even after config restore): %v", err)
+				}
+				loadErr = nil
+			}
+		}
+		if loadErr != nil {
+			fail("failed to load plugins declaratively: %v", loadErr)
+		}
 	}
 
-	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices，
-	// 取代原先 Main 手工编排 LLM→Agent→Tools 顺序与两段式依赖注入
-	if err := mgr.LoadFromConfig(merged); err != nil {
-		fail("failed to load plugins declaratively: %v", err)
+	// 成功启动：把已生效的 config.yaml 与当前 preset 各自独立备份一次（P2 自愈基础——
+	// 之后若被改坏，可分别还原各自最近正常版本续启）
+	if _, err := core.BackupGoodFile(mainConfigPath, logger); err != nil {
+		logger.Warn("failed to backup config after successful start", "err", err)
+	}
+	if _, err := core.BackupGoodFile(presetPath, logger); err != nil {
+		logger.Warn("failed to backup preset after successful start", "err", err)
 	}
 
 	// 后台监听/调度仅在常规模式启用；-headless 精简无头模式不开端口、不起常驻轮询，
