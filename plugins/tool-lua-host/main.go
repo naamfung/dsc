@@ -77,12 +77,35 @@ func main() {
 	})
 
 	// 动态工具：脚本注册的工具每次 ListTools/ExecuteTool 求值（脚本可热加载增删）。
+	// 头部注入静态只读工具 list_lua_tools：列出当前已注册的 LUA 脚本工具，供模型避免重名。
 	sdk.ToolProvider(func() []dsc.Tool {
 		h := holder.get()
-		if h == nil {
-			return nil
+		out := []dsc.Tool{
+			{
+				Name:        "list_lua_tools",
+				Description: "List the LUA-script tools currently registered by tool-lua-host (their names and descriptions), without executing any. Read-only.",
+				Schema:      json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+				Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+					hh := holder.get()
+					if hh == nil {
+						return `{"tools":[],"count":0}`, nil
+					}
+					type row struct {
+						Name        string `json:"name"`
+						Description string `json:"description"`
+					}
+					rows := make([]row, 0)
+					for _, pt := range hh.ListTools() {
+						rows = append(rows, row{Name: pt.Name, Description: pt.Description})
+					}
+					b, _ := json.Marshal(map[string]any{"tools": rows, "count": len(rows)})
+					return string(b), nil
+				},
+			},
 		}
-		var out []dsc.Tool
+		if h == nil {
+			return out
+		}
 		for _, pt := range h.ListTools() {
 			name := pt.Name
 			out = append(out, dsc.Tool{
