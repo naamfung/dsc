@@ -189,3 +189,60 @@ func TestPolicyBridgeUnregisterRemovesListeners(t *testing.T) {
 		t.Fatalf("after unregister listeners should not veto: %v", err)
 	}
 }
+
+// TestToolPipelineEmitsToolResult 验证工具执行完成后广播 tools/result 事件（对齐 DSH tools/result）。
+func TestToolPipelineEmitsToolResult(t *testing.T) {
+	m := newPipelineManager(t)
+	var got []ToolResultInfo
+	m.events.On(EventToolResult, func(ctx EventContext) (any, error) {
+		if info, ok := ctx.Data.(ToolResultInfo); ok {
+			got = append(got, info)
+		}
+		return nil, nil
+	})
+	result, err := m.ExecuteTool(context.Background(), "plain-tool", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result != "mock-result" {
+		t.Fatalf("result = %q", result)
+	}
+	if len(got) != 1 {
+		t.Fatalf("应广播 1 个 tools/result, got %d: %+v", len(got), got)
+	}
+	if got[0].ToolName != "plain-tool" || got[0].Result != "mock-result" || got[0].Error != "" {
+		t.Fatalf("tools/result 载荷异常: %+v", got[0])
+	}
+}
+
+// TestToolExecuteWaterfallCanWrap 验证 tools/execute 为独立 waterfall 拦截点：
+// 监听器可包围执行（在 next 前后记录），且不调 next 即 veto（不执行）。
+func TestToolExecuteWaterfallCanWrap(t *testing.T) {
+	m := newPipelineManager(t)
+	var order []string
+	m.events.OnWaterfall(EventToolExecute, func(ctx EventContext, next func(EventContext) error) error {
+		order = append(order, "exec-before")
+		err := next(ctx)
+		order = append(order, "exec-after")
+		return err
+	})
+	_, err := m.ExecuteTool(context.Background(), "plain-tool", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Join(order, ",") != "exec-before,exec-after" {
+		t.Fatalf("execute 拦截包裹顺序 = %v, want exec-before,exec-after", order)
+	}
+}
+
+// TestToolExecuteWaterfallVeto 验证 tools/execute 不调 next 即阻止执行。
+func TestToolExecuteWaterfallVeto(t *testing.T) {
+	m := newPipelineManager(t)
+	m.events.OnWaterfall(EventToolExecute, func(ctx EventContext, next func(EventContext) error) error {
+		return fmt.Errorf("execute vetoed")
+	})
+	_, err := m.ExecuteTool(context.Background(), "plain-tool", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "execute vetoed") {
+		t.Fatalf("execute veto 应返回错误, got %v", err)
+	}
+}

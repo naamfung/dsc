@@ -22,8 +22,18 @@ import (
 const (
 	// EventToolPreExecute 工具执行前拦截（waterfall）：veto 返回错误即阻止执行。
 	EventToolPreExecute EventName = "tools/pre-execute"
+	// EventToolExecute 工具执行（waterfall）：对齐 DSH tools/execute——监听器可改写
+	// 执行方式/参数/超时策略（timeout-policy）；不调 next 即 veto。DSC 现有实现把
+	// 实际执行纳入 pre-execute 的 next 闭包，此处约束为显式事件以便插件订阅。
+	EventToolExecute EventName = "tools/execute"
 	// EventToolPostExecute 工具执行后处理（waterfall）：可观测或改写结果。
 	EventToolPostExecute EventName = "tools/post-execute"
+	// EventToolResult 工具结果（emit）：对齐 DSH tools/result——工具执行完成后广播，
+	// 供插件订阅工具调用结果（非拦截，仅通知）。
+	EventToolResult EventName = "tools/result"
+	// EventToolsChange 工具集变更（emit）：对齐 DSH tools/change——工具加载/卸载时广播，
+	// 供依赖工具清单的插件（如 subagent）感知工具集变化。
+	EventToolsChange EventName = "tools/change"
 )
 
 // ToolInvocation 一次工具调用的流水线上下文（共享指针，监听器可直接改写）。
@@ -72,59 +82,97 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 // ViewExecutor。聚合 Tool 服务（ToolGRPCServer）据此把视图一并回给调用方。
 func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, error) {
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON)}
-	// pre-execute + execute：next 为实际执行；pre 监听器不调 next 即 veto
+
+	// pre-execute（waterfall）：守卫。不调 next 即 veto（阻止执行，execute 不运行）。
+	// 语义对齐 DSH tools/pre-execute guards。
 	runErr := m.events.Waterfall(EventToolPreExecute, EventContext{Data: inv}, func(EventContext) error {
 		// 互通机制 3：插件 BeforeTool 钩子（可 veto/改写参数；按加载顺序调用）
 		if veto := m.runPluginBeforeTool(ctx, inv); veto != nil {
 			inv.Err = veto
 			return veto
 		}
-		// run_code 是 PTC presentation transport：native 模式不对模型暴露，也不可执行
-		// （对齐 DSH“native agent must not find run_code”；ptc 折叠时才允许经其组合）。
-		if toolName == runCodeToolName && !m.isPTC() {
-			inv.Err = fmt.Errorf("tool %s is only available in PTC (programmatic tool composition) mode", runCodeToolName)
-			return inv.Err
-		}
-		tool, ok := m.toolRegistry.Get(toolName)
-		if !ok {
-			inv.Err = fmt.Errorf("tool not found: %s", toolName)
-			return inv.Err
-		}
-		// timeout-policy：声明 timeoutMs 的工具设置协作式截止时间（对齐 DSH）
-		execCtx, timeoutMs := ctx, 0
-		if tp, ok := tool.(TimeoutProvider); ok {
-			if ms := tp.TimeoutMs(); ms > 0 {
-				timeoutMs = ms
-				var cancel context.CancelFunc
-				execCtx, cancel = context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
-				defer cancel()
-			}
-		}
-		var result string
-		var err error
-		if ev, ok := tool.(ViewExecutor); ok {
-			result, inv.ViewJSON, err = ev.ExecuteWithView(execCtx, json.RawMessage(inv.ArgumentsJSON))
-		} else {
-			result, err = tool.Execute(execCtx, json.RawMessage(inv.ArgumentsJSON))
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			err = &ToolTimeoutError{Tool: toolName, Ms: timeoutMs}
-		}
-		inv.Result, inv.Err = result, err
-		return err
+		return inv.Err
 	})
 	if inv.Err == nil && runErr != nil {
 		inv.Err = runErr // pre 阶段 veto（execute 未运行）
 	}
-	// post-execute：观测/改写，next 原样透传 inv.Err
+
+	// execute（waterfall）：真正执行 + 超时策略。对齐 DSH tools/execute dispatch body。
+	if inv.Err == nil {
+		execErr := m.events.Waterfall(EventToolExecute, EventContext{Data: inv}, func(EventContext) error {
+			return m.executeToolBody(ctx, inv, toolName)
+		})
+		if inv.Err == nil && execErr != nil {
+			inv.Err = execErr
+		}
+	}
+
+	// post-execute（waterfall）：观测/改写。对齐 DSH tools/post-execute finalize。
 	if err := m.events.Waterfall(EventToolPostExecute, EventContext{Data: inv}, func(EventContext) error {
 		// 互通机制 3：插件 AfterTool 钩子（可改写结果/错误）
 		m.runPluginAfterTool(ctx, inv)
 		return inv.Err
 	}); err != nil {
+		m.emitToolResult(inv)
 		return "", "", err
 	}
+
+	// result（emit）：结果广播（非拦截），对齐 DSH tools/result。
+	m.emitToolResult(inv)
 	return inv.Result, inv.ViewJSON, inv.Err
+}
+
+// executeToolBody 实际执行工具（可被 tools/execute 的 waterfall 监听器改写/包围）。
+// 返回执行错误；调用方负责据此置 inv.Err。超时策略在此协作式应用（对齐 DSH timeout-policy）。
+func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, toolName string) error {
+	// run_code 是 PTC presentation transport：native 模式不对模型暴露，也不可执行
+	// （对齐 DSH“native agent must not find run_code”；ptc 折叠时才允许经其组合）。
+	if toolName == runCodeToolName && !m.isPTC() {
+		return fmt.Errorf("tool %s is only available in PTC (programmatic tool composition) mode", runCodeToolName)
+	}
+	tool, ok := m.toolRegistry.Get(toolName)
+	if !ok {
+		return fmt.Errorf("tool not found: %s", toolName)
+	}
+	// timeout-policy：声明 timeoutMs 的工具设置协作式截止时间（对齐 DSH）
+	execCtx, timeoutMs := ctx, 0
+	if tp, ok := tool.(TimeoutProvider); ok {
+		if ms := tp.TimeoutMs(); ms > 0 {
+			timeoutMs = ms
+			var cancel context.CancelFunc
+			execCtx, cancel = context.WithTimeout(ctx, time.Duration(ms)*time.Millisecond)
+			defer cancel()
+		}
+	}
+	var result string
+	var err error
+	if ev, ok := tool.(ViewExecutor); ok {
+		result, inv.ViewJSON, err = ev.ExecuteWithView(execCtx, json.RawMessage(inv.ArgumentsJSON))
+	} else {
+		result, err = tool.Execute(execCtx, json.RawMessage(inv.ArgumentsJSON))
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = &ToolTimeoutError{Tool: toolName, Ms: timeoutMs}
+	}
+	inv.Result, inv.Err = result, err
+	return err
+}
+
+// ToolResultInfo tools/result 事件的载荷（对齐 DSH tools/result）。
+type ToolResultInfo struct {
+	ToolName string `json:"tool_name"`
+	Result   string `json:"result"`
+	Error    string `json:"error,omitempty"`
+	ViewJSON string `json:"view_json,omitempty"`
+}
+
+// emitToolResult 广播工具执行结果事件（非拦截）。
+func (m *Manager) emitToolResult(inv *ToolInvocation) {
+	info := ToolResultInfo{ToolName: inv.ToolName, Result: inv.Result, ViewJSON: inv.ViewJSON}
+	if inv.Err != nil {
+		info.Error = inv.Err.Error()
+	}
+	m.events.Emit(EventToolResult, EventContext{Data: info})
 }
 
 // bridgePolicyToPipeline 把已加载的 policy 插件观测服务桥接为工具流水线监听器：
