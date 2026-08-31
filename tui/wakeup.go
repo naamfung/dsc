@@ -48,7 +48,7 @@ func (m *Model) startTurn(text, rendered string) tea.Cmd {
 	m.syncInputHeight()
 	m.render()
 	m.pinnedToBottom = true // 新轮开始：重新钉在底部跟随新内容（对齐 REX 发送消息即重新钉住）
-	m.viewport.GotoBottom()
+	m.virtualGotoBottom()
 	return tea.Batch(m.submitCmd(text), m.spinner.Tick, elapsedTick())
 }
 

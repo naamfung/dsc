@@ -160,9 +160,9 @@ func TestScrollbarDragDuringStreaming(t *testing.T) {
 	if !m2.streaming {
 		t.Fatal("前置条件：应处于流式状态")
 	}
-	atBottomYoff := m2.viewport.YOffset()
+	atBottomYoff := m2.viewStart
 	if atBottomYoff == 0 {
-		t.Fatalf("前置条件：内容应溢出视口（YOffset=%d，应有滚动条）", atBottomYoff)
+		t.Fatalf("前置条件：内容应溢出视口（viewStart=%d，应有滚动条）", atBottomYoff)
 	}
 
 	// 工作期间点按滚动条：应进入拖拽并脱离自动跟随
@@ -182,9 +182,9 @@ func TestScrollbarDragDuringStreaming(t *testing.T) {
 	if !m2.scrollbarDrag {
 		t.Fatal("拖拽中应保持 scrollbarDrag")
 	}
-	detachedYoff := m2.viewport.YOffset()
+	detachedYoff := m2.viewStart
 	if detachedYoff >= atBottomYoff {
-		t.Fatalf("向上拖拽应减小 YOffset: got %d, want < %d", detachedYoff, atBottomYoff)
+		t.Fatalf("向上拖拽应减小 viewStart: got %d, want < %d", detachedYoff, atBottomYoff)
 	}
 
 	// 继续泵一帧流式：脱离后视口不应被拉回底部
@@ -194,8 +194,8 @@ func TestScrollbarDragDuringStreaming(t *testing.T) {
 	msg := cmd()
 	model, cmd = model.Update(msg)
 	m2 = model.(*Model)
-	if got := m2.viewport.YOffset(); got != detachedYoff {
-		t.Fatalf("脱离跟随后流式帧不应把视口拉回底: got %d, want %d", got, detachedYoff)
+	if got := m2.viewStart; got != detachedYoff {
+		t.Fatalf("脱离跟随后流式帧不应把 viewStart 拉回底: got %d, want %d", got, detachedYoff)
 	}
 
 	// 松开：退出拖拽；未回到底部则保持脱离
@@ -233,7 +233,7 @@ func TestWheelDetachesAndRepins(t *testing.T) {
 		model, cmd = model.Update(msg)
 	}
 	m2 := model.(*Model)
-	if m2.viewport.YOffset() == 0 {
+	if m2.viewStart == 0 {
 		t.Fatal("前置条件：内容应溢出视口")
 	}
 	if !m2.pinnedToBottom {
@@ -246,9 +246,9 @@ func TestWheelDetachesAndRepins(t *testing.T) {
 	if m2.pinnedToBottom {
 		t.Fatal("滚轮向上应脱离底部自动跟随")
 	}
-	upYoff := m2.viewport.YOffset()
+	upYoff := m2.viewStart
 	if upYoff == 0 {
-		t.Fatal("滚轮向上应滚动到更早内容（YOffset>0 且非底部）")
+		t.Fatal("滚轮向上应滚动到更早内容（viewStart>0 且非底部）")
 	}
 
 	// 滚轮向下足够多次滚回底部 → 重新钉住
@@ -259,7 +259,7 @@ func TestWheelDetachesAndRepins(t *testing.T) {
 	if !m2.pinnedToBottom {
 		t.Fatal("滚回底部应重新钉住（pinnedToBottom=true）")
 	}
-	if !m2.viewport.AtBottom() {
+	if !m2.virtualAtBottom() {
 		t.Fatal("滚回底部后视口应位于底部")
 	}
 }

@@ -215,13 +215,21 @@ type Model struct {
 	sel          selection
 	wrappedLines []string
 
-	// 渲染行缓存（对齐 REX 的渲染缓存思路）：lineRendered[i] 是 m.lines[i] 按
-	// 当前宽度 wrap 后的结果（含 \n 多行）。流式帧只更新最后一行，历史行不变
-	// 却每帧全量重 wrap 是长会话卡顿主因；改为 dirtyFrom 起增量重算，
-	// renderWidth 记录上次宽度（终端尺寸变化时全量失效）。
+	// 渲染行缓存（对齐 REX 的渲染缓存思路，双级加速）：
+	// 1. lineRendered[i] 是 m.lines[i] 按当前宽度 wrap 后的结果（含 \n 多行）。
+	//    流式帧只更新最后一行，历史行不变却每帧全量重 wrap 是长会话卡顿主因；
+	//    改为 dirtyFrom 起增量重算，renderWidth 记录上次宽度（尺寸变化全量失效）。
+	// 2. 平铺（wrappedLines）与 viewport 喂入按 viewStart 虚拟窗口进行，见下方字段。
 	lineRendered []string
 	renderWidth  int
 	dirtyFrom    int
+	// 虚拟窗口（性能关键）：wrappedLines 是全部内容行的扁平可视行数组。
+	// viewStart 为窗口顶部的可视行下标，viewport 只渲染 [viewStart, viewStart+h) 的
+	// h 行窗口——否则每帧（流式 token/鼠标拖动）都要全量平铺并在 viewport 内 O(n)
+	// 重扫全部行，长会话卡顿。lineRowStart 记录各语义行在 wrappedLines 中的起始下标，
+	// 供光标/选区坐标做「可视行 ↔ 语义行」映射。
+	viewStart    int
+	lineRowStart []int
 
 	// 输入历史：已提交命令 + 当前草稿，用于 ↑/↓ 翻阅
 	history []string
@@ -468,7 +476,7 @@ func (m *Model) interruptTurn() (tea.Model, tea.Cmd) {
 	m.viewport.SetHeight(m.vpHeight())
 	m.render()
 	m.input.Focus()
-	m.viewport.GotoBottom()
+	m.virtualGotoBottom()
 	return m, nil
 }
 
@@ -526,7 +534,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetHeight(m.vpHeight())
 		}
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 
 	case tea.PasteMsg:
 		// 终端括号粘贴（如 Windows Terminal 的 Ctrl+V）插入到输入框。
@@ -574,7 +582,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scrollbarDrag {
 			m.dragScrollbar(mm.Y - 1)
 			// 拖拽位置决定是否回到钉底（拖到底部重新跟随，拖离则保持脱离）
-			m.pinnedToBottom = m.viewport.AtBottom()
+			m.pinnedToBottom = m.virtualAtBottom()
 			m.render()
 			return m, nil
 		}
@@ -591,7 +599,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scrollbarDrag {
 			m.scrollbarDrag = false
 			m.scrollbarGrabOffset = 0
-			m.pinnedToBottom = m.viewport.AtBottom()
+			m.pinnedToBottom = m.virtualAtBottom()
 			m.render()
 			return m, nil
 		}
@@ -619,8 +627,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		// 滚轮：对齐 REX——向上滚（翻阅历史）即脱离底部跟随；是否回到底部由
 		// 滚动后的位置决定。模型工作期间同样允许滚轮翻阅旧内容。
-		m.viewport, _ = m.viewport.Update(msg)
-		m.pinnedToBottom = m.viewport.AtBottom()
+		// viewport 只装可视窗口，滚动由虚拟窗口 viewStart 驱动。
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.setVirtualYOffset(m.viewStart - m.viewport.MouseWheelDelta)
+		case tea.MouseWheelDown:
+			m.setVirtualYOffset(m.viewStart + m.viewport.MouseWheelDelta)
+		}
+		m.pinnedToBottom = m.virtualAtBottom()
 		m.render()
 		return m, nil
 
@@ -739,7 +753,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncInputHeight()
 				m.render()
 				m.pinnedToBottom = true // 用户注入新消息 → 重新钉住，以便看到自己的气泡
-				m.viewport.GotoBottom()
+				m.virtualGotoBottom()
 				return m, tea.Batch(m.injectCmd(sendText), m.pumpStreamIfOpen(), m.input.Focus())
 			}
 			return m, m.startTurn(sendText, renderUserBubble(text, m.width-4))
@@ -790,7 +804,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 創建助手消息佔位符（僅身份頭）；新建块时重置思考/答案状态
 			m.openAssistantBlock()
 			m.render()
-			m.viewport.GotoBottom()
+			m.virtualGotoBottom()
 			if msg.ch == nil {
 				m.streaming = false
 				m.streamOpen = false
@@ -799,7 +813,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.appendMessage(errorSty.Render("错误: ") + msg.err.Error())
 				}
 				m.input.Focus()
-				m.viewport.GotoBottom()
+				m.virtualGotoBottom()
 				return m, nil
 			}
 			// 由事件循環賦值 Model 字段（避免 cmd goroutine 數據競爭）
@@ -824,7 +838,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetHeight(m.vpHeight())
 			m.render()
 			m.input.Focus()
-			m.viewport.GotoBottom()
+			m.virtualGotoBottom()
 			// 轮次结束：若有排队通知且预算未耗尽，自动开启唤醒轮
 			return m, m.tryWakeup()
 		}
@@ -837,7 +851,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetHeight(m.vpHeight())
 			m.render()
 			m.input.Focus()
-			m.viewport.GotoBottom()
+			m.virtualGotoBottom()
 			return m, nil
 		}
 		f := msg.frame
@@ -966,7 +980,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetHeight(m.vpHeight())
 			m.render()
 			m.input.Focus()
-			m.viewport.GotoBottom()
+			m.virtualGotoBottom()
 			return m, nil
 		}
 		return m, m.pumpStream(msg.input, msg.ch)
@@ -976,7 +990,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.appendMessage(errorSty.Render("注入失败: ") + msg.err.Error())
 			m.render()
-			m.viewport.GotoBottom()
+			m.virtualGotoBottom()
 		}
 		// 注入不应打断当前流；若有进行中的流式通道则继续保持泵取。
 		return m, m.pumpStreamIfOpen()
@@ -996,7 +1010,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetHeight(m.vpHeight())
 		m.render()
 		m.input.Focus()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return m, nil
 	}
 
@@ -1007,26 +1021,93 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // render 将历史行切分成与被选中区域一致的宽对齐渲染行，并把当前选区反色高亮后交给 viewport。
 // 内容宽度取 viewport 宽度（终端宽 -1，末列预留给自定义滚动条）。
-// 渲染行结果按语义行缓存（lineRendered），只从 dirtyFrom 起增量重算，避免长会话每帧全量重 wrap。
+// 双级优化（性能关键，视图版式渲染不受影响）：
+//   - buildWrappedLines 只从 dirtyFrom 起增量重算语义行的 wrap，历史行缓存命中；
+//   - 交给 viewport 的只含 viewStart 起的可视窗口 h 行，避免 viewport 内每帧 O(n) 全量重扫。
 func (m *Model) render() {
-	w := m.viewport.Width()
-	if w < 1 {
-		w = 1
+	w := m.vpWidth()
+	m.wrappedLines = m.buildWrappedLines(w)
+	m.paintWindow()
+}
+
+// vpWidth 返回 viewport 内容宽度（终端宽 -1，末列预留给自定义滚动条）。
+func (m *Model) vpWidth() int {
+	if w := m.viewport.Width(); w > 0 {
+		return w
 	}
-	rows := m.buildWrappedLines(w)
-	m.wrappedLines = rows
+	return 1
+}
+
+// paintWindow 把可视窗口 [viewStart, viewStart+h) 交给 viewport（含选区反色高亮）。
+// 只处理屏幕高度 h 行，viewport 内部不再 O(n) 全量重扫。
+func (m *Model) paintWindow() {
+	w := m.vpWidth()
+	start, end := m.visibleWindow(m.viewport.Height())
+	window := m.wrappedLines[start:end]
 	if m.sel.active && !m.sel.empty() {
-		start, end := m.sel.ordered()
-		highlighted := make([]string, len(rows))
-		for i, line := range rows {
+		oStart, oEnd := m.sel.ordered()
+		highlighted := make([]string, len(window))
+		for i, line := range window {
 			highlighted[i] = line
-			if lo, hi, ok := selSpan(i, start, end, w); ok {
+			if lo, hi, ok := selSpan(start+i, oStart, oEnd, w); ok {
 				highlighted[i] = lipgloss.StyleRanges(line, lipgloss.NewRange(lo, hi, selStyle))
 			}
 		}
-		rows = highlighted
+		window = highlighted
 	}
-	m.viewport.SetContent(strings.Join(rows, "\n"))
+	m.viewport.SetContent(strings.Join(window, "\n"))
+}
+
+// visibleWindow 返回可视窗口的 [start, end) 可视行下标（viewStart 起，最多 h 行）。
+// 视图版式不变，只是把喂给 viewport 的窗口截断到屏幕高度内。
+func (m *Model) visibleWindow(h int) (int, int) {
+	start := m.viewStart
+	if start > len(m.wrappedLines) {
+		start = len(m.wrappedLines)
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + h
+	if end > len(m.wrappedLines) {
+		end = len(m.wrappedLines)
+	}
+	return start, end
+}
+
+// virtualMaxYOffset 返回 viewport 相对全部可视行的最大 Y 偏移（内容不满一屏为 0）。
+// 滚动/钉底判定均以虚拟窗口为准，替代直接读写 viewport 内部 yOffset。
+func (m *Model) virtualMaxYOffset() int {
+	total := len(m.wrappedLines)
+	h := m.viewport.Height()
+	if total <= h {
+		return 0
+	}
+	return total - h
+}
+
+// setVirtualYOffset 把可视窗口顶行钳制到 [0, virtualMaxYOffset]。
+// viewStart 是滚动位置的唯一权威来源；viewport 只装可视窗口，其内部偏移恒为 0。
+func (m *Model) setVirtualYOffset(n int) {
+	maxY := m.virtualMaxYOffset()
+	if n < 0 {
+		n = 0
+	}
+	if n > maxY {
+		n = maxY
+	}
+	m.viewStart = n
+}
+
+// virtualAtBottom 报告可视窗口是否位于底部（流式自动跟随判定）。
+func (m *Model) virtualAtBottom() bool {
+	return m.viewStart >= m.virtualMaxYOffset()
+}
+
+// virtualGotoBottom 将可视窗口滚到底部（流式/收尾/提交后跟随新内容），并立即重绘窗口。
+func (m *Model) virtualGotoBottom() {
+	m.setVirtualYOffset(m.virtualMaxYOffset())
+	m.paintWindow()
 }
 
 // invalidateLines 标记从语义行 from 起需要重新渲染（就地替换 m.lines[i] 后调用）。
@@ -1039,32 +1120,74 @@ func (m *Model) invalidateLines(from int) {
 	}
 }
 
-// buildWrappedLines 将每条语义行以固定宽度渲染，得到换行后并为宽度对齐的可视行。
+// buildWrappedLines 将每条语义行以固定宽度渲染，得到换行后并为宽度对齐的可视行，
+// 同时记录各语义行在扁平可视行数组中的起始下标（lineRowStart）。
 // 每行恰好为宽度 w，故 viewport 对其不再折行，行号与可视列可直接映射。
 // 已渲染行缓存在 lineRendered；宽度变化或行被就地替换时从 dirtyFrom 起增量重算。
+// 平铺仅在受影响尾部重做（reflattenFrom），历史可视行直接复用。
 func (m *Model) buildWrappedLines(w int) []string {
-	// 终端宽度变化 → 全部缓存失效
+	// 终端宽度变化 → 全部缓存失效（含可视行平铺与行号映射）
 	if m.renderWidth != w {
 		m.lineRendered = nil
 		m.dirtyFrom = 0
 		m.renderWidth = w
+		m.wrappedLines = nil
+		m.lineRowStart = nil
+		m.viewStart = 0
 	}
 	// 新增语义行：先扩充缓存占位（append 后新行从 dirtyFrom 起重算）
 	for len(m.lineRendered) < len(m.lines) {
 		m.lineRendered = append(m.lineRendered, "")
 	}
-	if m.dirtyFrom < 0 {
-		m.dirtyFrom = 0
+	changedFrom := m.dirtyFrom
+	if changedFrom < 0 {
+		changedFrom = 0
 	}
-	for i := m.dirtyFrom; i < len(m.lines); i++ {
+	if changedFrom > len(m.lines) {
+		changedFrom = len(m.lines)
+	}
+	for i := changedFrom; i < len(m.lines); i++ {
 		m.lineRendered[i] = lipgloss.NewStyle().Width(w).Render(m.lines[i])
 	}
 	m.dirtyFrom = len(m.lines)
-	rows := make([]string, 0, len(m.lineRendered))
-	for _, lr := range m.lineRendered {
-		rows = append(rows, strings.Split(lr, "\n")...)
+	// 语义行收缩（如 /clear）→ 平铺与行号映射整体失效
+	if len(m.lines) < len(m.lineRowStart) {
+		m.wrappedLines = nil
+		m.lineRowStart = nil
+		m.viewStart = 0
 	}
-	return rows
+	m.reflattenFrom(changedFrom)
+	return m.wrappedLines
+}
+
+// reflattenFrom 从语义行 from 起重新平铺可视行：保留 [0, from) 语义行已有的可视行前缀，
+// 截断其后行并续接 from.. 各语义行的 wrap 拆分，同时重建 lineRowStart[from..]。
+// 追加新语义行（from == 已映射行数）与就地替换末行（from == 末行下标）都只重排尾部。
+func (m *Model) reflattenFrom(from int) {
+	if from < 0 {
+		from = 0
+	}
+	if from > len(m.lines) {
+		from = len(m.lines)
+	}
+	if from > len(m.lineRowStart) {
+		from = len(m.lineRowStart)
+	}
+	prefix := len(m.wrappedLines)
+	if from < len(m.lineRowStart) {
+		prefix = m.lineRowStart[from]
+	}
+	if prefix > len(m.wrappedLines) {
+		prefix = len(m.wrappedLines)
+	}
+	rows := m.wrappedLines[:prefix]
+	lineRowStart := m.lineRowStart[:from] // 前缀语义行起始行号不变
+	for i := from; i < len(m.lines); i++ {
+		lineRowStart = append(lineRowStart, len(rows))
+		rows = append(rows, strings.Split(m.lineRendered[i], "\n")...)
+	}
+	m.wrappedLines = rows
+	m.lineRowStart = lineRowStart
 }
 
 // selSpan 返回内容行 idx 上选区覆盖的 [lo, hi) 可视列跨度；不在选区内则返回 false。
@@ -1133,7 +1256,7 @@ func (m *Model) transcriptCaret(x, y int) selPos {
 	if cw := m.viewport.Width(); x > cw {
 		x = cw
 	}
-	return selPos{line: m.viewport.YOffset() + yv, col: x}
+	return selPos{line: m.viewStart + yv, col: x}
 }
 
 // navigateHistory 用 ↑/↓ 翻阅已提交命令历史。返回前会恢复用户半途编辑的草稿。
@@ -1237,7 +1360,7 @@ func (m *Model) appendToolFrame(rendered string) {
 // 不会把越界的位置硬拉到底，只会保留用户当前位置，故这里无需额外处理。
 func (m *Model) scrollToBottomIfPinned() {
 	if m.pinnedToBottom {
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 	}
 }
 
@@ -2058,7 +2181,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/clear":
 		m.lines = nil
@@ -2080,7 +2203,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/mode minimal":
 		if m.manager != nil {
@@ -2103,7 +2226,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/mode standard":
 		if m.manager != nil {
@@ -2126,7 +2249,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/mode creation":
 		if m.manager != nil {
@@ -2149,7 +2272,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/mode ptc":
 		if m.manager != nil {
@@ -2172,7 +2295,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/sessions":
 		if m.manager != nil {
@@ -2201,7 +2324,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/plan", "/plan on":
 		if err := m.agent.SetPlanMode(m.ctx, true); err != nil {
@@ -2213,7 +2336,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/plan off":
 		if err := m.agent.SetPlanMode(m.ctx, false); err != nil {
@@ -2225,7 +2348,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/session":
 		m.appendMessage(errorSty.Render("用法: /session <会话 id>，如 /session session-3 或 /session default"))
@@ -2233,7 +2356,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/export":
 		if m.manager == nil {
@@ -2250,7 +2373,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/crons":
 		if m.manager == nil {
@@ -2262,7 +2385,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/cron":
 		m.appendMessage(errorSty.Render("用法: /cron add <cron(5 段)> <prompt>，/cron remove <id>，/cron on|off <id>"))
@@ -2270,7 +2393,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/mouse":
 		m.mouseCaptureOff = !m.mouseCaptureOff
@@ -2283,7 +2406,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	case "/quit", "/exit":
 		return true, tea.Quit
@@ -2309,7 +2432,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			m.completion = completion{}
 			m.syncInputHeight()
 			m.render()
-			m.viewport.GotoBottom()
+			m.virtualGotoBottom()
 			return true, nil
 		}
 		if m.manager != nil {
@@ -2322,7 +2445,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	}
 	// /jobs [list|output <id>|kill <id> [reason]]：宿主侧后台任务（含 workflow）
@@ -2337,7 +2460,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	}
 	// /settings history <N|off|unlimited>：控制历史注入条数（模型预填充长度）。
@@ -2372,7 +2495,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	}
 	// /cron add|remove|on|off（前缀匹配）
@@ -2433,7 +2556,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	}
 	// /session <id> 切换 / new 新建 / delete <id> 删除（前缀匹配）
@@ -2487,7 +2610,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.completion = completion{}
 		m.syncInputHeight()
 		m.render()
-		m.viewport.GotoBottom()
+		m.virtualGotoBottom()
 		return true, nil
 	}
 	return false, nil

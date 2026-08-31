@@ -54,7 +54,7 @@ func (m *Model) viewportView() string {
 	}
 	lines := strings.Split(strings.TrimRight(v, "\n"), "\n")
 	total := len(m.wrappedLines)
-	yoff := m.viewport.YOffset()
+	yoff := m.viewStart
 	thumbStart, thumbSize := scrollbarThumb(h, yoff, total)
 	for i, line := range lines {
 		lines[i] = line + scrollbarCell(i, total, h, thumbStart, thumbSize)
@@ -72,7 +72,7 @@ func (m *Model) inScrollbar(x, y int) bool {
 // scrollbarGrabRowOffset 记录抓取点在滑块内的行偏移，拖拽时保持相对位置不跳变。
 // row 为相对 viewport 顶的行号（屏幕 y - 1）。
 func (m *Model) scrollbarGrabRowOffset(row int) int {
-	thumbStart, thumbSize := scrollbarThumb(m.viewport.Height(), m.viewport.YOffset(), len(m.wrappedLines))
+	thumbStart, thumbSize := scrollbarThumb(m.viewport.Height(), m.viewStart, len(m.wrappedLines))
 	if row >= thumbStart && row < thumbStart+thumbSize {
 		return row - thumbStart
 	}
@@ -81,7 +81,7 @@ func (m *Model) scrollbarGrabRowOffset(row int) int {
 
 // dragScrollbar 把滚动条列行号映射为 viewport 偏移并应用（拖拽中调用）。
 func (m *Model) dragScrollbar(row int) {
-	m.viewport.SetYOffset(scrollbarYOffset(m.viewport.Height(), row, len(m.wrappedLines), m.scrollbarGrabOffset))
+	m.setVirtualYOffset(scrollbarYOffset(m.viewport.Height(), row, len(m.wrappedLines), m.scrollbarGrabOffset))
 }
 
 // scrollbarYOffset 由滚动条列行号反推 viewport 应滚动到的 YOffset。

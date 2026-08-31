@@ -138,14 +138,14 @@ func TestScrollbarDrag(t *testing.T) {
 	if !m2.scrollbarDrag {
 		t.Fatal("点按滚动条列应进入拖拽模式")
 	}
-	before := m2.viewport.YOffset()
+	before := m2.viewStart
 
-	// 拖到滚动条底部 → YOffset 应增大
+	// 拖到滚动条底部 → viewStart 应增大
 	drag := tea.MouseMotionMsg{X: m.viewport.Width(), Y: 1 + m.viewport.Height() - 1, Button: tea.MouseLeft}
 	model, _ = m2.Update(drag)
 	m3 := model.(*Model)
-	if m3.viewport.YOffset() <= before {
-		t.Fatalf("拖到滚动条底部 YOffset 应增大: before=%d after=%d", before, m3.viewport.YOffset())
+	if m3.viewStart <= before {
+		t.Fatalf("拖到滚动条底部 viewStart 应增大: before=%d after=%d", before, m3.viewStart)
 	}
 
 	// 松开结束拖拽
