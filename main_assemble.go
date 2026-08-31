@@ -12,7 +12,8 @@ import (
 // assembleMerged 把 config.yaml（llm/agent）+ preset（tool/policy/dsc）合并成
 // 交给 Manager 声明式加载的插件集，并做两件关键事：
 //  1. config.yaml 里启用的 tool/policy/dsc（含 install_go_plugin 安装的）也并入，
-//     与 preset 按名去重、config 优先——使模型安装的插件能跨重启生效；
+//     与 preset 按名去重、preset 优先（同名冲突取 preset，config 仅补 preset 没有的）——
+//     使模型安装的插件也能跨重启生效；
 //  2. 为主路径与「失败回退续启」共用，避免重复的合并逻辑。
 func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry, mainCfg, presetCfg *core.Config, contextWindow int, headless bool, inputText string) *core.Config {
 	merged := &core.Config{}
@@ -43,13 +44,14 @@ func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry,
 	ag.Env = agentEnv
 	merged.Plugins = append(merged.Plugins, *ag)
 
-	// tool/policy/dsc：config.yaml 启用的并入（config 优先）→ 再补 preset
+	// tool/policy/dsc：preset 是具体的预设、优先；config.yaml 只是补充——同名冲突取 preset，
+	// config 仅并入 preset 没有的（install_go_plugin 写入 config.yaml 的插件因此仍能跨重启生效）。
 	seen := map[string]bool{}
 	for _, p := range merged.Plugins {
 		seen[p.Name] = true
 	}
-	if mainCfg != nil {
-		for _, e := range mainCfg.Plugins {
+	if presetCfg != nil {
+		for _, e := range presetCfg.Plugins {
 			if !e.Enabled || (e.Type != "tool" && e.Type != "policy" && e.Type != "dsc") {
 				continue
 			}
@@ -60,8 +62,8 @@ func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry,
 			merged.Plugins = append(merged.Plugins, e)
 		}
 	}
-	if presetCfg != nil {
-		for _, e := range presetCfg.Plugins {
+	if mainCfg != nil {
+		for _, e := range mainCfg.Plugins {
 			if !e.Enabled || (e.Type != "tool" && e.Type != "policy" && e.Type != "dsc") {
 				continue
 			}

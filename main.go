@@ -567,7 +567,7 @@ func main() {
 
 	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy/dsc
 	// （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_go_plugin
-	// 安装的 —— 亦并入，按名去重、config 优先，使模型安装的插件能跨重启生效）
+	// 安装的 —— 亦并入，按名去重、preset 优先（同名取 preset），使模型安装的插件能跨重启生效）
 	merged := assembleMerged(llmEntries, agentEntry, mainCfg, presetCfg, contextWindow, headless, inputText)
 
 	// 注入当前模式 + 工作根 + 沙箱档到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
