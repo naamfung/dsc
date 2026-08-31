@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	version "github.com/hashicorp/go-version"
 )
 
 // 宿主内置「DSC 插件安装/卸载/列举」模型工具：
@@ -353,6 +355,143 @@ func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawM
 }
 
 // ============================================================
+// upgrade_dsc_plugin
+// ============================================================
+
+type upgradeDscPluginTool struct{ m *Manager }
+
+func (t *upgradeDscPluginTool) Name() string { return "upgrade_dsc_plugin" }
+
+func (t *upgradeDscPluginTool) TimeoutMs() int { return 120000 } // 部署+热更替新进程可能较慢
+
+func (t *upgradeDscPluginTool) Description() string {
+	return "Upgrade an already-installed DSC plugin to a new version. " +
+		"name is the existing plugin's directory basename (e.g. tool-filesystem); " +
+		"version is the new semantic version (e.g. 2.3.1); " +
+		"source is the new plugin binary (a single <name>.exe) or a directory laid out as plugins/<name>/ containing <name>.exe. " +
+		"The tool deploys the new binary as <name>-v<version>.exe inside the plugin dir and hot-reloads the process to it; " +
+		"if hot-reload fails, the new binary is kept so it takes effect on next restart. Works on top of the DSC versioned-binary hot-reload mechanism."
+}
+
+func (t *upgradeDscPluginTool) ParametersSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{
+"name":{"type":"string","description":"Existing plugin name = directory basename (e.g. tool-filesystem)."},
+"version":{"type":"string","description":"New semantic version, e.g. '2.3.1' or '2.4'."},
+"source":{"type":"string","description":"Path to the new plugin binary (single <name>.exe) or to a directory laid out as plugins/<name>/ containing <name>.exe."}},
+"required":["name","version","source"],"additionalProperties":false}`)
+}
+
+func (t *upgradeDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Source  string `json:"source"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	res, err := t.upgrade(p.Name, p.Version, p.Source)
+	if err != nil {
+		return "", err
+	}
+	b, _ := json.Marshal(res)
+	return string(b), nil
+}
+
+func (t *upgradeDscPluginTool) upgrade(name, versionStr, source string) (map[string]any, error) {
+	if !dscPluginNameRe.MatchString(name) || name == "" || name == "." || name == ".." {
+		return nil, fmt.Errorf("invalid name %q: use [A-Za-z0-9_-] only", name)
+	}
+	pluginDir := filepath.Join(t.m.pluginsRoot(), name)
+	st, err := os.Stat(pluginDir)
+	if err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("插件目录 %s 不存在（请先用 install_dsc_plugin 安装）", pluginDir)
+	}
+
+	ext := binExt()
+	base := name
+	// 校验并解析新版本号
+	nv, err := version.NewVersion(versionStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid version %q: must be semver like 2.3.1", versionStr)
+	}
+	if nv.LessThanOrEqual(version.Must(version.NewVersion("0.0.0"))) {
+		return nil, fmt.Errorf("版本号必须大于 0.0.0")
+	}
+	newFile := filepath.Join(pluginDir, base+"-v"+versionStr+ext)
+	if _, err := os.Stat(newFile); err == nil {
+		return nil, fmt.Errorf("目标版本 %s 已存在（%s），无需重复升级", versionStr, newFile)
+	}
+
+	// 当前运行版本（基线或既有版本化二进制中最高者）
+	curBinary := ResolveLatestBinary(filepath.Join(pluginDir, base+ext))
+	curV := binaryVersion(curBinary)
+	if !nv.GreaterThan(curV) {
+		return nil, fmt.Errorf("版本 %s 不高于当前运行版本 %s，不是升级",
+			nv.String(), curV.String())
+	}
+
+	// 解析源二进制（单文件或目录的约定执行文件）
+	srcFile := ""
+	si, err := os.Stat(source)
+	if err != nil {
+		return nil, fmt.Errorf("source 不存在: %w", err)
+	}
+	if si.IsDir() {
+		srcFile = filepath.Join(source, base+ext)
+		if _, err := os.Stat(srcFile); err != nil {
+			return nil, fmt.Errorf("目录 %s 缺少约定执行文件 %s", source, base+ext)
+		}
+	} else {
+		srcFile = source
+	}
+
+	// 植入版本化二进制（不覆盖基础文件，供热重载识别更高版本）
+	if err := copyFile(srcFile, newFile); err != nil {
+		return nil, fmt.Errorf("植入版本化二进制 %s 失败: %w", newFile, err)
+	}
+
+	// 触发热更替：验证新进程，成功才交换；失败则保留新文件供重启兜底
+	if err := t.m.HotReload(name, newFile); err != nil {
+		// 不 return 错误：二进制已置入，重启后依版本规则生效
+		return map[string]any{
+			"ok":            true,
+			"name":          name,
+			"version":       versionStr,
+			"deployed_file": filepath.ToSlash(newFile),
+			"hot_reload":    false,
+			"note":          "新版本二进制已置入 " + filepath.ToSlash(newFile) + "，但当下热更替未立即生效（" + err.Error() + "），重启 DSC 后生效",
+		}, nil
+	}
+	return map[string]any{
+		"ok":            true,
+		"name":          name,
+		"version":       versionStr,
+		"deployed_file": filepath.ToSlash(newFile),
+		"hot_reload":    true,
+		"note":          "已升级并热更替为 " + name + "-v" + versionStr + ext + "；原版本文件保留可回退",
+	}, nil
+}
+
+func (t *upgradeDscPluginTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
+	v, verr := json.Marshal(ToolView{
+		Kind:  "card",
+		Title: "UpgradeDscPlugin",
+		Badge: &ViewBadge{Text: "upgraded", Tone: "green"},
+		Fields: []ViewField{
+			{Key: "name", Value: extractField(result, "name")},
+			{Key: "version", Value: extractField(result, "version")},
+			{Key: "deployed_file", Value: extractField(result, "deployed_file")},
+			{Key: "hot_reload", Value: extractField(result, "hot_reload")},
+		},
+	})
+	if verr != nil {
+		return result, "", nil
+	}
+	return result, string(v), nil
+}
+
+// ============================================================
 // 工具集合 + 拷贝辅助
 // ============================================================
 
@@ -360,6 +499,7 @@ func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawM
 func (m *Manager) dscPluginTools() []ToolDefinition {
 	return []ToolDefinition{
 		&installDscPluginTool{m: m},
+		&upgradeDscPluginTool{m: m},
 		&uninstallDscPluginTool{m: m},
 		&listDscPluginsTool{m: m},
 	}

@@ -108,3 +108,52 @@ func TestDscPluginDirBase(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// TestUpgradeDscPlugin 校验升级：植入更高版本的版本化二进制、拒绝非升级/坏版本/不存在目录。
+func TestUpgradeDscPlugin(t *testing.T) {
+	dir := t.TempDir()
+	// 构造 Manager，ExecDir 指向临时目录，pluginsRoot()=dir/plugins
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+	pluginDir := filepath.Join(m.pluginsRoot(), "tool-probe")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, "tool-probe"+binExt()), []byte("bin-v1"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	tool := &upgradeDscPluginTool{m: m}
+
+	// 源：单二进制文件
+	src := filepath.Join(dir, "tool-probe-new"+binExt())
+	if err := os.WriteFile(src, []byte("bin-v2"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 坏版本
+	if _, err := tool.upgrade("tool-probe", "not-a-version", src); err == nil {
+		t.Fatal("坏版本应报错")
+	}
+	// 插件目录不存在
+	if _, err := tool.upgrade("tool-absent", "2.0.0", src); err == nil {
+		t.Fatal("不存在的插件目录应报错")
+	}
+	// 成功升级 → 植入 tool-probe-v2.0.0.exe，运行版本提升
+	res, err := tool.upgrade("tool-probe", "2.0.0", src)
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	if !res["ok"].(bool) {
+		t.Fatalf("应升级成功 %v", res)
+	}
+	if _, err := os.Stat(filepath.Join(pluginDir, "tool-probe-v2.0.0"+binExt())); err != nil {
+		t.Fatalf("应植入版本化二进制: %v", err)
+	}
+	// 重复同版本 → 拒绝
+	if _, err := tool.upgrade("tool-probe", "2.0.0", src); err == nil {
+		t.Fatal("重复同版本应报错")
+	}
+	// 降级/平级 → 拒绝
+	if _, err := tool.upgrade("tool-probe", "1.0.0", src); err == nil {
+		t.Fatal("低于当前运行版本的应报错")
+	}
+}
