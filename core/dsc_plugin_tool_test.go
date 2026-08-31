@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// TestInstallGoPluginValidation 校验命名约定：非法 type / 非法 name（含路径穿越字符）
+// TestInstallDscPluginValidation 校验命名约定：非法 type / 非法 name（含路径穿越字符）
 // 在触碰任何文件/配置前即被拒绝，模型无法用坏命名安装插件。
-func TestInstallGoPluginValidation(t *testing.T) {
+func TestInstallDscPluginValidation(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
-	tool := &installGoPluginTool{m: m}
+	tool := &installDscPluginTool{m: m}
 	bad := []string{
 		`{"type":"bogus","name":"x","source":"/tmp"}`,
 		`{"type":"tool","name":"","source":"/tmp"}`,
@@ -84,10 +84,10 @@ func TestCopyPluginSource(t *testing.T) {
 	}
 }
 
-// TestListGoPluginsView 校验 list_go_plugins 视图渲染为 table。
-func TestListGoPluginsView(t *testing.T) {
+// TestListDscPluginsView 校验 list_dsc_plugins 视图渲染为 table。
+func TestListDscPluginsView(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
-	tool := &listGoPluginsTool{m: m}
+	tool := &listDscPluginsTool{m: m}
 	result := `{"plugins":[{"name":"tool-filesystem","type":"tool","enabled":true},{"name":"dsc-notify","type":"dsc","enabled":true}],"count":2}`
 	_, view, err := tool.ExecuteWithView(context.Background(), json.RawMessage(`{}`), result)
 	if err != nil {
@@ -97,14 +97,14 @@ func TestListGoPluginsView(t *testing.T) {
 	if err := json.Unmarshal([]byte(view), &v); err != nil {
 		t.Fatalf("view JSON 非法: %v", err)
 	}
-	if v.Kind != "table" || v.Title != "GoPlugins" || len(v.Rows) != 2 {
+	if v.Kind != "table" || v.Title != "DscPlugins" || len(v.Rows) != 2 {
 		t.Fatalf("view = %+v", v)
 	}
 }
 
-// TestGoPluginDirBase 校验命名约定拼接。
-func TestGoPluginDirBase(t *testing.T) {
-	if got := goPluginDirBase("dsc", "notify"); got != "dsc-notify" {
+// TestDscPluginDirBase 校验命名约定拼接。
+func TestDscPluginDirBase(t *testing.T) {
+	if got := dscPluginDirBase("dsc", "notify"); got != "dsc-notify" {
 		t.Errorf("got %q", got)
 	}
 }

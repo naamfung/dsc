@@ -566,7 +566,7 @@ func main() {
 	logger.Info("context window", "window", contextWindow)
 
 	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy/dsc
-	// （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_go_plugin
+	// （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_dsc_plugin
 	// 安装的 —— 亦并入，按名去重、preset 优先（同名取 preset），使模型安装的插件能跨重启生效）
 	merged := assembleMerged(llmEntries, agentEntry, mainCfg, presetCfg, contextWindow, headless, inputText)
 

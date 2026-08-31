@@ -13,18 +13,19 @@ import (
 	"time"
 )
 
-// 宿主内置「Go 插件安装/卸载/列举」模型工具：
-// 让模型按统一命名约定自助安装/卸载 Go 插件（对标 install_skill）。
+// 宿主内置「DSC 插件安装/卸载/列举」模型工具：
+// 指 DSC 自身的插件（本机二进制 Go 插件，基于 go-plugin/gRPC 实现、经 dsc-sdk 构建），
+// 区别于 Go 标准库的 plugin 包。让模型按统一命名约定自助安装/卸载（对标 install_skill）。
 // 安全：严格命名 + 路径安全 + 写 config 前备份 + 「干跑(live 加载)校验成功才落盘」，
 // 失败回滚（删除已拷贝目录、config 未被写入），避免模型搞坏配置导致启动失败。
 
 var (
-	goPluginNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	goPluginTypes  = map[string]bool{"tool": true, "llm": true, "agent": true, "policy": true, "dsc": true}
+	dscPluginNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	dscPluginTypes  = map[string]bool{"tool": true, "llm": true, "agent": true, "policy": true, "dsc": true}
 )
 
-// goPluginDirBase 返回按命名约定拼出的插件目录基名 <type>-<name>。
-func goPluginDirBase(ptype, name string) string { return ptype + "-" + name }
+// dscPluginDirBase 返回按命名约定拼出的插件目录基名 <type>-<name>。
+func dscPluginDirBase(ptype, name string) string { return ptype + "-" + name }
 
 // binExt 返回当前平台的插件可执行文件后缀。
 func binExt() string {
@@ -54,15 +55,15 @@ func (m *Manager) backupConfig() (string, error) {
 	return bak, nil
 }
 
-// removeGoPluginConfig 仅从 config.yaml 移除条目（幂等）。需自行避免嵌套 m.mu。
-func (m *Manager) removeGoPluginConfig(name string) error {
+// removeDscPluginConfig 仅从 config.yaml 移除条目（幂等）。需自行避免嵌套 m.mu。
+func (m *Manager) removeDscPluginConfig(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.persistRemovalLocked(name)
 }
 
-// goPluginToolListPrefix 列出 config.yaml 中声明的插件（用于 list_go_plugins）。
-func (m *Manager) listGoPluginConfig() ([]PluginEntry, error) {
+// 列出 config.yaml 中声明的插件（用于 list_dsc_plugins）。
+func (m *Manager) listDscPluginConfig() ([]PluginEntry, error) {
 	cfg, err := LoadConfig(m.persistConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("list plugins: load config: %w", err)
@@ -71,17 +72,17 @@ func (m *Manager) listGoPluginConfig() ([]PluginEntry, error) {
 }
 
 // ============================================================
-// install_go_plugin
+// install_dsc_plugin
 // ============================================================
 
-type installGoPluginTool struct{ m *Manager }
+type installDscPluginTool struct{ m *Manager }
 
-func (t *installGoPluginTool) Name() string { return "install_go_plugin" }
+func (t *installDscPluginTool) Name() string { return "install_dsc_plugin" }
 
-func (t *installGoPluginTool) TimeoutMs() int { return 120000 } // 安装+live 加载插件可能较慢
+func (t *installDscPluginTool) TimeoutMs() int { return 120000 } // 安装+live 加载插件可能较慢
 
-func (t *installGoPluginTool) Description() string {
-	return "Install a Go (dsc-sdk) plugin into this DSC instance so it can be used. " +
+func (t *installDscPluginTool) Description() string {
+	return "Install a DSC plugin (our own binary plugin, a Go program built with the dsc-sdk and loaded via go-plugin/gRPC) into this DSC instance so it can be used. " +
 		"Follow the naming convention: plugin directory must be plugins/<type>-<name>/ and its executable " +
 		"must be <type>-<name>.exe, where <type> is one of tool|llm|agent|policy|dsc and <name> uses only " +
 		"[A-Za-z0-9_-]. Provide source as a directory already laid out as plugins/<type>-<name>/ (containing " +
@@ -90,7 +91,7 @@ func (t *installGoPluginTool) Description() string {
 		"it to config.yaml so it survives restart. On failure nothing is persisted and the copied directory is removed."
 }
 
-func (t *installGoPluginTool) ParametersSchema() json.RawMessage {
+func (t *installDscPluginTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{
 "type":{"type":"string","enum":["tool","llm","agent","policy","dsc"],"description":"Plugin type (must match the plugin's own declared type)."},
 "name":{"type":"string","description":"Plugin name using [A-Za-z0-9_-]; directory will be plugins/<type>-<name>/."},
@@ -99,7 +100,7 @@ func (t *installGoPluginTool) ParametersSchema() json.RawMessage {
 "required":["type","name","source"],"additionalProperties":false}`)
 }
 
-func (t *installGoPluginTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+func (t *installDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
 		Type    string `json:"type"`
 		Name    string `json:"name"`
@@ -118,22 +119,22 @@ func (t *installGoPluginTool) Execute(ctx context.Context, args json.RawMessage)
 	}
 	res, _ := json.Marshal(map[string]any{
 		"ok":      true,
-		"name":    goPluginDirBase(p.Type, p.Name),
+		"name":    dscPluginDirBase(p.Type, p.Name),
 		"type":    p.Type,
 		"enabled": enabled,
-		"note":    "已安装并热加载；已备份原配置，重启后仍生效；卸载可用 uninstall_go_plugin",
+		"note":    "已安装并热加载；已备份原配置，重启后仍生效；卸载可用 uninstall_dsc_plugin",
 	})
 	return string(res), nil
 }
 
-func (t *installGoPluginTool) install(ctx context.Context, ptype, name, source string, enabled bool) error {
-	if !goPluginTypes[ptype] {
+func (t *installDscPluginTool) install(ctx context.Context, ptype, name, source string, enabled bool) error {
+	if !dscPluginTypes[ptype] {
 		return fmt.Errorf("invalid type %q: must be tool|llm|agent|policy|dsc", ptype)
 	}
-	if !goPluginNameRe.MatchString(name) || name == "" || name == "." || name == ".." {
+	if !dscPluginNameRe.MatchString(name) || name == "" || name == "." || name == ".." {
 		return fmt.Errorf("invalid name %q: use [A-Za-z0-9_-] only (prevents path traversal)", name)
 	}
-	dirBase := goPluginDirBase(ptype, name)
+	dirBase := dscPluginDirBase(ptype, name)
 	pluginRoot := filepath.Join(t.m.pluginsRoot(), dirBase)
 
 	// 拷贝来源到约定目录
@@ -158,10 +159,10 @@ func (t *installGoPluginTool) install(ctx context.Context, ptype, name, source s
 	return nil
 }
 
-func (t *installGoPluginTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
+func (t *installDscPluginTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
 	v, verr := json.Marshal(ToolView{
 		Kind:  "card",
-		Title: "InstallGoPlugin",
+		Title: "InstallDscPlugin",
 		Badge: &ViewBadge{Text: "installed", Tone: "green"},
 		Fields: []ViewField{
 			{Key: "name", Value: extractField(result, "name")},
@@ -200,27 +201,27 @@ func copyPluginSource(source, pluginRoot, execFile string) error {
 }
 
 // ============================================================
-// uninstall_go_plugin
+// uninstall_dsc_plugin
 // ============================================================
 
-type uninstallGoPluginTool struct{ m *Manager }
+type uninstallDscPluginTool struct{ m *Manager }
 
-func (t *uninstallGoPluginTool) Name() string { return "uninstall_go_plugin" }
+func (t *uninstallDscPluginTool) Name() string { return "uninstall_dsc_plugin" }
 
-func (t *uninstallGoPluginTool) Description() string {
-	return "Uninstall a Go plugin by its config entry name (the directory basename like tool-filesystem or dsc-notify). " +
+func (t *uninstallDscPluginTool) Description() string {
+	return "Uninstall a DSC plugin by its config entry name (the directory basename like tool-filesystem or dsc-notify). " +
 		"Backs up config.yaml, removes the plugin from config so it won't load on restart, live-unloads it, " +
 		"and optionally deletes its directory under plugins/. Pass delete_dir=true to also remove the files."
 }
 
-func (t *uninstallGoPluginTool) ParametersSchema() json.RawMessage {
+func (t *uninstallDscPluginTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{
 "name":{"type":"string","description":"Config entry name = directory basename (e.g. tool-filesystem, dsc-notify)."},
 "delete_dir":{"type":"boolean","description":"Also delete plugins/<name>/ directory. Default false."}},
 "required":["name"],"additionalProperties":false}`)
 }
 
-func (t *uninstallGoPluginTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+func (t *uninstallDscPluginTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
 	var p struct {
 		Name      string `json:"name"`
 		DeleteDir bool   `json:"delete_dir"`
@@ -228,7 +229,7 @@ func (t *uninstallGoPluginTool) Execute(_ context.Context, args json.RawMessage)
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	if !goPluginNameRe.MatchString(p.Name) || p.Name == "" || p.Name == "." || p.Name == ".." {
+	if !dscPluginNameRe.MatchString(p.Name) || p.Name == "" || p.Name == "." || p.Name == ".." {
 		return "", fmt.Errorf("invalid name %q", p.Name)
 	}
 	if _, err := t.m.backupConfig(); err != nil {
@@ -236,10 +237,10 @@ func (t *uninstallGoPluginTool) Execute(_ context.Context, args json.RawMessage)
 	}
 	// live 卸载（含持久化移除）；若当前未加载则仅清除 config 条目
 	if err := t.m.UnloadPlugin(p.Name); err != nil {
-		if perr := t.m.removeGoPluginConfig(p.Name); perr != nil {
+		if perr := t.m.removeDscPluginConfig(p.Name); perr != nil {
 			return "", fmt.Errorf("卸载插件: %v; 且清 config 失败: %v", err, perr)
 		}
-	} else if err := t.m.removeGoPluginConfig(p.Name); err != nil {
+	} else if err := t.m.removeDscPluginConfig(p.Name); err != nil {
 		return "", fmt.Errorf("清 config 失败: %w", err)
 	}
 	t.m.removeHookClient(p.Name)
@@ -257,10 +258,10 @@ func (t *uninstallGoPluginTool) Execute(_ context.Context, args json.RawMessage)
 	return string(res), nil
 }
 
-func (t *uninstallGoPluginTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
+func (t *uninstallDscPluginTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
 	v, verr := json.Marshal(ToolView{
 		Kind:  "card",
-		Title: "UninstallGoPlugin",
+		Title: "UninstallDscPlugin",
 		Badge: &ViewBadge{Text: "removed", Tone: "yellow"},
 		Fields: []ViewField{
 			{Key: "name", Value: extractField(result, "name")},
@@ -290,23 +291,23 @@ func (m *Manager) removeHookClient(name string) {
 }
 
 // ============================================================
-// list_go_plugins
+// list_dsc_plugins
 // ============================================================
 
-type listGoPluginsTool struct{ m *Manager }
+type listDscPluginsTool struct{ m *Manager }
 
-func (t *listGoPluginsTool) Name() string { return "list_go_plugins" }
+func (t *listDscPluginsTool) Name() string { return "list_dsc_plugins" }
 
-func (t *listGoPluginsTool) Description() string {
-	return "List the Go plugins declared in config.yaml for this DSC instance (name, type, enabled, binary_path)."
+func (t *listDscPluginsTool) Description() string {
+	return "List the DSC plugins declared in config.yaml for this DSC instance (name, type, enabled, binary_path)."
 }
 
-func (t *listGoPluginsTool) ParametersSchema() json.RawMessage {
+func (t *listDscPluginsTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 }
 
-func (t *listGoPluginsTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
-	entries, err := t.m.listGoPluginConfig()
+func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	entries, err := t.m.listDscPluginConfig()
 	if err != nil {
 		return "", err
 	}
@@ -324,7 +325,7 @@ func (t *listGoPluginsTool) Execute(_ context.Context, _ json.RawMessage) (strin
 	return string(b), nil
 }
 
-func (t *listGoPluginsTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
+func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
 	var r struct {
 		Plugins []struct {
 			Name    string `json:"name"`
@@ -341,7 +342,7 @@ func (t *listGoPluginsTool) ExecuteWithView(ctx context.Context, args json.RawMe
 	}
 	v, verr := json.Marshal(ToolView{
 		Kind:    "table",
-		Title:   "GoPlugins",
+		Title:   "DscPlugins",
 		Columns: []ViewColumn{{Key: "name", Title: "插件"}, {Key: "type", Title: "类型"}, {Key: "enabled", Title: "启用"}},
 		Rows:    rows,
 	})
@@ -355,12 +356,12 @@ func (t *listGoPluginsTool) ExecuteWithView(ctx context.Context, args json.RawMe
 // 工具集合 + 拷贝辅助
 // ============================================================
 
-// goPluginTools 返回宿主内置的 Go 插件管理工具。
-func (m *Manager) goPluginTools() []ToolDefinition {
+// dscPluginTools 返回宿主内置的 DSC 插件管理工具。
+func (m *Manager) dscPluginTools() []ToolDefinition {
 	return []ToolDefinition{
-		&installGoPluginTool{m: m},
-		&uninstallGoPluginTool{m: m},
-		&listGoPluginsTool{m: m},
+		&installDscPluginTool{m: m},
+		&uninstallDscPluginTool{m: m},
+		&listDscPluginsTool{m: m},
 	}
 }
 

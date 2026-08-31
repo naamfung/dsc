@@ -12,7 +12,7 @@ func TestAssembleMergedConfigToolsDedup(t *testing.T) {
 	mainCfg := &core.Config{Plugins: []core.PluginEntry{
 		{Name: "agent-react-loop", Type: "agent", Enabled: true, BinaryPath: "./plugins/agent-react-loop/a.exe"},
 		{Name: "llm-openai", Type: "llm", Enabled: true, BinaryPath: "./plugins/llm-openai/l.exe"},
-		// config.yaml 里安装的（preset 没有的）工具——install_go_plugin 写入的位置
+		// config.yaml 里安装的（preset 没有的）工具——install_dsc_plugin 写入的位置
 		{Name: "tool-installed", Type: "tool", Enabled: true, BinaryPath: "./plugins/tool-installed/t.exe"},
 		// config.yaml 里与 preset 同名的（duplicate）——preset 优先，保留 preset 的 binary_path
 		{Name: "tool-filesystem", Type: "tool", Enabled: true, BinaryPath: "./plugins/config/tool-filesystem/cf.exe"},
