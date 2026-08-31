@@ -367,108 +367,11 @@ func playWorker() {
 	}
 }
 
-// ---------- notify 工具（原生插件 RPC） ----------
-
-// notifyToolSchema notify 工具参数 Schema。
-var notifyToolSchema = json.RawMessage(`{
-	"type": "object",
-	"properties": {
-		"type": {"type": "string", "description": "内置音效类型：success/error/warning/info（默认 success）"},
-		"file": {"type": "string", "description": "自定义音频文件路径（.mp3/.wav），指定时优先于 type"}
-	}
-}`)
-
-// notifyTool 处理 notify 工具调用：type 播放内置音效，file 播放自定义音频文件。
-// 播放经 playQueue 异步执行，本函数只入队并返回确认结果，不阻塞等播放完成。
-func notifyTool(ctx context.Context, args json.RawMessage) (string, error) {
-	var p struct {
-		Type string `json:"type"`
-		File string `json:"file"`
-	}
-	if err := json.Unmarshal(args, &p); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
-	}
-	now := time.Now().Format("15:04:05")
-	if p.File != "" {
-		if _, err := os.Stat(p.File); err != nil {
-			return "", fmt.Errorf("音频文件不存在: %w", err)
-		}
-		playQueue <- PlayRequest{CustomPath: p.File}
-		res, _ := json.Marshal(map[string]any{
-			"ok":      true,
-			"message": fmt.Sprintf("正在播放自定义文件: %s", p.File),
-			"file":    p.File,
-			"time":    now,
-		})
-		return string(res), nil
-	}
-	if p.Type == "" {
-		p.Type = "success"
-	}
-	if _, ok := soundMap[p.Type]; !ok {
-		return "", fmt.Errorf("未知音效类型: %s（可选 success/error/warning/info）", p.Type)
-	}
-	playQueue <- PlayRequest{SoundType: p.Type}
-	res, _ := json.Marshal(map[string]any{
-		"ok":      true,
-		"message": fmt.Sprintf("正在播放内置音效: %s", p.Type),
-		"type":    p.Type,
-		"time":    now,
-	})
-	return string(res), nil
-}
-
-// notifyView 构造 notify 结果的结构化视图（卡片）：徽标按音效类型着色。
-func notifyView(result string) (json.RawMessage, error) {
-	var r struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-		File    string `json:"file"`
-		Time    string `json:"time"`
-	}
-	if err := json.Unmarshal([]byte(result), &r); err != nil {
-		return nil, nil
-	}
-	tone := "gray"
-	switch r.Type {
-	case "success":
-		tone = "green"
-	case "error":
-		tone = "red"
-	case "warning":
-		tone = "yellow"
-	case "info":
-		tone = "teal"
-	}
-	fields := []dsc.ViewField{{Key: "message", Value: r.Message}}
-	if r.File != "" {
-		fields = append(fields, dsc.ViewField{Key: "file", Value: r.File})
-	} else {
-		fields = append(fields, dsc.ViewField{Key: "type", Value: r.Type, Tone: tone})
-	}
-	fields = append(fields, dsc.ViewField{Key: "time", Value: r.Time})
-	return dsc.CardView("Notify", &dsc.ViewBadge{Text: r.Type, Tone: tone}, fields), nil
-}
-
-// main 以公共 SDK（dsc-sdk）启动插件：注册 notify 工具，经原生插件 RPC 供
-// 宿主/模型调用，替代原型的独立 HTTP 服务（通知能力保留，供将来按需使用）。
-// 同时注册 Hook.OnEvent 订阅宿主 agent 回合事件：回合完成（成功/失败）时程序性
-// 播放相应音效，不依赖模型调用。
+// main 以公共 SDK（dsc-sdk）启动通用（dsc 类型）插件：不注册任何模型可调用的
+// 工具，仅经 Hook.OnEvent 订阅宿主事件实现程序性完成音效——agent 回合完成
+// （成功 idle / 失败 error）时播放相应音效，完全由宿主事件驱动、不依赖模型调用。
 func main() {
-	sdk := dsc.New(dsc.Config{Name: "notify", Version: "1.0.0", Type: dsc.TypeTool})
-	sdk.Tool(dsc.Tool{
-		Name: "notify",
-		Description: "播放通知音效：支持内置音效（success/error/warning/info）与自定义音频文件（.mp3/.wav）。" +
-			"参数 type 指定内置音效类型，file 指定自定义音频文件路径（优先于 type）。",
-		Schema:  notifyToolSchema,
-		Handler: notifyTool,
-		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
-			return notifyView(result)
-		},
-	})
-	// 程序性完成提醒：宿主在 agent 回合完成时广播 agent/status(idle) 或
-	// agent/error，此处订阅并播放相应音效（success/error；
-	// 不涉及模型的 notify 工具调用）。作为通用能力，任何插件都可独立订阅。
+	sdk := dsc.New(dsc.Config{Name: "notify", Version: "1.0.0", Type: dsc.TypeDsc})
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) {
 			switch eventType {

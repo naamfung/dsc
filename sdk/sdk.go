@@ -30,6 +30,10 @@ const (
 	// TypePolicy 策略插件：注册宿主可桥接的策略服务（如文件系统观测
 	// FsObservationPolicyService）；宿主经主连接直接取对应 proto 客户端。
 	TypePolicy Type = "policy"
+	// TypeDsc 通用插件：不注册任何 tool/llm/agent/policy 服务，仅提供元数据与
+	// 可选 Hook（OnEvent 订阅宿主事件等）。作为「纯后台/程序性」插件的通用类型，
+	// 宿主加载它时同样登记 hook client，使其能接收宿主事件广播。目录前缀 dsc-。
+	TypeDsc Type = "dsc"
 )
 
 // Config 插件声明。Name 与宿主发现/注入的插件名一致（目录 plugins/<type>-<name>/）。
@@ -219,8 +223,10 @@ func (s *SDK) validate() error {
 		if s.policy == nil {
 			return fmt.Errorf("policy 类型插件必须注册策略服务（调用 sdk.Policy(...)）")
 		}
+	case TypeDsc:
+		// 通用类型：无强制的 tool/llm/agent/policy 服务；仅元数据 + 可选 Hook。
 	default:
-		return fmt.Errorf("不支持的插件类型 %q（tool | llm | agent | policy）", s.cfg.Type)
+		return fmt.Errorf("不支持的插件类型 %q（tool | llm | agent | policy | dsc）", s.cfg.Type)
 	}
 	return nil
 }
@@ -238,6 +244,8 @@ func (s *SDK) plugins() map[string]plugin.Plugin {
 		return map[string]plugin.Plugin{"agent": &agentGRPCPlugin{sdk: s}}
 	case TypePolicy:
 		return map[string]plugin.Plugin{"policy": &policyGRPCPlugin{sdk: s}}
+	case TypeDsc:
+		return map[string]plugin.Plugin{"dsc": &dscGRPCPlugin{sdk: s}}
 	default:
 		return map[string]plugin.Plugin{"tool": &toolGRPCPlugin{sdk: s}}
 	}

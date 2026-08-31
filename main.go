@@ -601,7 +601,7 @@ func main() {
 	}
 	if presetCfg != nil {
 		for _, e := range presetCfg.Plugins {
-			if e.Enabled && (e.Type == "tool" || e.Type == "policy") {
+			if e.Enabled && (e.Type == "tool" || e.Type == "policy" || e.Type == "dsc") {
 				merged.Plugins = append(merged.Plugins, e)
 			}
 		}
@@ -708,7 +708,7 @@ func main() {
 		// （success/error，约 0.29s）。-input 单发回合结束后宿主随即回收插件子进程
 		// （Windows 上为强杀，不跑 defer），可能导致音效被截断。已加载通知插件且非
 		// headless（CI 单发无需报声）时，短暂宽限让音效播完再关闭；headless 保持快速退出。
-		if !headless && mgr.HasPlugin("tool-notify") {
+		if !headless && mgr.HasPlugin("dsc-notify") {
 			const completionSoundGrace = 800 * time.Millisecond
 			logger.Info("draining completion sound", "grace", completionSoundGrace.String())
 			time.Sleep(completionSoundGrace)

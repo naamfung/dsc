@@ -2,12 +2,9 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
-	"encoding/json"
 	"io"
 	"math"
-	"strings"
 	"testing"
 	"time"
 )
@@ -220,39 +217,6 @@ func TestConstants(t *testing.T) {
 	}
 	if maxInt16 != 32767 {
 		t.Error("maxInt16 应为 32767")
-	}
-}
-
-// ---------- 测试 notify 工具处理器（RPC 入口） ----------
-func TestNotifyTool(t *testing.T) {
-	initSoundCache()
-
-	// 非法参数（type 应为字符串）
-	if _, err := notifyTool(context.Background(), json.RawMessage(`{"type":123}`)); err == nil {
-		t.Error("非法参数应报错")
-	}
-	// 未知音效类型
-	if _, err := notifyTool(context.Background(), json.RawMessage(`{"type":"boom"}`)); err == nil {
-		t.Error("未知音效类型应报错")
-	}
-	// 自定义文件不存在
-	if _, err := notifyTool(context.Background(), json.RawMessage(`{"file":"/nonexistent/notify.mp3"}`)); err == nil {
-		t.Error("不存在的文件应报错")
-	}
-	// 默认 success
-	res, err := notifyTool(context.Background(), json.RawMessage(`{}`))
-	if err != nil || !strings.Contains(res, "success") {
-		t.Errorf("默认音效应为 success: %q, err %v", res, err)
-	}
-	// 显式内置音效
-	res, err = notifyTool(context.Background(), json.RawMessage(`{"type":"warning"}`))
-	if err != nil || !strings.Contains(res, "warning") {
-		t.Errorf("显式音效类型应生效: %q, err %v", res, err)
-	}
-
-	// 清空入队请求，避免阻塞后续用例
-	for len(playQueue) > 0 {
-		<-playQueue
 	}
 }
 

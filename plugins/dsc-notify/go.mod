@@ -1,4 +1,4 @@
-module dsc-plugin-tool-notify
+module dsc-plugin-dsc-notify
 
 go 1.26.0
 

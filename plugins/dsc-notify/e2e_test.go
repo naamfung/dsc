@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"dsc/core"
@@ -15,31 +14,16 @@ import (
 	plugin "github.com/hashicorp/go-plugin"
 )
 
-// assertView 校验工具结果经完整 gRPC 链路透传的 ViewJson：非空且可解析为合法视图。
-func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
-	t.Helper()
-	if resp.ViewJson == "" {
-		t.Fatalf("ViewJson 为空（ViewFn 未生效或 gRPC 透传缺失）: %+v", resp)
-	}
-	var v core.ToolView
-	if err := json.Unmarshal([]byte(resp.ViewJson), &v); err != nil {
-		t.Fatalf("ViewJson 非法: %v", err)
-	}
-	if v.Kind == "" {
-		t.Fatalf("ViewJson 缺 kind: %q", resp.ViewJson)
-	}
-	return v
-}
-
-// TestE2EWithHostClient 端到端验证 SDK 重写后的 tool-notify 能被宿主侧正常拉起并调用：
-// 以 go-core 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，经 gRPC 验证元数据、
-// 工具目录与 notify 工具执行。以 DSC_NOTIFY_NO_AUDIO=1 跳过音频初始化，保证在无音频
-// 设备的环境（如 CI）也能确定性运行；工具执行只入队即返回，不依赖音频设备播放。
+// TestE2EWithHostClient 端到端验证通用（dsc）类型插件 notify 的宿主侧契约：
+// 以 go-core 客户端（宿主 Manager 同款协议路径）spawn 本插件 exe，验证——元数据
+// 类型为 dsc、提供 PluginHookService 可经 OnEvent 订阅宿主事件（agent/status idle），
+// 且不再暴露模型可调用的工具面（ListTools 返回空 or 未实现）。DSC_NOTIFY_NO_AUDIO=1
+// 跳过音频初始化，保证在无音频设备的环境（如 CI）也能确定性运行。
 func TestE2EWithHostClient(t *testing.T) {
 	dir := t.TempDir()
 
 	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
-	exe := filepath.Join(dir, "tool-notify.exe")
+	exe := filepath.Join(dir, "dsc-notify.exe")
 	if out, err := exec.Command("go", "build", "-o", exe, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
@@ -66,51 +50,28 @@ func TestE2EWithHostClient(t *testing.T) {
 	conn := grpcClient.Conn
 	ctx := context.Background()
 
-	// 3. 元数据（SDK 自动提供）
-	meta := metadata.NewPluginMetadataClient(conn)
-	info, err := meta.GetInfo(ctx, &metadata.Empty{})
-	if err != nil || info.Type != "tool" || info.Name != "notify" || info.Version == "" || info.ApiVersion != "1.0" {
-		t.Fatalf("GetInfo = %+v, err %v", info, err)
+	// 3. 元数据：类型应为 dsc（通用类型），而非 tool
+	info, err := metadata.NewPluginMetadataClient(conn).GetInfo(ctx, &metadata.Empty{})
+	if err != nil || info.Type != "dsc" || info.Name != "notify" || info.Version == "" || info.ApiVersion != "1.0" {
+		t.Fatalf("GetInfo = %+v, err %v（期望 dsc 通用类型）", info, err)
 	}
 
-	// 4. 工具目录（SDK 自动聚合唯一 notify 工具）
+	// 4. Hook 服务可用：经 OnEvent 订阅宿主事件（agent/status idle）无错误。
+	// 这是 notify 程序性完成音效的核心链路：宿主广播 → 插件 Hook.OnEvent。
+	hc := proto.NewPluginHookServiceClient(conn)
+	idle := core.AgentStatusEvent{Agent: "agent-react-loop", Status: core.AgentStatusIdle}
+	data, _ := json.Marshal(idle)
+	if _, err := hc.OnEvent(ctx, &proto.OnEventRequest{Name: string(core.EventAgentStatus), DataJson: string(data)}); err != nil {
+		t.Fatalf("OnEvent(agent/status idle) 失败: %v", err)
+	}
+	if _, err := hc.OnEvent(ctx, &proto.OnEventRequest{Name: string(core.EventAgentError), DataJson: `{"agent":"a","error":"boom"}`}); err != nil {
+		t.Fatalf("OnEvent(agent/error) 失败: %v", err)
+	}
+
+	// 5. 无模型可调用的工具面：通用插件不注册 ToolService，ListTools 应报未实现
+	//（而非返回 notify 工具），证明已收敛为纯后台程序性插件。
 	tc := proto.NewToolServiceClient(conn)
-	list, err := tc.ListTools(ctx, &proto.ListToolsRequest{})
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	if len(list.Tools) != 1 || list.Tools[0].Name != "notify" {
-		t.Fatalf("expected 1 notify tool, got %+v", list.Tools)
-	}
-	if list.Tools[0].Description == "" || list.Tools[0].ParametersJson == "" {
-		t.Fatalf("notify 工具缺 description/schema: %+v", list.Tools[0])
-	}
-
-	// 5. 工具执行：默认 success 音效（入队即返回，不依赖音频设备）
-	execTool := func(args string) *proto.ExecuteToolResponse {
-		t.Helper()
-		resp, err := tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{ToolName: "notify", ArgumentsJson: args})
-		if err != nil {
-			t.Fatalf("ExecuteTool(notify, %s): %v", args, err)
-		}
-		return resp
-	}
-	if resp := execTool(`{}`); resp.Error != "" || !strings.Contains(resp.Content, "success") {
-		t.Fatalf("默认 success 执行 = %+v", resp)
-	} else if v := assertView(t, resp); v.Kind != "card" || v.Title != "Notify" || v.Badge == nil || v.Badge.Tone != "green" {
-		t.Fatalf("success view = %+v", v)
-	}
-	if resp := execTool(`{"type":"warning"}`); resp.Error != "" || !strings.Contains(resp.Content, "warning") {
-		t.Fatalf("warning 执行 = %+v", resp)
-	} else if v := assertView(t, resp); v.Badge.Tone != "yellow" {
-		t.Fatalf("warning view = %+v", v)
-	}
-	// 未知音效类型应报错（错误经响应透传，而非 RPC 错误）
-	if resp := execTool(`{"type":"boom"}`); resp.Error == "" {
-		t.Fatalf("未知音效类型应报错: %+v", resp)
-	}
-	// 自定义文件不存在应报错
-	if resp := execTool(`{"file":"/nonexistent/notify.mp3"}`); resp.Error == "" {
-		t.Fatalf("不存在的文件应报错: %+v", resp)
+	if _, err := tc.ListTools(ctx, &proto.ListToolsRequest{}); err == nil {
+		t.Fatalf("dsc 通用插件不应暴露 ListTools（工具面已收敛）")
 	}
 }

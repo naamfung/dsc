@@ -117,12 +117,12 @@ go build -o tool-memory-service.exe .
 cd ..\..
 call :pack "plugins\tool-memory-service\tool-memory-service.exe"
 
-:: 构建 tool-notify 插件（独立 module，基于 dsc-sdk）
-echo Building tool-notify plugin...
-cd plugins\tool-notify
-go build -o tool-notify.exe .
+:: 构建 dsc-notify 插件（独立 module，基于 dsc-sdk）
+echo Building dsc-notify plugin...
+cd plugins\dsc-notify
+go build -o dsc-notify.exe .
 cd ..\..
-call :pack "plugins\tool-notify\tool-notify.exe"
+call :pack "plugins\dsc-notify\dsc-notify.exe"
 
 :: 构建 tool-lua-host 插件
 echo Building tool-lua-host plugin...

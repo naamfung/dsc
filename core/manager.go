@@ -1542,6 +1542,14 @@ func (m *Manager) HasPlugin(name string) bool {
 	return false
 }
 
+// DefaultSessionID 返回默认（项目）会话 id：按统一工作区根路径转换，与 agent
+// 侧 projectKey（SessionKeyForProject(DSC_WORKSPACE_ROOT)）保持一致。TUI 以此初始化
+// 当前会话标识，使「显示/切换/导出」的会话 id 与真实存档文件名吻合，避免出现
+// 一个映射不到任何存档的假 "default"。
+func (m *Manager) DefaultSessionID() string {
+	return session.SessionKeyForProject(WorkspaceRoot)
+}
+
 // ListPlugins 返回所有已加載插件的列表，并携带运行时状态。
 // 除当前已注册/已加载的插件外，也会带上已卸载(disposed/failed)的终态插件，便于观测最近失败或下线的插件。
 func (m *Manager) ListPlugins() []PluginInfoSummary {
@@ -1902,7 +1910,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 			} else {
 				m.logger.Warn("multiple agent plugins found, using first one", "first", agentEntry.Name, "ignored", entry.Name)
 			}
-		} else if entry.Type == "llm" || entry.Type == "tool" || entry.Type == "policy" {
+		} else if entry.Type == "llm" || entry.Type == "tool" || entry.Type == "policy" || entry.Type == "dsc" {
 			providerEntries = append(providerEntries, entry)
 		}
 	}
@@ -2015,7 +2023,7 @@ func (m *Manager) loadProviderDeclarativeLocked(entry PluginEntry) error {
 		if _, err := m.serveLLMProviderLocked(entry.Name); err != nil {
 			return err
 		}
-	case "tool", "policy":
+	case "tool", "policy", "dsc":
 		if err := m.loadPluginWithBroker(entry, m.broker); err != nil {
 			return err
 		}
@@ -2404,6 +2412,20 @@ func (m *Manager) registerPolicyLocked(name string, info *metadata.PluginInfo, c
 	m.logger.Info("Policy core loaded and bridged to tool pipeline", "name", name)
 }
 
+// registerDscCoreLocked 登记通用（dsc）类型插件：不注册任何 tool/llm/agent/policy
+// 服务，仅登记 hook client 以接收宿主事件广播（OnEvent）。供纯后台插件（如通知、
+// 探针）订阅宿主事件；loadPluginWithBroker 的 case "dsc" 与宿主链测试共用（单一真源）。
+func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, client *plugin.Client, grpcClient *plugin.GRPCClient) {
+	m.toolHookClients[name] = proto.NewPluginHookServiceClient(grpcClient.Conn)
+	m.putToolHookOrderLocked(name)
+	m.clients[name] = client
+	m.typeMap[name] = "dsc"
+	m.coreMetadata[name] = info
+	m.transitionLocked(name, StateActive, "")
+	go m.monitorExit(name, client)
+	m.logger.Info("dsc core registered", "name", name)
+}
+
 // loadPluginWithBroker 用於 LLM/Tool 插件加載，通過 broker 註冊服務
 func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBroker) error {
 	// 跨平台處理二進制路徑
@@ -2509,6 +2531,11 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 	case "policy":
 		m.registerPolicyLocked(entry.Name, info, client, grpcClient)
 
+	case "dsc":
+		// 通用类型：无 tool/llm/agent/policy 服务，仅登记 hook client 以接收宿主
+		// 事件广播（OnEvent），供「纯后台/程序性」插件（如通知、探针）订阅。
+		m.registerDscCoreLocked(entry.Name, info, client, grpcClient)
+
 	default:
 		client.Kill()
 		m.transitionLocked(entry.Name, StateFailed, fmt.Sprintf("unsupported core type: %s", info.Type))
@@ -2593,7 +2620,7 @@ func (m *Manager) LoadToolsAndPoliciesFromConfig(cfg *Config) error {
 		if !entry.Enabled {
 			continue
 		}
-		if entry.Type == "tool" || entry.Type == "policy" {
+		if entry.Type == "tool" || entry.Type == "policy" || entry.Type == "dsc" {
 			if err := m.loadPluginWithBroker(entry, m.broker); err != nil {
 				return fmt.Errorf("failed to load core %s: %w", entry.Name, err)
 			}

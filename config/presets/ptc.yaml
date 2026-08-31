@@ -22,8 +22,8 @@ plugins:
     type: tool
     enabled: true
   # 通知音效（回合完成程序性响铃）
-  - name: tool-notify
-    type: tool
+  - name: dsc-notify
+    type: dsc
     enabled: true
   - name: tool-lua-host
     type: tool

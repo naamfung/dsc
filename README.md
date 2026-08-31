@@ -12,10 +12,10 @@
 - **工具調用超時（活躍續命）**：shell 与命令型工具采用「十分鐘起步、活躍續命」超时（对齐 rex shell）——启动 10 分钟预算（`DSC_SHELL_TIMEOUT` 可覆盖），只要 stdout/stderr 持续有新输出就不间断续命，仅对「长时间完全无新输出」才判定超时，避免一刀切固定时长方误杀仍在产出嘅长编译/测试。
 - **凭据隔离**：插件子进程 env 白名单化——仅 LLM 插件放行凭据类键（`*_API_KEY`/`*_TOKEN`/`*_SECRET` 等），其余 tool/policy/agent 插件一律滤除（`DSC_*` 宿主配置保留），防止 API key 经 shell 等工具进程被模型读进会话历史。
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
-- **TUI 工具調用顯示**：所有工具名在 TUI 統一以 PascalCase 呈現（`read_skill` → `ReadSkill`、`update_goal` → `UpdateGoal`、`shell` → `Shell`）；針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `StrReplaceEditor(View, /root/file/path)`、`StrReplaceEditor(Create, /root/file/path)` 等格式。工具结果的展示采用**结构化视图声明**（对齐 DSH 显示契约）：实现工具的插件可选地在结果里声明**结构化视图 spec**（`ExecuteToolResponse.view_json`，见 SDK 的 `dsc.CardView` / `dsc.TableView` / `dsc.PlainView`），TUI 以**单一渲染器统一绘制**三种版式——**card**（标题 + 语义色徽标 + 对齐键值字段）、**table**（对齐列头 + 对齐行，超长单元格截断）、**plain**（标题/徽标 + 正文块），保证各工具结果风格一致。已内置插件的各工具均已按此实现专属视图（goal/todo/ask 卡片与表格、memory_search/ssh_list/web_search 表格、fetch/read_skill/lisp_eval/ssh_exec/shell 纯文本、notify/ssh/skill/browser 卡片等），宿主侧 `run_code` 亦有专属视图（RunCode plain 块，徽标为 stop_reason，正文为返回值/错误）；宿主聚合 Tool 服务会把插件 `ViewJson` 与宿主工具视图一并透传到 `ExecuteToolResponse.view_json`。未声明视图的工具回退到通用 JSON 键值卡片（同层值列对齐），再退回到原文（`str_replace_editor` 的 diff 着色由通用兜底保留）。browser-use 插件支持 `DSC_BROWSER_CDP_URL` 指向既有 CDP 端点（跳过本地 chromium 启动，供 mock chromium 集成测试等场景）。
+- **TUI 工具調用顯示**：所有工具名在 TUI 統一以 PascalCase 呈現（`read_skill` → `ReadSkill`、`update_goal` → `UpdateGoal`、`shell` → `Shell`）；針對 `str_replace_editor`（或名稱包含 `editor` 的編輯器工具），會根據具體的 `command`（如 `view`, `create`, `str_replace`, `insert`）和 `path` 參數，顯示為 `StrReplaceEditor(View, /root/file/path)`、`StrReplaceEditor(Create, /root/file/path)` 等格式。工具结果的展示采用**结构化视图声明**（对齐 DSH 显示契约）：实现工具的插件可选地在结果里声明**结构化视图 spec**（`ExecuteToolResponse.view_json`，见 SDK 的 `dsc.CardView` / `dsc.TableView` / `dsc.PlainView`），TUI 以**单一渲染器统一绘制**三种版式——**card**（标题 + 语义色徽标 + 对齐键值字段）、**table**（对齐列头 + 对齐行，超长单元格截断）、**plain**（标题/徽标 + 正文块），保证各工具结果风格一致。已内置插件的各工具均已按此实现专属视图（goal/todo/ask 卡片与表格、memory_search/ssh_list/web_search 表格、fetch/read_skill/lisp_eval/ssh_exec/shell 纯文本、ssh/skill/browser 卡片等），宿主侧 `run_code` 亦有专属视图（RunCode plain 块，徽标为 stop_reason，正文为返回值/错误）；宿主聚合 Tool 服务会把插件 `ViewJson` 与宿主工具视图一并透传到 `ExecuteToolResponse.view_json`。未声明视图的工具回退到通用 JSON 键值卡片（同层值列对齐），再退回到原文（`str_replace_editor` 的 diff 着色由通用兜底保留）。browser-use 插件支持 `DSC_BROWSER_CDP_URL` 指向既有 CDP 端点（跳过本地 chromium 启动，供 mock chromium 集成测试等场景）。
 - **多 Agent 工作流（workflow）**：宿主内置 `workflow` 模型工具（对齐 DSH tool-workflow）——模型编写的 Lua 编排脚本，由 go-lua 的**协程排程器**执行，可扇出 subagent（`agent`/`parallel`/`pipeline`/`phase`/`log` 钩子）；子代理默认无迭代上限，何时完成由模型自行决定；`return` 的 JSON 即结果；支持 `background: true` 后台运行。TUI `/jobs list | output <id> | kill <id>` 用户命令管理后台任务，模型亦可用 `job_output`/`job_list`/`job_kill` 工具。
 - **程序化工具呈现（PTC）**：宿主内置 `run_code` 工具（对齐 DSH 的 PTC 概念）——模型写一段**严格 Lua** 程序一把过组合多步工具调用，而不再逐个 call：程序里每个可用工具以同名 Lua 函数呈现（`mytool{...}`），顶层 `return` 即结果；语言是带类型注解、可空 `T?`、联集、流式收窄的受检方言（基于 go-lua）。`-mode ptc`（或 `DSC_PTC=1`）开启**呈现模式**：把直接工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调（对齐 DSH presentation；native/其余模式下 `run_code` 对模型隐藏、也不可执行）；system prompt 引入 PTC 引导，`run_code` 描述携带「程序内可调工具」清单与严格 Lua 方言规范，助模型一把过组合多步。
-- **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
+- **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；TUI 的当前会话标识与切换也统一对齐该项目 key（宿主 `DefaultSessionID()` 与 agent 的 `projectKey` 同源），`/session default` 解析到项目 key、`/export` 导出真实存档，且**标题栏不再显示会话 id**（经 `/sessions` 列表与 `/export` 管理，避免「显示名 ≠ 存档名」的脱节）；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
 - **事件體系（對齊 DSH harness 事件）**：宿主 EventBus 採與 DSH cordis events 一致的五種分發模式（`emit` 廣播通知 / `waterfall` 洋葱攔截 / `serial` 順序 / `bail` 短路 / `parallel` 並發），並經互通機制把宿主事件廣播給插件（`Hook.OnEvent`），令插件可獨立訂閱系統事件而不改宿主。已對齊的關鍵事件：工具流水線 `tools/pre-execute` / `tools/execute` / `tools/post-execute`（waterfall 攔截，veto 即阻止；execute 供插件包圍執行與超時策略）與 `tools/result`（emit 結果廣播）；agent 回合生命週期 `agent/status`（running/idle）與 `agent/error`（emit，成功/失敗區分）。因 DSC 的 agent 為獨立 gRPC 插件進程（不同於 DSH 宿主內循環），僅對齊機制與有真實消費者的事件，不機械照搬無消費者或需跨進程空轉的事件。這些領域事件與運行時日誌可經管理 API 的 SSE 端點實時觀測：`/plugins/domain-events`（推送全部 EventBus 領域事件，含字段保真載荷）與 `/plugins/logs`（推送宿主日誌與插件子進程經轉發上來的日志；宿主與插件 logger 統一接入扇出 sink，即使默認靜默模式也按需可察）。`-input` 非 headless 且已加載通知插件（如 notify）時，回合結束後會短暫寬限（約 0.8s）再關閉插件，確保異步的回合完成音效（約 0.29s）能完整播完，避免被插件進程回收截斷。
 
@@ -70,17 +70,19 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `tool-skill`
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify）
 - `tool-memory-service`（记忆库工具：原生 RPC 工具 + AfterTool 自动记忆钩子，落点宿主可执行目录 `memory/`，跨会话共享）
-- `tool-notify`（通知音效插件：`notify` 工具播放内置音效 success/error/warning/info 或自定义 `.mp3/.wav`；同时**程序性驱动**——经 Hook.OnEvent 订阅宿主通用 agent 回合事件，成功（`agent/status` idle）播 success、失败（`agent/error`）播 error，无需模型调用）
 - `tool-harness-webui`（独立 HTTP 服务，代理宿主 admin API 的前端）
 
 ### Policy 插件
 - `policy-fs-observation`
 
+### DSC 通用插件
+- `dsc-notify`（通知音效插件：**通用 dsc 类型**，纯后台程序性驱动、不暴露模型工具——经 Hook.OnEvent 订阅宿主通用 agent 回合事件，成功（`agent/status` idle）播 success、失败（`agent/error`）播 error，无需模型调用；内置音效 success/error/warning/info 与自定义 `.mp3/.wav`）
+
 ## 目錄結構
 
 - `core/` — 宿主核心（插件管理、工具流水線、sandbox、subagent、workflow 工具等）
 - `plugin/` — 定制版 go-plugin 庫（module path 仍 `github.com/hashicorp/go-plugin`，含宿主掛載聚合服務必需的 `GRPCClient.Broker()` 擴展）
-- `plugins/` — 各插件實現（`llm-*` / `tool-*` / `agent-*` / `policy-*`）
+- `plugins/` — 各插件實現（`llm-*` / `tool-*` / `agent-*` / `policy-*` / `dsc-*`）
 - `sdk/` — `dsc-sdk`：聲明式插件構建器（獨立 module，插件作者只需導入 SDK）
 - `workflow/` — 多 Agent Lua 编排引擎（go-lua 协程排程器执行模型编写的脚本）
 - `coderuntime/` — `run_code` 的实现：go-lua 隔离执行程序 + 按工具目录生成 Lua SDK

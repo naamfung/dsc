@@ -37,10 +37,10 @@ plugins:
     binary_path: ./plugins/tool-memory-service/tool-memory-service.exe
     enabled: true
 
-  # 通知音效：notify 工具（success/error/warning/info 或自定义音效）
-  - name: tool-notify
-    type: tool
-    binary_path: ./plugins/tool-notify/tool-notify.exe
+  # 通知音效：通用(dsc) 类型插件，经 Hook.OnEvent 程序性播放 success/error 完成音效
+  - name: dsc-notify
+    type: dsc
+    binary_path: ./plugins/dsc-notify/dsc-notify.exe
     enabled: true
 
   # LUA HOST：空壳工具插件，加载 LUA 脚本（运行已创建的工具；新脚本仅在创造模式生效）
@@ -67,4 +67,4 @@ plugins:
     enabled: true
     depends_on:
       llm: llm-anthropic
-      tools: [tool-filesystem, tool-notify, tool-lua-host, tool-ssh]
+      tools: [tool-filesystem, tool-lua-host, tool-ssh]
