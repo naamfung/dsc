@@ -211,6 +211,9 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_output"})
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_list"})
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_kill"})
+	for _, t := range m.goPluginTools() {
+		_ = m.toolRegistry.Register(t) // 宿主内置 Go 插件管理工具（模型可调用）
+	}
 	// 后台任务完成 → 宿主事件总线（通用送达：TUI 唤醒、web/novelforge 等插件订阅）
 	m.jobs.OnJobDone(func(s jobs.JobSnapshot) {
 		m.events.Emit(JobDoneEvent, EventContext{Data: s})

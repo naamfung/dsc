@@ -94,7 +94,7 @@ func (m *Manager) injectionEntryLocked(entry PluginEntry) error {
 		} else {
 			m.reactivateAgentLocked(entry.Name) // 依赖已满足则直接注入并激活
 		}
-	case "llm", "tool", "policy":
+	case "llm", "tool", "policy", "dsc":
 		if m.broker == nil {
 			return fmt.Errorf("broker not available, cannot inject core type %s", entry.Type)
 		}

@@ -19,6 +19,8 @@
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
 - **事件體系（對齊 DSH harness 事件）**：宿主 EventBus 採與 DSH cordis events 一致的五種分發模式（`emit` 廣播通知 / `waterfall` 洋葱攔截 / `serial` 順序 / `bail` 短路 / `parallel` 並發），並經互通機制把宿主事件廣播給插件（`Hook.OnEvent`），**不限定插件類型**——任意註冊了 Hook 的插件（tool/dsc/llm/agent/policy）都能訂閱，對齊 DSH cordis 的「事件廣播類型無關」；令插件可獨立訂閱系統事件而不改宿主。已對齊的關鍵事件：工具流水線 `tools/pre-execute` / `tools/execute` / `tools/post-execute`（waterfall 攔截，veto 即阻止；execute 供插件包圍執行與超時策略）與 `tools/result`（emit 結果廣播）；agent 回合生命週期 `agent/status`（running/idle）與 `agent/error`（emit，成功/失敗區分）。因 DSC 的 agent 為獨立 gRPC 插件進程（不同於 DSH 宿主內循環），僅對齊機制與有真實消費者的事件，不機械照搬無消費者或需跨進程空轉的事件。這些領域事件與運行時日誌可經管理 API 的 SSE 端點實時觀測：`/plugins/domain-events`（推送全部 EventBus 領域事件，含字段保真載荷）與 `/plugins/logs`（推送宿主日誌與插件子進程經轉發上來的日志；宿主與插件 logger 統一接入扇出 sink，即使默認靜默模式也按需可察）。`-input` 非 headless 且已加載通知插件（如 notify）時，回合結束後會短暫寬限（約 0.8s）再關閉插件，確保異步的回合完成音效（約 0.29s）能完整播完，避免被插件進程回收截斷。
 
+- **插件安裝/管理（模型可自助）**：宿主內置 `install_go_plugin` / `uninstall_go_plugin` / `list_go_plugins` 三個模型工具（對齊 SKILL 安裝，經聚合 Tool 服務暴露給模型）。嚴格命約定（插件目錄 `plugins/<type>-<name>/`、執行檔 `<type>-<name><ext>`、`type`∈tool/llm/agent/policy/dsc、`name` 僅 `[A-Za-z0-9_-]`），寫 config 前先備份（`config.yaml.<ts>.bak`），並「干跑=live 加載」驗證類型/元數據一致才落盤、失敗回滾（刪已拷目錄、config 未變），防止模型寫壞配置導致起不來。新裝插件即時熱加載、無需重啟；模型據「能否加載 ACTIVE」判斷安裝是否正確，可再用 `uninstall_go_plugin` 清理。
+
 ## 與 DSH（DeepSeek Harness）的對比
 
 DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層高度同構，但語言棧與運行形態不同：DSH 為 TypeScript / Node.js（cordis 插件框架），DSC 為 Go / go-plugin + gRPC。
