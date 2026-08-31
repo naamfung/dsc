@@ -209,9 +209,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		for _, arg := range args {
-			if name, sub, ok := cutElemSubscript(arg); vars && ok {
-				r.unsetElem(name, sub)
-			} else if vars && r.lookupVar(arg).IsSet() {
+			if vars && r.lookupVar(arg).IsSet() {
 				r.delVar(arg)
 			} else if _, ok := r.Funcs[arg]; ok && funcs {
 				delete(r.Funcs, arg)
@@ -364,11 +362,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-a", "-f", "--help":
-				return failf(3, "type: NOT IMPLEMENTED\n")
+				return failf(3, "command: NOT IMPLEMENTED\n")
 			case "-p", "-P", "-t":
 				mode = flag
 			default:
-				return failf(2, "type: invalid option %q\n", flag)
+				return failf(2, "command: invalid option %q\n", flag)
 			}
 		}
 		args := fp.args()
@@ -718,25 +716,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				Kind: expand.Indexed,
 				List: values,
 			})
-		} else if len(args) == 0 {
-			// Bare "read" assigns the whole line to REPLY without any
-			// trimming, only discarding backslash escapes unless raw.
-			val := string(line)
-			if !raw {
-				var sb strings.Builder
-				esc := false
-				for i := range len(val) {
-					if val[i] == '\\' && !esc {
-						esc = true
-						continue
-					}
-					sb.WriteByte(val[i])
-					esc = false
-				}
-				val = sb.String()
-			}
-			r.setVarString(shellReplyVar, val)
 		} else {
+			if len(args) == 0 {
+				args = append(args, shellReplyVar)
+			}
+
 			values := expand.ReadFields(r.ecfg, string(line), len(args), raw)
 			for i, name := range args {
 				val := ""
@@ -1073,8 +1057,8 @@ func (r *Runner) readLine(ctx context.Context, raw bool) ([]byte, error) {
 				line = append(line, b)
 				esc = !esc
 			case !raw && b == '\n' && esc:
-				// line continuation; drop the trailing backslash
-				line = line[:len(line)-1]
+				// line continuation
+				line = line[len(line)-1:]
 				esc = false
 			case b == '\n':
 				return line, nil
@@ -1100,7 +1084,7 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 		r.errf("%s: no such file or directory: %q\n", cmd, path)
 		return 1
 	}
-	if r.access(ctx, apath, AccessExec) != nil {
+	if r.access(ctx, apath, access_X_OK) != nil {
 		r.errf("%s: permission denied: %q\n", cmd, path)
 		return 1
 	}
@@ -1202,39 +1186,30 @@ func (g *getopts) next(optstr string, args []string) (opt rune, optarg string, d
 
 	opts := arg[1:]
 	opt = opts[g.runeidx]
-
-	i := strings.IndexRune(optstr, opt)
-	if i >= 0 && i+1 < len(optstr) && optstr[i+1] == ':' {
-		// the option requires an argument
-		if g.runeidx+1 < len(opts) {
-			// attached to the option in the same word, like -bval
-			optarg = string(opts[g.runeidx+1:])
-		} else if g.argidx+1 < len(args) {
-			// the word that follows
-			optarg = args[g.argidx+1]
-			g.argidx++
-		} else {
-			// missing argument
-			g.argidx++
-			g.runeidx = 0
-			return ':', string(opt), false
-		}
-		g.argidx++
-		g.runeidx = 0
-		return opt, optarg, false
-	}
-
 	if g.runeidx+1 < len(opts) {
 		g.runeidx++
 	} else {
 		g.argidx++
 		g.runeidx = 0
 	}
+
+	i := strings.IndexRune(optstr, opt)
 	if i < 0 {
 		// invalid option
 		return '?', string(opt), false
 	}
-	return opt, "", false
+
+	if i+1 < len(optstr) && optstr[i+1] == ':' {
+		if g.argidx >= len(args) {
+			// missing argument
+			return ':', string(opt), false
+		}
+		optarg = args[g.argidx]
+		g.argidx++
+		g.runeidx = 0
+	}
+
+	return opt, optarg, false
 }
 
 // optStatusText returns a shell option's status text display

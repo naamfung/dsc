@@ -56,9 +56,7 @@ func stmtsEnd(stmts []*Stmt, last []Comment) Pos {
 		s := stmts[len(stmts)-1]
 		sEnd := s.End()
 		if len(s.Comments) > 0 {
-			// The comments are sorted by position; a comment which trails
-			// the statement on the same line is last.
-			if cEnd := s.Comments[len(s.Comments)-1].End(); cEnd.After(sEnd) {
+			if cEnd := s.Comments[0].End(); cEnd.After(sEnd) {
 				return cEnd
 			}
 		}
@@ -311,10 +309,7 @@ func (a *Assign) End() Pos {
 		return a.Array.End()
 	}
 	if a.Index != nil {
-		if a.Naked {
-			return posAddCol(a.Index.End(), len("]"))
-		}
-		return posAddCol(a.Index.End(), len("]="))
+		return posAddCol(a.Index.End(), 2)
 	}
 	if a.Naked {
 		return a.Name.End()
@@ -326,7 +321,7 @@ func (a *Assign) End() Pos {
 type Redirect struct {
 	OpPos Pos
 	Op    RedirOperator
-	N     *Lit  // fd>, or {varname}> with [LangBash] or [LangZsh]
+	N     *Lit  // fd>, or {varname}> in Bash
 	Word  *Word // >word
 	Hdoc  *Word // here-document body
 }
@@ -439,12 +434,7 @@ type ForClause struct {
 }
 
 func (f *ForClause) Pos() Pos { return f.ForPos }
-func (f *ForClause) End() Pos {
-	if f.Braces {
-		return posAddCol(f.DonePos, len("}"))
-	}
-	return posAddCol(f.DonePos, len("done"))
-}
+func (f *ForClause) End() Pos { return posAddCol(f.DonePos, 4) }
 
 // Loop holds either [*WordIter] or [*CStyleLoop].
 type Loop interface {
@@ -612,16 +602,6 @@ type CmdSubst struct {
 func (c *CmdSubst) Pos() Pos { return c.Left }
 func (c *CmdSubst) End() Pos { return posAddCol(c.Right, 1) }
 
-// OptState represents a boolean option which may be unset
-// on top of being explicitly set on or off.
-type OptState uint8
-
-const (
-	OptUnset OptState = iota // option not set
-	OptOn                    // option set to true
-	OptOff                   // option set to false
-)
-
 // ParamExp represents a parameter expansion.
 type ParamExp struct {
 	Dollar, Rbrace Pos
@@ -640,13 +620,6 @@ type ParamExp struct {
 	Length bool // ${#a}
 	Width  bool // mksh's ${%a}
 	IsSet  bool // ${+a} with [LangZsh]
-
-	// Zsh expansion prefixes that override shell options for this expansion.
-	// They can stack with one another and with the operators above.
-	// The doubled forms (${==a}, ${~~a}, ${^^a}) force the option off.
-	Split     OptState // ${=a} / ${==a} word splitting with [LangZsh]
-	GlobSubst OptState // ${~a} / ${~~a} treat value as a glob pattern with [LangZsh]
-	RcExpand  OptState // ${^a} / ${^^a} RC_EXPAND_PARAM-style array expansion with [LangZsh]
 
 	// Only one of these is set at a time,
 	// or neither with [LangZsh] when the name is omitted.
@@ -677,7 +650,6 @@ type ParamExp struct {
 func (p *ParamExp) simple() bool {
 	return p.Param != nil && p.Flags == nil &&
 		!p.Excl && !p.Length && !p.Width && !p.IsSet &&
-		p.Split == OptUnset && p.GlobSubst == OptUnset && p.RcExpand == OptUnset &&
 		p.NestedParam == nil && p.Index == nil &&
 		len(p.Modifiers) == 0 && p.Slice == nil &&
 		p.Repl == nil && p.Names == 0 && p.Exp == nil
@@ -689,7 +661,6 @@ func (p *ParamExp) Pos() Pos {
 	}
 	return p.Param.Pos()
 }
-
 func (p *ParamExp) End() Pos {
 	if !p.Short {
 		return posAddCol(p.Rbrace, 1)
@@ -853,12 +824,7 @@ type CaseClause struct {
 }
 
 func (c *CaseClause) Pos() Pos { return c.Case }
-func (c *CaseClause) End() Pos {
-	if c.Braces {
-		return posAddCol(c.Esac, len("}"))
-	}
-	return posAddCol(c.Esac, len("esac"))
-}
+func (c *CaseClause) End() Pos { return posAddCol(c.Esac, 4) }
 
 // CaseItem represents a pattern list (case) within a [CaseClause].
 type CaseItem struct {
@@ -991,7 +957,7 @@ func (a *ArrayElem) End() Pos {
 	if a.Value != nil {
 		return a.Value.End()
 	}
-	return posAddCol(a.Index.End(), len("]="))
+	return posAddCol(a.Index.Pos(), 1)
 }
 
 // TODO(v4): the expand package has to stringify ExtGlob again,

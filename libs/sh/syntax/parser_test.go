@@ -500,10 +500,6 @@ var errorCases = []errorCase{
 		langErr("1:1: reached EOF without matching `${` with `}`", LangMirBSDKorn),
 	),
 	errCase(
-		`${ { foo; }bar; }`,
-		langErr("1:12: statements must be separated by &, ; or a newline", LangBash|LangMirBSDKorn),
-	),
-	errCase(
 		"((foo\x80bar",
 		langErr("1:6: invalid UTF-8 encoding"),
 	),
@@ -1973,7 +1969,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo {var}>foo",
-		langErr("1:6: `{varname}` redirects are a bash/zsh feature; tried parsing as LANG", LangPOSIX|LangMirBSDKorn),
+		langErr("1:6: `{varname}` redirects are a bash feature; tried parsing as LANG", LangPOSIX|LangMirBSDKorn),
 		// shells treat {var} as an argument, but we are a bit stricter
 		// so that users won't think this will work like they expect in POSIX shell.
 		flipConfirmAll,
@@ -1990,7 +1986,6 @@ var errorCases = []errorCase{
 	errCase(
 		"echo ;|",
 		langErr("1:7: `|` can only immediately follow a statement", LangPOSIX|LangBash),
-		langErr("1:6: `;|` can only be used in a case clause", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"for i in 1 2 3; { echo; }",
@@ -2581,69 +2576,6 @@ func TestPosEdgeCases(t *testing.T) {
 	qt.Check(t, qt.Equals(f.Stmts[1].End().String(), "2:9"))
 }
 
-func TestParseHighControlRunes(t *testing.T) {
-	t.Parallel()
-	// U+0080 and U+0081 must parse as regular characters even though the
-	// lexer uses rune sentinels for "reached EOF" and "escaped newline".
-	tests := []struct {
-		in, want string // want is an error string when wantErr
-		wantErr  bool
-	}{
-		{in: "echo a\u0080b", want: "echo a\u0080b\n"},
-		{in: "echo 'a\u0080b'", want: "echo 'a\u0080b'\n"},
-		{in: "echo \"a\u0080b\"", want: "echo \"a\u0080b\"\n"},
-		{in: "echo a\u0081b", want: "echo a\u0081b\n"},
-		{in: "echo 'a\u0081b'", want: "echo 'a\u0081b'\n"},
-		{in: "echo \"a\u0081b\"", want: "echo \"a\u0081b\"\n"},
-	}
-	p := NewParser()
-	printer := NewPrinter()
-	for _, tc := range tests {
-		f, err := p.Parse(strings.NewReader(tc.in), "")
-		if tc.wantErr {
-			qt.Assert(t, qt.ErrorMatches(err, regexp.QuoteMeta(tc.want)), qt.Commentf("input: %q", tc.in))
-			continue
-		}
-		qt.Assert(t, qt.IsNil(err), qt.Commentf("input: %q", tc.in))
-		var sb strings.Builder
-		qt.Assert(t, qt.IsNil(printer.Print(&sb, f)))
-		qt.Check(t, qt.Equals(sb.String(), tc.want), qt.Commentf("input: %q", tc.in))
-	}
-}
-
-func TestNodeEndPos(t *testing.T) {
-	t.Parallel()
-
-	// An array element with an index but no value ends after the "]=".
-	p := NewParser()
-	f, err := p.Parse(strings.NewReader("declare -A x=([index]=)"), "")
-	qt.Assert(t, qt.IsNil(err))
-	elem := f.Stmts[0].Cmd.(*DeclClause).Args[1].Array.Elems[0]
-	qt.Check(t, qt.Equals(elem.End().Offset(), uint(22)))
-
-	// A trailing comment ends the file even when a leading comment exists.
-	p = NewParser(KeepComments(true))
-	f, err = p.Parse(strings.NewReader("# lead\nfoo # trail\n"), "")
-	qt.Assert(t, qt.IsNil(err))
-	qt.Check(t, qt.Equals(f.End().Offset(), uint(18)))
-
-	// A naked indexed assignment ends after the "]"; there is no "=".
-	f, err = p.Parse(strings.NewReader("declare a[1]"), "")
-	qt.Assert(t, qt.IsNil(err))
-	qt.Check(t, qt.Equals(f.Stmts[0].Cmd.(*DeclClause).Args[0].End().Offset(), uint(12)))
-
-	// The mksh brace forms of for and case clauses end after the "}",
-	// not four bytes as if it were "done" or "esac".
-	p = NewParser(Variant(LangMirBSDKorn))
-	f, err = p.Parse(strings.NewReader("for i in a; { b; }"), "")
-	qt.Assert(t, qt.IsNil(err))
-	qt.Check(t, qt.Equals(f.Stmts[0].Cmd.(*ForClause).End().Offset(), uint(18)))
-
-	f, err = p.Parse(strings.NewReader("case x { a) b ;; }"), "")
-	qt.Assert(t, qt.IsNil(err))
-	qt.Check(t, qt.Equals(f.Stmts[0].Cmd.(*CaseClause).End().Offset(), uint(18)))
-}
-
 func TestParseRecoverErrors(t *testing.T) {
 	t.Parallel()
 
@@ -2685,10 +2617,6 @@ func TestParseRecoverErrors(t *testing.T) {
 		},
 		{
 			src:         "$((incomp",
-			wantMissing: 1,
-		},
-		{
-			src:         "$[incomp",
 			wantMissing: 1,
 		},
 		{
@@ -2805,15 +2733,15 @@ func countRecoveredPositions(x reflect.Value) int {
 		}
 		return n
 	case reflect.Struct:
-		if pos, ok := reflect.TypeAssert[Pos](x); ok {
+		if pos, ok := x.Interface().(Pos); ok {
 			if pos.IsRecovered() {
 				return 1
 			}
 			return 0
 		}
 		n := 0
-		for _, field := range x.Fields() {
-			n += countRecoveredPositions(field)
+		for i := range x.NumField() {
+			n += countRecoveredPositions(x.Field(i))
 		}
 		return n
 	}

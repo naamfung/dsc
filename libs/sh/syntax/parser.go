@@ -140,7 +140,7 @@ func (l *LangVariant) Set(s string) error {
 	switch s {
 	case "bash":
 		*l = LangBash
-	case "posix", "sh", "dash":
+	case "posix", "sh":
 		*l = LangPOSIX
 	case "mksh":
 		*l = LangMirBSDKorn
@@ -481,7 +481,7 @@ type Parser struct {
 	src io.Reader
 	bs  []byte // current chunk of read bytes
 	bsp uint   // offset within [Parser.bs] for the rune after [Parser.r]
-	r   rune   // next rune; [runeEOF] when it went past EOF, or we stopped
+	r   rune   // next rune; [utf8.RuneSelf] when it went past EOF, or we stopped
 	w   int    // width of [Parser.r]
 
 	f *File
@@ -527,9 +527,6 @@ type Parser struct {
 	openNodes int
 	// openBquotes is how many levels of backquotes are open at the moment.
 	openBquotes int
-	// openBquoteDbls is how many of those backquote levels began inside
-	// double quotes, where backslashes also escape double quotes.
-	openBquoteDbls int
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
@@ -575,7 +572,6 @@ func (p *Parser) reset() {
 	p.hdocStops = nil
 	p.parsingDoc = false
 	p.openBquotes = 0
-	p.openBquoteDbls = 0
 	p.accComs = nil
 	p.accComs, p.curComs = nil, &p.accComs
 	p.litBatch = nil
@@ -665,9 +661,6 @@ const (
 
 	subCmd
 	subCmdBckquo
-	// subCmdBraces is like subCmd, but for `${ stmts;}` and `${|stmts;}`,
-	// whose bodies end at a word beginning with `}`.
-	subCmdBraces
 	dblQuotes
 	hdocWord
 	hdocBody
@@ -685,8 +678,8 @@ const (
 
 	allKeepSpaces = runeByRune | paramExpRepl | dblQuotes | hdocBody |
 		hdocBodyTabs | paramExpRepl | paramExpExp
-	allRegTokens = noState | unquotedWordCont | subCmd | subCmdBckquo | subCmdBraces |
-		hdocWord | switchCase | arrayElems | testExpr
+	allRegTokens = noState | unquotedWordCont | subCmd | subCmdBckquo | hdocWord |
+		switchCase | arrayElems | testExpr
 	allArithmExpr = arithmExpr | arithmExprLet | arithmExprCmd | paramExpArithm
 	allParamExp   = paramExpArithm | paramExpRepl | paramExpExp
 )
@@ -916,7 +909,7 @@ func (p *Parser) errPass(err error) {
 	if p.err == nil {
 		p.err = err
 		p.bsp = uint(len(p.bs)) + 1
-		p.r = runeEOF
+		p.r = utf8.RuneSelf
 		p.w = 1
 		p.tok = _EOF
 	}
@@ -1218,7 +1211,7 @@ func (p *Parser) wordPart() WordPart {
 				TempFile: p.r != '|',
 				ReplyVar: p.r == '|',
 			}
-			old := p.preNested(subCmdBraces)
+			old := p.preNested(subCmd)
 			p.rune() // don't tokenize '|'
 			p.next()
 			cs.Stmts, cs.Last = p.stmtList("}")
@@ -1245,10 +1238,6 @@ func (p *Parser) wordPart() WordPart {
 		ar.X = p.followArithm(left, ar.Left)
 		if ar.Bracket {
 			if p.tok != rightBrack {
-				if p.recoverError() {
-					ar.Right = recoveredPos
-					return ar
-				}
 				p.arithmMatchingErr(ar.Left, dollBrack, rightBrack)
 			}
 			p.postNested(old)
@@ -1300,7 +1289,7 @@ func (p *Parser) wordPart() WordPart {
 				return sq
 			case escNewl:
 				p.litBs = append(p.litBs, '\\', '\n')
-			case runeEOF:
+			case utf8.RuneSelf:
 				p.tok = _EOF
 				if p.recoverError() {
 					sq.Right = recoveredPos
@@ -1324,9 +1313,6 @@ func (p *Parser) wordPart() WordPart {
 		cs := &CmdSubst{Left: p.pos, Backquotes: true}
 		old := p.preNested(subCmdBckquo)
 		p.openBquotes++
-		if old.quote == dblQuotes {
-			p.openBquoteDbls++
-		}
 
 		// The lexer didn't call p.rune for us, so that it could have
 		// the right p.openBquotes to properly handle backslashes.
@@ -1341,9 +1327,6 @@ func (p *Parser) wordPart() WordPart {
 		}
 		p.postNested(old)
 		p.openBquotes--
-		if old.quote == dblQuotes {
-			p.openBquoteDbls--
-		}
 		cs.Right = p.pos
 
 		// Like above, the lexer didn't call p.rune for us.
@@ -1363,7 +1346,7 @@ func (p *Parser) wordPart() WordPart {
 			// for a function declaration, which the parser handles earlier.
 			pos := p.pos
 			p.pos = p.nextPos()
-			for p.newLit(p.r); p.r != runeEOF && p.r != ')'; p.rune() {
+			for p.newLit(p.r); p.r != utf8.RuneSelf && p.r != ')'; p.rune() {
 			}
 			if p.r != ')' {
 				p.tok = _EOF // we can only get here due to EOF
@@ -1384,7 +1367,7 @@ func (p *Parser) wordPart() WordPart {
 	globLoop:
 		for p.newLit(r); ; r = p.rune() {
 			switch r {
-			case runeEOF:
+			case utf8.RuneSelf:
 				break globLoop
 			case '(':
 				lparens++
@@ -1460,7 +1443,7 @@ func (p *Parser) paramExp() *ParamExp {
 		lparen := p.nextPos()
 		p.rune()
 		p.pos = p.nextPos()
-		for p.newLit(p.r); p.r != runeEOF && p.r != ')'; p.rune() {
+		for p.newLit(p.r); p.r != utf8.RuneSelf && p.r != ')'; p.rune() {
 		}
 		p.val = p.endLit()
 		if p.r != ')' {
@@ -1469,44 +1452,6 @@ func (p *Parser) paramExp() *ParamExp {
 		}
 		pe.Flags = p.lit(p.pos, p.val)
 		p.rune()
-	}
-	// Zsh-only prefixes that change how the parameter is expanded.
-	// They may appear in any combination, like ${=^name}.
-	// Doubling the rune (${==a}, ${~~a}, ${^^a}) forces the option off.
-zshPrefixLoop:
-	for p.lang.in(LangZsh) {
-		var field *OptState
-		switch p.r {
-		case '=':
-			field = &pe.Split
-		case '~':
-			field = &pe.GlobSubst
-		case '^':
-			field = &pe.RcExpand
-		default:
-			break zshPrefixLoop
-		}
-		next, after := p.peekTwo()
-		state := OptOn
-		check := next
-		if rune(next) == p.r {
-			state = OptOff
-			check = after
-		}
-		if check == utf8.RuneSelf || check == '}' {
-			break zshPrefixLoop
-		}
-		// For the short form, only treat as a prefix if followed by something
-		// that could start a parameter name or another zsh prefix.
-		if pe.Short && check != '=' && check != '~' && check != '^' &&
-			!singleRuneParam(check) && !paramNameRune(check) && check != '"' {
-			break zshPrefixLoop
-		}
-		if state == OptOff {
-			p.rune() // consume the first of the doubled pair
-		}
-		p.rune()
-		*field = state
 	}
 	if !pe.Short || p.lang.in(LangZsh) {
 		// Prefixes, like ${#name} to get the length of a variable.
@@ -1592,7 +1537,7 @@ zshPrefixLoop:
 		loop:
 			for p.newLit(p.r); ; p.rune() {
 				switch p.r {
-				case runeEOF:
+				case utf8.RuneSelf:
 					p.tok = _EOF
 					p.matchingErr(pe.Dollar, dollBrace, rightBrace)
 					break loop
@@ -1767,7 +1712,7 @@ func (p *Parser) paramExpParameter(pe *ParamExp) *ParamExp {
 			p.val = string(p.r)
 			p.rune()
 		} else {
-			for p.newLit(p.r); p.r != runeEOF; p.rune() {
+			for p.newLit(p.r); p.r != utf8.RuneSelf; p.rune() {
 				if !paramNameRune(p.r) && p.r != escNewl {
 					break
 				}
@@ -1835,7 +1780,7 @@ func (p *Parser) zshSubFlags() *FlagsArithm {
 	old := p.quote
 	p.quote = runeByRune
 	p.pos = p.nextPos()
-	for p.newLit(p.r); p.r != runeEOF && p.r != ')'; p.rune() {
+	for p.newLit(p.r); p.r != utf8.RuneSelf && p.r != ')'; p.rune() {
 	}
 	p.val = p.endLit()
 	if p.r != ')' {
@@ -1844,16 +1789,13 @@ func (p *Parser) zshSubFlags() *FlagsArithm {
 	}
 	zf.Flags = p.lit(p.pos, p.val)
 	p.rune()
-	// Lex the argument as a raw pattern, stopping at ',' or ']',
-	// since zsh treats it as a pattern rather than an arithmetic expression.
-	argPos := p.nextPos()
-	for p.newLit(p.r); p.r != runeEOF && p.r != ',' && p.r != ']'; p.rune() {
-	}
-	if val := p.endLit(); val != "" {
-		zf.X = p.wordOne(p.lit(argPos, val))
-	}
 	p.quote = old
+	// Parse the expression; use arithmExprAssign so commas are left for ranges.
 	p.next()
+	if p.tok == star || p.tok == at {
+		p.tok, p.val = _LitWord, p.tok.String()
+	}
+	zf.X = p.arithmExprAssign(false)
 	return zf
 }
 
@@ -2063,7 +2005,7 @@ func (p *Parser) doRedirect(s *Stmt) {
 	}
 	r.N = p.getLit()
 	if r.N != nil && r.N.Value[0] == '{' {
-		p.checkLang(r.N.Pos(), langBashLike|LangZsh, "`{varname}` redirects")
+		p.checkLang(r.N.Pos(), langBashLike, "`{varname}` redirects")
 	}
 	r.Op, r.OpPos = RedirOperator(p.tok), p.pos
 	switch r.Op {
@@ -2879,16 +2821,6 @@ func (p *Parser) testDecl(s *Stmt) {
 	s.Cmd = td
 }
 
-func (p *Parser) unexpectedInCallExpr(ce *CallExpr) {
-	// Note that we'll only keep the first error that happens.
-	if len(ce.Args) > 0 {
-		if cmd := ce.Args[0].Lit(); isBashCompoundCommand(_LitWord, cmd) {
-			p.checkLang(p.pos, langBashLike, "the %#q builtin", cmd)
-		}
-	}
-	p.curErr("a command can only contain words and redirects; encountered %#q", p.tok)
-}
-
 func (p *Parser) callExpr(s *Stmt, w *Word, assign bool) {
 	ce := p.call(w)
 	if w == nil {
@@ -2939,23 +2871,23 @@ loop:
 			ce.Args = append(ce.Args, p.wordAnyNumber())
 		case dblLeftParen:
 			p.curErr("%#q can only be used to open an arithmetic cmd", p.tok)
-		case leftParen:
-			if p.lang.in(LangZsh) && p.r != ')' {
-				ce.Args = append(ce.Args, p.wordAnyNumber())
-				break
-			}
-			p.unexpectedInCallExpr(ce)
 		case rightParen:
 			if p.quote == subCmd {
 				break loop
 			}
-			p.unexpectedInCallExpr(ce)
+			fallthrough
 		default:
 			if p.peekRedir() {
 				p.doRedirect(s)
 				continue
 			}
-			p.unexpectedInCallExpr(ce)
+			// Note that we'll only keep the first error that happens.
+			if len(ce.Args) > 0 {
+				if cmd := ce.Args[0].Lit(); isBashCompoundCommand(_LitWord, cmd) {
+					p.checkLang(p.pos, langBashLike, "the %#q builtin", cmd)
+				}
+			}
+			p.curErr("a command can only contain words and redirects; encountered %#q", p.tok)
 		}
 	}
 	if len(ce.Args) == 0 {

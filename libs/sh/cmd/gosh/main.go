@@ -24,7 +24,8 @@ var command = flag.String("c", "", "command to be executed")
 func main() {
 	flag.Parse()
 	err := runAll()
-	if es, ok := errors.AsType[interp.ExitStatus](err); ok {
+	var es interp.ExitStatus
+	if errors.As(err, &es) {
 		os.Exit(int(es))
 	}
 	if err != nil {
@@ -39,14 +40,7 @@ func runAll() error {
 		return err
 	}
 
-	// Note that -c '' is a no-op, so check whether the flag was set.
-	commandSet := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "c" {
-			commandSet = true
-		}
-	})
-	if commandSet {
+	if *command != "" {
 		return run(r, strings.NewReader(*command), "")
 	}
 	if flag.NArg() == 0 {

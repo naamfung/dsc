@@ -124,10 +124,6 @@ func fullProg(v any) *File {
 type fileTestCase struct {
 	inputs []string // input sources; the first is the canonical formatting
 
-	// printedAs is the canonical formatting when it differs from inputs[0],
-	// such as a lone trailing backslash being escaped by the printer.
-	printedAs string
-
 	// Each language in [langResolvedVariants] has an entry:
 	// - nil:    nothing to test
 	// - *File:  parse as the given syntax tree
@@ -167,10 +163,6 @@ func fileTest(in []string, opts ...func(*fileTestCase)) fileTestCase {
 	return c
 }
 
-func printsAs(s string) func(*fileTestCase) {
-	return func(c *fileTestCase) { c.printedAs = s }
-}
-
 func langSkip(langSets ...LangVariant) func(*fileTestCase) {
 	return func(c *fileTestCase) { c.setForLangs(nil, langSets...) }
 }
@@ -200,22 +192,11 @@ var fileTests = []fileTestCase{
 	),
 	fileTest(
 		[]string{`\`},
-		printsAs(`\\`),
 		langFile(litWord(`\`)),
 	),
 	fileTest(
 		[]string{`foo\`, "f\\\noo\\"},
-		printsAs(`foo\\`),
 		langFile(litWord(`foo\`)),
-	),
-	fileTest(
-		[]string{`foo\\`},
-		langFile(litWord(`foo\\`)),
-	),
-	fileTest(
-		[]string{`foo\\\`},
-		printsAs(`foo\\\\`),
-		langFile(litWord(`foo\\\`)),
 	),
 	fileTest(
 		[]string{`foo\a`, "f\\\noo\\a"},
@@ -1841,16 +1822,6 @@ var fileTests = []fileTestCase{
 			Redirs: []*Redirect{
 				{Op: RdrIn, N: lit("{fd}"), Word: litWord("f")},
 			},
-		}, LangBash|LangZsh),
-	),
-	// Only bash allows an array element as the fd variable. See issue #719.
-	fileTest(
-		[]string{"foo {fds[3]}<f"},
-		langFile(&Stmt{
-			Cmd: litCall("foo"),
-			Redirs: []*Redirect{
-				{Op: RdrIn, N: lit("{fds[3]}"), Word: litWord("f")},
-			},
 		}, LangBash),
 	),
 	fileTest(
@@ -2037,8 +2008,8 @@ var fileTests = []fileTestCase{
 	),
 	fileTest(
 		[]string{
-			"$( (echo foo bar) )",
 			"$( (echo foo bar))",
+			"$( (echo foo bar) )",
 			"`(echo foo bar)`",
 		},
 		langFile(cmdSubst(stmt(
@@ -2106,28 +2077,6 @@ var fileTests = []fileTestCase{
 			word(cmdSubst(litStmt("foo", "bar"))),
 		)))),
 	),
-	// In a backquote command substitution within double quotes,
-	// backslashes escape double quotes as well. See issue #1083.
-	fileTest(
-		[]string{
-			`"$(echo "foobar")"`,
-			"\"`echo \\\"foobar\\\"`\"",
-		},
-		langFile(word(dblQuoted(cmdSubst(stmt(call(
-			litWord("echo"),
-			word(dblQuoted(lit("foobar"))),
-		)))))),
-	),
-	fileTest(
-		[]string{
-			`"$(echo '"')"`,
-			"\"`echo '\\\"'`\"",
-		},
-		langFile(word(dblQuoted(cmdSubst(stmt(call(
-			litWord("echo"),
-			word(sglQuoted(`"`)),
-		)))))),
-	),
 	fileTest(
 		[]string{"$( (a) | b)"},
 		langFile(cmdSubst(
@@ -2139,7 +2088,7 @@ var fileTests = []fileTestCase{
 		)),
 	),
 	fileTest(
-		[]string{`"$( (foo) )"`},
+		[]string{`"$( (foo))"`},
 		langFile(dblQuoted(cmdSubst(stmt(
 			subshell(litStmt("foo")),
 		)))),
@@ -2277,30 +2226,6 @@ var fileTests = []fileTestCase{
 			Stmts:    litStmts("foo", "bar"),
 			ReplyVar: true,
 		}, LangBash|LangMirBSDKorn),
-	),
-	fileTest(
-		[]string{`"${ foo;}"`, `"${ foo; }"`},
-		langFile(dblQuoted(&CmdSubst{
-			Stmts:    litStmts("foo"),
-			TempFile: true,
-		}), LangBash|LangMirBSDKorn),
-		langErr2("1:2: `${ stmts;}` is a bash/mksh feature; tried parsing as LANG", LangPOSIX),
-	),
-	fileTest(
-		[]string{`"${|foo;}"`, `"${| foo; }"`},
-		langFile(dblQuoted(&CmdSubst{
-			Stmts:    litStmts("foo"),
-			ReplyVar: true,
-		}), LangBash|LangMirBSDKorn),
-		langErr2("1:2: `${|stmts;}` is a bash/mksh feature; tried parsing as LANG", LangPOSIX),
-	),
-	fileTest(
-		[]string{`${ foo;}bar`},
-		langFile(word(&CmdSubst{
-			Stmts:    litStmts("foo"),
-			TempFile: true,
-		}, lit("bar")), LangBash|LangMirBSDKorn),
-		langErr2("1:1: `${ stmts;}` is a bash/mksh feature; tried parsing as LANG", LangPOSIX),
 	),
 	fileTest(
 		[]string{`"$foo"`},
@@ -2796,36 +2721,6 @@ var fileTests = []fileTestCase{
 			Param: lit("array"),
 			Index: &FlagsArithm{
 				Flags: lit("i"),
-			},
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{`${array[(i)--]}`},
-		langFile(&ParamExp{
-			Param: lit("array"),
-			Index: &FlagsArithm{
-				Flags: lit("i"),
-				X:     litWord("--"),
-			},
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{`${array[(R)/*]}`},
-		langFile(&ParamExp{
-			Param: lit("array"),
-			Index: &FlagsArithm{
-				Flags: lit("R"),
-				X:     litWord("/*"),
-			},
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{`${array[(i)&]}`},
-		langFile(&ParamExp{
-			Param: lit("array"),
-			Index: &FlagsArithm{
-				Flags: lit("i"),
-				X:     litWord("&"),
 			},
 		}, LangZsh),
 	),
@@ -3429,7 +3324,7 @@ var fileTests = []fileTestCase{
 		langFile(arithmExp(&UnaryArithm{Op: Dec, X: litWord("i")})),
 	),
 	fileTest(
-		[]string{`$((! i))`, `$((!i))`},
+		[]string{`$((!i))`},
 		langFile(arithmExp(&UnaryArithm{Op: Not, X: litWord("i")})),
 	),
 	fileTest(
@@ -3437,7 +3332,7 @@ var fileTests = []fileTestCase{
 		langFile(arithmExp(&UnaryArithm{Op: BitNegation, X: litWord("i")})),
 	),
 	fileTest(
-		[]string{`$((-! +i))`, `$((-!+i))`},
+		[]string{`$((-!+i))`},
 		langFile(arithmExp(&UnaryArithm{
 			Op: Minus,
 			X: &UnaryArithm{
@@ -3447,7 +3342,7 @@ var fileTests = []fileTestCase{
 		})),
 	),
 	fileTest(
-		[]string{`$((! ! i))`, `$((!!i))`},
+		[]string{`$((!!i))`},
 		langFile(arithmExp(&UnaryArithm{
 			Op: Not,
 			X:  &UnaryArithm{Op: Not, X: litWord("i")},
@@ -3885,7 +3780,7 @@ var fileTests = []fileTestCase{
 					Stmts:    litStmts("b"),
 				},
 			},
-		}, LangMirBSDKorn|LangZsh),
+		}, LangMirBSDKorn),
 	),
 	fileTest(
 		[]string{"case $i in 1) cat <<EOF ;;\nfoo\nEOF\nesac"},
@@ -4097,14 +3992,6 @@ var fileTests = []fileTestCase{
 		}}, LangBash),
 	),
 	fileTest(
-		// '#' inside [[ ]] is part of a word, not a comment.
-		[]string{"[[ -n $foo#bar ]]"},
-		langFile(&TestClause{X: &UnaryTest{
-			Op: TsNempStr,
-			X:  word(litParamExp("foo"), lit("#bar")),
-		}}, LangBash|LangMirBSDKorn|LangZsh),
-	),
-	fileTest(
 		[]string{"[[ a =~ b ]]", "[[ a =~ b ]];"},
 		langFile(&TestClause{X: &BinaryTest{
 			Op: TsReMatch,
@@ -4189,14 +4076,6 @@ var fileTests = []fileTestCase{
 			X:  litWord("a"),
 			Y:  word(lit("(#i)"), lit("bar")),
 		}}, LangZsh),
-	),
-	fileTest(
-		[]string{`echo (foo|bar).baz`},
-		langFile(call(litWord("echo"), word(lit("(foo|bar)"), lit(".baz"))), LangZsh),
-	),
-	fileTest(
-		[]string{`ls (#i)*.mod`},
-		langFile(call(litWord("ls"), word(lit("(#i)"), lit("*.mod"))), LangZsh),
 	),
 	fileTest(
 		[]string{`[[ a =~ -n ]]`},
@@ -5036,24 +4915,6 @@ var fileTests = []fileTestCase{
 		}}}, LangBash),
 	),
 	fileTest(
-		[]string{`a=(foo[0-9])`},
-		langFile(&CallExpr{Assigns: []*Assign{{
-			Name: lit("a"),
-			Array: &ArrayExpr{Elems: []*ArrayElem{
-				{Value: word(lit("foo"), lit("[0-9]"))},
-			}},
-		}}}, LangBash|LangMirBSDKorn|LangZsh),
-	),
-	fileTest(
-		[]string{`a=("foo"[0-9])`},
-		langFile(&CallExpr{Assigns: []*Assign{{
-			Name: lit("a"),
-			Array: &ArrayExpr{Elems: []*ArrayElem{
-				{Value: word(dblQuoted(lit("foo")), lit("[0-9]"))},
-			}},
-		}}}, LangBash|LangMirBSDKorn|LangZsh),
-	),
-	fileTest(
 		[]string{"a]b"},
 		langFile(litStmt("a]b")),
 	),
@@ -5342,76 +5203,6 @@ var fileTests = []fileTestCase{
 			litParamExp("$"),
 			lit("{foo}"),
 		)),
-	),
-	fileTest(
-		[]string{"${=foo}"},
-		langFile(&ParamExp{
-			Split: OptOn,
-			Param: lit("foo"),
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{"${~foo}"},
-		langFile(&ParamExp{
-			GlobSubst: OptOn,
-			Param:     lit("foo"),
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{"${^foo}"},
-		langFile(&ParamExp{
-			RcExpand: OptOn,
-			Param:    lit("foo"),
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{"${==foo}"},
-		langFile(&ParamExp{
-			Split: OptOff,
-			Param: lit("foo"),
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{"${~~foo}"},
-		langFile(&ParamExp{
-			GlobSubst: OptOff,
-			Param:     lit("foo"),
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{"${^^foo}"},
-		langFile(&ParamExp{
-			RcExpand: OptOff,
-			Param:    lit("foo"),
-		}, LangZsh),
-	),
-	fileTest(
-		[]string{"$=foo $^bar $~baz"},
-		langFile(call(
-			word(&ParamExp{
-				Short: true,
-				Split: OptOn,
-				Param: lit("foo"),
-			}),
-			word(&ParamExp{
-				Short:    true,
-				RcExpand: OptOn,
-				Param:    lit("bar"),
-			}),
-			word(&ParamExp{
-				Short:     true,
-				GlobSubst: OptOn,
-				Param:     lit("baz"),
-			}),
-		), LangZsh),
-	),
-	fileTest(
-		[]string{"${(o)=items}"},
-		langFile(&ParamExp{
-			Flags: lit("o"),
-			Split: OptOn,
-			Param: lit("items"),
-		}, LangZsh),
 	),
 	fileTest(
 		[]string{"${(aO)foo} ${(s/x/)foo}"},

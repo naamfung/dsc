@@ -3,7 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/mvdan.cc/sh/v3.svg)](https://pkg.go.dev/mvdan.cc/sh/v3)
 
 A shell parser, formatter, and interpreter.
-Supports [POSIX Shell], [Bash], [Zsh], and [mksh]. Requires Go 1.26 or later.
+Supports [POSIX Shell], [Bash], [Zsh], and [mksh]. Requires Go 1.25 or later.
 
 ### Quick start
 
@@ -36,14 +36,6 @@ Packages are available on [Alpine], [Arch], [Debian], [Docker], [Fedora], [FreeB
 	go install mvdan.cc/sh/v3/cmd/gosh@latest
 
 Proof of concept shell that uses the `interp` package.
-
-### Contributing
-
-Bug reports and feature requests should be filed as detailed issues,
-ideally with an example which reproduces the bug or shows what feature you're after.
-
-Unless you're an active user or contributor to the project, drive-by AI patches
-are not helpful. File detailed issues instead.
 
 ### Fuzzing
 
@@ -135,9 +127,12 @@ The following editor integrations wrap `shfmt`:
 - [intellij-shellscript] - Intellij Jetbrains `shell script` plugin
 - [micro] - Editor with a built-in plugin
 - [neoformat] - (Neo)Vim plugin
+- [shell-format] - VS Code plugin
 - [vscode-shfmt] - VS Code plugin
 - [shfmt.el] - Emacs package
+- [Sublime-Pretty-Shell] - Sublime Text 3 plugin
 - [Trunk] - Universal linter, available as a CLI, VS Code plugin, and GitHub action
+- [vim-shfmt] - Vim plugin
 
 Other noteworthy integrations include:
 
@@ -181,10 +176,13 @@ Other noteworthy integrations include:
 [scoop]: https://github.com/ScoopInstaller/Main/blob/HEAD/bucket/shfmt.json
 [sh-checker]: https://github.com/luizm/action-sh-checker
 [sh-syntax]: https://github.com/un-ts/sh-syntax
+[shell-format]: https://marketplace.visualstudio.com/items?itemName=foxundermoon.shell-format
 [shfmt.el]: https://github.com/purcell/emacs-shfmt/
 [snapcraft]: https://snapcraft.io/shfmt
+[sublime-pretty-shell]: https://github.com/aerobounce/Sublime-Pretty-Shell
 [tesh]: https://github.com/feloy/tesh
 [trunk]: https://trunk.io/check
+[vim-shfmt]: https://github.com/z0mbix/vim-shfmt
 [void]: https://github.com/void-linux/void-packages/blob/HEAD/srcpkgs/shfmt/template
 [vscode-shfmt]: https://marketplace.visualstudio.com/items?itemName=mkhl.shfmt
 [webi]: https://webinstall.dev/shfmt/

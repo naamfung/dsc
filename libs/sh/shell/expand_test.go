@@ -6,11 +6,10 @@ package shell
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/go-quicktest/qt"
 )
 
 func strEnviron(pairs ...string) func(string) string {
@@ -117,7 +116,9 @@ func TestFields(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			qt.Assert(t, qt.DeepEquals(got, tc.want))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("\nwant: %q\ngot:  %q", tc.want, got)
+			}
 		})
 	}
 }

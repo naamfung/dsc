@@ -33,7 +33,6 @@ func (b *boolStringValue) Set(val string) error {
 	*b = boolStringValue(val)
 	return nil
 }
-
 func (b *boolStringValue) String() string {
 	return string(*b)
 }
@@ -72,7 +71,6 @@ var (
 	write       = flagVal("w", "write", false, flag.BoolVar)
 	diff        = flagVal("d", "diff", false, flag.BoolVar)
 	applyIgnore = flagVal("", "apply-ignore", false, flag.BoolVar)
-	detect      = flagVal("", "detect", "default", flag.StringVar)
 	filename    = flagVal("", "filename", "", flag.StringVar)
 
 	// Parser flags.
@@ -122,7 +120,6 @@ directory, all shell scripts found under that directory will be used.
   -w,     --write     write result to file instead of stdout
   -d,     --diff      error with a diff when the formatting differs
   --apply-ignore      always apply EditorConfig ignore rules
-  --detect str        how to detect shell files when walking: default, exec, or all
   --filename str      provide a name for the standard input file
 
 Parser options:
@@ -177,12 +174,6 @@ For more information and to report bugs, see https://github.com/mvdan/sh.
 	}
 	if find.val != "true" && find.val != "false" && find.val != "0" {
 		fmt.Fprintf(os.Stderr, "only -f and -f=0 allowed\n")
-		os.Exit(1)
-	}
-	switch detect.val {
-	case "default", "exec", "all":
-	default:
-		fmt.Fprintf(os.Stderr, "--detect only allows default, exec, or all\n")
 		os.Exit(1)
 	}
 	simplify.val = simplify.val || minify.val
@@ -258,10 +249,6 @@ For more information and to report bugs, see https://github.com/mvdan/sh.
 		fmt.Fprintln(os.Stderr, "--to-json can only be used with stdin")
 		os.Exit(1)
 	}
-	if fromJSON.val {
-		fmt.Fprintln(os.Stderr, "--from-json can only be used with stdin")
-		os.Exit(1)
-	}
 	status := 0
 	for _, path := range flag.Args() {
 		explicit := true
@@ -309,25 +296,8 @@ For more information and to report bugs, see https://github.com/mvdan/sh.
 			}
 			// If the path is not an explicit arg, or it's not regular, or --find is set,
 			// then we check for extensions and shebangs.
-			if !explicit || !entry.Type().IsRegular() || find.val != "false" {
+			if !explicit || !entry.Type().IsRegular() || find.val == "true" {
 				conf = fileutil.CouldBeScript2(entry)
-				// A regular file discarded for its non-shell extension may
-				// still have its shebang read, depending on --detect.
-				// TODO(v4): perhaps the non-default modes should include hidden files.
-				if conf == fileutil.ConfNotScript && entry.Type().IsRegular() && entry.Name()[0] != '.' {
-					switch detect.val {
-					case "exec":
-						info, err := entry.Info()
-						if err != nil {
-							return err
-						}
-						if info.Mode()&0o111 != 0 {
-							conf = fileutil.ConfIfShebang
-						}
-					case "all":
-						conf = fileutil.ConfIfShebang
-					}
-				}
 				if conf == fileutil.ConfNotScript {
 					return nil
 				}
@@ -458,7 +428,7 @@ func formatPath(path string, checkShebang bool) error {
 	}
 	readBuf.Reset()
 	if checkShebang || shebangForAuto {
-		n, err := io.ReadAtLeast(f, copyBuf[:32], len("#!/bin/sh"))
+		n, err := io.ReadAtLeast(f, copyBuf[:32], len("#!/bin/sh\n"))
 		switch {
 		case !checkShebang:
 			// only wanted the shebang for LangAuto

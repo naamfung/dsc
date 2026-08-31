@@ -51,3 +51,6 @@ replace github.com/hashicorp/go-plugin => ../../plugin
 replace github.com/toon-format/toon-go => ../../libs/toon-go
 
 replace github.com/wippyai/go-lua => ../../libs/go-lua
+
+// mvdan shell 解释器（mvdan.cc/sh/v3）本地版本（libs/），便于发现问题直接改源码
+replace mvdan.cc/sh/v3 => ../../libs/sh

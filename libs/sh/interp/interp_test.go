@@ -74,7 +74,7 @@ let i=(2 + 3)
 `
 	file := parse(b, nil, src)
 	r, _ := interp.New()
-	ctx := b.Context()
+	ctx := context.Background()
 
 	for b.Loop() {
 		r.Reset()
@@ -127,7 +127,8 @@ func TestMain(m *testing.M) {
 		)
 		ctx := context.Background()
 		if err := runner.Run(ctx, file); err != nil {
-			if es, ok := errors.AsType[interp.ExitStatus](err); ok {
+			var es interp.ExitStatus
+			if errors.As(err, &es) {
 				os.Exit(int(es))
 			}
 
@@ -344,7 +345,6 @@ var runTests = []runTest{
 	{`a=" b c "; echo foo${a}bar`, "foo b c bar\n"},
 	{`a="b    c"; echo foo${a}bar`, "foob cbar\n"},
 	{`echo "$(echo ' b c ')"`, " b c \n"},
-	{"echo \"`echo \\\"foobar\\\"`\"", "foobar\n"},
 	{"echo ''", "\n"},
 	{`$(echo)`, ""},
 	{`echo -n '\\'`, `\\`},
@@ -554,10 +554,6 @@ var runTests = []runTest{
 		"b\n",
 	},
 	{
-		`a=héllo; echo "${a:2}" "${a:1:2}" "${a::-3}" "${a: -2}"`,
-		"llo él hé lo\n",
-	},
-	{
 		"a=foo; echo ${a/no/x} ${a/o/i} ${a//o/i} ${a/fo/}",
 		"foo fio fii o\n",
 	},
@@ -670,32 +666,8 @@ var runTests = []runTest{
 		"àÉñ bAr\nàÉñ bAr\n",
 	},
 	{
-		"a=foo; echo ${a^o} ${a^f}; a=OOF; echo ${a,O} ${a,,O} ${a,o}",
-		"foo Foo\noOF ooF OOF\n",
-	},
-	{
 		"a=(àÉñ bAr); echo ${a[@]^}; echo ${a[*],,}",
 		"ÀÉñ BAr\nàéñ bar\n",
-	},
-	{
-		`a=(foo boo); printf '[%s]' "${a[@]%o}"; echo; printf '[%s]' "${a[@]/o/O}"; echo; printf '[%s]' "${a[@]^}"; echo`,
-		"[fo][bo]\n[fOo][bOo]\n[Foo][Boo]\n",
-	},
-	{
-		`set -- foo boo; printf '[%s]' "${@#?}"; echo; IFS=,; echo "${*%o}"`,
-		"[oo][oo]\nfo,bo\n",
-	},
-	{
-		`a=(foo boo); IFS=,; echo "${a[*]%o}"`,
-		"fo,bo\n",
-	},
-	{
-		`a=(aax abx); echo ${a[@]/x/}; b=("${a[@]/a/z}"); echo "${b[0]}" "${b[1]}"`,
-		"aa ab\nzax zbx\n",
-	},
-	{
-		"a=(foo boo); echo ${a[@]%o}; echo ${a[@]}",
-		"fo bo\nfoo boo\n",
 	},
 	{
 		"INTERP_X_1=a INTERP_X_2=b; echo ${!INTERP_X_*}",
@@ -762,22 +734,6 @@ var runTests = []runTest{
 	{
 		`export e=1; echo "${e@A}"`,
 		"declare -x e=1\n #IGNORE bash always single-quotes",
-	},
-	{
-		`a=Hello; echo "${a@U}"`,
-		"HELLO\n",
-	},
-	{
-		`a=hello; echo "${a@u}"`,
-		"Hello\n",
-	},
-	{
-		`a=HELLO; echo "${a@L}"`,
-		"hello\n",
-	},
-	{
-		`a=foo; echo "<${a@K}><${a@k}>"`,
-		"<foo><foo>\n #IGNORE not implemented; must not panic",
 	},
 	{
 		"declare a; a+=(b); echo ${a[@]} ${#a[@]}",
@@ -1334,26 +1290,6 @@ var runTests = []runTest{
 		"case foo in '*') echo x ;; f*) echo y ;; esac",
 		"y\n",
 	},
-	{
-		`case 0 in [\0]) echo bar ;; esac`,
-		"bar\n",
-	},
-	{
-		`case d in [\d]) echo bar ;; esac`,
-		"bar\n",
-	},
-	{
-		`case '[' in [) echo match ;; *) echo miss ;; esac`,
-		"match\n",
-	},
-	{
-		`case '[abc' in [a*) echo match ;; *) echo miss ;; esac`,
-		"match\n",
-	},
-	{
-		`touch a b; x=']'; echo [ab$x`,
-		"a b\n",
-	},
 
 	// exec
 	{
@@ -1375,18 +1311,6 @@ var runTests = []runTest{
 	{
 		"exec >/dev/null; echo foo",
 		"",
-	},
-	{
-		"exec >a; echo foo; cat a >&2",
-		"foo\n",
-	},
-	{
-		"exec >a; echo one >b; echo two; cat a b >&2",
-		"two\none\n",
-	},
-	{
-		"{ exec >a; echo in; } >b; echo out; cat a b >&2",
-		"out\nin\n",
 	},
 
 	// return
@@ -1777,22 +1701,6 @@ var runTests = []runTest{
 		"",
 	},
 	{
-		">a; [[ a -nt b ]]",
-		"",
-	},
-	{
-		">a; [[ a -ot b ]]",
-		"exit status 1",
-	},
-	{
-		">b; [[ a -nt b ]]",
-		"exit status 1",
-	},
-	{
-		">b; [[ a -ot b ]]",
-		"",
-	},
-	{
 		"[[ a -ef b ]]",
 		"exit status 1",
 	},
@@ -2027,18 +1935,6 @@ var runTests = []runTest{
 		"",
 	},
 	{
-		">a; [ a -nt b ]",
-		"",
-	},
-	{
-		">b; [ a -ot b ]",
-		"",
-	},
-	{
-		"[ a -nt b ]",
-		"exit status 1",
-	},
-	{
 		">a; [ a -ef a ]",
 		"",
 	},
@@ -2063,6 +1959,10 @@ var runTests = []runTest{
 		// A directory is readable, writable, and executable.
 		"mkdir d; [ -r d ] && echo r; [ -w d ] && echo w; [ -x d ] && echo x",
 		"r\nw\nx\n",
+	},
+	{
+		"test -N a",
+		"unsupported unary test op: -N\nexit status 1 #IGNORE",
 	},
 	{
 		"test -? a",
@@ -2142,38 +2042,6 @@ var runTests = []runTest{
 		"1\n",
 	},
 	{
-		"x=0; echo $((0 && (x = 1))) $x",
-		"0 0\n",
-	},
-	{
-		"x=0; echo $((1 || (x = 1))) $x",
-		"1 0\n",
-	},
-	{
-		"x=0; echo $((0 && x++)) $x $((1 || x++)) $x",
-		"0 0 1 0\n",
-	},
-	{
-		"x=0; echo $((1 && (x = 1))) $x",
-		"1 1\n",
-	},
-	{
-		"x=0; echo $((0 || (x = 2))) $x",
-		"1 2\n",
-	},
-	{
-		"echo $((0 && 1/0)) $((1 || 1/0))",
-		"0 1\n",
-	},
-	{
-		"x=0; y=0; echo $((0 && (x = 1) || (y = 2))) $x $y",
-		"1 0 2\n",
-	},
-	{
-		"x=0; echo $((1/0 && x++)); echo $x",
-		"division by zero\n0\n #JUSTERR",
-	},
-	{
 		"echo $(((1 & 2) != (1 | 2)))",
 		"1\n",
 	},
@@ -2202,66 +2070,8 @@ var runTests = []runTest{
 		"8 0\n",
 	},
 	{
-		"echo $((2 ** -1)); let x=2**-1",
-		"exponent less than 0\nexponent less than 0\nexit status 1 #JUSTERR",
-	},
-	{
 		"echo $((1 ? 2 : 3)) $((0 ? 2 : 3))",
 		"2 3\n",
-	},
-	{
-		"echo $((2 ? 3 : 4)) $((-1 ? 3 : 4))",
-		"3 3\n",
-	},
-	{
-		"echo $((255+1))",
-		"256\n",
-	},
-	{
-		"echo $((0xff+1))",
-		"256\n",
-	},
-	{
-		"echo $((0377+1))",
-		"256\n",
-	},
-	{
-		"echo $((10#255+1))",
-		"256\n",
-	},
-	{
-		"echo $((16#ff+1))",
-		"256\n",
-	},
-	{
-		"echo $((2#11111111+1))",
-		"256\n",
-	},
-	// TODO: Enable this test once integer bit widths are
-	// handled in a consistent manner throughout the library.
-	//{
-	//	"echo $((16#badc0ffee+1))",
-	//	"50159747055\n",
-	//},
-	{
-		"echo $((16#cafe+1))",
-		"51967\n",
-	},
-	{
-		"x=-010 y=+010 z=-0x10; echo $((x)) $((y)) $((z))",
-		"-8 8 -16\n",
-	},
-	{
-		"echo $((64#z)) $((64#Z)) $((40#A)) $((64#10)) $((36#z))",
-		"35 61 36 64 35\n",
-	},
-	{
-		"a=64#@ b=64#_ c=64#1_; echo $((a)) $((b)) $((c))",
-		"62 63 127\n",
-	},
-	{
-		"echo $((nope+1))",
-		"1\n", // Yes, this is what bash does.
 	},
 	{
 		"((1))",
@@ -2336,14 +2146,6 @@ var runTests = []runTest{
 	{
 		"set -- a b; echo $#",
 		"2\n",
-	},
-	{
-		"set +; echo $#",
-		"0\n",
-	},
-	{
-		"set + a b; echo $# $1 $2",
-		"2 a b\n",
 	},
 	{
 		"set -U",
@@ -2621,22 +2423,6 @@ set +o pipefail
 done <<< 2`,
 		"1) foo\n#? invalid option 2\n",
 	},
-	{
-		"select opt in a b c; do echo \"got $opt\"; if [[ $REPLY == 2 ]]; then break; fi; done <<< $'1\n2'",
-		"1) a\n2) b\n3) c\n#? got a\n#? got b\n",
-	},
-	{
-		"select opt in a b; do break; done </dev/null; echo status $?",
-		"1) a\n2) b\n#? \nstatus 1\n",
-	},
-	{
-		"select opt in a b; do echo \"got $opt\"; done <<< 2",
-		"1) a\n2) b\n#? got b\n#? \nexit status 1",
-	},
-	{
-		"select opt in a b; do break; done <<< $'\n1'",
-		"1) a\n2) b\n#? 1) a\n2) b\n#? ",
-	},
 
 	// shopt
 	{"set -e; shopt -o | grep -E '^(errexit|noexec)' | wc -l | tr -d ' '", "2\n"},
@@ -2745,15 +2531,6 @@ done <<< 2`,
 	{`set -- x y z; IFS=-; echo "$*"`, "x-y-z\n"},
 	{`set -- x y z; IFS=; echo $*`, "x y z\n"},
 	{`set -- x y z; IFS=; echo "$*"`, "xyz\n"},
-	{`set -- x y z; IFS=-; a=$*; echo "$a"`, "x-y-z\n"},
-	{`set -- x y z; IFS=; a=$*; echo "$a"`, "xyz\n"},
-	{`a=(x y z); IFS=; echo ${a[*]}; c=${a[*]}; echo "$c"`, "x y z\nxyz\n"},
-	{`a=(x y z); IFS=-; b=${a[*]}; echo "$b"`, "x-y-z\n"},
-	{`set -- x y; IFS=éz; a=$*; echo "$a"`, "xéy\n"},
-	{`set -- xo yo; IFS=-; a=${*%o}; echo "$a"`, "x-y\n"},
-	{`a=(zo wo); IFS=-; b=${a[*]^}; echo "$b"`, "Zo-Wo\n"},
-	{`a=(x y z); IFS=-; echo "${!a[*]}"`, "0-1-2\n"},
-	{`INTERP_Y_1=a INTERP_Y_2=b; IFS=-; echo "${!INTERP_Y_*}"`, "INTERP_Y_1-INTERP_Y_2\n"},
 
 	// builtin
 	{"builtin", ""},
@@ -2771,7 +2548,6 @@ done <<< 2`,
 	{"echo() { :; }; type echo | grep 'is a function'", "echo is a function\n"},
 	{"type $PATH_PROG | grep -q -E ' is (/|[A-Z]:)'", ""},
 	{"type noexist", "type: noexist: not found\nexit status 1 #JUSTERR"},
-	{"type -o echo", "type: invalid option \"-o\"\nexit status 2 #JUSTERR"},
 	{"PATH=/; type $PATH_PROG", "type: " + pathProg + ": not found\nexit status 1 #JUSTERR"},
 	{"shopt -s expand_aliases; alias interp_foo='bar baz'\ntype interp_foo", "interp_foo is aliased to `bar baz'\n"},
 	{"alias interp_foo='bar baz'\ntype interp_foo", "type: interp_foo: not found\nexit status 1 #JUSTERR"},
@@ -2800,15 +2576,6 @@ done <<< 2`,
 	// TODO: our builtin appears to not receive the piped bytes?
 	// {"trap 'echo on_err' ERR; trap | grep -q '.*echo on_err.*'", "trap -- \"echo on_err\" ERR\n"},
 	{"trap 'false' ERR EXIT; false", "exit status 1"},
-	// A parse error in one trap callback must not disable later ones.
-	{"trap '(' ERR; false; trap 'echo ok' ERR; false; :", "errortrap: error trap:1:1: `(` must be followed by a statement list\nok\n #IGNORE"},
-	// On entry to a trap, "$?" is the status of the command which triggered it.
-	{"trap 'echo err $?' ERR; false; echo after $?", "err 1\nafter 1\n"},
-	{"trap 'echo exit $?' EXIT; false", "exit 1\nexit status 1"},
-	{"trap 'echo exit $?' EXIT; true", "exit 0\n"},
-	{"trap 'false; echo next $?' EXIT; true", "next 1\n"},
-	{"trap 'echo err $?' ERR; trap 'echo exit $?' EXIT; false; true", "err 1\nexit 0\n"},
-	{"false; trap 'echo exit $?' EXIT; true", "exit 0\n"},
 
 	// eval
 	{"eval", ""},
@@ -3075,42 +2842,7 @@ done <<< 2`,
 	{"declare -A a=([x]=b [y]=c); a=d; for e in ${a[@]}; do echo $e; done | sort", "b\nc\nd\n"},
 	{"i=3; a=b; a[i]=x; echo ${a[@]}", "b x\n"},
 	{"i=3; declare a=(b); a[i]=x; echo ${!a[@]}", "0 3\n"},
-	{`a=(x "" y); echo ${!a[@]}; echo "${!a[@]}"`, "0 1 2\n0 1 2\n"},
-	{"a=(0 1 2 3 4 5 6 7 8 9 10); echo ${!a[@]}", "0 1 2 3 4 5 6 7 8 9 10\n"},
 	{"i=3; declare -A a=(['x']=b); a[i]=x; for e in ${!a[@]}; do echo $e; done | sort", "i\nx\n"},
-
-	// sparse indexed arrays
-	{"a[5]=x; echo ${#a[@]} ${a[@]} ${!a[@]}", "1 x 5\n"},
-	{"a=([5]=x [2]=y); echo ${!a[@]}; echo ${a[@]}", "2 5\ny x\n"},
-	{"a=([5]=x y z); echo ${!a[@]}", "5 6 7\n"},
-	{"a[5]=x; a[2]=y; declare -p a", "declare -a a=([2]=\"y\" [5]=\"x\")\n"},
-	{"a[5]=x; echo ${a[0]-unset} ${a[5]}; echo \"${a[@]}\"", "unset x\nx\n"},
-	{"a=(x y z); unset 'a[1]'; echo ${#a[@]} ${!a[@]} ${a[@]}", "2 0 2 x z\n"},
-	{"a=(x y z); unset 'a[2]'; echo ${#a[@]} ${!a[@]} ${a[@]}", "2 0 1 x y\n"},
-	{"a=(x y z); unset 'a[1]'; a+=(w); echo ${!a[@]}", "0 2 3\n"},
-	{"a=(x y z); unset 'a[@]'; echo ${#a[@]}", "0\n"},
-	{"a=(w x y z); i=2; unset \"a[i+1]\"; echo ${!a[@]}", "0 1 2\n"},
-	{"declare -A a=([x]=1 [y]=2); unset 'a[x]'; echo ${!a[@]}", "y\n"},
-	{"a=(1 2 3); a[-1]=x; echo ${a[@]}", "1 2 x\n"},
-	{"a=(x); a+=([5]=z w); echo ${!a[@]}; echo ${a[@]}", "0 5 6\nx z w\n"},
-	{"a=s; a+=([0]=x); echo ${a[@]}", "x\n"},
-	{"a=([5]=x); a+=s; echo ${!a[@]}; echo ${a[@]}", "0 5\ns x\n"},
-	{"a=([1]=one [5]=five [10]=ten); echo ${a[@]:2:2}; echo ${a[@]:5}; echo ${a[@]: -1}", "five ten\nfive ten\nten\n"},
-	{"a=([2]=x [5]=y); echo \"${a[@]::1}\" \"${a[@]:0}\"", "x x y\n"},
-	{"a=([2]=x [5]=y); echo $a ${a[0]-unset}", "unset\n"},
-	{"a=([0]=x [5]=y); echo $a", "x\n"},
-	{"a=([5]=x); echo ${a+set} ${a-unset}", "unset\n"},
-	{"a=(x y); : \"${a[5]=z}\"; declare -p a", "declare -a a=([0]=\"x\" [1]=\"y\" [5]=\"z\")\n"},
-	{"s=x; : \"${s[1]=z}\"; declare -p s", "declare -a s=([0]=\"x\" [1]=\"z\")\n"},
-	{"declare -A m=([k]=v); : \"${m[j]=z}\"; echo ${m[j]} ${m[k]}", "z v\n"},
-	{"a=([5]=b [-1]=c d); declare -p a", "declare -a a=([5]=\"c\" [6]=\"d\")\n"},
-	{"a=(1 2 3); echo ${a[-1]} ${a[-3]}", "3 1\n"},
-	{"a=(x); unset 'a[]'; echo $?; declare -p a", "0\ndeclare -a a=([0]=\"x\")\n"},
-	{"s=x; unset 's[0]'; echo ${s-unset}", "unset\n"},
-	{"s=x; unset 's[5]'; echo $s", "unset: s: not an array variable\nx\n #JUSTERR"},
-	{"a=([5]=x); (a[2]=y; echo ${!a[@]}); echo ${!a[@]}", "2 5\n5\n"},
-	{"a=([1]=y [0]=x); declare -p a", "declare -a a=([0]=\"x\" [1]=\"y\")\n"},
-	{"declare -n r=a; a=(1 2 3); unset 'r[1]'; echo ${!a[@]}", "0 2\n"},
 
 	// declare
 	{"declare -B foo", "declare: invalid option \"-B\"\nexit status 2 #JUSTERR"},
@@ -3591,31 +3323,12 @@ done <<< 2`,
 	{"echo a{b,c}d{e,f}g", "abdeg abdfg acdeg acdfg\n"},
 	{"echo a{b{x,y},c}d", "abxd abyd acd\n"},
 	{"echo a{1..", "a{1..\n"},
-	{
-		"echo {00..2}; echo {01..10}; echo {1..10..-2}; echo {10..1..2}; echo {-03..3}",
-		"00 01 02\n01 02 03 04 05 06 07 08 09 10\n1 3 5 7 9\n10 8 6 4 2\n-03 -02 -01 000 001 002 003\n",
-	},
 	{"echo a{1..2}b{4..5}c", "a1b4c a1b5c a2b4c a2b5c\n"},
 	{"echo a{c..f}", "ac ad ae af\n"},
 	{"echo a{4..1..1}", "a4 a3 a2 a1\n"},
 	{"b=c; echo ${b}a{4..1..1}", "ca4 ca3 ca2 ca1\n"},
 	{"b=c; echo a{1,2}$b", "a1c a2c\n"},
 	{"echo a{1,2}'bc'", "a1bc a2bc\n"},
-	{`echo a\{1,2}b`, "a{1,2}b\n"},
-	{`echo a{1,2\`, "a{1,2\\\n"},
-	{`echo a{1,2\}b`, "a{1,2}b\n"},
-	{`echo a{1\,2,3}b`, "a1,2b a3b\n"},
-	{`echo a{1\}2,3}b`, "a1}2b a3b\n"},
-	{`echo a{1\..2}b`, "a{1..2}b\n"},
-	{`echo \{\{iriname\}\}`, "{{iriname}}\n"},
-	{
-		"echo {1..100000}",
-		"brace expansion would exceed 16384 elements\n #IGNORE bash has no defensive limit below MaxInt",
-	},
-	{
-		"echo a{0..9999999999}b",
-		"brace expansion would exceed 16384 elements\n #JUSTERR bash errors with a different message",
-	},
 
 	// brace expansion in declarations
 	{"declare {A,B}_VAR=1; echo $A_VAR $B_VAR", "1 1\n"},
@@ -3743,18 +3456,6 @@ done <<< 2`,
 		"linecontinuation\n",
 	},
 	{
-		"read x <<< $'foo\\\\\nbar'; echo \"$x\"",
-		"foobar\n",
-	},
-	{
-		"read x <<< $'a\\\\\nb\\\\\nc'; echo \"$x\"",
-		"abc\n",
-	},
-	{
-		"read -r x <<< $'foo\\\\\nbar'; echo \"$x\"",
-		"foo\\\n",
-	},
-	{
 		"while read a; do echo $a; GOSH_CMD=print_ok $GOSH_PROG; done <<< 'a\nb\nc'",
 		"a\nexec ok\nb\nexec ok\nc\nexec ok\n",
 	},
@@ -3786,22 +3487,6 @@ done <<< 2`,
 	{
 		"IFS=: read a b c <<< '1\\:2:3'; echo \"$a\"; echo $b; echo $c",
 		"1:2\n3\n\n",
-	},
-	{
-		`read x <<< '  a  b  '; echo "[$x]"`,
-		"[a  b]\n",
-	},
-	{
-		`IFS=' :' read x <<< ' :a b: '; echo "[$x]"`,
-		"[:a b:]\n",
-	},
-	{
-		`IFS=: read x <<< ':a:b:'; echo "[$x]"`,
-		"[:a:b:]\n",
-	},
-	{
-		`read <<< '  a \b  '; echo "[$REPLY]"; read -r <<< ' a\b '; echo "[$REPLY]"`,
-		"[  a b  ]\n[ a\\b ]\n",
 	},
 	{
 		"read -p",
@@ -3912,18 +3597,6 @@ done <<< 2`,
 		"b 1\na 2\nc 3\n",
 	},
 	{
-		"while getopts ab: opt -a -bval -a; do echo $opt $OPTARG $OPTIND; done",
-		"a 2\nb val 3\na 4\n",
-	},
-	{
-		"while getopts b: opt -bval foo; do echo $opt $OPTARG $OPTIND; done",
-		"b val 2\n",
-	},
-	{
-		"while getopts ab: opt -ab val; do echo $opt $OPTARG $OPTIND; done",
-		"a 1\nb val 3\n",
-	},
-	{
 		"a() { while getopts abc: opt; do echo $opt $OPTARG; done }; a -a -b -c arg",
 		"a\nb\nc arg\n",
 	},
@@ -3964,20 +3637,6 @@ var runTestsUnix = []runTest{
 		"",
 	},
 
-	// windows does not reliably track last-access time, so -N is unix-only
-	{
-		">a; cat a; sleep 0.01; echo 'Hello' >> a; test -N a && echo yes",
-		"yes\n",
-	},
-	{
-		"test -N nonexistent",
-		"exit status 1",
-	},
-	{
-		">a; sleep 0.01; cat a; test -N a; echo $?",
-		"1\n",
-	},
-
 	// no fifos on windows
 	{
 		"[ -p a ] && echo x; mkfifo a; [ -p a ] && echo y",
@@ -3990,32 +3649,6 @@ var runTestsUnix = []runTest{
 
 	{"sh() { :; }; sh -c 'echo foo'", ""},
 	{"sh() { :; }; command sh -c 'echo foo'", "foo\n"},
-
-	// files without a shebang line are run as shell scripts; see issue #1065
-	{
-		"echo 'echo foo' >a; chmod +x a; ./a",
-		"foo\n",
-	},
-	{
-		"echo 'echo $#: $1' >a; chmod +x a; ./a one two",
-		"2: one\n",
-	},
-	{
-		"echo 'echo \"[$foo][$bar]\"' >a; chmod +x a; foo=1; export bar=2; ./a",
-		"[][2]\n",
-	},
-	{
-		"echo 'exit 5' >a; chmod +x a; ./a",
-		"exit status 5",
-	},
-	{
-		"printf '\\0\\n' >a; chmod +x a; ./a",
-		"./a: cannot execute binary file\nexit status 126 #JUSTERR",
-	},
-	{
-		"echo 'if' >a; chmod +x a; ./a",
-		"./a:1:1: `if` must be followed by a statement list\nexit status 2 #JUSTERR",
-	},
 
 	// chmod is practically useless on Windows
 	{
@@ -4475,7 +4108,7 @@ func TestRunnerRun(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 			defer cancel()
 			if err := r.Run(ctx, file); err != nil {
 				cb.WriteString(err.Error())
@@ -4494,51 +4127,6 @@ func TestRunnerRun(t *testing.T) {
 				}
 				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q",
 					c.in, want, got)
-			}
-		})
-	}
-}
-
-func TestRunnerUnsupported(t *testing.T) {
-	t.Parallel()
-
-	// Features from language variants that the interpreter does not
-	// support, such as zsh, should error rather than panic.
-	tests := []struct {
-		lang syntax.LangVariant
-		in   string
-		want string
-	}{
-		{syntax.LangZsh, "echo x${}y", "unsupported\n"},
-		{syntax.LangZsh, `echo "${}"`, "unsupported\n"},
-		{syntax.LangZsh, "echo ${:-foo}", "unsupported\n"},
-		{syntax.LangZsh, "echo ${+a}", "unsupported\n"},
-		{syntax.LangZsh, "a=abc; echo ${a[(r)b]}", "unsupported\n"},
-		{syntax.LangZsh, "() { echo anon; }", "unsupported\nexit status 1"},
-		{syntax.LangZsh, "function { echo anon; }", "unsupported\nexit status 1"},
-		{syntax.LangZsh, "function f g { echo multi; }", "unsupported\nexit status 1"},
-		{syntax.LangZsh, "cat =(echo hi)", "unsupported\n"},
-		{syntax.LangMirBSDKorn, "echo ${%a}", "unsupported\n"},
-	}
-	for _, tc := range tests {
-		t.Run("", func(t *testing.T) {
-			t.Parallel()
-			t.Logf("input: %q", tc.in)
-			p := syntax.NewParser(syntax.Variant(tc.lang))
-			file := parse(t, p, tc.in)
-			var cb concBuffer
-			r, err := interp.New(interp.StdIO(nil, &cb, &cb))
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
-			defer cancel()
-			if err := r.Run(ctx, file); err != nil {
-				cb.WriteString(err.Error())
-			}
-			if got := cb.String(); got != tc.want {
-				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q",
-					tc.in, tc.want, got)
 			}
 		})
 	}
@@ -4837,7 +4425,7 @@ func TestRunnerRunConfirm(t *testing.T) {
 			skipIfUnsupported(t, c.in)
 			t.Parallel()
 			tdir := t.TempDir()
-			ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "bash")
 			cmd.Dir = tdir
@@ -4980,7 +4568,7 @@ func TestRunnerOpts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 			defer cancel()
 			if err := r.Run(ctx, file); err != nil {
 				cb.WriteString(err.Error())
@@ -5011,7 +4599,7 @@ func TestRunnerContext(t *testing.T) {
 	for _, in := range cases {
 		t.Run("", func(t *testing.T) {
 			file := parse(t, p, in)
-			ctx, cancel := context.WithCancel(t.Context())
+			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			r, _ := interp.New()
 			errChan := make(chan error)
@@ -5045,7 +4633,7 @@ func TestCancelBlockedStdinRead(t *testing.T) {
 
 	p := syntax.NewParser()
 	file := parse(t, p, "read x")
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	// Make the linter happy, even though we deliberately wait for the timeout.
 	defer cancel()
 
@@ -5090,7 +4678,7 @@ func TestRunnerAltNodes(t *testing.T) {
 	for _, node := range nodes {
 		var cb concBuffer
 		r, _ := interp.New(interp.StdIO(nil, &cb, &cb))
-		ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 		defer cancel()
 		if err := r.Run(ctx, node); err != nil {
 			cb.WriteString(err.Error())
@@ -5177,7 +4765,7 @@ func TestRunnerDir(t *testing.T) {
 			t.Fatal(err)
 		}
 		file := parse(t, nil, "echo $PWD $PWD/*")
-		ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 		defer cancel()
 		if err := r.Run(ctx, file); err != nil {
 			t.Fatal(err)
@@ -5202,7 +4790,7 @@ func TestRunnerIncremental(t *testing.T) {
 	want := "foo\nbar\n"
 	var b bytes.Buffer
 	r, _ := interp.New(interp.StdIO(nil, &b, &b))
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	for _, stmt := range file.Stmts {
 		err := r.Run(ctx, stmt)
@@ -5213,33 +4801,6 @@ func TestRunnerIncremental(t *testing.T) {
 		if r.Exited() {
 			break
 		}
-	}
-	if got := b.String(); got != want {
-		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
-	}
-}
-
-func TestRunnerIncrementalExitTrap(t *testing.T) {
-	t.Parallel()
-
-	file := parse(t, nil, "trap 'echo bye' EXIT\necho a\necho b\nexit 3\necho never")
-	want := "a\nb\nbye\n"
-	var b bytes.Buffer
-	r, _ := interp.New(interp.StdIO(nil, &b, &b))
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
-	defer cancel()
-	var exit interp.ExitStatus
-	for _, stmt := range file.Stmts {
-		err := r.Run(ctx, stmt)
-		if err != nil && !errors.As(err, &exit) {
-			b.WriteString(err.Error())
-		}
-		if r.Exited() {
-			break
-		}
-	}
-	if exit != 3 {
-		t.Fatalf("want exit status 3, got %d", exit)
 	}
 	if got := b.String(); got != want {
 		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
@@ -5292,7 +4853,7 @@ exec >/dev/null 2>/dev/null
 GLOBAL=
 export GLOBAL=
 `)
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	for i := range 3 {
 		if err := r.Run(ctx, file); err != nil {
@@ -5320,7 +4881,7 @@ func TestRunnerFilename(t *testing.T) {
 	file, _ := syntax.NewParser().Parse(strings.NewReader("echo $0"), "f.sh")
 	var b bytes.Buffer
 	r, _ := interp.New(interp.StdIO(nil, &b, &b))
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, file); err != nil {
 		t.Fatal(err)
@@ -5338,7 +4899,7 @@ func TestRunnerEnvNoModify(t *testing.T) {
 
 	var b bytes.Buffer
 	r, _ := interp.New(interp.Env(env), interp.StdIO(nil, &b, &b))
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	for range 3 {
 		r.Reset()
@@ -5351,34 +4912,6 @@ func TestRunnerEnvNoModify(t *testing.T) {
 	want := "1 2; 1 2; 1 2; "
 	if got := b.String(); got != want {
 		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
-	}
-}
-
-func TestRunnerASTNoModify(t *testing.T) {
-	t.Parallel()
-
-	file := parse(t, nil, "shopt -s expand_aliases; alias foo=echo\nfoo bar")
-	printer := syntax.NewPrinter()
-	var sb strings.Builder
-	printer.Print(&sb, file)
-	before := sb.String()
-
-	var b bytes.Buffer
-	r, _ := interp.New(interp.StdIO(nil, &b, &b))
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
-	defer cancel()
-	if err := r.Run(ctx, file); err != nil {
-		t.Fatal(err)
-	}
-	if want := "bar\n"; b.String() != want {
-		t.Fatalf("want output %q, got %q", want, b.String())
-	}
-
-	sb.Reset()
-	printer.Print(&sb, file)
-	after := sb.String()
-	if after != before {
-		t.Fatalf("Run modified the AST:\nbefore: %q\nafter:  %q", before, after)
 	}
 }
 
@@ -5402,7 +4935,7 @@ func TestMalformedPathOnWindows(t *testing.T) {
 	file := parse(t, nil, "test.cmd")
 	var cb concBuffer
 	r, _ := interp.New(interp.Env(expand.ListEnviron("PATH="+pathList)), interp.StdIO(nil, &cb, &cb))
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, file); err != nil {
 		t.Fatal(err)
@@ -5422,7 +4955,7 @@ func TestReadShouldNotPanicWithNilStdin(t *testing.T) {
 	}
 
 	f := parse(t, nil, "read foobar")
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, f); err == nil {
 		t.Fatal("it should have returned an error")
@@ -5438,7 +4971,7 @@ func TestRunnerVars(t *testing.T) {
 	}
 
 	f := parse(t, nil, "foo=updated; BAR=new")
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, f); err != nil {
 		t.Fatal(err)
@@ -5461,7 +4994,7 @@ func TestRunnerSubshell(t *testing.T) {
 	f1 := parse(t, nil, "PARENT=foo")
 	f2 := parse(t, nil, "CHILD=bar")
 
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r1.Run(ctx, f1); err != nil {
 		t.Fatal(err)
@@ -5499,7 +5032,7 @@ func TestRunnerNonFileStdin(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := parse(t, nil, "while read a; do echo $a; GOSH_CMD=print_ok $GOSH_PROG; done")
-	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, file); err != nil {
 		cb.WriteString(err.Error())

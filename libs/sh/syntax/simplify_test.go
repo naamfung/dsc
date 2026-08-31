@@ -47,8 +47,6 @@ var simplifyTests = [...]simplifyTest{
 	noSimple(`[[ ! -e foo ]]`),
 	noSimple(`[[ foo == bar ]]`),
 	{`[[ foo = bar ]]`, `[[ foo == bar ]]`},
-	noSimple(`[[ foo =~ "$bar" ]]`),
-	{`[[ "$foo" =~ bar ]]`, `[[ $foo =~ bar ]]`},
 
 	// stmts
 	{"$( (sts))", "$(sts)"},

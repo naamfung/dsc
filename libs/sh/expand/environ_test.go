@@ -4,9 +4,8 @@
 package expand
 
 import (
+	"reflect"
 	"testing"
-
-	"github.com/go-quicktest/qt"
 )
 
 func TestListEnviron(t *testing.T) {
@@ -62,7 +61,10 @@ func TestListEnviron(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			gotEnv := listEnviron_(tc.insensitive, tc.pairs...)
 			got := gotEnv.(listEnviron).pairs
-			qt.Assert(t, qt.DeepEquals(got, tc.want))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ListEnviron(%t, %q) wanted %#v, got %#v",
+					tc.insensitive, tc.pairs, tc.want, got)
+			}
 		})
 	}
 }

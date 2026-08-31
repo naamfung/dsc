@@ -96,7 +96,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `session/` — 事件溯源會話（按項目路徑命名存儲，跨項目隔離）
 - `proto/` — gRPC 定義與生成代碼
 - `tui/` — 終端界面（Bubble Tea）
-- `libs/` — vendored 本地依赖 fork（`go-lua`、`jig-lisp` 精确有理数解释器等），经各插件 `go.mod` 的 `replace` 指入
+- `libs/` — vendored 本地依赖 fork（`go-lua`、`jig-lisp` 精确有理数解释器、`sh`（mvdan.cc/sh/v3 shell 解释器）等），经各插件 `go.mod` 的 `replace` 指入
 
 ## TUI 斜杆命令
 

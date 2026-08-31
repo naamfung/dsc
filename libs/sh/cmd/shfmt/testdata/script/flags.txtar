@@ -28,9 +28,6 @@ stderr 'unknown shell language'
 ! exec shfmt --to-json file
 stderr '--to-json can only be used with stdin'
 
-! exec shfmt --from-json .
-stderr '--from-json can only be used with stdin'
-
 ! exec shfmt -filename=foo file
 stderr '-filename can only be used with stdin'
 

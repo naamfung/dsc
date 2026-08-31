@@ -146,26 +146,6 @@ var braceTests = []struct {
 		litWords("0", "1"),
 	},
 	{
-		litWord("{00..2}"),
-		litWords("00", "01", "02"),
-	},
-	{
-		litWord("{01..10}"),
-		litWords("01", "02", "03", "04", "05", "06", "07", "08", "09", "10"),
-	},
-	{
-		litWord("{-03..3..3}"),
-		litWords("-03", "000", "003"),
-	},
-	{
-		litWord("a{1..10..-3}"),
-		litWords("a1", "a4", "a7", "a10"),
-	},
-	{
-		litWord("a{10..1..3}"),
-		litWords("a10", "a7", "a4", "a1"),
-	},
-	{
 		litWord("a{d..k..3}"),
 		litWords("ad", "ag", "aj"),
 	},
@@ -180,22 +160,6 @@ var braceTests = []struct {
 	{
 		litWord("{1..1}"),
 		litWords("1"),
-	},
-	{
-		litWord("{1,2..3}"),
-		litWords("1", "2..3"),
-	},
-	{
-		litWord("{1..2,3}"),
-		litWords("1..2", "3"),
-	},
-	{
-		litWord("{1..2..3,4}"),
-		litWords("1..2..3", "4"),
-	},
-	{
-		litWord("a{1..2..3..4}"),
-		litWords("a{1..2..3..4}"),
 	},
 }
 
@@ -216,60 +180,6 @@ func TestBraces(t *testing.T) {
 			if gotStr != wantStr {
 				t.Fatalf("mismatch in %q\nwant:\n%s\ngot: %s",
 					inStr, wantStr, gotStr)
-			}
-		})
-	}
-}
-
-func TestBracesSeq(t *testing.T) {
-	t.Parallel()
-	for _, tc := range braceTests {
-		t.Run("", func(t *testing.T) {
-			inStr := printWords(tc.in)
-			wantStr := printWords(tc.want...)
-
-			inBraces := *tc.in
-			syntax.SplitBraces(&inBraces)
-
-			var got []*syntax.Word
-			for w, err := range BracesSeq(nil, &inBraces) {
-				if err != nil {
-					t.Fatalf("unexpected error on %q: %v", inStr, err)
-				}
-				got = append(got, w)
-			}
-			gotStr := printWords(got...)
-			if gotStr != wantStr {
-				t.Fatalf("mismatch in %q\nwant:\n%s\ngot: %s",
-					inStr, wantStr, gotStr)
-			}
-		})
-	}
-}
-
-func TestBracesSeqError(t *testing.T) {
-	t.Parallel()
-	tests := []string{
-		"{1..100000}",
-		"a{0..9223372036854775807}b",
-		"{-9223372036854775808..9223372036854775807}",
-		"{1..1000000000..1}",
-		"{1..100}{1..100}{1..100}",
-		"{a,b,c,d}{1..100}{1..100}{1..50}",
-	}
-	for _, in := range tests {
-		t.Run(in, func(t *testing.T) {
-			word := &syntax.Word{Parts: []syntax.WordPart{lit(in)}}
-			syntax.SplitBraces(word)
-			var gotErr error
-			for _, err := range BracesSeq(nil, word) {
-				if err != nil {
-					gotErr = err
-					break
-				}
-			}
-			if gotErr == nil {
-				t.Fatalf("expected error for %q", in)
 			}
 		})
 	}
