@@ -1,10 +1,12 @@
-!build.sh
-!plugins/*/build.sh
-
 # Executables
 *.exe~
 *.exe
 *.sh
+
+# 放行仓库自带的构建/清理脚本（须位于 *.sh 之后才生效）
+!build.sh
+!clean.sh
+!plugins/*/build.sh
 
 # Protobuf compiler files
 protoc.zip
