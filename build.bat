@@ -152,6 +152,18 @@ go build -o tool-ssh.exe .
 cd ..\..
 call :pack "plugins\tool-ssh\tool-ssh.exe"
 
+:: 构建 tool-novelforge 插件（独立 module，基于 dsc-sdk；本地内部插件，
+:: 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
+echo Building tool-novelforge plugin...
+if exist plugins\tool-novelforge (
+    cd plugins\tool-novelforge
+    go build -o novelforge.exe .
+    cd ..\..
+    call :pack "plugins\tool-novelforge\novelforge.exe"
+) else (
+    echo   ^(skip: plugins\tool-novelforge 目录不存在^)
+)
+
 echo Build completed successfully.
 endlocal
 goto :eof
