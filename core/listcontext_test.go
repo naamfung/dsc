@@ -49,3 +49,29 @@ func TestListContextStableOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestAllToolsProtoSorted 校验 AllToolsProto 产出的工具目录按名升序（供 ListTools、
+// subagent LLM、run_code SDK、PTC 描述内嵌清单复用），使模型输入前缀字节稳定。
+func TestAllToolsProtoSorted(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	// 故意乱序注册（map 里顺序不保证），AllToolsProto 应稳定按名排序
+	_ = m.toolRegistry.Register(&RemoteTool{name: "zebra"})
+	_ = m.toolRegistry.Register(&RemoteTool{name: "apple"})
+	_ = m.toolRegistry.Register(&RemoteTool{name: "mango"})
+
+	out := m.AllToolsProto()
+	if len(out) == 0 {
+		t.Fatal("AllToolsProto 为空")
+	}
+	if out[0].Name != "apple" {
+		t.Fatalf("应按名升序, 首工具应为 apple, got %q", out[0].Name)
+	}
+	if out[len(out)-1].Name != "zebra" {
+		t.Fatalf("应按名升序, 末工具应为 zebra, got %q", out[len(out)-1].Name)
+	}
+	for i := 1; i < len(out); i++ {
+		if out[i-1].Name >= out[i].Name {
+			t.Fatalf("非严格升序: %s >= %s", out[i-1].Name, out[i].Name)
+		}
+	}
+}

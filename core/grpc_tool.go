@@ -62,6 +62,11 @@ func (m *Manager) AllToolsProto() []*proto.Tool {
 			ParametersJson: string(paramsJSON),
 		})
 	}
+	// 稳定排序：工具目录顺序必须确定。底层 ToOpenAITools 遍历共享 map，迭代序随机；
+	// 若直接把该顺序交给模型（ListTools→agent tools、subagent LLM、run_code SDK、
+	// PTC 描述内嵌清单），请求前缀随进程随机漂移、命中前缀缓存失效。此处统一按名升序，
+	// 与 agent 端对工具目录的排序算法一致（顺序不影响功能，但必须确定）。
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
