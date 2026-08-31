@@ -471,9 +471,6 @@ func main() {
 	// 不涉及模型的 notify 工具调用）。作为通用能力，任何插件都可独立订阅。
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) {
-			if globalCtx == nil {
-				return // 音频未初始化（如无音频设备 / DSC_NOTIFY_NO_AUDIO），跳过
-			}
 			switch eventType {
 			case string(core.EventAgentStatus):
 				var ev core.AgentStatusEvent
@@ -483,10 +480,17 @@ func main() {
 				if ev.Status != core.AgentStatusIdle {
 					return // 仅回合完成提醒，运行中/起始不打扰
 				}
-				// 回合成功完成 → success 音效
+				// 事件已到达：先记日志（不受音频初始化影响，便于观测程序性触发）
+				log.Println("🔔 回合完成(success)：agent/status=idle 事件到达")
+				if globalCtx == nil {
+					return // 音频未初始化（如无音频设备 / DSC_NOTIFY_NO_AUDIO），跳过播放
+				}
 				playQueue <- PlayRequest{SoundType: "success"}
 			case string(core.EventAgentError):
 				// 回合失败 → error 音效
+				if globalCtx == nil {
+					return // 音频未初始化，跳过播放
+				}
 				playQueue <- PlayRequest{SoundType: "error"}
 			}
 		},
