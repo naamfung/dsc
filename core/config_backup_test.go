@@ -65,6 +65,13 @@ func TestConfigBackupSeparatePerFile(t *testing.T) {
 	if !strings.HasPrefix(filepath.Base(pc), "config.") || !strings.HasPrefix(filepath.Base(pp), "standard.") {
 		t.Fatalf("备份名前缀应按源文件区分: %q %q", filepath.Base(pc), filepath.Base(pp))
 	}
+	// config 与 preset 落不同备份目录：config.yaml → config-backups/，preset → preset-backups/
+	if filepath.Dir(pc) != filepath.Join(dir, backupConfigDir) {
+		t.Fatalf("config 备份应在 %s, got %s", backupConfigDir, filepath.Dir(pc))
+	}
+	if filepath.Dir(pp) != filepath.Join(dir, "presets", backupPresetDir) {
+		t.Fatalf("preset 备份应在 %s, got %s", backupPresetDir, filepath.Dir(pp))
+	}
 	// 各自 LatestGoodBackup 只认各自前缀
 	if l, _ := LatestGoodBackup(preset); l != pp {
 		t.Fatalf("preset latest 应只认 preset 备份, got %s want %s", l, pp)

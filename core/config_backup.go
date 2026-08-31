@@ -20,12 +20,21 @@ import (
 // backupKeep 旋转保留的最近正常配置份数。
 const backupKeep = 10
 
-// backupConfigDir 相对待备份文件所在目录的备份目录名。
-const backupConfigDir = "config-backups"
+// backupConfigDir / backupPresetDir：config.yaml 与 preset 各自独立的备份子目录名。
+const (
+	backupConfigDir = "config-backups"
+	backupPresetDir = "preset-backups"
+)
 
-// backupDir 返回某配置文件所在目录下的备份目录。
+// backupDir 返回某配置文件所在目录下的备份目录：config.yaml 用 config-backups/，
+// preset（standard/minimal/... 等模式文件）用 preset-backups/，两者独立、互不串扰。
 func backupDir(file string) string {
-	return filepath.Join(filepath.Dir(file), backupConfigDir)
+	base := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+	sub := backupConfigDir
+	if base != "config" {
+		sub = backupPresetDir
+	}
+	return filepath.Join(filepath.Dir(file), sub)
 }
 
 // backupName 由源文件名.prefix 派生备份文件名：<base>.<ts>.yaml。
