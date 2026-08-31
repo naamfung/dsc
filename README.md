@@ -17,6 +17,7 @@
 - **程序化工具呈现（PTC）**：宿主内置 `run_code` 工具（对齐 DSH 的 PTC 概念）——模型写一段**严格 Lua** 程序一把过组合多步工具调用，而不再逐个 call：程序里每个可用工具以同名 Lua 函数呈现（`mytool{...}`），顶层 `return` 即结果；语言是带类型注解、可空 `T?`、联集、流式收窄的受检方言（基于 go-lua）。`-mode ptc`（或 `DSC_PTC=1`）开启**呈现模式**：把直接工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调（对齐 DSH presentation；native/其余模式下 `run_code` 对模型隐藏、也不可执行）；system prompt 引入 PTC 引导，`run_code` 描述携带「程序内可调工具」清单与严格 Lua 方言规范，助模型一把过组合多步。
 - **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
+- **事件體系（對齊 DSH harness 事件）**：宿主 EventBus 採與 DSH cordis events 一致的五種分發模式（`emit` 廣播通知 / `waterfall` 洋葱攔截 / `serial` 順序 / `bail` 短路 / `parallel` 並發），並經互通機制把宿主事件廣播給插件（`Hook.OnEvent`），令插件可獨立訂閱系統事件而不改宿主。已對齊的關鍵事件：工具流水線 `tools/pre-execute` / `tools/execute` / `tools/post-execute`（waterfall 攔截，veto 即阻止；execute 供插件包圍執行與超時策略）與 `tools/result`（emit 結果廣播）；agent 回合生命週期 `agent/status`（running/idle）與 `agent/error`（emit，成功/失敗區分）。因 DSC 的 agent 為獨立 gRPC 插件進程（不同於 DSH 宿主內循環），僅對齊機制與有真實消費者的事件，不機械照搬無消費者或需跨進程空轉的事件。
 
 ## 與 DSH（DeepSeek Harness）的對比
 
