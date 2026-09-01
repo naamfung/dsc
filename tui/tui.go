@@ -3114,7 +3114,7 @@ func elapsedTick() tea.Cmd {
 // 采用 REX 风格的缩进 + 分隔线布局，把交互信息与模型信息区分开，营造呼吸感。
 func (m *Model) statusBar() string {
 	divider := dividerSty.Render(strings.Repeat("─", m.width))
-	left := "模型: " + m.displayModelName() + " · " + m.scopeLabel()
+	left := m.displayModelName() + " · " + m.scopeLabel()
 	if m.copyNotice != "" {
 		left += " · " + m.copyNotice
 	}
