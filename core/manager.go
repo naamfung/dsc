@@ -1652,7 +1652,7 @@ func (m *Manager) GetMainAgentName() string {
 func (m *Manager) LoadPlugin(entry PluginEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.injectionEntryLocked(entry)
+	return m.injectionEntryLocked(entry, true)
 }
 
 // SetConfigPath 设置动态注入/卸载要写回的 config.yaml 路径。

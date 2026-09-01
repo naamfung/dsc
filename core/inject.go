@@ -79,8 +79,9 @@ func (m *Manager) deferPendingLocked(entry PluginEntry) error {
 // injectionEntryLocked 注入单个插件（需已持有 m.mu）：
 //   - agent 作为 broker 提供者先拉起进程但不立即激活；依赖满足则直接激活，否则置 PENDING；
 //   - llm/tool/policy 按类型加载，依赖未满足则进入 PENDING；
-//   - 加载/挂起后持久化声明，并触发 repairPendingLocked 修复其他等待中的插件。
-func (m *Manager) injectionEntryLocked(entry PluginEntry) error {
+//   - persist=true 时将声明持久化写回 config.yaml（重启后仍加载），false 则仅当前进程生效；
+//     随后触发 repairPendingLocked 修复其他等待中的插件。
+func (m *Manager) injectionEntryLocked(entry PluginEntry, persist bool) error {
 	switch entry.Type {
 	case "agent":
 		// agent 提供 broker；loadAgentAndGetBroker 拉起进程、注册 stop hook 并记录 agentEntries
@@ -109,9 +110,12 @@ func (m *Manager) injectionEntryLocked(entry PluginEntry) error {
 		return fmt.Errorf("unsupported core type for injection: %s", entry.Type)
 	}
 
-	// 声明持久化：注入（含 PENDING）写回 config.yaml，保证重启保留
-	if err := m.persistInjectionLocked(entry); err != nil {
-		m.logger.Warn("persist injection failed", "name", entry.Name, "error", err)
+	// 可选持久化：persist=true 才写回 config.yaml（保证重启保留），false 仅本进程生效。
+	// deferPendingLocked 分支自身的持久化不受此开关影响（依赖未满足时一律落盘待办）。
+	if persist {
+		if err := m.persistInjectionLocked(entry); err != nil {
+			m.logger.Warn("persist injection failed", "name", entry.Name, "error", err)
+		}
 	}
 
 	// 修复：本次注入可能补足了先前的缺口，提升等待中的 provider / 再激活 PENDING agent

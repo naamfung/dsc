@@ -517,7 +517,8 @@ func (t *loadDscPluginTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{
 "name":{"type":"string","description":"插件 id，即 plugins/ 下的目录名（如 tool-musicplayer），须匹配 [A-Za-z0-9_-]。"},
 "type":{"type":"string","enum":["tool","llm","agent","policy","dsc"],"description":"插件类型，默认 tool。"},
-"binary_path":{"type":"string","description":"可选：显式指定插件可执行文件路径；缺省按约定 plugins/<name>/<name>.exe 解析。"}},
+"binary_path":{"type":"string","description":"可选：显式指定插件可执行文件路径；缺省按约定 plugins/<name>/<name>.exe 解析。"},
+"persist":{"type":"boolean","description":"是否写回 config.yaml 使重启后仍加载。默认 false：仅当前进程生效、不改配置；true：持久化（先备份 config）。"}},
 "required":["name"],"additionalProperties":false}`)
 }
 
@@ -526,6 +527,7 @@ func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (
 		Name       string `json:"name"`
 		Type       string `json:"type"`
 		BinaryPath string `json:"binary_path"`
+		Persist    bool   `json:"persist"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -557,29 +559,134 @@ func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("插件可执行文件不存在: %s", bin)
 	}
 
-	// 幂等：已在运行则直接返回当前状态
+	// 幂等：已在运行则直接返回当前状态（仍可按需落盘）
 	t.m.mu.RLock()
 	_, already := t.m.clients[p.Name]
 	t.m.mu.RUnlock()
 	if already {
-		return t.result(p.Name, p.Type, bin, "already-active", false)
+		if p.Persist {
+			if err := t.persistEntry(p.Name, p.Type, bin); err != nil {
+				return "", err
+			}
+		}
+		return t.result(p.Name, p.Type, bin, "already-active", false, p.Persist)
 	}
 
-	if err := t.m.LoadPlugin(PluginEntry{Name: p.Name, Type: p.Type, BinaryPath: bin, Enabled: true}); err != nil {
+	// 持久化需在改动前先备份 config；persist=false 则连备份都不做（不改配置）。
+	if p.Persist {
+		if _, err := t.m.backupConfig(); err != nil {
+			return "", err
+		}
+	}
+	entry := PluginEntry{Name: p.Name, Type: p.Type, BinaryPath: bin, Enabled: true}
+	t.m.mu.Lock()
+	err := t.m.injectionEntryLocked(entry, p.Persist)
+	t.m.mu.Unlock()
+	if err != nil {
 		return "", fmt.Errorf("加载失败（可能已加载，或插件自身类型/元数据不匹配）: %w", err)
 	}
-	return t.result(p.Name, p.Type, bin, "loaded", true)
+	return t.result(p.Name, p.Type, bin, "loaded", true, p.Persist)
 }
 
-func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded bool) (string, error) {
+// persistEntry 把载入的插件条目显式写回 config.yaml（先备份），保证重启后仍加载。
+func (t *loadDscPluginTool) persistEntry(name, typ, bin string) error {
+	if _, err := t.m.backupConfig(); err != nil {
+		return err
+	}
+	t.m.mu.Lock()
+	err := t.m.persistInjectionLocked(PluginEntry{Name: name, Type: typ, BinaryPath: bin})
+	t.m.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("写回 config.yaml 失败: %w", err)
+	}
+	return nil
+}
+
+func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded, persist bool) (string, error) {
 	b, err := json.Marshal(map[string]any{
-		"ok":     true,
-		"name":   name,
-		"type":   typ,
-		"binary": filepath.ToSlash(bin),
-		"status": status,
-		"loaded": loaded,
-		"note":   "插件已载入本进程，其工具立即可用；本次不变更 config.yaml，重启后按需重新 load",
+		"ok":      true,
+		"name":    name,
+		"type":    typ,
+		"binary":  filepath.ToSlash(bin),
+		"status":  status,
+		"loaded":  loaded,
+		"persist": persist,
+		"note":    fmt.Sprintf("插件已载入本进程，其工具立即可用；persist=%v", persist),
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ============================================================
+// unload_dsc_plugin
+// ============================================================
+
+// unloadDscPluginTool 运行期卸载已载入的插件（本进程内停止其服务并注销其工具）。
+// persist=true 时同时从 config.yaml 移除条目（重启后不再加载）；目录文件保留。
+type unloadDscPluginTool struct{ m *Manager }
+
+func (t *unloadDscPluginTool) Name() string { return "unload_dsc_plugin" }
+
+func (t *unloadDscPluginTool) TimeoutMs() int { return 120000 }
+
+func (t *unloadDscPluginTool) Description() string {
+	return "Unload a DSC plugin that is currently loaded (stops it in this process and removes its tools). " +
+		"Give the plugin id as the plugins/ directory name (e.g. tool-musicplayer). " +
+		"Set persist=true to also remove its entry from config.yaml so it no longer loads on restart (config is backed up first); " +
+		"files under plugins/ are always kept. This complements uninstall_dsc_plugin (which removes config and optionally the directory)."
+}
+
+func (t *unloadDscPluginTool) ParametersSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{
+"name":{"type":"string","description":"插件 id，即 plugins/ 下的目录名（如 tool-musicplayer）。"},
+"persist":{"type":"boolean","description":"是否同时从 config.yaml 移除条目（重启后不再加载）。默认 false。"}},
+"required":["name"],"additionalProperties":false}`)
+}
+
+func (t *unloadDscPluginTool) Execute(_ context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Name    string `json:"name"`
+		Persist bool   `json:"persist"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if !dscPluginNameRe.MatchString(p.Name) || p.Name == "" || p.Name == "." || p.Name == ".." {
+		return "", fmt.Errorf("invalid name %q", p.Name)
+	}
+
+	t.m.mu.RLock()
+	_, loaded := t.m.clients[p.Name]
+	t.m.mu.RUnlock()
+	if !loaded {
+		if p.Persist {
+			if err := t.m.removeDscPluginConfig(p.Name); err != nil {
+				return "", err
+			}
+		}
+		return t.unloadResult(p.Name, "not-loaded", p.Persist)
+	}
+
+	if err := t.m.UnloadPlugin(p.Name); err != nil {
+		return "", fmt.Errorf("卸载失败: %w", err)
+	}
+	if p.Persist {
+		if err := t.m.removeDscPluginConfig(p.Name); err != nil {
+			return "", fmt.Errorf("卸载成功但清 config 失败: %w", err)
+		}
+	}
+	return t.unloadResult(p.Name, "unloaded", p.Persist)
+}
+
+func (t *unloadDscPluginTool) unloadResult(name, status string, persist bool) (string, error) {
+	b, err := json.Marshal(map[string]any{
+		"ok":      true,
+		"name":    name,
+		"status":  status,
+		"persist": persist,
+		"note":    fmt.Sprintf("插件已卸载（persist=%v）；plugins/ 目录文件保留", persist),
 	})
 	if err != nil {
 		return "", err
@@ -599,6 +706,7 @@ func (m *Manager) dscPluginTools() []ToolDefinition {
 		&uninstallDscPluginTool{m: m},
 		&listDscPluginsTool{m: m},
 		&loadDscPluginTool{m: m},
+		&unloadDscPluginTool{m: m},
 	}
 }
 
