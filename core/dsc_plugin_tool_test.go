@@ -418,3 +418,118 @@ func TestListDscPluginsThreeStates(t *testing.T) {
 		t.Errorf("len = %d, want 3 (bad-dir 不应计入): %v", len(out.Plugins), out.Plugins)
 	}
 }
+
+// TestOrphanNonConventionBinary 校验 directory 内含非约定命名可执行文件
+// （如 tool-novelforge/novelforge.exe）也能被识别为孤儿，并回退到实际二进制。
+func TestOrphanNonConventionBinary(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("plugins: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+	m.SetConfigPath(cfgPath)
+
+	pd := filepath.Join(dir, "plugins", "tool-novelforge")
+	if err := os.MkdirAll(pd, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pd, "novelforge.exe"), []byte("bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 二进制解析应回退到目录内实际可执行文件（约定名 tool-novelforge.exe 不存在）
+	if got := m.diskPluginBinary("tool-novelforge"); !strings.HasSuffix(filepath.ToSlash(got), "/plugins/tool-novelforge/novelforge.exe") {
+		t.Fatalf("diskPluginBinary = %q, want .../novelforge.exe", got)
+	}
+
+	tool := &listDscPluginsTool{m: m}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(res, `"name":"tool-novelforge"`) || !strings.Contains(res, `"state":"orphan"`) {
+		t.Fatalf("novelforge 应作为孤儿列出: %s", res)
+	}
+	if !strings.Contains(res, "novelforge.exe") {
+		t.Fatalf("应回退到实际二进制 novelforge.exe: %s", res)
+	}
+}
+
+// TestPluginBinaryNamingRule 校验插件二进制命名规则：
+//
+//	主名须等于目录名、或目录名去类型前缀；可带 -v<semver> 版本后缀。
+//	dsc-plugin-* 这类主名与目录不符的旧残留记为不合规、不作二进制。
+func TestPluginBinaryNamingRule(t *testing.T) {
+	type c struct {
+		dir, stem string
+		want      bool
+	}
+	cases := []c{
+		{"tool-musicplayer", "tool-musicplayer", true},
+		{"tool-musicplayer", "musicplayer", true},                  // 类型前缀可省略
+		{"tool-musicplayer", "dsc-plugin-tool-musicplayer", false}, // 与目录不符（旧残留）
+		{"tool-musicplayer", "tool-musicplayer-v2.3.1", true},      // 版本后缀（带前缀）
+		{"tool-musicplayer", "musicplayer-v2.3.1", true},           // 版本后缀（省略前缀）
+		{"tool-musicplayer", "musicplayer-v2", true},               // 版本号可仅主号
+		{"tool-musicplayer", "tool-musicplayer-vbad", false},       // 坏版本号
+		{"tool-novelforge", "novelforge", true},                    // 省略 tool- 前缀
+		{"tool-novelforge", "novelforge-v1.0.0", true},
+	}
+	for _, cc := range cases {
+		if got := pluginBinaryStemValid(cc.dir, cc.stem); got != cc.want {
+			t.Errorf("pluginBinaryStemValid(%q,%q) = %v, want %v", cc.dir, cc.stem, got, cc.want)
+		}
+	}
+}
+
+// TestDiskBinarySkipsNonCompliantResidue 校验目录内同时存在合规二进制与不合规旧残留
+// 时，diskPluginBinary 只选合规者（不误抓 dsc-plugin-* 残留）。
+func TestDiskBinarySkipsNonCompliantResidue(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("plugins: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+	m.SetConfigPath(cfgPath)
+
+	pd := filepath.Join(dir, "plugins", "tool-musicplayer")
+	if err := os.MkdirAll(pd, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 不合规残留 + 合规二进制并存
+	if err := os.WriteFile(filepath.Join(pd, "dsc-plugin-tool-musicplayer.exe"), []byte("old"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	toolExe := filepath.Join(pd, "tool-musicplayer.exe")
+	if err := os.WriteFile(toolExe, []byte("bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 合规二进制被选中（而非残留）
+	if got := m.diskPluginBinary("tool-musicplayer"); got != toolExe {
+		t.Fatalf("diskPluginBinary = %q, want %q（不应取残留 dsc-plugin-*）", got, toolExe)
+	}
+
+	tool := &listDscPluginsTool{m: m}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(res, `"name":"tool-musicplayer"`) || !strings.Contains(res, `"state":"orphan"`) {
+		t.Fatalf("tool-musicplayer 应作为孤儿列出: %s", res)
+	}
+	if strings.Contains(res, "dsc-plugin-tool-musicplayer") {
+		t.Fatalf("不应把不合规残留当二进制: %s", res)
+	}
+	if !strings.Contains(res, "tool-musicplayer.exe") {
+		t.Fatalf("应指向合规二进制 tool-musicplayer.exe: %s", res)
+	}
+}

@@ -30,7 +30,7 @@
 
 ### 命名約定與安全保障
 
-- **命名約定**：插件目錄 `plugins/<type>-<name>/`、執行檔 `<type>-<name><ext>`（Windows 下 `ext=.exe`）、`type`∈tool/llm/agent/policy/dsc、`name` 僅 `[A-Za-z0-9_-]`。
+- **命名約定**：插件目錄 `plugins/<type>-<name>/`，`type`∈tool/llm/agent/policy/dsc、`name` 僅 `[A-Za-z0-9_-]`。目錄內可執行文件的**主名須與目錄名一致**，類型前綴可省略（前綴由**目錄級**校驗即可）——例如 `plugins/tool-novelforge/` 內合法主名可為 `tool-novelforge` 或 `novelforge`；`plugin/` 封裝前綴（如 `dsc-plugin-*`）不合法。若帶版本號（升級部署用），版本號須符合語義版本約定（`-v<semver>` 後綴，見「版本化文件命名約定」）。Windows 下 `ext=.exe`。
 - **寫 config 前備份**：任何改動 config.yaml 前先備份（`config.yaml.<ts>.bak`），防止模型寫壞配置。
 - **干跑=live 加載**：安裝先真實 live 加載插件、驗證類型/元數據一致才落盤，失敗則回滾（刪除已拷貝目錄、config 未寫入）。
 
