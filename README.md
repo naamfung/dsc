@@ -76,6 +76,8 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify；内置只读 `list_lua_tools` 枚举当前已注册的 LUA 脚本工具；脚本工具在创造模式下热加载（约 2s 轮询扫描 `scripts/`），宿主会节流同步其到模型可直接调用的工具目录——新脚本工具无需重启即可被模型直接调用）
 - `tool-memory-service`（记忆库工具：原生 RPC 工具 + AfterTool 自动记忆钩子，落点宿主可执行目录 `memory/`，跨会话共享）
 - `tool-harness-webui`（独立 HTTP 服务，代理宿主 admin API 的前端）
+- `tool-ssh`（SSH 远程命令执行终端：`ssh_connect` / `ssh_exec` / `ssh_list` / `ssh_close` 四类持久会话，登录支持密码或私钥，会话按 id 缓存复用，方便模型在远程主机上连续执行命令）
+- `tool-musicplayer`（后台音乐播放器：`music_play` / `music_stop` / `music_setdir`，异步播放 MP3/WAV 文件或目录、单曲/列表循环、音量百分比调节（0-100）；`music_setdir` 持久化默认播放目录到 `~/.dsc/musicplayer_src.txt`，`music_play` 的 path 可省略以用默认目录）
 
 ### Policy 插件
 - `policy-fs-observation`
