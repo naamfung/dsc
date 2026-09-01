@@ -152,6 +152,37 @@ go build -o tool-ssh.exe .
 cd ..\..
 call :pack "plugins\tool-ssh\tool-ssh.exe"
 
+:: 构建 tool-musicplayer 插件（独立 module，基于 dsc-sdk）
+echo Building tool-musicplayer plugin...
+cd plugins\tool-musicplayer
+go build -o tool-musicplayer.exe .
+cd ..\..
+call :pack "plugins\tool-musicplayer\tool-musicplayer.exe"
+
+:: 构建 tool-jyutzyun 插件（独立 module，基于 dsc-sdk；本地内部插件，
+:: 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
+echo Building tool-jyutzyun plugin...
+if exist plugins\tool-jyutzyun (
+    cd plugins\tool-jyutzyun
+    go build -o tool-jyutzyun.exe .
+    cd ..\..
+    call :pack "plugins\tool-jyutzyun\tool-jyutzyun.exe"
+) else (
+    echo   ^(skip: plugins\tool-jyutzyun 目录不存在^)
+)
+
+:: 构建 tool-2fa-master 插件（独立 module，基于 dsc-sdk；本地内部插件，
+:: 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
+echo Building tool-2fa-master plugin...
+if exist plugins\tool-2fa-master (
+    cd plugins\tool-2fa-master
+    go build -o tool-2fa-master.exe .
+    cd ..\..
+    call :pack "plugins\tool-2fa-master\tool-2fa-master.exe"
+) else (
+    echo   ^(skip: plugins\tool-2fa-master 目录不存在^)
+)
+
 :: 构建 tool-novelforge 插件（独立 module，基于 dsc-sdk；本地内部插件，
 :: 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
 echo Building tool-novelforge plugin...
