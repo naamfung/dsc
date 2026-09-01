@@ -23,6 +23,7 @@ const (
 	PurposeAssistants       PurposeType = "assistants"
 	PurposeAssistantsOutput PurposeType = "assistants_output"
 	PurposeBatch            PurposeType = "batch"
+	PurposeUserData         PurposeType = "user_data" // DeepSeek Files API 视觉图片用途
 )
 
 // FileBytesRequest represents a file upload request.

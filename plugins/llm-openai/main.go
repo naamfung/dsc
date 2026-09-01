@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"dsc-sdk"
 	"dsc/core"
@@ -16,7 +19,19 @@ import (
 type OpenAIProvider struct {
 	client *openai.Client
 	model  string
+	// vision 是否启用图像输入：模型名含 "vision"（如 deepseek-v4-flash-vision-exp）
+	// 时自动开启，也可用 DSC_VISION=1/0 强制开/关。
+	vision bool
+	// filesAPI 是否可把超大图自动上传 DeepSeek Files API（base URL 为 deepseek.com 时启用）。
+	filesAPI bool
+	// fileCache 已上传图片的 data URL → file_id 缓存（同一图多轮复用，避免重复上传）。
+	fileMu    sync.Mutex
+	fileCache map[string]string
 }
+
+// maxInlineImageBytes 内联 base64 单图大小上限（对齐 DeepSeek 32 MiB 内联限制，
+// 预留余量避免请求体逼近 48 MiB 上限；超出则走 Files API 上传）。
+const maxInlineImageBytes = 20 << 20 // 20 MiB
 
 // toolCallDeltaAccumulator 用於累積工具調用的增量信息
 type toolCallDeltaAccumulator struct {
@@ -50,13 +65,36 @@ func usageFromOpenAI(u *openai.Usage) *core.Usage {
 	}
 }
 
-func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
-	// 转换消息格式
+// visionEnabled 是否启用图像输入：DSC_VISION=1/true/on 强制开启；0/false/off 强制
+// 关闭；未设置时按模型名是否含 "vision" 自动判定（DeepSeek 仅视觉模型接受图片，
+// 其它模型对图片返回 400）。
+func visionEnabled(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_VISION"))) {
+	case "1", "true", "on", "yes":
+		return true
+	case "0", "false", "off", "no":
+		return false
+	}
+	return strings.Contains(strings.ToLower(model), "vision")
+}
+
+// isDeepSeekEndpoint 按 base URL 是否指向 DeepSeek 判定 Files API 可用性
+// （llamacpp 等本地 server 无 Files API，始终内联）。
+func isDeepSeekEndpoint(baseURL string) bool {
+	return strings.Contains(baseURL, "deepseek.com")
+}
+
+// toOpenAIMessages 把 core.Message 转换为 OpenAI 请求消息。用户消息携带图像且
+// 视觉开启时，构造多模态 content（文本 + image_url / file 块）；assistant 消息
+// 回带工具调用。
+func (p *OpenAIProvider) toOpenAIMessages(messages []core.Message) []openai.ChatCompletionMessage {
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, m := range messages {
-		msg := openai.ChatCompletionMessage{
-			Role:    m.Role,
-			Content: m.Content,
+		msg := openai.ChatCompletionMessage{Role: m.Role}
+		if m.Role == "user" && p.vision && len(m.Images) > 0 {
+			msg.MultiContent = p.imageContentParts(m.Content, m.Images)
+		} else {
+			msg.Content = m.Content
 		}
 		// assistant 消息需回带工具调用（OpenAI 格式要求 tool_calls 与后续 tool 结果匹配）
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
@@ -75,6 +113,108 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tool
 		}
 		openaiMessages[i] = msg
 	}
+	return openaiMessages
+}
+
+// imageContentParts 构造用户消息的多模态 content：文本块 + 每张图像的块。
+// 图像引用（dsc-img:// 或 data URL）先解析为 base64 data URL；单图解码后不超过
+// 内联上限时用 image_url，超限且 DeepSeek Files API 可用时自动上传并以 file 块
+// 引用 file_id（避免请求体超限）。
+func (p *OpenAIProvider) imageContentParts(text string, images []string) []openai.ChatMessagePart {
+	parts := make([]openai.ChatMessagePart, 0, len(images)+1)
+	if text != "" {
+		parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: text})
+	}
+	for _, img := range images {
+		url, err := core.ResolveImageRef(img)
+		if err != nil {
+			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
+			continue
+		}
+		part := openai.ChatMessagePart{
+			Type:     openai.ChatMessagePartTypeImageURL,
+			ImageURL: &openai.ChatMessageImageURL{URL: url},
+		}
+		if p.filesAPI && dataURLSize(url) > maxInlineImageBytes {
+			if fileID := p.uploadImage(url); fileID != "" {
+				part = openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeFile,
+					File: &openai.ChatMessageFile{FileID: fileID},
+				}
+			}
+		}
+		parts = append(parts, part)
+	}
+	return parts
+}
+
+// dataURLSize 返回 data URL 解码后的近似字节数（按 base64 长度估算；非 data URL 返回 0）。
+func dataURLSize(url string) int {
+	const marker = ";base64,"
+	i := strings.Index(url, marker)
+	if i < 0 {
+		return 0
+	}
+	return len(url[i+len(marker):]) / 4 * 3
+}
+
+// parseDataURL 解析 data:image/<mime>;base64,<data> 为 (mime, 原始字节)。
+func parseDataURL(url string) (string, []byte, error) {
+	i := strings.Index(url, ";base64,")
+	if !strings.HasPrefix(url, "data:") || i < 0 {
+		return "", nil, os.ErrInvalid
+	}
+	mime := url[len("data:"):i]
+	raw, err := base64.StdEncoding.DecodeString(url[i+len(";base64,"):])
+	if err != nil {
+		return "", nil, err
+	}
+	return mime, raw, nil
+}
+
+// mimeToExt 由图片 MIME 推导文件扩展名（Files API 上传文件名用）。
+func mimeToExt(mime string) string {
+	switch strings.ToLower(mime) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	}
+	return ".img"
+}
+
+// uploadImage 把超大图上传到 DeepSeek Files API（purpose=user_data）并返回 file_id。
+// 同一 data URL 只上传一次（进程内缓存，多轮复用）；上传失败返回空串（回退内联）。
+func (p *OpenAIProvider) uploadImage(dataURL string) string {
+	p.fileMu.Lock()
+	defer p.fileMu.Unlock()
+	if id, ok := p.fileCache[dataURL]; ok {
+		return id
+	}
+	mime, raw, err := parseDataURL(dataURL)
+	if err != nil {
+		return ""
+	}
+	file, err := p.client.CreateFileBytes(context.Background(), openai.FileBytesRequest{
+		Name:    "image" + mimeToExt(mime),
+		Bytes:   raw,
+		Purpose: openai.PurposeUserData,
+	})
+	if err != nil {
+		log.Printf("⚠️ 图片上传 Files API 失败，回退内联: %v", err)
+		return ""
+	}
+	p.fileCache[dataURL] = file.ID
+	return file.ID
+}
+
+func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
+	// 转换消息格式
+	openaiMessages := p.toOpenAIMessages(messages)
 
 	// 转换工具格式
 	openaiTools := make([]openai.Tool, len(tools))
@@ -131,35 +271,13 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tool
 }
 
 func (p *OpenAIProvider) Name(ctx context.Context) string       { return "openai" }
-func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.0.0" }
+func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.1.0" } // 支持图像输入（视觉）
 func (p *OpenAIProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口
 func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {
 	// 轉換消息格式
-	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
-	for i, m := range messages {
-		msg := openai.ChatCompletionMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		}
-		// assistant 消息需回带工具调用
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			msg.ToolCalls = make([]openai.ToolCall, len(m.ToolCalls))
-			for j, tc := range m.ToolCalls {
-				argsJSON, _ := json.Marshal(tc.Arguments)
-				msg.ToolCalls[j] = openai.ToolCall{
-					ID:   tc.ID,
-					Type: "function",
-					Function: openai.FunctionCall{
-						Name:      tc.Name,
-						Arguments: string(argsJSON),
-					},
-				}
-			}
-		}
-		openaiMessages[i] = msg
-	}
+	openaiMessages := p.toOpenAIMessages(messages)
 
 	// 轉換工具格式
 	openaiTools := make([]openai.Tool, len(tools))
@@ -336,13 +454,16 @@ func main() {
 	}
 
 	provider := &OpenAIProvider{
-		client: openai.NewClientWithConfig(config),
-		model:  model,
+		client:    openai.NewClientWithConfig(config),
+		model:     model,
+		vision:    visionEnabled(model),
+		filesAPI:  isDeepSeekEndpoint(baseURL),
+		fileCache: map[string]string{},
 	}
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.LLMGRPCPlugin
 	// 自动提供 LLMService + 元数据（重写自旧的 plugin.Serve 样板）。
-	sdk := dsc.New(dsc.Config{Name: "openai", Version: "1.0.0", Type: dsc.TypeLLM})
+	sdk := dsc.New(dsc.Config{Name: "openai", Version: "1.1.0", Type: dsc.TypeLLM})
 	sdk.LLM(provider)
 	sdk.Serve()
 }

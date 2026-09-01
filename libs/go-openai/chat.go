@@ -86,12 +86,22 @@ type ChatMessagePartType string
 const (
 	ChatMessagePartTypeText     ChatMessagePartType = "text"
 	ChatMessagePartTypeImageURL ChatMessagePartType = "image_url"
+	ChatMessagePartTypeFile     ChatMessagePartType = "file" // DeepSeek Files API 引用（file_id / file_data）
 )
+
+// ChatMessageFile 是 DeepSeek 等端点支持的文件内容块：通过 Files API 上传后
+// 用 file_id 引用，或用 file_data 以 base64 内联携带（file_id 与 file_data 互斥）。
+type ChatMessageFile struct {
+	FileID   string `json:"file_id,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	Filename string `json:"filename,omitempty"`
+}
 
 type ChatMessagePart struct {
 	Type     ChatMessagePartType  `json:"type,omitempty"`
 	Text     string               `json:"text,omitempty"`
 	ImageURL *ChatMessageImageURL `json:"image_url,omitempty"`
+	File     *ChatMessageFile     `json:"file,omitempty"`
 }
 
 type ChatCompletionMessage struct {
