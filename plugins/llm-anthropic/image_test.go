@@ -59,7 +59,8 @@ func TestImageBlocksFileSource(t *testing.T) {
 // TestImageBlocksRef 内容寻址引用（dsc-img://）被解析为 base64 image 块。
 func TestImageBlocksRef(t *testing.T) {
 	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
-	ref, err := core.SaveImageAttachment([]byte("ref-bytes"), "image/jpeg")
+	jpg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 7, 8, 9}
+	ref, err := core.SaveImageAttachment(jpg)
 	if err != nil {
 		t.Fatal(err)
 	}

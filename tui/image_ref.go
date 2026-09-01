@@ -50,11 +50,11 @@ func ResolveImageRefs(line string) []string {
 	return refs
 }
 
-// saveImageAttachment 读取图片文件并把字节写入内容寻址附件库，返回引用。
+// saveImageAttachment 读取图片文件并把字节写入内容寻址附件库，返回引用
+// （文件名纯哈希不带后缀；MIME 由字节嗅探，不依赖声明扩展名）。
 func saveImageAttachment(path string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
-	mime, ok := imageExtMIME[ext]
-	if !ok {
+	if _, ok := imageExtMIME[ext]; !ok {
 		return "", os.ErrInvalid
 	}
 	info, err := os.Stat(path)
@@ -65,7 +65,7 @@ func saveImageAttachment(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return core.SaveImageAttachment(data, mime)
+	return core.SaveImageAttachment(data)
 }
 
 // resolveRefPath 把 @ 引用路径解析为绝对路径：/workspace 虚拟根映射到工作区

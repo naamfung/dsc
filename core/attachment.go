@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,33 +12,19 @@ import (
 )
 
 // 图像附件的内容寻址引用。对齐 DSH：会话历史/事件日志只保存引用（体积小），
-// 图片字节写入内容寻址附件库（同内容只存一份、可去重），LLM 请求时再解析嵌入
-// （或上传 Files API 引用 file_id）。
+// 图片字节写入内容寻址附件库；附件文件名**只取内容哈希、不带后缀**（对齐 DSH 的
+// objects/<sha256> 命名），同一内容无论声明/改写什么扩展名都落同一文件（去重不
+// 受后缀影响）；图片 MIME 由字节嗅探得出，请求时再解析嵌入（或上传 Files API
+// 引用 file_id）。
 const imageRefPrefix = "dsc-img://"
 
-// imageExtMIME 支持的图片扩展名 → MIME（对齐 DeepSeek vision 支持范围）。
-var imageExtMIME = map[string]string{
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif":  "image/gif",
-	".webp": "image/webp",
-}
-
-// imageMIMEToExt 由图片 MIME 推导扩展名（附件文件名用；image/jpeg 统一 .jpg 保证确定性）。
-func imageMIMEToExt(mime string) string {
-	switch mime {
-	case "image/png":
-		return ".png"
-	case "image/jpeg":
-		return ".jpg"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	}
-	return ".img"
-}
+// 常见图片格式的魔数（用于从字节嗅探 MIME，避免把类型编进文件名）。
+var (
+	pngSig  = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+	jpgSig  = []byte{0xFF, 0xD8, 0xFF}
+	riffSig = []byte("RIFF")
+	webpSig = []byte("WEBP")
+)
 
 // AttachmentDir 返回附件库根目录：DSC_ATTACHMENT_DIR 覆盖（宿主启动时注入
 // <ExecDir>/attachments，对齐 sessions/、memory/ 等可执行目录旧例；各插件进程
@@ -53,10 +40,11 @@ func AttachmentDir() string {
 }
 
 // SaveImageAttachment 把图片字节以内容寻址方式写入附件库并返回引用
-// （dsc-img://<sha256><ext>）；同内容已存在时直接返回既有引用（去重）。
-func SaveImageAttachment(data []byte, mime string) (string, error) {
+// （dsc-img://<sha256>，文件名纯哈希不带后缀）；同内容已存在时直接返回既有引用
+// （去重不受扩展名影响）。
+func SaveImageAttachment(data []byte) (string, error) {
 	sum := sha256.Sum256(data)
-	name := hex.EncodeToString(sum[:]) + imageMIMEToExt(mime)
+	name := hex.EncodeToString(sum[:])
 	ref := imageRefPrefix + name
 	dir := AttachmentDir()
 	path := filepath.Join(dir, name)
@@ -73,8 +61,13 @@ func SaveImageAttachment(data []byte, mime string) (string, error) {
 }
 
 // ResolveImageRef 把图像引用解析为 data:image/<mime>;base64,... 数据 URL。
-// 兼容两种格式：dsc-img:// 引用（从附件库读取字节）与已内联的 data URL（原样返回，
-// 兼容旧版本会话历史中直接存 base64 的消息）。
+// 兼容三种形态：
+//   - 新引用 dsc-img://<sha256>（纯哈希文件名）；
+//   - 旧引用 dsc-img://<sha256>.<ext>（早期版本把后缀编进文件名/引用，解析时
+//     剥离后缀仍按纯哈希读取，兼容旧会话历史）；
+//   - 已内联的 data URL（原样返回，兼容更早版本直接存 base64 的消息）。
+//
+// MIME 由附件字节嗅探，不依赖声明/文件名后缀。
 func ResolveImageRef(ref string) (string, error) {
 	if strings.HasPrefix(ref, "data:") {
 		return ref, nil
@@ -83,14 +76,45 @@ func ResolveImageRef(ref string) (string, error) {
 		return "", fmt.Errorf("不支持的图像引用: %s", ref)
 	}
 	name := strings.TrimPrefix(ref, imageRefPrefix)
-	data, err := os.ReadFile(filepath.Join(AttachmentDir(), name))
+	// 剥离旧版后缀：文件名只认纯哈希；带后缀时先按纯哈希读、读不到再回退旧文件名
+	sha := name
+	if i := strings.IndexByte(sha, '.'); i > 0 {
+		sha = sha[:i]
+	}
+	data, err := readAttachment(sha, name)
 	if err != nil {
-		return "", fmt.Errorf("读取图像附件 %s 失败: %w", name, err)
+		return "", fmt.Errorf("读取图像附件 %s 失败: %w", sha, err)
 	}
-	ext := strings.ToLower(filepath.Ext(name))
-	mime, ok := imageExtMIME[ext]
-	if !ok {
-		mime = "application/octet-stream"
-	}
+	mime := sniffImageMime(data)
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// readAttachment 读取附件字节：优先纯哈希文件名，读不到再回退带后缀的旧文件名
+// （旧版 <sha256>.<ext> 遗留文件，历史兼容）。
+func readAttachment(sha, legacy string) ([]byte, error) {
+	if data, err := os.ReadFile(filepath.Join(AttachmentDir(), sha)); err == nil {
+		return data, nil
+	}
+	if legacy != sha {
+		if data, err := os.ReadFile(filepath.Join(AttachmentDir(), legacy)); err == nil {
+			return data, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+
+// sniffImageMime 由字节魔数嗅探图片 MIME（JPEG/PNG/GIF/WebP；未知返回
+// application/octet-stream）。不依赖文件名与声明类型。
+func sniffImageMime(data []byte) string {
+	switch {
+	case len(data) >= 8 && bytes.Equal(data[:8], pngSig):
+		return "image/png"
+	case len(data) >= 3 && bytes.Equal(data[:3], jpgSig):
+		return "image/jpeg"
+	case len(data) >= 6 && (bytes.HasPrefix(data[:6], []byte("GIF87a")) || bytes.HasPrefix(data[:6], []byte("GIF89a"))):
+		return "image/gif"
+	case len(data) >= 12 && bytes.Equal(data[:4], riffSig) && bytes.Equal(data[8:12], webpSig):
+		return "image/webp"
+	}
+	return "application/octet-stream"
 }

@@ -108,8 +108,9 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 `deepseek-v4-flash-vision-exp`；llamacpp server 的 OpenAI/Anthropic 兼容端点同样
 接受该格式）：
 - 图像**只在用户消息**携带；图片字节以**内容寻址附件库**存储
-  （可执行目录下 `attachments/<sha256><ext>`，对齐 `sessions/` 等目录旧例，同内容
-  去重），会话历史只保存引用（`dsc-img://<sha256><ext>`），不随历史膨胀；上下文
+  （可执行目录下 `attachments/<sha256>`，文件名只取内容哈希不带后缀，对齐 DSH 与
+  `sessions/` 等目录旧例——同内容无论声明/改写什么扩展名都落同一文件、去重不受后缀
+  影响），会话历史只保存引用（`dsc-img://<sha256>`），不随历史膨胀；上下文
   窗口内后续轮次模型仍可见；
 - LLM 请求时把引用解析为 base64 嵌入（OpenAI 端点为 `image_url` 块，Anthropic
   端点为 `image` 块）；

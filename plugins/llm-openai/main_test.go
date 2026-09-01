@@ -31,7 +31,9 @@ func TestImageContentPartsInline(t *testing.T) {
 // TestImageContentPartsRef 内容寻址引用（dsc-img://）被解析为 image_url 块。
 func TestImageContentPartsRef(t *testing.T) {
 	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
-	ref, err := core.SaveImageAttachment([]byte("ref-bytes"), "image/png")
+	// PNG 魔数字节：解析时由字节嗅探出 image/png
+	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3}
+	ref, err := core.SaveImageAttachment(png)
 	if err != nil {
 		t.Fatal(err)
 	}
