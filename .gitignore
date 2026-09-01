@@ -23,6 +23,7 @@ plugins-backup/
 config/config-backups/
 config/presets/preset-backups/
 memory/
+attachments/
 
 # Agent session event log
 session.jsonl

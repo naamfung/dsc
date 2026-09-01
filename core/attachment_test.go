@@ -1,9 +1,26 @@
 package core
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestAttachmentDirDefault 未配置 DSC_ATTACHMENT_DIR 时，缺省落到可执行文件
+// 所在目录的 attachments/（对齐 sessions/ 等目录旧例）。
+func TestAttachmentDirDefault(t *testing.T) {
+	t.Setenv("DSC_ATTACHMENT_DIR", "")
+	dir := AttachmentDir()
+	exeDir, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(filepath.Dir(exeDir), "attachments")
+	if dir != want {
+		t.Fatalf("AttachmentDir() = %q, want %q", dir, want)
+	}
+}
 
 // TestSaveAndResolveImageAttachment 验证内容寻址附件库：保存返回 dsc-img:// 引用、
 // 同内容去重、解析回 data URL。

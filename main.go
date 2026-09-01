@@ -243,6 +243,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 图像附件库目录（对齐 sessions/、memory/ 等可执行目录旧例）：未显式配置
+	// DSC_ATTACHMENT_DIR 时注入 <ExecDir>/attachments，宿主与各插件进程
+	//（buildEnv 继承宿主环境）路径天然一致。
+	if os.Getenv("DSC_ATTACHMENT_DIR") == "" {
+		os.Setenv("DSC_ATTACHMENT_DIR", filepath.Join(execDir, "attachments"))
+	}
+
 	// dsc setup：交互式配置向导（不加载插件，直接读写 config.yaml）。
 	// 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
 	if isSetupCommand(os.Args[1:]) {

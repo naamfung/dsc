@@ -39,17 +39,17 @@ func imageMIMEToExt(mime string) string {
 	return ".img"
 }
 
-// AttachmentDir 返回附件库根目录：DSC_ATTACHMENT_DIR 覆盖，缺省
-// ~/.dsc/attachments/v1/objects（宿主与各插件进程同用户，路径天然一致）。
+// AttachmentDir 返回附件库根目录：DSC_ATTACHMENT_DIR 覆盖（宿主启动时注入
+// <ExecDir>/attachments，对齐 sessions/、memory/ 等可执行目录旧例；各插件进程
+// 继承宿主环境路径一致），未设置时回退可执行文件所在目录的 attachments/。
 func AttachmentDir() string {
 	if d := strings.TrimSpace(os.Getenv("DSC_ATTACHMENT_DIR")); d != "" {
 		return d
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".dsc", "attachments", "v1", "objects")
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "attachments")
 	}
-	return filepath.Join(home, ".dsc", "attachments", "v1", "objects")
+	return "attachments"
 }
 
 // SaveImageAttachment 把图片字节以内容寻址方式写入附件库并返回引用
