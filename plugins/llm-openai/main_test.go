@@ -65,22 +65,19 @@ func TestToOpenAIMessagesVisionGating(t *testing.T) {
 	}
 }
 
-// TestVisionEnabled 模型名含 vision 自动开启；DSC_VISION 可强制覆盖。
+// TestVisionEnabled 默认开启（对齐 DSH 默认支持图像）；DSC_NO_VISION=1 关闭。
 func TestVisionEnabled(t *testing.T) {
-	t.Setenv("DSC_VISION", "")
-	if !visionEnabled("deepseek-v4-flash-vision-exp") {
-		t.Fatal("vision model should auto-enable vision")
+	t.Setenv("DSC_NO_VISION", "")
+	if !visionEnabled() {
+		t.Fatal("default should be enabled (aligned with DSH)")
 	}
-	if visionEnabled("Agentic-Turbo-Coder") {
-		t.Fatal("non-vision model should not auto-enable")
+	t.Setenv("DSC_NO_VISION", "1")
+	if visionEnabled() {
+		t.Fatal("DSC_NO_VISION=1 should disable images")
 	}
-	t.Setenv("DSC_VISION", "0")
-	if visionEnabled("deepseek-v4-flash-vision-exp") {
-		t.Fatal("DSC_VISION=0 should force disable")
-	}
-	t.Setenv("DSC_VISION", "1")
-	if !visionEnabled("Agentic-Turbo-Coder") {
-		t.Fatal("DSC_VISION=1 should force enable")
+	t.Setenv("DSC_NO_VISION", "0")
+	if !visionEnabled() {
+		t.Fatal("DSC_NO_VISION=0 should keep images enabled")
 	}
 }
 

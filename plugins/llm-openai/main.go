@@ -19,8 +19,7 @@ import (
 type OpenAIProvider struct {
 	client *openai.Client
 	model  string
-	// vision 是否启用图像输入：模型名含 "vision"（如 deepseek-v4-flash-vision-exp）
-	// 时自动开启，也可用 DSC_VISION=1/0 强制开/关。
+	// vision 是否启用图像输入：默认开启（对齐 DSH），DSC_NO_VISION=1 可关闭。
 	vision bool
 	// filesAPI 是否可把超大图自动上传 DeepSeek Files API（base URL 为 deepseek.com 时启用）。
 	filesAPI bool
@@ -65,17 +64,14 @@ func usageFromOpenAI(u *openai.Usage) *core.Usage {
 	}
 }
 
-// visionEnabled 是否启用图像输入：DSC_VISION=1/true/on 强制开启；0/false/off 强制
-// 关闭；未设置时按模型名是否含 "vision" 自动判定（DeepSeek 仅视觉模型接受图片，
-// 其它模型对图片返回 400）。
-func visionEnabled(model string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_VISION"))) {
+// visionEnabled 是否启用图像输入：默认开启（对齐 DSH 默认支持图像，仅按模型能力
+// 决定是否接受），DSC_NO_VISION=1 可显式关闭（用于不接收图片的模型）。
+func visionEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_NO_VISION"))) {
 	case "1", "true", "on", "yes":
-		return true
-	case "0", "false", "off", "no":
 		return false
 	}
-	return strings.Contains(strings.ToLower(model), "vision")
+	return true
 }
 
 // isDeepSeekEndpoint 按 base URL 是否指向 DeepSeek 判定 Files API 可用性
@@ -456,7 +452,7 @@ func main() {
 	provider := &OpenAIProvider{
 		client:    openai.NewClientWithConfig(config),
 		model:     model,
-		vision:    visionEnabled(model),
+		vision:    visionEnabled(),
 		filesAPI:  isDeepSeekEndpoint(baseURL),
 		fileCache: map[string]string{},
 	}
