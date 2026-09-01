@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"mime/multipart"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"dsc-sdk"
 	"dsc/core"
@@ -24,21 +31,46 @@ type AnthropicProvider struct {
 	// maxTokens 单轮输出上限。为「不应人为限制」起见默认取较大值，仅当显式配置时才收紧；
 	// 流式路径（TUI / -input）以该值为准，非流式 Chat 则在其 >0 时覆盖。
 	maxTokens int64
+	// vision 是否启用图像输入：模型名含 "vision"（如 deepseek-v4-flash-vision-exp）
+	// 时自动开启，也可用 DSC_VISION=1/0 强制开/关。
+	vision bool
+	// filesAPI 是否可把超大图自动上传 DeepSeek Files API（base URL 为 deepseek.com 时启用）。
+	filesAPI bool
+	// fileCache 已上传图片的 data URL → file_id 缓存（同一图多轮复用，避免重复上传）。
+	fileMu    sync.Mutex
+	fileCache map[string]string
+	// apiKey/baseURL 供 Files API 上传与消息请求使用（DeepSeek anthropic 端点）。
+	apiKey  string
+	baseURL string
 }
+
+// maxInlineImageBytes 内联 base64 单图大小上限（对齐 DeepSeek 32 MiB 内联限制，
+// 预留余量避免请求体逼近 48 MiB 上限；超出则走 Files API 上传）。
+const maxInlineImageBytes = 20 << 20 // 20 MiB
 
 // buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）。
 // maxTokens <= 0 表示使用服务端默认（不再人为限制）；>0 时才显式携带。
-func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []core.Tool, maxTokens int64) anthropic.MessageNewParams {
+// 第二个返回值标记本请求是否引用了 Files API 的 file_id（须带 anthropic-beta 头）。
+func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []core.Tool, maxTokens int64) (anthropic.MessageNewParams, bool) {
 	// 1. 构建 Anthropic 消息
 	var systemMsg string
 	userMessages := make([]anthropic.MessageParam, 0, len(messages))
+	usesBetaHeader := false
 
 	for _, m := range messages {
 		switch m.Role {
 		case "system":
 			systemMsg = m.Content
 		case "user":
-			userMessages = append(userMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
+			if p.vision && len(m.Images) > 0 {
+				blocks, usesFile := p.imageBlocks(m.Content, m.Images)
+				if usesFile {
+					usesBetaHeader = true
+				}
+				userMessages = append(userMessages, anthropic.NewUserMessage(blocks...))
+			} else {
+				userMessages = append(userMessages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
+			}
 		case "assistant":
 			// Anthropic 要求：若后续跟随 tool_result（tool 消息），本 assistant 消息必须
 			// 回带对应的 tool_use 块，否则 API 无法把工具结果关联到之前的调用
@@ -117,7 +149,156 @@ func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []
 	if p.thinking {
 		msgParams.Thinking = anthropic.ThinkingConfigParamOfEnabled(p.thinkingBudget)
 	}
-	return msgParams
+	return msgParams, usesBetaHeader
+}
+
+// visionEnabled 是否启用图像输入：DSC_VISION=1/true/on 强制开启；0/false/off 强制
+// 关闭；未设置时按模型名是否含 "vision" 自动判定（DeepSeek 仅视觉模型接受图片，
+// 其它模型对图片返回 400）。
+func visionEnabled(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_VISION"))) {
+	case "1", "true", "on", "yes":
+		return true
+	case "0", "false", "off", "no":
+		return false
+	}
+	return strings.Contains(strings.ToLower(model), "vision")
+}
+
+// isDeepSeekEndpoint 按 base URL 是否指向 DeepSeek 判定 Files API 可用性
+// （llamacpp 等本地 server 无 Files API，始终内联）。
+func isDeepSeekEndpoint(baseURL string) bool {
+	return strings.Contains(baseURL, "deepseek.com")
+}
+
+// imageBlocks 构造用户消息的多模态内容块：文本块 + 每张图像的 image 块。
+// 图像引用（dsc-img:// 或 data URL）先解析为 base64 data URL；单图解码后不超过
+// 内联上限时用 base64 源；超限且 DeepSeek Files API 可用时自动上传并以 file 源
+// 引用 file_id（请求需带 anthropic-beta 头）。返回内容块与是否使用了 file 源。
+func (p *AnthropicProvider) imageBlocks(text string, images []string) ([]anthropic.ContentBlockParamUnion, bool) {
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(images)+1)
+	usesFile := false
+	if text != "" {
+		blocks = append(blocks, anthropic.NewTextBlock(text))
+	}
+	for _, img := range images {
+		url, err := core.ResolveImageRef(img)
+		if err != nil {
+			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
+			continue
+		}
+		mime, b64, ok := splitDataURL(url)
+		if !ok {
+			continue
+		}
+		if p.filesAPI && dataURLSize(url) > maxInlineImageBytes {
+			if fileID := p.uploadImage(url); fileID != "" {
+				usesFile = true
+				blocks = append(blocks, anthropic.NewImageBlock(anthropic.FileImageSourceParam{
+					FileID:    fileID,
+					MediaType: anthropic.Base64ImageSourceMediaType(mime),
+				}))
+				continue
+			}
+		}
+		blocks = append(blocks, anthropic.NewImageBlockBase64(mime, b64))
+	}
+	return blocks, usesFile
+}
+
+// splitDataURL 解析 data:image/<mime>;base64,<b64> 为 (mime, base64 负载)。
+func splitDataURL(url string) (string, string, bool) {
+	i := strings.Index(url, ";base64,")
+	if !strings.HasPrefix(url, "data:") || i < 0 {
+		return "", "", false
+	}
+	return url[len("data:"):i], url[i+len(";base64,"):], true
+}
+
+// dataURLSize 返回 data URL 解码后的近似字节数（按 base64 长度估算；非 data URL 返回 0）。
+func dataURLSize(url string) int {
+	_, b64, ok := splitDataURL(url)
+	if !ok {
+		return 0
+	}
+	return len(b64) / 4 * 3
+}
+
+// mimeToExt 由图片 MIME 推导文件扩展名（Files API 上传文件名用）。
+func mimeToExt(mime string) string {
+	switch strings.ToLower(mime) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	}
+	return ".img"
+}
+
+// uploadImage 把超大图上传到 DeepSeek anthropic 兼容 Files API（purpose=user_data）
+// 并返回 file_id。同一 data URL 只上传一次（进程内缓存，多轮复用）；失败返回空串。
+func (p *AnthropicProvider) uploadImage(dataURL string) string {
+	p.fileMu.Lock()
+	defer p.fileMu.Unlock()
+	if id, ok := p.fileCache[dataURL]; ok {
+		return id
+	}
+	mime, b64, ok := splitDataURL(dataURL)
+	if !ok {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return ""
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("purpose", "user_data")
+	part, err := writer.CreateFormFile("file", "image"+mimeToExt(mime))
+	if err != nil {
+		return ""
+	}
+	if _, err := part.Write(raw); err != nil {
+		return ""
+	}
+	if err := writer.Close(); err != nil {
+		return ""
+	}
+
+	endpoint := strings.TrimRight(p.baseURL, "/") + "/v1/files"
+	req, err := http.NewRequest(http.MethodPost, endpoint, &body)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("x-api-key", p.apiKey)
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("anthropic-beta", "files-api-2025-04-14")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("⚠️ 图片上传 Files API 失败: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Printf("⚠️ 图片上传 Files API 失败（HTTP %d）: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return ""
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.ID == "" {
+		return ""
+	}
+	p.fileCache[dataURL] = out.ID
+	return out.ID
 }
 
 // concatText 拼接消息中所有 text 块的内容
@@ -199,8 +380,9 @@ func usageFromAnthropic(u *anthropic.Usage) *core.Usage {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
-	params := p.buildMessageParams(messages, tools, int64(maxTokens))
-	resp, err := p.client.Messages.New(ctx, params)
+	params, beta := p.buildMessageParams(messages, tools, int64(maxTokens))
+	opts := p.requestOptions(beta)
+	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -212,8 +394,20 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []core.Message, t
 	}, nil
 }
 
+// requestOptions 返回本次消息请求的额外选项：引用 Files API file_id 时附加
+// anthropic-beta 头（DeepSeek 要求）。
+func (p *AnthropicProvider) requestOptions(beta bool) []option.RequestOption {
+	if !beta {
+		return nil
+	}
+	return []option.RequestOption{
+		option.WithHeader("anthropic-beta", "files-api-2025-04-14"),
+	}
+}
+
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {
-	stream := p.client.Messages.NewStreaming(ctx, p.buildMessageParams(messages, tools, p.maxTokens))
+	params, beta := p.buildMessageParams(messages, tools, p.maxTokens)
+	stream := p.client.Messages.NewStreaming(ctx, params, p.requestOptions(beta)...)
 
 	ch := make(chan *core.ChatStreamResponse)
 	go func() {
@@ -264,7 +458,7 @@ func (p *AnthropicProvider) Name(ctx context.Context) string {
 }
 
 func (p *AnthropicProvider) Version(ctx context.Context) string {
-	return "1.1.0" // 版本升级，支持工具调用
+	return "1.2.0" // 版本升级：支持图像输入（视觉）
 }
 
 func (p *AnthropicProvider) HealthCheck(ctx context.Context) error {
@@ -319,11 +513,16 @@ func main() {
 		thinking:       thinking,
 		thinkingBudget: thinkingBudget,
 		maxTokens:      maxTokens,
+		vision:         visionEnabled(model),
+		filesAPI:       isDeepSeekEndpoint(baseURL),
+		fileCache:      map[string]string{},
+		apiKey:         apiKey,
+		baseURL:        baseURL,
 	}
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.LLMGRPCPlugin
 	// 自动提供 LLMService + 元数据（重写自旧的 plugin.Serve 样板）。
-	sdk := dsc.New(dsc.Config{Name: "anthropic", Version: "1.1.0", Type: dsc.TypeLLM})
+	sdk := dsc.New(dsc.Config{Name: "anthropic", Version: "1.2.0", Type: dsc.TypeLLM})
 	sdk.LLM(provider)
 	sdk.Serve()
 }

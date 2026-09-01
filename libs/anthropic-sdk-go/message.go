@@ -143,6 +143,25 @@ const (
 	Base64ImageSourceMediaTypeImageWebP Base64ImageSourceMediaType = "image/webp"
 )
 
+// The properties FileID, MediaType, Type are required.
+// FileImageSourceParam 通过 Files API 上传后以 file_id 引用图片
+// （DeepSeek 等端点需在请求头携带 anthropic-beta: files-api-2025-04-14）。
+type FileImageSourceParam struct {
+	FileID    string                     `json:"file_id" api:"required"`
+	MediaType Base64ImageSourceMediaType `json:"media_type,omitzero" api:"required"`
+	// This field can be elided, and will marshal its zero value as "file".
+	Type constant.File `json:"type" default:"file"`
+	paramObj
+}
+
+func (r FileImageSourceParam) MarshalJSON() (data []byte, err error) {
+	type shadow FileImageSourceParam
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *FileImageSourceParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 type Base64PDFSource struct {
 	Data      string                  `json:"data" api:"required" format:"byte"`
 	MediaType constant.ApplicationPDF `json:"media_type" default:"application/pdf"`
@@ -1872,13 +1891,15 @@ func NewTextBlock(text string) ContentBlockParamUnion {
 	return ContentBlockParamUnion{OfText: &variant}
 }
 
-func NewImageBlock[T Base64ImageSourceParam | URLImageSourceParam](source T) ContentBlockParamUnion {
+func NewImageBlock[T Base64ImageSourceParam | URLImageSourceParam | FileImageSourceParam](source T) ContentBlockParamUnion {
 	var image ImageBlockParam
 	switch v := any(source).(type) {
 	case Base64ImageSourceParam:
 		image.Source.OfBase64 = &v
 	case URLImageSourceParam:
 		image.Source.OfURL = &v
+	case FileImageSourceParam:
+		image.Source.OfFile = &v
 	}
 	return ContentBlockParamUnion{OfImage: &image}
 }
@@ -3339,11 +3360,12 @@ func (r *ImageBlockParam) UnmarshalJSON(data []byte) error {
 type ImageBlockParamSourceUnion struct {
 	OfBase64 *Base64ImageSourceParam `json:",omitzero,inline"`
 	OfURL    *URLImageSourceParam    `json:",omitzero,inline"`
+	OfFile   *FileImageSourceParam   `json:",omitzero,inline"`
 	paramUnion
 }
 
 func (u ImageBlockParamSourceUnion) MarshalJSON() ([]byte, error) {
-	return param.MarshalUnion(u, u.OfBase64, u.OfURL)
+	return param.MarshalUnion(u, u.OfBase64, u.OfURL, u.OfFile)
 }
 func (u *ImageBlockParamSourceUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
@@ -3354,6 +3376,8 @@ func (u *ImageBlockParamSourceUnion) asAny() any {
 		return u.OfBase64
 	} else if !param.IsOmitted(u.OfURL) {
 		return u.OfURL
+	} else if !param.IsOmitted(u.OfFile) {
+		return u.OfFile
 	}
 	return nil
 }
@@ -3388,6 +3412,8 @@ func (u ImageBlockParamSourceUnion) GetType() *string {
 		return (*string)(&vt.Type)
 	} else if vt := u.OfURL; vt != nil {
 		return (*string)(&vt.Type)
+	} else if vt := u.OfFile; vt != nil {
+		return (*string)(&vt.Type)
 	}
 	return nil
 }
@@ -3397,6 +3423,7 @@ func init() {
 		"type",
 		apijson.Discriminator[Base64ImageSourceParam]("base64"),
 		apijson.Discriminator[URLImageSourceParam]("url"),
+		apijson.Discriminator[FileImageSourceParam]("file"),
 	)
 }
 
