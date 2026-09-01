@@ -492,6 +492,102 @@ func (t *upgradeDscPluginTool) ExecuteWithView(ctx context.Context, args json.Ra
 }
 
 // ============================================================
+// load_dsc_plugin
+// ============================================================
+
+// loadDscPluginTool 运行期载入「已存在于 plugins/ 目录、但未在 config 声明」的插件，
+// 使模型可直接使用其工具（本进程生效）。走宿主原生聚合 Tool RPC（经 ToolRegistry
+// Execute → LoadPlugin），不经 HTTP，也不写 config.yaml。安全：只允许 pluginsRoot
+// 之内的路径 + 严格命名；幂等：已加载则直接返回当前状态。
+type loadDscPluginTool struct{ m *Manager }
+
+func (t *loadDscPluginTool) Name() string { return "load_dsc_plugin" }
+
+func (t *loadDscPluginTool) TimeoutMs() int { return 120000 } // 加载插件进程可能较慢
+
+func (t *loadDscPluginTool) Description() string {
+	return "Activate an existing DSC plugin that is already on disk under the plugins/ directory but not yet loaded (e.g. it exists but is not in the running config), so its tools become usable by the model this session. " +
+		"Give the plugin id as the directory name under plugins/ (e.g. tool-musicplayer). The binary is resolved automatically " +
+		"(plugins/<name>/<name>.exe, honoring versioned binaries) unless binary_path is given, and type defaults to tool. " +
+		"This does NOT modify config.yaml (the change lasts only for the current process; after a restart you can reload it again). " +
+		"Discover what is on disk by listing the plugins/ directory with the shell tool, or list configured plugins with list_dsc_plugins."
+}
+
+func (t *loadDscPluginTool) ParametersSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{
+"name":{"type":"string","description":"插件 id，即 plugins/ 下的目录名（如 tool-musicplayer），须匹配 [A-Za-z0-9_-]。"},
+"type":{"type":"string","enum":["tool","llm","agent","policy","dsc"],"description":"插件类型，默认 tool。"},
+"binary_path":{"type":"string","description":"可选：显式指定插件可执行文件路径；缺省按约定 plugins/<name>/<name>.exe 解析。"}},
+"required":["name"],"additionalProperties":false}`)
+}
+
+func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		BinaryPath string `json:"binary_path"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if !dscPluginNameRe.MatchString(p.Name) || p.Name == "." || p.Name == ".." {
+		return "", fmt.Errorf("invalid name %q: use [A-Za-z0-9_-] and match the plugins/ directory name", p.Name)
+	}
+	if p.Type == "" {
+		p.Type = "tool"
+	}
+	if !dscPluginTypes[p.Type] {
+		return "", fmt.Errorf("invalid type %q", p.Type)
+	}
+
+	bin := p.BinaryPath
+	if bin == "" {
+		pluginDir := filepath.Join(t.m.pluginsRoot(), p.Name)
+		if st, err := os.Stat(pluginDir); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("插件目录 %s 不存在（插件须已置于 plugins/ 目录下）", pluginDir)
+		}
+		bin = ResolveLatestBinary(filepath.Join(pluginDir, p.Name+binExt()))
+	}
+	bin = filepath.Clean(bin)
+	root := strings.ToLower(filepath.Clean(t.m.pluginsRoot()))
+	if !strings.HasPrefix(strings.ToLower(bin), root) {
+		return "", fmt.Errorf("拒绝加载 plugins/ 目录之外的可执行文件: %s", bin)
+	}
+	if _, err := os.Stat(bin); err != nil {
+		return "", fmt.Errorf("插件可执行文件不存在: %s", bin)
+	}
+
+	// 幂等：已在运行则直接返回当前状态
+	t.m.mu.RLock()
+	_, already := t.m.clients[p.Name]
+	t.m.mu.RUnlock()
+	if already {
+		return t.result(p.Name, p.Type, bin, "already-active", false)
+	}
+
+	if err := t.m.LoadPlugin(PluginEntry{Name: p.Name, Type: p.Type, BinaryPath: bin, Enabled: true}); err != nil {
+		return "", fmt.Errorf("加载失败（可能已加载，或插件自身类型/元数据不匹配）: %w", err)
+	}
+	return t.result(p.Name, p.Type, bin, "loaded", true)
+}
+
+func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded bool) (string, error) {
+	b, err := json.Marshal(map[string]any{
+		"ok":     true,
+		"name":   name,
+		"type":   typ,
+		"binary": filepath.ToSlash(bin),
+		"status": status,
+		"loaded": loaded,
+		"note":   "插件已载入本进程，其工具立即可用；本次不变更 config.yaml，重启后按需重新 load",
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ============================================================
 // 工具集合 + 拷贝辅助
 // ============================================================
 
@@ -502,6 +598,7 @@ func (m *Manager) dscPluginTools() []ToolDefinition {
 		&upgradeDscPluginTool{m: m},
 		&uninstallDscPluginTool{m: m},
 		&listDscPluginsTool{m: m},
+		&loadDscPluginTool{m: m},
 	}
 }
 

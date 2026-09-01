@@ -157,3 +157,43 @@ func TestUpgradeDscPlugin(t *testing.T) {
 		t.Fatal("低于当前运行版本的应报错")
 	}
 }
+
+// TestLoadDscPluginValidation 校验 load_dsc_plugin：
+//  1. 工具已入 dscPluginTools 目录（模型可见）；
+//  2. schema 为合法 JSON；
+//  3. 坏命名/坏类型/目录缺失/越界 binary_path 均被拒绝（不触碰插件进程）。
+func TestLoadDscPluginValidation(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	var names []string
+	for _, td := range m.dscPluginTools() {
+		names = append(names, td.Name())
+	}
+	found := false
+	for _, n := range names {
+		if n == "load_dsc_plugin" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("load_dsc_plugin 未入 dscPluginTools: %v", names)
+	}
+
+	tool := &loadDscPluginTool{m: m}
+	if err := json.Unmarshal(tool.ParametersSchema(), &map[string]any{}); err != nil {
+		t.Fatalf("schema 非法 JSON: %v", err)
+	}
+
+	bad := []string{
+		`{"name":""}`,
+		`{"name":"../evil"}`,
+		`{"name":"a/b"}`,
+		`{"name":"x","type":"bogus"}`,
+		`{"name":"tool-absent"}`,                       // 目录不存在
+		`{"name":"x","binary_path":"C:\\evil\\x.exe"}`, // 越界 pluginsRoot
+	}
+	for _, s := range bad {
+		if _, err := tool.Execute(context.Background(), json.RawMessage(s)); err == nil {
+			t.Errorf("非法参数应被拒绝: %s", s)
+		}
+	}
+}
