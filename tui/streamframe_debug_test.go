@@ -17,7 +17,7 @@ type stubAgent struct {
 	historyCalls []int
 }
 
-func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *core.RunStreamResponse, error) {
+func (s *stubAgent) RunStream(_ context.Context, _ string, _ []string) (<-chan *core.RunStreamResponse, error) {
 	ch := make(chan *core.RunStreamResponse)
 	go func() {
 		defer close(ch)
@@ -28,7 +28,7 @@ func (s *stubAgent) RunStream(_ context.Context, _ string) (<-chan *core.RunStre
 	return ch, nil
 }
 
-func (s *stubAgent) Run(context.Context, string) (*core.AgentResult, error) {
+func (s *stubAgent) Run(context.Context, string, []string) (*core.AgentResult, error) {
 	return nil, nil
 }
 
@@ -49,7 +49,7 @@ func (s *stubAgent) SetHistoryInjection(_ context.Context, count int) error {
 }
 func (s *stubAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
 func (s *stubAgent) Shutdown(context.Context, bool) error                  { return nil }
-func (s *stubAgent) InjectMessage(context.Context, string) error           { return nil }
+func (s *stubAgent) InjectMessage(context.Context, string, []string) error { return nil }
 func (s *stubAgent) DebugSnapshot(context.Context) (*core.AgentDebugSnapshot, error) {
 	return &core.AgentDebugSnapshot{SessionID: "stub"}, nil
 }
@@ -68,7 +68,7 @@ func TestPumpLoopRealFlow(t *testing.T) {
 	// 通过真实消息队列执行：submitCmd → first 帧 → pump 循环
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 

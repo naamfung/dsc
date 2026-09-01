@@ -109,7 +109,7 @@ func TestRunLoopContinuesOnInjectedDuringStream(t *testing.T) {
 	done := make(chan *core.AgentResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		res, err := a.runLoop(context.Background(), "初始问题", emit)
+		res, err := a.runLoop(context.Background(), "初始问题", nil, emit)
 		if err != nil {
 			errCh <- err
 			return
@@ -125,7 +125,7 @@ func TestRunLoopContinuesOnInjectedDuringStream(t *testing.T) {
 	}
 
 	// 竞态窗口：模型输出期间注入新用户消息
-	if err := a.InjectMessage(context.Background(), "第二问"); err != nil {
+	if err := a.InjectMessage(context.Background(), "第二问", nil); err != nil {
 		t.Fatalf("InjectMessage: %v", err)
 	}
 	close(llm.releaseFirst)

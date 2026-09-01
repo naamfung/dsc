@@ -132,7 +132,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
-	ch, err := ic.Agent().RunStream(ctx, req.Content)
+	ch, err := ic.Agent().RunStream(ctx, req.Content, nil)
 	if err != nil {
 		writeJSON(w, map[string]string{"error": fmt.Sprintf("对话失败：%v", err)})
 		return

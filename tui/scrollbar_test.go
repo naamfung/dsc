@@ -57,7 +57,7 @@ func pumpFrames(t *testing.T, frames []*core.RunStreamResponse) *Model {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 20 && cmd != nil; i++ {

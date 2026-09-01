@@ -96,7 +96,7 @@ func runTestAgentTurn(t *testing.T, agent Agent, input string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, err := agent.RunStream(ctx, input)
+	ch, err := agent.RunStream(ctx, input, nil)
 	if err != nil {
 		t.Fatalf("RunStream(%q) err: %v", input, err)
 	}

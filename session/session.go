@@ -78,7 +78,15 @@ type TurnData struct {
 	Reason string
 }
 type StepData struct{ Turn, Step int }
-type UserMessageData struct{ Content, Source string }
+
+// UserMessageData 用户消息事件载荷。
+// Images 为该消息附带的图像 data URL（data:image/...;base64,...），随事件日志持久化，
+// 上下文窗口内后续轮次派生历史仍会携带（对齐 rex：图片随消息保留）。
+type UserMessageData struct {
+	Content string
+	Source  string
+	Images  []string
+}
 type AssistantChunkData struct {
 	Turn, Step         int
 	Content, Reasoning string
@@ -288,7 +296,7 @@ func deriveMessageRole(ev *Event) string {
 func deriveEventMessage(ev *Event) *proto.Message {
 	switch d := ev.Data.(type) {
 	case *UserMessageData:
-		return &proto.Message{Role: "user", Content: d.Content}
+		return &proto.Message{Role: "user", Content: d.Content, Images: d.Images}
 	case *AssistantMessageData:
 		// 内容为空且无工具调用时跳过（同 DSH：空 assistant 不得进入模型历史）。
 		if d.Content == "" && len(d.ToolCalls) == 0 {

@@ -141,7 +141,7 @@ func loadBinaryPath(cfgPath string, defaultRel string) string {
 // runOneTurn 以与 TUI 内部一致的 RunStream 方式运行一组输入（不渲染 TUI），
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
 func runOneTurn(agent core.Agent, ctx context.Context, input string) int {
-	ch, err := agent.RunStream(ctx, input)
+	ch, err := agent.RunStream(ctx, input, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
 		return 1

@@ -51,12 +51,12 @@ type StreamItem struct {
 }
 
 // RunStream 以与主 agent 内部一致的流式方式运行一轮对话，返回帧通道。
-// 未连接时返回 nil 通道与错误。
-func (c *Client) RunStream(ctx context.Context, input string) (<-chan *StreamItem, error) {
+// images 为本轮附带的图像 data URL（可为 nil）。未连接时返回 nil 通道与错误。
+func (c *Client) RunStream(ctx context.Context, input string, images []string) (<-chan *StreamItem, error) {
 	if c == nil || c.c == nil {
 		return nil, fmt.Errorf("agentclient: not connected")
 	}
-	stream, err := c.c.RunStream(ctx, &proto.RunRequest{Input: input})
+	stream, err := c.c.RunStream(ctx, &proto.RunRequest{Input: input, Images: images})
 	if err != nil {
 		return nil, err
 	}
@@ -79,10 +79,11 @@ func (c *Client) RunStream(ctx context.Context, input string) (<-chan *StreamIte
 }
 
 // InjectMessage 把一条用户消息实时注入主 agent 当前会话（下一轮 LLM 迭代可见）。
-func (c *Client) InjectMessage(ctx context.Context, content string) error {
+// images 为注入消息附带的图像 data URL（可为 nil）。
+func (c *Client) InjectMessage(ctx context.Context, content string, images []string) error {
 	if c == nil || c.c == nil {
 		return fmt.Errorf("agentclient: not connected")
 	}
-	_, err := c.c.InjectMessage(ctx, &proto.InjectMessageRequest{Content: content})
+	_, err := c.c.InjectMessage(ctx, &proto.InjectMessageRequest{Content: content, Images: images})
 	return err
 }

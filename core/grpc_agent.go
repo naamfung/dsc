@@ -34,7 +34,7 @@ type agentGRPCServer struct {
 }
 
 func (s *agentGRPCServer) Run(ctx context.Context, req *proto.RunRequest) (*proto.RunResponse, error) {
-	result, err := s.impl.Run(ctx, req.Input)
+	result, err := s.impl.Run(ctx, req.Input, req.Images)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (s *agentGRPCServer) Run(ctx context.Context, req *proto.RunRequest) (*prot
 }
 
 func (s *agentGRPCServer) RunStream(req *proto.RunRequest, stream proto.AgentService_RunStreamServer) error {
-	ch, err := s.impl.RunStream(stream.Context(), req.Input)
+	ch, err := s.impl.RunStream(stream.Context(), req.Input, req.Images)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func (s *agentGRPCServer) SetUserQuestionsService(ctx context.Context, req *prot
 }
 
 func (s *agentGRPCServer) InjectMessage(ctx context.Context, req *proto.InjectMessageRequest) (*proto.InjectMessageResponse, error) {
-	if err := s.impl.InjectMessage(ctx, req.Content); err != nil {
+	if err := s.impl.InjectMessage(ctx, req.Content, req.Images); err != nil {
 		return nil, err
 	}
 	return &proto.InjectMessageResponse{}, nil
@@ -167,8 +167,8 @@ type agentGRPCClient struct {
 	client proto.AgentServiceClient
 }
 
-func (c *agentGRPCClient) Run(ctx context.Context, input string) (*AgentResult, error) {
-	resp, err := c.client.Run(ctx, &proto.RunRequest{Input: input})
+func (c *agentGRPCClient) Run(ctx context.Context, input string, images []string) (*AgentResult, error) {
+	resp, err := c.client.Run(ctx, &proto.RunRequest{Input: input, Images: images})
 	if err != nil {
 		return nil, err
 	}
@@ -178,8 +178,8 @@ func (c *agentGRPCClient) Run(ctx context.Context, input string) (*AgentResult, 
 	}, nil
 }
 
-func (c *agentGRPCClient) RunStream(ctx context.Context, input string) (<-chan *RunStreamResponse, error) {
-	stream, err := c.client.RunStream(ctx, &proto.RunRequest{Input: input})
+func (c *agentGRPCClient) RunStream(ctx context.Context, input string, images []string) (<-chan *RunStreamResponse, error) {
+	stream, err := c.client.RunStream(ctx, &proto.RunRequest{Input: input, Images: images})
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +248,8 @@ func (c *agentGRPCClient) Shutdown(ctx context.Context, force bool) error {
 	return err
 }
 
-func (c *agentGRPCClient) InjectMessage(ctx context.Context, content string) error {
-	_, err := c.client.InjectMessage(ctx, &proto.InjectMessageRequest{Content: content})
+func (c *agentGRPCClient) InjectMessage(ctx context.Context, content string, images []string) error {
+	_, err := c.client.InjectMessage(ctx, &proto.InjectMessageRequest{Content: content, Images: images})
 	return err
 }
 

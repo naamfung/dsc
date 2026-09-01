@@ -108,7 +108,7 @@ func TestPreDispatchCompactionOnRestore(t *testing.T) {
 		mu.Unlock()
 	}
 
-	res, err := a.runLoop(context.Background(), "继续", emit)
+	res, err := a.runLoop(context.Background(), "继续", nil, emit)
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestCompactionTriggeredOnUnderReportedUsage(t *testing.T) {
 	a.llmClient = llm
 	a.toolClient = &mockToolClient{}
 
-	res, err := a.runLoop(context.Background(), "继续", nil)
+	res, err := a.runLoop(context.Background(), "继续", nil, nil)
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}

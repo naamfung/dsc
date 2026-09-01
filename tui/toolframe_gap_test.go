@@ -28,7 +28,7 @@ func TestToolFrameGapVisual(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 20 && cmd != nil; i++ {
@@ -67,7 +67,7 @@ func TestToolFrameGapStructural(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 20 && cmd != nil; i++ {
@@ -99,7 +99,7 @@ func TestToolCallResultContiguous(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 20 && cmd != nil; i++ {
@@ -148,7 +148,7 @@ func TestScrollbarDragDuringStreaming(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	// 泵足够多帧使内容溢出视口，同时保持流式进行中（通道仍有余帧）
@@ -225,7 +225,7 @@ func TestWheelDetachesAndRepins(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 25 && cmd != nil; i++ {
@@ -277,7 +277,7 @@ func TestToolResultReasoningSeparated(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 20 && cmd != nil; i++ {

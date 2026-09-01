@@ -30,7 +30,7 @@ func TestVirtualWindowBoundsViewportContent(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 50 && cmd != nil; i++ {
@@ -79,7 +79,7 @@ func TestVirtualWindowStreamingKeepsLastLineLive(t *testing.T) {
 
 	var model tea.Model = m
 	var cmd tea.Cmd
-	cmd = model.(*Model).submitCmd("你好")
+	cmd = model.(*Model).submitCmd("你好", nil)
 	firstMsg := cmd()
 	model, cmd = model.Update(firstMsg)
 	for i := 0; i < 40 && cmd != nil; i++ {

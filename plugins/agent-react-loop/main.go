@@ -147,17 +147,17 @@ func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, too
 	return nil
 }
 
-func (a *ReactLoopAgent) Run(ctx context.Context, input string) (*core.AgentResult, error) {
-	return a.runLoop(ctx, input, nil)
+func (a *ReactLoopAgent) Run(ctx context.Context, input string, images []string) (*core.AgentResult, error) {
+	return a.runLoop(ctx, input, images, nil)
 }
 
 // RunStream 以流式方式执行循环：LLM 文本增量、工具调用提示以帧的形式发送到通道，关闭表示结束
-func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *core.RunStreamResponse, error) {
+func (a *ReactLoopAgent) RunStream(ctx context.Context, input string, images []string) (<-chan *core.RunStreamResponse, error) {
 	ch := make(chan *core.RunStreamResponse)
 	go func() {
 		defer close(ch)
 		var emittedErr bool
-		_, err := a.runLoop(ctx, input, func(item *core.RunStreamResponse) {
+		_, err := a.runLoop(ctx, input, images, func(item *core.RunStreamResponse) {
 			if item.Status == "error" {
 				emittedErr = true
 			}
@@ -173,7 +173,7 @@ func (a *ReactLoopAgent) RunStream(ctx context.Context, input string) (<-chan *c
 }
 
 // runLoop 是 Agent 的核心循环；emit 非空时输出流式帧（文本增量 / 工具提示 / 结束状态），否则保持非流式
-func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*core.RunStreamResponse)) (*core.AgentResult, error) {
+func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []string, emit func(*core.RunStreamResponse)) (*core.AgentResult, error) {
 	// 创建一个可取消的 context，保存 cancelFunc
 	ctx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
@@ -295,7 +295,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, emit func(*c
 
 	// 轮次与用户输入作为会话事件记录（turn/start 为 log-only，user/message 进入 surface）
 	sess.Append(session.TurnStart, &session.TurnData{Turn: turnNo}, nil)
-	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user"}, &session.SurfaceOp{Op: session.SurfaceAppend})
+	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user", Images: images}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
 	// cancelLoop 返回被取消的结果
 	cancelResult := func() (*core.AgentResult, error) {
@@ -905,13 +905,20 @@ func estimateTextTokens(s string) int {
 
 // estimateMessageTokens 估算单条消息的 token 数（对齐 DSH tokenMeter 的
 // "字符数 + 结构开销" 回退，不依赖精确 tokenizer）：文本估算 + 每条消息的固定
-// 结构开销（角色、tool_call_id 等），工具调用额外计入名称与参数。
+// 结构开销（角色、tool_call_id 等），工具调用额外计入名称与参数；图像按
+// DeepSeek 文档的单图 token 上限（384）估算，避免 base64 字节数被误放大。
 func estimateMessageTokens(m *proto.Message) int {
 	toks := estimateTextTokens(m.Content)
 	if m.Role == "tool" {
 		toks += 6 // tool 角色 + tool_call_id 开销
 	} else {
 		toks += 4
+	}
+	for _, img := range m.Images {
+		if img == "" {
+			continue
+		}
+		toks += 384 // 单图 token 上限（视觉模型按尺寸换算）
 	}
 	for _, tc := range m.ToolCalls {
 		toks += estimateTextTokens(tc.Name) + estimateTextTokens(tc.ArgumentsJson) + 8
@@ -1087,20 +1094,20 @@ func (a *ReactLoopAgent) ensureConnected(llmID, toolID uint32) (proto.LLMService
 }
 
 func (a *ReactLoopAgent) Name(ctx context.Context) string    { return "react-agent" }
-func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.0.0" }
+func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.1.0" } // 消息支持图像附件
 
 // InjectMessage 将一条用户消息实时注入到当前运行中会话的历史末端。
 // 运行中的 runLoop 每步都从会话 surface 重新派生请求历史（DeriveMessages），
 // 因此这里追加的 UserMessage 表面事件会在下一次 LLM 迭代即被模型看到——
 // 无需停止或等待本轮完成（对齐 TUI 正在工作中的实时输入）。
-func (a *ReactLoopAgent) InjectMessage(ctx context.Context, content string) error {
+func (a *ReactLoopAgent) InjectMessage(ctx context.Context, content string, images []string) error {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
 	if a.sess == nil {
 		return fmt.Errorf("inject message: session not loaded")
 	}
 	a.sess.Append(session.UserMessage,
-		&session.UserMessageData{Content: content, Source: "user"},
+		&session.UserMessageData{Content: content, Source: "user", Images: images},
 		&session.SurfaceOp{Op: session.SurfaceAppend})
 	a.pendingInjects++ // 记录一次尚未被 runLoop 消费的注入（收尾前据此检测是否继续）
 	fmt.Printf("[Agent Loop] injected user message (%d chars) into running session\n", len(content))
@@ -1314,7 +1321,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	sdk := dsc.New(dsc.Config{Name: "agent-react-loop", Version: "1.0.0", Type: dsc.TypeAgent})
+	sdk := dsc.New(dsc.Config{Name: "agent-react-loop", Version: "1.1.0", Type: dsc.TypeAgent})
 	sdk.Agent(agent)
 	sdk.AgentBroker(func(b *dsc.AgentBroker) error {
 		agent.broker = b

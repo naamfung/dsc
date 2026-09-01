@@ -21,7 +21,7 @@ func TestInjectMessageVisibleOnNextDerive(t *testing.T) {
 
 	// 注入一条运行中的实时消息
 	got := a.sess.Events()
-	if err := a.InjectMessage(context.Background(), "顺便再打印当前时间"); err != nil {
+	if err := a.InjectMessage(context.Background(), "顺便再打印当前时间", nil); err != nil {
 		t.Fatalf("InjectMessage: %v", err)
 	}
 
@@ -72,7 +72,7 @@ func TestInjectMessageVisibleOnNextDerive(t *testing.T) {
 // TestInjectMessageNoSession 验证会话未加载时注入返回错误，不 panic。
 func TestInjectMessageNoSession(t *testing.T) {
 	a := &ReactLoopAgent{}
-	if err := a.InjectMessage(context.Background(), "x"); err == nil {
+	if err := a.InjectMessage(context.Background(), "x", nil); err == nil {
 		t.Fatalf("期望无会话时 InjectMessage 返回错误")
 	}
 }

@@ -36,7 +36,8 @@ func noticeBubble(text string) string {
 }
 
 // startTurn 启动一轮 agent 运行（Enter 用户输入与完成通知唤醒共用）。
-func (m *Model) startTurn(text, rendered string) tea.Cmd {
+// images 为本轮附带的图像 data URL（唤醒场景为 nil）。
+func (m *Model) startTurn(text string, images []string, rendered string) tea.Cmd {
 	m.appendMessage(rendered)
 	m.thinking = true
 	// 新一轮运行指标重置：耗时计时起点、下行数据、缓存命中
@@ -49,7 +50,7 @@ func (m *Model) startTurn(text, rendered string) tea.Cmd {
 	m.render()
 	m.pinnedToBottom = true // 新轮开始：重新钉在底部跟随新内容（对齐 REX 发送消息即重新钉住）
 	m.virtualGotoBottom()
-	return tea.Batch(m.submitCmd(text), m.spinner.Tick, elapsedTick())
+	return tea.Batch(m.submitCmd(text, images), m.spinner.Tick, elapsedTick())
 }
 
 // tryWakeup 空闲且预算未耗尽时，把排队通知作为新轮输入自动发送
@@ -68,5 +69,5 @@ func (m *Model) tryWakeup() tea.Cmd {
 	m.wakeBudget--
 	text := strings.Join(m.pendingWakeups, "\n\n")
 	m.pendingWakeups = nil
-	return m.startTurn(text, noticeBubble(text))
+	return m.startTurn(text, nil, noticeBubble(text))
 }

@@ -102,7 +102,7 @@ func (s *llmProviderServer) HealthCheck(ctx context.Context, req *proto.HealthCh
 func protoMessagesToPlugin(req *proto.ChatRequest) ([]Message, []Tool) {
 	messages := make([]Message, len(req.Messages))
 	for i, m := range req.Messages {
-		msg := Message{Role: m.Role, Content: m.Content}
+		msg := Message{Role: m.Role, Content: m.Content, Images: m.Images}
 		if len(m.ToolCalls) > 0 {
 			msg.ToolCalls = make([]ToolCall, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {

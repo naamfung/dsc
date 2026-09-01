@@ -87,7 +87,7 @@ func TestRunLoopForwardsPluginViewJsonToToolFrame(t *testing.T) {
 	var frames []*core.RunStreamResponse
 	emit := func(f *core.RunStreamResponse) { frames = append(frames, f) }
 
-	res, err := a.runLoop(context.Background(), "do it", emit)
+	res, err := a.runLoop(context.Background(), "do it", nil, emit)
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}

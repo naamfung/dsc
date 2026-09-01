@@ -90,6 +90,7 @@ message HealthCheckResponse {
 
 message RunRequest {
   string input = 1;
+  repeated string images = 2; // 本轮附带的图像 data URL（仅 user 输入；模型可见）
 }
 
 message RunResponse {
@@ -133,6 +134,7 @@ message Message {
   string content = 2;
   string tool_call_id = 3;   // 用于 tool 角色关联
   repeated ToolCall tool_calls = 4;  // 用于 assistant 角色回传工具调用（OpenAI 格式必需）
+  repeated string images = 5;  // 图像附件（data:image/...;base64,... 数据 URL；仅 user 消息）
 }
 
 message Tool {
@@ -209,6 +211,7 @@ message SetUserQuestionsServiceResponse {
 
 message InjectMessageRequest {
   string content = 1; // 注入的用户消息文本
+  repeated string images = 2; // 注入消息附带的图像 data URL
 }
 
 message InjectMessageResponse {}

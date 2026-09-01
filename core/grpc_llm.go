@@ -32,6 +32,8 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"` // assistant 消息回传的工具调用
+	// Images 图像附件（data:image/...;base64,... 数据 URL；仅 user 消息承载，视觉模型可见）
+	Images []string `json:"images,omitempty"`
 }
 
 // Tool 工具结构体
@@ -106,7 +108,7 @@ type llmGRPCServer struct {
 func convertLLMChatRequest(req *proto.ChatRequest) ([]Message, []Tool) {
 	messages := make([]Message, len(req.Messages))
 	for i, m := range req.Messages {
-		msg := Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallId}
+		msg := Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallId, Images: m.Images}
 		if len(m.ToolCalls) > 0 {
 			msg.ToolCalls = make([]ToolCall, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {
@@ -231,7 +233,7 @@ type llmGRPCClient struct {
 func convertToProtoMessages(messages []Message) []*proto.Message {
 	protoMessages := make([]*proto.Message, len(messages))
 	for i, m := range messages {
-		pm := &proto.Message{Role: m.Role, Content: m.Content, ToolCallId: m.ToolCallID}
+		pm := &proto.Message{Role: m.Role, Content: m.Content, ToolCallId: m.ToolCallID, Images: m.Images}
 		if len(m.ToolCalls) > 0 {
 			pm.ToolCalls = make([]*proto.ToolCall, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {

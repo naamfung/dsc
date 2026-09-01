@@ -11,7 +11,7 @@ type streamAgent struct {
 	frames []*RunStreamResponse
 }
 
-func (s *streamAgent) RunStream(ctx context.Context, input string) (<-chan *RunStreamResponse, error) {
+func (s *streamAgent) RunStream(ctx context.Context, input string, images []string) (<-chan *RunStreamResponse, error) {
 	ch := make(chan *RunStreamResponse)
 	go func() {
 		defer close(ch)
@@ -44,7 +44,7 @@ func TestEventAgentEmitsAgentStatusOnTurnComplete(t *testing.T) {
 		m:    m,
 	}
 
-	ch, err := agent.RunStream(context.Background(), "hello")
+	ch, err := agent.RunStream(context.Background(), "hello", nil)
 	if err != nil {
 		t.Fatalf("RunStream: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestEventAgentErrorEmitsAgentError(t *testing.T) {
 		name:  "agent-react-loop",
 		m:     m,
 	}
-	ch, _ := agent.RunStream(context.Background(), "x")
+	ch, _ := agent.RunStream(context.Background(), "x", nil)
 	var n int
 	for range ch {
 		n++

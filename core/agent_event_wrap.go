@@ -46,8 +46,8 @@ func (m *Manager) EventAgentFor(name string) (Agent, bool) {
 
 // RunStream 透传底层 agent 的流帧，并在回合边界广播 agent/status 事件：
 // 收到首帧后广播 running；遇到 success/error 终帧（agent 结束一轮）广播 idle。
-func (w *eventWrappedAgent) RunStream(ctx context.Context, input string) (<-chan *RunStreamResponse, error) {
-	ch, err := w.Agent.RunStream(ctx, input)
+func (w *eventWrappedAgent) RunStream(ctx context.Context, input string, images []string) (<-chan *RunStreamResponse, error) {
+	ch, err := w.Agent.RunStream(ctx, input, images)
 	if err != nil {
 		return nil, err
 	}

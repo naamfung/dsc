@@ -26,7 +26,7 @@ func (s *agentBridgeServer) RunStream(req *proto.RunRequest, stream proto.AgentS
 	if err != nil {
 		return err
 	}
-	ch, err := agent.RunStream(stream.Context(), req.Input)
+	ch, err := agent.RunStream(stream.Context(), req.Input, req.Images)
 	if err != nil {
 		return err
 	}
@@ -49,7 +49,7 @@ func (s *agentBridgeServer) InjectMessage(ctx context.Context, req *proto.Inject
 	if err != nil {
 		return nil, err
 	}
-	if err := agent.InjectMessage(ctx, req.Content); err != nil {
+	if err := agent.InjectMessage(ctx, req.Content, req.Images); err != nil {
 		return nil, err
 	}
 	return &proto.InjectMessageResponse{}, nil

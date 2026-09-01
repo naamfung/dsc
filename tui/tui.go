@@ -403,11 +403,12 @@ func (m *Model) Init() tea.Cmd {
 }
 
 // submitCmd 发起一次 agent.RunStream，结果通过 streamFrame 消息返回
-func (m *Model) submitCmd(input string) tea.Cmd {
+// （images 为本轮附带的图像 data URL，由输入中的 @ 引用解析而来）。
+func (m *Model) submitCmd(input string, images []string) tea.Cmd {
 	return func() tea.Msg {
 		// 为本轮单独建一个可取消的上下文，供 Ctrl+C 中断当前操作
 		cctx, cancel := context.WithCancel(m.ctx)
-		ch, err := m.agent.RunStream(cctx, input)
+		ch, err := m.agent.RunStream(cctx, input, images)
 		if err != nil {
 			cancel()
 			return streamFrame{input: input, err: err, done: true}
@@ -446,9 +447,10 @@ func (m *Model) pumpStreamIfOpen() tea.Cmd {
 
 // injectCmd 将用户输入实时注入到运行中 agent 的会话历史（跨进程 RPC）。
 // 成功注入无需额外 UI 动作（气泡已在上游同步渲染）；失败仅回显错误，不中断当前流。
-func (m *Model) injectCmd(text string) tea.Cmd {
+// images 为注入消息附带的图像 data URL。
+func (m *Model) injectCmd(text string, images []string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.agent.InjectMessage(m.ctx, text)
+		err := m.agent.InjectMessage(m.ctx, text, images)
 		return injectedMsg{err: err}
 	}
 }
@@ -760,9 +762,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.render()
 				m.pinnedToBottom = true // 用户注入新消息 → 重新钉住，以便看到自己的气泡
 				m.virtualGotoBottom()
-				return m, tea.Batch(m.injectCmd(sendText), m.pumpStreamIfOpen(), m.input.Focus())
+				return m, tea.Batch(m.injectCmd(sendText, nil), m.pumpStreamIfOpen(), m.input.Focus())
 			}
-			return m, m.startTurn(sendText, renderUserBubble(text, m.width-4))
+			return m, m.startTurn(sendText, nil, renderUserBubble(text, m.width-4))
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)

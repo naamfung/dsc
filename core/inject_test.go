@@ -15,8 +15,8 @@ type mockAgent struct {
 	registerCalls []struct{ llm, tool uint32 }
 }
 
-func (a *mockAgent) Run(context.Context, string) (*AgentResult, error) { return nil, nil }
-func (a *mockAgent) RunStream(context.Context, string) (<-chan *RunStreamResponse, error) {
+func (a *mockAgent) Run(context.Context, string, []string) (*AgentResult, error) { return nil, nil }
+func (a *mockAgent) RunStream(context.Context, string, []string) (<-chan *RunStreamResponse, error) {
 	return nil, nil
 }
 func (a *mockAgent) Name(context.Context) string    { return "mock" }
@@ -32,7 +32,7 @@ func (a *mockAgent) SetPlanMode(context.Context, bool) error               { ret
 func (a *mockAgent) SetHistoryInjection(context.Context, int) error        { return nil }
 func (a *mockAgent) SetUserQuestionsService(context.Context, uint32) error { return nil }
 func (a *mockAgent) Shutdown(context.Context, bool) error                  { return nil }
-func (a *mockAgent) InjectMessage(context.Context, string) error           { return nil }
+func (a *mockAgent) InjectMessage(context.Context, string, []string) error { return nil }
 func (a *mockAgent) DebugSnapshot(context.Context) (*AgentDebugSnapshot, error) {
 	return &AgentDebugSnapshot{SessionID: "mock"}, nil
 }

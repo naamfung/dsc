@@ -488,6 +488,7 @@ func (x *HealthCheckResponse) GetMessage() string {
 type RunRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Input         string                 `protobuf:"bytes,1,opt,name=input,proto3" json:"input,omitempty"`
+	Images        []string               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"` // 本轮附带的图像 data URL（仅 user 输入；模型可见）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -527,6 +528,13 @@ func (x *RunRequest) GetInput() string {
 		return x.Input
 	}
 	return ""
+}
+
+func (x *RunRequest) GetImages() []string {
+	if x != nil {
+		return x.Images
+	}
+	return nil
 }
 
 type RunResponse struct {
@@ -850,6 +858,7 @@ type Message struct {
 	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
 	ToolCallId    string                 `protobuf:"bytes,3,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"` // 用于 tool 角色关联
 	ToolCalls     []*ToolCall            `protobuf:"bytes,4,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`      // 用于 assistant 角色回传工具调用（OpenAI 格式必需）
+	Images        []string               `protobuf:"bytes,5,rep,name=images,proto3" json:"images,omitempty"`                             // 图像附件（data:image/...;base64,... 数据 URL；仅 user 消息）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -908,6 +917,13 @@ func (x *Message) GetToolCallId() string {
 func (x *Message) GetToolCalls() []*ToolCall {
 	if x != nil {
 		return x.ToolCalls
+	}
+	return nil
+}
+
+func (x *Message) GetImages() []string {
+	if x != nil {
+		return x.Images
 	}
 	return nil
 }
@@ -1652,6 +1668,7 @@ func (x *SetUserQuestionsServiceResponse) GetMessage() string {
 type InjectMessageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"` // 注入的用户消息文本
+	Images        []string               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"`   // 注入消息附带的图像 data URL
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1691,6 +1708,13 @@ func (x *InjectMessageRequest) GetContent() string {
 		return x.Content
 	}
 	return ""
+}
+
+func (x *InjectMessageRequest) GetImages() []string {
+	if x != nil {
+		return x.Images
+	}
+	return nil
 }
 
 type InjectMessageResponse struct {
@@ -3455,10 +3479,11 @@ const file_dsc_proto_rawDesc = "" +
 	"\x12HealthCheckRequest\"G\n" +
 	"\x13HealthCheckResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\"\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\":\n" +
 	"\n" +
 	"RunRequest\x12\x14\n" +
-	"\x05input\x18\x01 \x01(\tR\x05input\"=\n" +
+	"\x05input\x18\x01 \x01(\tR\x05input\x12\x16\n" +
+	"\x06images\x18\x02 \x03(\tR\x06images\"=\n" +
 	"\vRunResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\"\xb9\x02\n" +
@@ -3487,14 +3512,15 @@ const file_dsc_proto_rawDesc = "" +
 	"\bmessages\x18\x01 \x03(\v2\f.dsc.MessageR\bmessages\x12\x1f\n" +
 	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\x12\x1d\n" +
 	"\n" +
-	"max_tokens\x18\x03 \x01(\x05R\tmaxTokens\"\x87\x01\n" +
+	"max_tokens\x18\x03 \x01(\x05R\tmaxTokens\"\x9f\x01\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12 \n" +
 	"\ftool_call_id\x18\x03 \x01(\tR\n" +
 	"toolCallId\x12,\n" +
 	"\n" +
-	"tool_calls\x18\x04 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\"e\n" +
+	"tool_calls\x18\x04 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\x12\x16\n" +
+	"\x06images\x18\x05 \x03(\tR\x06images\"e\n" +
 	"\x04Tool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12'\n" +
@@ -3542,9 +3568,10 @@ const file_dsc_proto_rawDesc = "" +
 	"service_id\x18\x01 \x01(\rR\tserviceId\"U\n" +
 	"\x1fSetUserQuestionsServiceResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"0\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"H\n" +
 	"\x14InjectMessageRequest\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\tR\acontent\"\x17\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x16\n" +
+	"\x06images\x18\x02 \x03(\tR\x06images\"\x17\n" +
 	"\x15InjectMessageResponse\"\x16\n" +
 	"\x14DebugSnapshotRequest\"<\n" +
 	"\fDebugMessage\x12\x12\n" +

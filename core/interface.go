@@ -33,10 +33,10 @@ type ExecuteResponse struct {
 
 // Agent 定义了核心循环的契约
 type Agent interface {
-	// Run 是 Agent 的主入口，负责执行整个循环
-	Run(ctx context.Context, input string) (*AgentResult, error)
-	// RunStream 以流式方式执行循环，返回增量输出通道；关闭表示结束
-	RunStream(ctx context.Context, input string) (<-chan *RunStreamResponse, error)
+	// Run 是 Agent 的主入口，负责执行整个循环；images 为本轮附带的图像 data URL（可为 nil）
+	Run(ctx context.Context, input string, images []string) (*AgentResult, error)
+	// RunStream 以流式方式执行循环，返回增量输出通道；关闭表示结束；images 为本轮附带图像
+	RunStream(ctx context.Context, input string, images []string) (<-chan *RunStreamResponse, error)
 	// 可以添加其他方法，如 Name(), Version() 等
 	Name(ctx context.Context) string
 	Version(ctx context.Context) string
@@ -61,7 +61,8 @@ type Agent interface {
 	Shutdown(ctx context.Context, force bool) error
 	// InjectMessage 将一条用户消息实时注入到当前运行中的会话历史末端，
 	// 使模型在下一次 LLM 迭代即可看到（无需停止或等待本轮完成）。
-	InjectMessage(ctx context.Context, content string) error
+	// images 为注入消息附带的图像 data URL（可为 nil）。
+	InjectMessage(ctx context.Context, content string, images []string) error
 	// DebugSnapshot 返回 agent 当前运行时的调试快照（会话历史、token 用量、
 	// turn 与 plan/goal 状态）。供 ADMIN API DEBUGGER 端点与自动化测试观察。
 	DebugSnapshot(ctx context.Context) (*AgentDebugSnapshot, error)
