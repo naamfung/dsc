@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,66 @@ func TestPersistInjectionUpsertAndRemoval(t *testing.T) {
 		if e.Name == entry.Name {
 			t.Fatalf("entry %s should be removed from config", entry.Name)
 		}
+	}
+}
+
+// TestPersistInjectionNormalizesBinaryPath 校验写回 config.yaml 的 binary_path
+// 归一为相对正斜杆形式（./plugins/<name>/<name>.exe）：load_dsc_plugin persist
+// 会用 filepath.Join(ExecDir,...) 生成绝对反斜杆路径，原样写入会在把部署目录
+// 拷贝/迁移到其他机器后失效；应改为相对路径。
+func TestPersistInjectionNormalizesBinaryPath(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("plugins: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+	m.SetConfigPath(cfgPath)
+
+	// 插件根下的绝对路径（模拟 load_dsc_plugin persist 生成的 Windows 反斜杆绝对路径）
+	abs := filepath.Join(dir, "plugins", "tool-musicplayer", "tool-musicplayer.exe")
+	m.mu.Lock()
+	if err := m.persistInjectionLocked(PluginEntry{Name: "tool-musicplayer", Type: "tool", BinaryPath: abs}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	m.mu.Unlock()
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	wantPrefix := "./plugins/tool-musicplayer/tool-musicplayer"
+	if !strings.Contains(content, "binary_path: "+wantPrefix) {
+		t.Fatalf("config should contain relative forward-slash binary_path:\n%s", content)
+	}
+	// .exe 后缀按平台调整（复用 normalizeBinaryPath）：Windows 保留、其它平台去掉
+	if runtime.GOOS == "windows" && !strings.Contains(content, wantPrefix+".exe") {
+		t.Fatalf("windows config should keep .exe suffix:\n%s", content)
+	}
+	if runtime.GOOS != "windows" && strings.Contains(content, wantPrefix+".exe") {
+		t.Fatalf("non-windows config should drop .exe suffix:\n%s", content)
+	}
+	if strings.Contains(content, "\\") {
+		t.Fatalf("config should not contain backslash paths:\n%s", content)
+	}
+
+	// 插件根外的绝对路径：保留绝对形态但复用 normalizeBinaryPath（正斜杆 + 平台扩展名）
+	outside := filepath.Join(dir, "..", "elsewhere", "tool-x.exe")
+	m.mu.Lock()
+	if err := m.persistInjectionLocked(PluginEntry{Name: "tool-x", Type: "tool", BinaryPath: outside}); err != nil {
+		t.Fatalf("persist outside: %v", err)
+	}
+	m.mu.Unlock()
+	data, _ = os.ReadFile(cfgPath)
+	content = string(data)
+	// YAML 对含冒号的路径值会加引号，这里只断言 normalizeBinaryPath 后的路径本身出现
+	wantOutside := normalizeBinaryPath(filepath.Clean(outside))
+	if !strings.Contains(content, wantOutside) {
+		t.Fatalf("outside-root absolute path should be kept (normalized):\n%s", content)
+	}
+	if strings.Contains(content, "\\") {
+		t.Fatalf("config should not contain backslash paths:\n%s", content)
 	}
 }
 

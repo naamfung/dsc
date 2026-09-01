@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -167,6 +168,7 @@ func (m *Manager) mutatePluginsSessionLocked(createMissing bool, mutate func(roo
 // 动态注入默认启用条目（Enabled=true）。需已持有 m.mu。
 func (m *Manager) persistInjectionLocked(entry PluginEntry) error {
 	entry.Enabled = true
+	entry.BinaryPath = m.portableBinaryPath(entry.BinaryPath)
 	_, err := m.mutatePluginsSessionLocked(true, func(root, seq *yaml.Node) (bool, error) {
 		entryNode, err := entryToNode(entry)
 		if err != nil {
@@ -186,6 +188,27 @@ func (m *Manager) persistInjectionLocked(entry PluginEntry) error {
 	}
 	m.logger.Info("injected core persisted", "name", entry.Name, "type", entry.Type, "config", m.persistConfigPath())
 	return nil
+}
+
+// portableBinaryPath 把要写回 config.yaml 的插件 binary_path 归为可移植形式：
+//  1. 相对化：二进制位于插件根（ExecDir/plugins）之下时转为相对路径
+//     （./plugins/<name>/<name><ext>）——避免绝对路径（含盘符与反斜杆，由
+//     filepath.Join 在 Windows 上生成）在把部署目录拷贝/迁移到其他机器后失效；
+//  2. 复用 normalizeBinaryPath 的转换逻辑：统一正斜杆 + 按平台调整 .exe 后缀
+//     （Windows 保留、其它平台去掉），保证配置跨平台可用。
+func (m *Manager) portableBinaryPath(bin string) string {
+	if bin == "" {
+		return ""
+	}
+	clean := filepath.Clean(bin)
+	root := filepath.Clean(m.pluginsRoot())
+	if filepath.IsAbs(clean) {
+		if rel, err := filepath.Rel(root, clean); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return normalizeBinaryPath("./" + filepath.Join("plugins", rel))
+		}
+	}
+	return normalizeBinaryPath(clean)
 }
 
 // persistRemovalLocked 从 config.yaml 的 plugins 序列中移除指定插件条目。
