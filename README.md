@@ -19,10 +19,49 @@
 - **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
 - **事件體系（對齊 DSH harness 事件）**：宿主 EventBus 採與 DSH cordis events 一致的五種分發模式（`emit` 廣播通知 / `waterfall` 洋葱攔截 / `serial` 順序 / `bail` 短路 / `parallel` 並發），並經互通機制把宿主事件廣播給插件（`Hook.OnEvent`），**不限定插件類型**——任意註冊了 Hook 的插件（tool/dsc/llm/agent/policy）都能訂閱，對齊 DSH cordis 的「事件廣播類型無關」；令插件可獨立訂閱系統事件而不改宿主。已對齊的關鍵事件：工具流水線 `tools/pre-execute` / `tools/execute` / `tools/post-execute`（waterfall 攔截，veto 即阻止；execute 供插件包圍執行與超時策略）與 `tools/result`（emit 結果廣播）；agent 回合生命週期 `agent/status`（running/idle）與 `agent/error`（emit，成功/失敗區分）。因 DSC 的 agent 為獨立 gRPC 插件進程（不同於 DSH 宿主內循環），僅對齊機制與有真實消費者的事件，不機械照搬無消費者或需跨進程空轉的事件。這些領域事件與運行時日誌可經管理 API 的 SSE 端點實時觀測：`/plugins/domain-events`（推送全部 EventBus 領域事件，含字段保真載荷）與 `/plugins/logs`（推送宿主日誌與插件子進程經轉發上來的日志；宿主與插件 logger 統一接入扇出 sink，即使默認靜默模式也按需可察）。管理 API 另提供 `GET /plugins/tools`，一次性返回模型當前可直接調用的工具目錄（含插件熱加載的動態工具，如 tool-lua-host 腳本工具），作為調試視圖。`-input` 非 headless 且已加載通知插件（如 notify）時，回合結束後會短暫寬限（約 0.8s）再關閉插件，確保異步的回合完成音效（約 0.29s）能完整播完，避免被插件進程回收截斷。
 
-- **插件安裝/管理（模型可自助）**：宿主內置 `install_dsc_plugin` / `upgrade_dsc_plugin` / `uninstall_dsc_plugin` / `list_dsc_plugins` / `load_dsc_plugin` / `unload_dsc_plugin` 六個模型工具（指 DSC 自身的二进制插件——本机 Go 程序、經 dsc-sdk 構建、go-plugin/gRPC 加載，有別於 Go 標準庫的 plugin 包；對齊 SKILL 安裝，經聚合 Tool 服務暴露給模型）。嚴格命約定（插件目錄 `plugins/<type>-<name>/`、執行檔 `<type>-<name><ext>`、`type`∈tool/llm/agent/policy/dsc、`name` 僅 `[A-Za-z0-9_-]`），寫 config 前先備份（`config.yaml.<ts>.bak`），並「干跑=live 加載」驗證類型/元數據一致才落盤、失敗回滾（刪已拷目錄、config 未變），防止模型寫壞配置導致起不來。`upgrade_dsc_plugin` 把新版本部署為版本化二进制 `<name>-v<版本><ext>` 並觸發宿主熱更替（依版本化熱更新機制，失敗保留舊實例、新文件供重啟兜底）。新裝/升級插件即時熱加載、無需重啟；模型據「能否加載 ACTIVE」判斷安裝是否正確，可再用 `uninstall_dsc_plugin` 清理。`load_dsc_plugin` 用於**運行期載入「已存在於 plugins/ 目錄、但未在 config 聲明」的插件**（如目錄裡有但仍處孤立未啟用者）：模型直接傳插件 id（`plugins/` 下目錄名，如 `tool-musicplayer`）即載入，其工具本會話立即可用；走宿主原生聚合 Tool RPC 調 `LoadPlugin`、**默認不寫 config.yaml**（`persist=false` 僅對當前進程生效、重啟後按需重新 load），傳 `persist=true` 則先備份再顯式寫回 config.yaml、重啟後仍自動加載（安全：僅允許 pluginsRoot 內可執行檔 + 嚴格命名 + 已載入冪等返回）。對稱的 `unload_dsc_plugin` 在**運行期卸載已載入插件**並註銷其工具：`persist=false` 僅本進程停止、不改 config，`persist=true` 則同時從 config.yaml 移除該條目（先備份；plugins/ 目錄文件一律保留），重啟後不再加載——用以對 `load_dsc_plugin` 的臨時/持久載入做對稱清理。
+- **插件安裝/管理（模型可自助）**：宿主內置六個模型工具，讓模型動態管理插件——安裝 / 升級 / 卸載 / 列出 / 運行期載入 / 運行期卸載，詳見「[模型自助動態插件管理](#模型自助動態插件管理)」一節。
 
 - **配置自癒**：每個成功啟動後，把已生效的 `config.yaml` 與當前 mode 的 preset（如 `standard.yaml`）**各自獨立備份**到源文件同目錄的備份子目錄（`config.yaml` → `config-backups/`、preset → `preset-backups/`；旋轉保留最近 10 份、按各自前綴區分、互不串擾）。當某份配置因改壞或壞插件導致啟動報錯時，宿主會先把壞版各自留檔，再**分別還原各自最近正常備份**、重建插件集重試一次並以降級模式繼續啟動——而非直接退出，避免「模型搞壞配置就再也起不來」。同時 config.yaml 中啟用的 tool/policy/dsc 插件正式併入啟動合併集（與 preset 按名去重、**preset 優先**——preset 屬具體的預設，同名衝突取 preset，config 僅補 preset 沒有的，使模型安裝的插件仍能跨重啟生效）。
 - **插件目錄自癒**：維持 `plugins/` 的「上次正常」快照（兄弟目錄 `plugins-backup/`，二進制大故僅當有新內容才刷新）。當插件目錄與配置無法對齊（如插件二進制缺失/損壞）導致啟動加載失敗時，從快照回拷合併恢復（**容錯拷貝**：運行中的插件 `.exe` 被進程鎖住會跳過——本就正常；真正缺失/損壞、未運行的二進制會被回拷）後再續啟。恢復後還會盤點「未被當前配置引用的孤立插件目錄」並**僅告警、不刪除**——此類插件從未啟用，無法判斷其可用性、亦不能替用戶保證將來不用，故先保留；日後若用戶啟用其卻導致啟動加載失敗，再由本機制兜底處理。
+
+## 模型自助動態插件管理
+
+宿主內置六個模型工具，讓模型可以自助地安裝、升級、卸載、列出，以及在**運行期**載入/卸載 DSC 自身插件——即本機二進制 Go 程序、經 `dsc-sdk` 構建、go-plugin/gRPC 加載的插件（有別於 Go 標準庫的 `plugin` 包；對齊 SKILL 安裝，經聚合 Tool 服務暴露給模型）。插件**用與不用由配置決定**，與是否被構建解耦；這些工具在運行時動態生效、無需重啟。
+
+### 命名約定與安全保障
+
+- **命名約定**：插件目錄 `plugins/<type>-<name>/`、執行檔 `<type>-<name><ext>`（Windows 下 `ext=.exe`）、`type`∈tool/llm/agent/policy/dsc、`name` 僅 `[A-Za-z0-9_-]`。
+- **寫 config 前備份**：任何改動 config.yaml 前先備份（`config.yaml.<ts>.bak`），防止模型寫壞配置。
+- **干跑=live 加載**：安裝先真實 live 加載插件、驗證類型/元數據一致才落盤，失敗則回滾（刪除已拷貝目錄、config 未寫入）。
+
+### 工具一覽
+
+| 工具 | 用途 | 關鍵行為 |
+| --- | --- | --- |
+| `install_dsc_plugin` | 安裝插件 | 拷貝到 `plugins/<type>-<name>/`，live 加載校驗後落盤 config，失敗回滾 |
+| `upgrade_dsc_plugin` | 升級插件 | 部署版本化二進制 `<name>-v<版本><ext>` 並觸發宿主熱更替；失敗保留舊實例、新文件供重啟兜底 |
+| `uninstall_dsc_plugin` | 卸載插件 | 從 config 移除條目，可選刪除 `plugins/<name>/` 目錄 |
+| `list_dsc_plugins` | 列出插件 | 列出 config.yaml 聲明的插件（name/type/enabled/binary_path） |
+| `load_dsc_plugin` | 運行期載入 | 載入「已存在於 plugins/ 但未在 config 聲明」的插件；默認僅當前進程生效，可選持久化 |
+| `unload_dsc_plugin` | 運行期卸載 | 停止本進程服務並註銷其工具；可選從 config 移除條目 |
+
+安裝/升級/卸載後插件即時熱加載、不需重啟；模型可據「能否加載 ACTIVE」判斷安裝是否正確。
+
+### 運行期載入 / 卸載（load / unload）
+
+`load_dsc_plugin` 用於**運行期載入「已存在於 plugins/ 目錄、但未在 config 聲明」的插件**（如目錄裡有但仍處孤立未啟用者）：模型直接傳插件 id（`plugins/` 下目錄名，如 `tool-musicplayer`）即載入，其工具本會話立即可用。走宿主原生聚合 Tool RPC 調 `LoadPlugin`，**默認不寫 config.yaml**：
+
+- `persist=false`（默認）：僅對當前進程生效、不改配置；重啟後按需重新 load。
+- `persist=true`：先備份再顯式寫回 config.yaml，重啟後仍自動加載。
+- 安全：僅允許 `pluginsRoot` 內可執行檔 + 嚴格命名 + 已載入冪等返回（重複 load 不報錯）。
+
+對稱的 `unload_dsc_plugin` 在**運行期卸載已載入插件**並註銷其工具：
+
+- `persist=false`：僅本進程停止、不改 config。
+- `persist=true`：同時從 config.yaml 移除該條目（先備份）；`plugins/` 目錄文件一律保留。
+- 安全：未載入時卸載也冪等處理，可按需僅清除 config 條目。
+
+`unload_dsc_plugin` 用以對 `load_dsc_plugin` 的臨時/持久載入做對稱清理；完整卸載（移除 config 且可選刪目錄）則用 `uninstall_dsc_plugin`。
 
 ## 與 DSH（DeepSeek Harness）的對比
 
