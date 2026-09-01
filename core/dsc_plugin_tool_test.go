@@ -418,3 +418,54 @@ func TestListDscPluginsThreeStates(t *testing.T) {
 		t.Errorf("len = %d, want 3 (bad-dir 不应计入): %v", len(out.Plugins), out.Plugins)
 	}
 }
+
+// TestPluginBinaryNameStrict 校验严格命名规则对可执行文件名称的判定：
+// 主名须与目录名一致（可带 -v<semver> 版本后缀），类型前缀不可省略。
+func TestPluginBinaryNameStrict(t *testing.T) {
+	cases := []struct {
+		dir, stem string
+		want      bool
+	}{
+		{"tool-novelforge", "tool-novelforge", true},               // 主名=目录名
+		{"tool-novelforge", "tool-novelforge-v2", true},            // 版本后缀
+		{"tool-novelforge", "tool-novelforge-v2.3.1", true},        // 版本后缀
+		{"tool-novelforge", "novelforge", false},                   // 省略类型前缀 → 不合规
+		{"tool-novelforge", "novelforge-v2.3.1", false},            // 省略类型前缀+版本 → 不合规
+		{"tool-musicplayer", "dsc-plugin-tool-musicplayer", false}, // 封装前缀残留 → 不合规
+		{"tool-novelforge", "novelforge.exe", false},               // 整名含扩展名 → 不合规
+	}
+	for _, c := range cases {
+		if got := pluginBinaryStemValid(c.dir, c.stem); got != c.want {
+			t.Errorf("pluginBinaryStemValid(%q, %q) = %v, want %v", c.dir, c.stem, got, c.want)
+		}
+	}
+}
+
+// TestDiskOrphanRequiresCompliantBinary 校验孤儿/未配候选须在目录内存在合规执行文件，
+// 而非仅凭目录名或任意 exe——省略类型前缀的不合规文件不把该目录计入。
+func TestDiskOrphanRequiresCompliantBinary(t *testing.T) {
+	dir := t.TempDir()
+	pluginDir := filepath.Join(dir, "plugins", "tool-novelforge")
+	if err := os.MkdirAll(pluginDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ext := binExt()
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+
+	// 仅有省略前缀的 novelforge.exe（不合规残留）→ 目录不是孤儿候选
+	if err := os.WriteFile(filepath.Join(pluginDir, "novelforge"+ext), []byte("bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.listPluginDiskNames(); len(got) != 0 {
+		t.Fatalf("仅残留不合规文件时 listPluginDiskNames = %v, want 空", got)
+	}
+
+	// 补上合规的 tool-novelforge.exe（与目录名一致）→ 目录成为孤儿候选
+	if err := os.WriteFile(filepath.Join(pluginDir, "tool-novelforge"+ext), []byte("bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got := m.listPluginDiskNames()
+	if len(got) != 1 || got[0] != "tool-novelforge" {
+		t.Fatalf("有合规文件时 listPluginDiskNames = %v, want [tool-novelforge]", got)
+	}
+}

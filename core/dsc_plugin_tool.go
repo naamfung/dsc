@@ -370,7 +370,7 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 				r.Type = conf.Type
 			}
 			r.Enabled = true
-			r.BinaryPath = m.resolveDiskBinary(name)
+			r.BinaryPath = m.diskPluginBinary(name)
 			if inConf && conf.BinaryPath != "" {
 				r.BinaryPath = conf.BinaryPath
 			}
@@ -380,13 +380,13 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 			r.Enabled = conf.Enabled
 			r.BinaryPath = conf.BinaryPath
 			if r.BinaryPath == "" {
-				r.BinaryPath = m.resolveDiskBinary(name)
+				r.BinaryPath = m.diskPluginBinary(name)
 			}
 		default:
 			r.State = "orphan"
 			r.Type = inferPluginTypeFromDir(name)
 			r.Enabled = false
-			r.BinaryPath = m.resolveDiskBinary(name)
+			r.BinaryPath = m.diskPluginBinary(name)
 		}
 		rows = append(rows, r)
 	}
@@ -398,19 +398,69 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 	return string(b), nil
 }
 
-// resolveDiskBinary 按约定返回 plugins/<name>/<name><ext> 的路径（不校验存在性）。
-func (m *Manager) resolveDiskBinary(name string) string {
-	return filepath.Join(m.pluginsRoot(), name, name+binExt())
+// 插件二进制命名约定（严格）：
+//   目录 plugins/<type>-<name>/ 内的可执行文件主名须与目录名一致（类型前缀不可省略），
+//   即 <type>-<name>；若带版本号（升级部署按 -v<semver> 后缀），版本号须符合
+//   语义版本约定。目录内存在合规二进制则该目录是一个插件（孤儿/未配候选）——
+//   判定依据是「文件名称」，而非仅目录名。
+// 例如：tool-novelforge/tool-novelforge.exe 合规；tool-novelforge-v2.3.1.exe 合规；
+//      novelforge.exe（省略 tool- 前缀）与目录名不符，不合规，系旧残留。
+
+// pluginVersionSuffixRe 匹配 -v<semver> 版本后缀（形如 2 / 2.3 / 2.3.1）。
+var pluginVersionSuffixRe = regexp.MustCompile(`^v[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z.-]+)?$`)
+
+// pluginBinaryStemValid 判断可执行文件主名（去扩展名后的 stem）对给定目录名是否合规
+// （严格）：等于目录名，或等于目录名带 -v<semver> 版本后缀。
+func pluginBinaryStemValid(dir, stem string) bool {
+	if stem == dir {
+		return true
+	}
+	if i := strings.LastIndex(stem, "-v"); i > 0 {
+		pre, ver := stem[:i], stem[i+1:]
+		if pre == dir && pluginVersionSuffixRe.MatchString(ver) {
+			return true
+		}
+	}
+	return false
 }
 
-// listPluginDiskNames 扫描 pluginsRoot 下的插件目录名（约定可执行文件齐备者），
-// 作为孤儿/未配插件的候选来源。
+// diskPluginBinary 在插件目录内查找首个符合命名约定的可执行文件路径；无则返回空串。
+func (m *Manager) diskPluginBinary(name string) string {
+	dir := filepath.Join(m.pluginsRoot(), name)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		fn := e.Name()
+		if runtime.GOOS == "windows" {
+			if !strings.EqualFold(filepath.Ext(fn), ".exe") {
+				continue
+			}
+		} else {
+			fi, err := e.Info()
+			if err != nil || fi.Mode().Perm()&0111 == 0 {
+				continue
+			}
+		}
+		stem := strings.TrimSuffix(fn, binExt())
+		if pluginBinaryStemValid(name, stem) {
+			return filepath.Join(dir, fn)
+		}
+	}
+	return ""
+}
+
+// listPluginDiskNames 扫描 pluginsRoot 下的目录名，仅将「目录内存在合规执行文件」的
+// 目录计为孤儿/未配候选——校验文件名称，而非仅凭目录名。
 func (m *Manager) listPluginDiskNames() []string {
 	ents, err := os.ReadDir(m.pluginsRoot())
 	if err != nil {
 		return nil
 	}
-	ext := binExt()
 	var out []string
 	for _, e := range ents {
 		if !e.IsDir() {
@@ -420,8 +470,7 @@ func (m *Manager) listPluginDiskNames() []string {
 		if !dscPluginNameRe.MatchString(name) {
 			continue
 		}
-		// 要求可执行文件存在（与 load_dsc_plugin 的解析约定一致）
-		if _, err := os.Stat(filepath.Join(m.pluginsRoot(), name, name+ext)); err != nil {
+		if m.diskPluginBinary(name) == "" {
 			continue
 		}
 		out = append(out, name)
