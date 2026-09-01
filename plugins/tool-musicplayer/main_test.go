@@ -9,6 +9,26 @@ import (
 	"testing"
 )
 
+// setUserHome 临时把 Windows 主目录切换到 temp 目录，测试结束后还原，
+// 让默认播放目录的持久化读写落在独立环境下，不污染真实主目录。
+func setUserHome(t *testing.T) string {
+	t.Helper()
+	key := "USERPROFILE"
+	prev, had := os.LookupEnv(key)
+	home := t.TempDir()
+	if err := os.Setenv(key, home); err != nil {
+		t.Fatalf("set %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if had {
+			os.Setenv(key, prev)
+		} else {
+			os.Unsetenv(key)
+		}
+	})
+	return home
+}
+
 // ---------- collectAudioFiles ----------
 
 func TestCollectAudioFilesDir(t *testing.T) {
@@ -116,5 +136,34 @@ func TestDecodeWAV(t *testing.T) {
 	first := int16(binary.LittleEndian.Uint16(pcm[0:2]))
 	if first != 100 {
 		t.Fatalf("first sample=%d, want 100", first)
+	}
+}
+
+// ---------- 默认播放目录持久化 ----------
+
+func TestDefaultSrcPersistence(t *testing.T) {
+	os.Unsetenv("DSC_MUSICPLAYER_SRC")
+	setUserHome(t)
+
+	dir := t.TempDir()
+	if err := saveDefaultSrc(dir); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got := loadDefaultSrc(); got != filepath.Clean(dir) {
+		t.Fatalf("load after save = %q, want %q", got, filepath.Clean(dir))
+	}
+	data, err := os.ReadFile(defaultSrcFile())
+	if err != nil {
+		t.Fatalf("default src file not written: %v", err)
+	}
+	if string(data) != filepath.Clean(dir) {
+		t.Fatalf("file content = %q, want %q", string(data), filepath.Clean(dir))
+	}
+}
+
+func TestDefaultSrcInvalidDir(t *testing.T) {
+	setUserHome(t)
+	if err := saveDefaultSrc(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Fatalf("non-existent dir should fail")
 	}
 }

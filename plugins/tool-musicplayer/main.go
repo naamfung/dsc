@@ -34,6 +34,43 @@ var (
 	pbCancel context.CancelFunc // 当前播放任务取消句柄；新播放先取消旧任务
 )
 
+// ---------- 默认播放目录 ----------
+
+// defaultSrcFile 持久化默认播放目录的路径（存于用户主目录，重启后仍生效）。
+func defaultSrcFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".dsc-musicplayer-src"
+	}
+	return filepath.Join(home, ".dsc", "musicplayer_src.txt")
+}
+
+// saveDefaultSrc 写入默认播放目录；目录不变时跳过写盘。
+func saveDefaultSrc(path string) error {
+	clean := filepath.Clean(path)
+	if info, err := os.Stat(clean); err != nil || !info.IsDir() {
+		return fmt.Errorf("默认播放目录不存在: %s", clean)
+	}
+	file := defaultSrcFile()
+	if old := loadDefaultSrc(); old == clean {
+		return nil
+	}
+	os.MkdirAll(filepath.Dir(file), 0o755)
+	return os.WriteFile(file, []byte(clean), 0o644)
+}
+
+// loadDefaultSrc 读取默认播放目录：环境变量优先，其次文件。
+func loadDefaultSrc() string {
+	if env := strings.TrimSpace(os.Getenv("DSC_MUSICPLAYER_SRC")); env != "" {
+		return env
+	}
+	data, err := os.ReadFile(defaultSrcFile())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 // ---------- 播放状态控制 ----------
 
 func stopCurrentPlayback() {
@@ -268,15 +305,14 @@ func main() {
 
 	sdk.Tool(dsc.Tool{
 		Name:        "music_play",
-		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；volume 为音量百分比 0-100。播放即返回，可随时用 music_stop 停止。",
+		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；可省略以使用默认播放目录（用 music_setdir 预先设定）。loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；volume 为音量百分比 0-100。播放即返回，可随时用 music_stop 停止。",
 		Schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"path":   {"type": "string", "description": "音频文件路径或包含 .mp3/.wav 的目录"},
+				"path":   {"type": "string", "description": "音频文件路径或目录；省略则用默认播放目录（music_setdir 设定）"},
 				"loop":   {"type": "string", "enum": ["off", "one", "list"], "description": "off=播完即止; one=单曲循环(文件)/单曲重复; list=列表循环(目录整列表循环)", "default": "off"},
 				"volume": {"type": "integer", "minimum": 0, "maximum": 100, "description": "音量百分比 0-100，默认 100", "default": 100}
-			},
-			"required": ["path"]
+			}
 		}`),
 		Handler: func(_ context.Context, args json.RawMessage) (string, error) {
 			var p struct {
@@ -288,7 +324,10 @@ func main() {
 				return "", fmt.Errorf("参数解析失败: %w", err)
 			}
 			if p.Path == "" {
-				return "", fmt.Errorf("须提供 path（音频文件或目录）")
+				p.Path = loadDefaultSrc()
+				if p.Path == "" {
+					return "", fmt.Errorf("未提供 path，也未设定默认播放目录（请提供 path 或先用 music_setdir 设定）")
+				}
 			}
 			if p.Loop == "" {
 				p.Loop = "off"
@@ -338,6 +377,30 @@ func main() {
 		Handler: func(_ context.Context, _ json.RawMessage) (string, error) {
 			stopCurrentPlayback()
 			return "⏹ 已停止音乐播放", nil
+		},
+	})
+
+	sdk.Tool(dsc.Tool{
+		Name:        "music_setdir",
+		Description: "设定默认播放目录并持久化（重启后仍生效），之后 music_play 可省略 path 直接播放该目录下的 mp3/wav。path 必须为存在的目录。",
+		Schema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"path": {"type": "string", "description": "要设为默认播放目录的路径"}
+			},
+			"required": ["path"]
+		}`),
+		Handler: func(_ context.Context, args json.RawMessage) (string, error) {
+			var p struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(args, &p); err != nil {
+				return "", fmt.Errorf("参数解析失败: %w", err)
+			}
+			if err := saveDefaultSrc(p.Path); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("已设定默认播放目录: %s", filepath.Clean(p.Path)), nil
 		},
 	})
 
