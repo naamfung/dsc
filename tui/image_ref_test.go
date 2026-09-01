@@ -24,9 +24,9 @@ func TestResolveImageRefs(t *testing.T) {
 	t.Setenv("DSC_WORKSPACE_ROOT", dir)
 
 	// 相对工作区路径的图片引用 → 1 个 dsc-img:// 引用
-	refs := resolveImageRefs("看看 @shot.png 这张图")
+	refs := ResolveImageRefs("看看 @shot.png 这张图")
 	if len(refs) != 1 || !strings.HasPrefix(refs[0], "dsc-img://") {
-		t.Fatalf("resolveImageRefs = %v, want one dsc-img ref", refs)
+		t.Fatalf("ResolveImageRefs = %v, want one dsc-img ref", refs)
 	}
 	// 附件库中应有内容寻址文件
 	name := strings.TrimPrefix(refs[0], "dsc-img://")
@@ -35,23 +35,23 @@ func TestResolveImageRefs(t *testing.T) {
 	}
 
 	// 绝对路径引用同样生效
-	refs = resolveImageRefs("@" + png)
+	refs = ResolveImageRefs("@" + png)
 	if len(refs) != 1 || !strings.HasPrefix(refs[0], "dsc-img://") {
-		t.Fatalf("absolute path resolveImageRefs = %v", refs)
+		t.Fatalf("absolute path ResolveImageRefs = %v", refs)
 	}
 
 	// 普通文本文件引用不解析为图片（保持文字）
-	if refs := resolveImageRefs("@note.txt"); len(refs) != 0 {
+	if refs := ResolveImageRefs("@note.txt"); len(refs) != 0 {
 		t.Fatalf("text file should not become image, got %v", refs)
 	}
 
 	// 不存在的路径忽略
-	if refs := resolveImageRefs("@missing.png"); len(refs) != 0 {
+	if refs := ResolveImageRefs("@missing.png"); len(refs) != 0 {
 		t.Fatalf("missing path should be ignored, got %v", refs)
 	}
 
 	// 无 @ 的输入 → 无图片
-	if refs := resolveImageRefs("你好"); len(refs) != 0 {
+	if refs := ResolveImageRefs("你好"); len(refs) != 0 {
 		t.Fatalf("plain text should have no images, got %v", refs)
 	}
 }
@@ -66,7 +66,7 @@ func TestResolveImageRefsDedupAndMultipe(t *testing.T) {
 	os.WriteFile(jpg, []byte("jpg"), 0o644)
 	t.Setenv("DSC_WORKSPACE_ROOT", dir)
 
-	refs := resolveImageRefs("@a.png 与 @b.jpg 和再提一次 @a.png")
+	refs := ResolveImageRefs("@a.png 与 @b.jpg 和再提一次 @a.png")
 	if len(refs) != 2 {
 		t.Fatalf("want 2 unique images (dedup), got %d: %v", len(refs), refs)
 	}

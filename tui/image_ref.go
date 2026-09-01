@@ -17,12 +17,12 @@ var imageExtMIME = map[string]string{
 	".webp": "image/webp",
 }
 
-// resolveImageRefs 解析输入行中的「@图片路径」引用为内容寻址图像引用列表
+// ResolveImageRefs 解析输入行中的「@图片路径」引用为内容寻址图像引用列表
 // （dsc-img://<sha256><ext>，字节已写入附件库；对齐 DSH：历史只存引用）。
 // 仅把「@ 开头、可解析为本地存在的图片文件」的 token 转为附件；其余 @ 引用
 // （目录、普通文件、不存在的路径）一律忽略，保持输入文本原样（@路径 仍以文字
-// 传给模型作为引用）。图片仅当轮/注入消息携带。
-func resolveImageRefs(line string) []string {
+// 传给模型作为引用）。图片仅当轮/注入消息携带。TUI 提交与 -input 自动化共用。
+func ResolveImageRefs(line string) []string {
 	wsRoot := os.Getenv("DSC_WORKSPACE_ROOT")
 	var refs []string
 	seen := map[string]bool{}
