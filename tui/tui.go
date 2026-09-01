@@ -762,9 +762,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.render()
 				m.pinnedToBottom = true // 用户注入新消息 → 重新钉住，以便看到自己的气泡
 				m.virtualGotoBottom()
-				return m, tea.Batch(m.injectCmd(sendText, nil), m.pumpStreamIfOpen(), m.input.Focus())
+				return m, tea.Batch(m.injectCmd(sendText, resolveImageRefs(text)), m.pumpStreamIfOpen(), m.input.Focus())
 			}
-			return m, m.startTurn(sendText, nil, renderUserBubble(text, m.width-4))
+			return m, m.startTurn(sendText, resolveImageRefs(text), renderUserBubble(text, m.width-4))
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
