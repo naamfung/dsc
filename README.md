@@ -148,8 +148,9 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
   并以 `file_id` 引用（Anthropic 端点自动附带 `anthropic-beta: files-api-2025-04-14` 头）；
   llama.cpp 等本地 server 无 Files API，始终内联；
 
-- 图像输入**默认开启**（对齐 DSH：默认支持图像、仅按模型能力决定是否接受），
-  可用 `DSC_NO_VISION=1` 关闭（用于不接收图片的模型）；
+- 图像输入**默认按模型能力自动判断**：请求 `/models` 读取模型的 `input_modalities`
+  （上报含 `image` 则启用；未上报/未知默认放行，对齐 DSH 仅按模型能力校验）；
+  `DSC_NO_VISION=1` 可强制关闭（自动判断失灵时的逃生口）；
   附件库根目录可用 `DSC_ATTACHMENT_DIR` 覆盖（缺省 `<ExecDir>/attachments`）。
 
 TUI 输入中以 `@图片路径` 引用本地图片（支持 `/workspace` 虚拟根别名与绝对路径），

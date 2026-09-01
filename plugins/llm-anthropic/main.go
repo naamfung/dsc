@@ -31,7 +31,7 @@ type AnthropicProvider struct {
 	// maxTokens 单轮输出上限。为「不应人为限制」起见默认取较大值，仅当显式配置时才收紧；
 	// 流式路径（TUI / -input）以该值为准，非流式 Chat 则在其 >0 时覆盖。
 	maxTokens int64
-	// vision 是否启用图像输入：默认开启（对齐 DSH），DSC_NO_VISION=1 可关闭。
+	// vision 是否启用图像输入：默认按模型能力自动判断，DSC_NO_VISION=1 强制关闭。
 	vision bool
 	// filesAPI 是否可把超大图自动上传 DeepSeek Files API（base URL 为 deepseek.com 时启用）。
 	filesAPI bool
@@ -151,14 +151,15 @@ func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []
 	return msgParams, usesBetaHeader
 }
 
-// visionEnabled 是否启用图像输入：默认开启（对齐 DSH 默认支持图像，仅按模型能力
-// 决定是否接受），DSC_NO_VISION=1 可显式关闭（用于不接收图片的模型）。
-func visionEnabled() bool {
+// visionEnabled 是否启用图像输入：默认按模型能力自动判断（服务端在 /models
+// 上报 input_modalities 含 image 时启用；未上报则默认放行，对齐 DSH）。
+// DSC_NO_VISION=1 可显式强制关闭（自动判断失灵时的逃生口）。
+func visionEnabled(baseURL, model string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_NO_VISION"))) {
 	case "1", "true", "on", "yes":
 		return false
 	}
-	return true
+	return core.ModelSupportsImages(baseURL, model)
 }
 
 // isDeepSeekEndpoint 按 base URL 是否指向 DeepSeek 判定 Files API 可用性
@@ -509,7 +510,7 @@ func main() {
 		thinking:       thinking,
 		thinkingBudget: thinkingBudget,
 		maxTokens:      maxTokens,
-		vision:         visionEnabled(),
+		vision:         visionEnabled(baseURL, model),
 		filesAPI:       isDeepSeekEndpoint(baseURL),
 		fileCache:      map[string]string{},
 		apiKey:         apiKey,

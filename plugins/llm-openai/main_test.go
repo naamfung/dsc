@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -65,19 +67,49 @@ func TestToOpenAIMessagesVisionGating(t *testing.T) {
 	}
 }
 
-// TestVisionEnabled 默认开启（对齐 DSH 默认支持图像）；DSC_NO_VISION=1 关闭。
+// TestVisionEnabled 默认按模型能力自动判断（/models 上报 input_modalities）；
+// 未上报放行；DSC_NO_VISION=1 强制关闭。
 func TestVisionEnabled(t *testing.T) {
 	t.Setenv("DSC_NO_VISION", "")
-	if !visionEnabled() {
-		t.Fatal("default should be enabled (aligned with DSH)")
+
+	// 服务端上报含 image → 自动启用
+	srvImage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"id":"Agentic-Turbo","input_modalities":["text","image"]}]}`))
+	}))
+	defer srvImage.Close()
+	if !visionEnabled(srvImage.URL, "Agentic-Turbo") {
+		t.Fatal("server reporting image modality should auto-enable")
 	}
+
+	// 服务端上报仅 text → 自动关闭
+	srvText := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"id":"Agentic-Turbo","input_modalities":["text"]}]}`))
+	}))
+	defer srvText.Close()
+	if visionEnabled(srvText.URL, "Agentic-Turbo") {
+		t.Fatal("server reporting text-only should auto-disable")
+	}
+
+	// 服务端未上报 → 默认放行
+	srvUnknown := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":[{"id":"Agentic-Turbo"}]}`))
+	}))
+	defer srvUnknown.Close()
+	if !visionEnabled(srvUnknown.URL, "Agentic-Turbo") {
+		t.Fatal("server not reporting modalities should default to allow")
+	}
+
+	// DSC_NO_VISION=1 强制关闭（逃生口）
 	t.Setenv("DSC_NO_VISION", "1")
-	if visionEnabled() {
-		t.Fatal("DSC_NO_VISION=1 should disable images")
+	if visionEnabled(srvImage.URL, "Agentic-Turbo") {
+		t.Fatal("DSC_NO_VISION=1 should force disable")
 	}
 	t.Setenv("DSC_NO_VISION", "0")
-	if !visionEnabled() {
-		t.Fatal("DSC_NO_VISION=0 should keep images enabled")
+	if !visionEnabled(srvImage.URL, "Agentic-Turbo") {
+		t.Fatal("DSC_NO_VISION=0 should keep auto-detect")
 	}
 }
 
