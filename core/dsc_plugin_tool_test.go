@@ -468,4 +468,13 @@ func TestDiskOrphanRequiresCompliantBinary(t *testing.T) {
 	if len(got) != 1 || got[0] != "tool-novelforge" {
 		t.Fatalf("有合规文件时 listPluginDiskNames = %v, want [tool-novelforge]", got)
 	}
+	// binary_path 须归一化为正斜杠（模型/宿主 SHELL 是 POSIX，反斜杠会误导）
+	bin := m.diskPluginBinary("tool-novelforge")
+	if strings.ContainsRune(bin, '\\') {
+		t.Errorf("diskPluginBinary = %q, 不应含反斜杠（应已 ToSlash 为正斜杠）", bin)
+	}
+	wantDir := filepath.ToSlash(filepath.Join(dir, "plugins", "tool-novelforge", "tool-novelforge"+ext))
+	if bin != wantDir {
+		t.Errorf("diskPluginBinary = %q, want %q", bin, wantDir)
+	}
 }
