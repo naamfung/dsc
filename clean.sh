@@ -42,6 +42,7 @@ fi
 rm -rf ./config/presets/preset-backups
 rm -rf ./config/config-backups
 rm -rf ./plugins-backup
+rm -rf ./attachments
 rm -rf ./sessions
 rm -rf ./memory
 rm -rf ./temp
