@@ -39,4 +39,10 @@ if [ -f "plugins/tool-lua-host/tool-lua-host" ]; then
     rm -f "plugins/tool-lua-host/tool-lua-host"
 fi
 
+rm -rf ./config/presets/preset-backups
+rm -rf ./config/config-backups
+rm -rf ./plugins-backup
+rm -rf ./sessions
+rm -rf ./memory
+
 echo "Clean completed."
