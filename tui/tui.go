@@ -172,18 +172,31 @@ type injectedMsg struct {
 	err error
 }
 
-// compItem 是斜杆命令菜单的一行：label 是完整命令，hint 是右侧提示。
+// compItem 是补全菜单的一行：label 显示、insert 填入输入框、hint 右侧提示。
+// descend 表示选中后保持菜单打开并下钻一层（@ 目录）。
 type compItem struct {
-	label  string
-	insert string
-	hint   string
+	label   string
+	insert  string
+	hint    string
+	descend bool
 }
 
-// completion 是斜杆命令补全菜单状态；active 为 false 时菜单关闭。
+// compKind 区分补全菜单种类：斜杆命令 / @ 文件引用。
+type compKind int
+
+const (
+	compSlash compKind = iota
+	compAt
+)
+
+// completion 是补全菜单状态；active 为 false 时菜单关闭。replaceFrom 为输入中
+// 被替换片段的起始字节偏移（斜杆命令为 0 即整行；@ 引用为 '@' 的位置）。
 type completion struct {
-	active bool
-	items  []compItem
-	sel    int
+	active      bool
+	kind        compKind
+	items       []compItem
+	sel         int
+	replaceFrom int
 }
 
 // Model 是聊天界面的状态模型
@@ -496,8 +509,12 @@ func (m *Model) vpHeight() int {
 		h -= thinkingRow
 	}
 	if m.completion.active && len(m.completion.items) > 0 {
-		// 减去补全菜单的高度：items 数量 + 1 行提示
-		h -= (len(m.completion.items) + 1)
+		// 减去补全菜单的高度：显示行数（窗口封顶 maxCompRows）+ 1 行提示
+		rows := len(m.completion.items)
+		if rows > maxCompRows {
+			rows = maxCompRows
+		}
+		h -= (rows + 1)
 	}
 	// 减去待办进度面板（对齐 REX：输入框上方常驻面板，占动态行数）
 	h -= m.todoPanelRows()
@@ -2681,25 +2698,31 @@ func (m *Model) renderCrons() string {
 	return b.String()
 }
 
-// updateCompletion 根据当前输入重新计算命令补全菜单：
-// 仅在输入是「/」开头的单个词（不含空格）时弹出，并按前缀/子序列过滤。
+// updateCompletion 根据当前输入重新计算补全菜单：优先 @ 文件引用 token（可出现在
+// 行中），其次「/」开头的单个词（不含空格）的斜杆命令，并按前缀/子序列过滤。
 func (m *Model) updateCompletion() {
 	val := m.input.Value()
-	if !strings.HasPrefix(val, "/") || strings.ContainsAny(val, " \t\n") {
-		m.completion = completion{}
-		// 更新 viewport 高度以移除補全菜單佔用的空間
+	// @ 文件引用 token 优先：可出现在行中（含斜杆命令参数后），如 "@foo"
+	if at, token, ok := activeAtToken(val); ok {
+		if items := m.fileItems(token); len(items) > 0 {
+			m.setCompletion(compAt, items, at)
+			m.viewport.SetHeight(m.vpHeight())
+			return
+		}
+	}
+	// 斜杆命令：整行以 / 开头且不含空白
+	if strings.HasPrefix(val, "/") && !strings.ContainsAny(val, " \t\n") {
+		items := filterSlash(slashCommands, val)
+		if len(items) == 0 {
+			m.completion = completion{}
+			m.viewport.SetHeight(m.vpHeight())
+			return
+		}
+		m.setCompletion(compSlash, items, 0)
 		m.viewport.SetHeight(m.vpHeight())
 		return
 	}
-	items := filterSlash(slashCommands, val)
-	if len(items) == 0 {
-		m.completion = completion{}
-		// 更新 viewport 高度以移除補全菜單佔用的空間
-		m.viewport.SetHeight(m.vpHeight())
-		return
-	}
-	m.completion = completion{active: true, items: items}
-	// 更新 viewport 高度以適應補全菜單
+	m.completion = completion{}
 	m.viewport.SetHeight(m.vpHeight())
 }
 
@@ -2746,33 +2769,65 @@ func (m *Model) moveCompletion(delta int) {
 	m.completion.sel = ((m.completion.sel+delta)%n + n) % n
 }
 
-// acceptCompletion 用选中的命令填充输入框，并重新过滤菜单。
+// acceptCompletion 用选中项填充输入框：@ 引用只替换 token（replaceFrom 起），目录项
+// 保持菜单打开下钻一层；斜杆命令整行替换。替换后若仍剩唯一单项且 token 已与该插入
+// 一致（用户其实已输完），关闭菜单，让下一次 Enter 走提交逻辑而不是再次被补全吞掉。
 func (m *Model) acceptCompletion() {
 	if m.completion.sel >= len(m.completion.items) {
 		m.completion = completion{}
 		return
 	}
 	it := m.completion.items[m.completion.sel]
-	m.input.SetValue(it.insert)
+	val := m.input.Value()
+	rf := m.completion.replaceFrom
+	if rf > len(val) {
+		rf = len(val)
+	}
+	m.input.SetValue(val[:rf] + it.insert)
 	m.input.CursorEnd()
 	m.updateCompletion()
+	if m.completion.active && len(m.completion.items) == 1 {
+		tok := m.input.Value()[m.completion.replaceFrom:]
+		if tok == m.completion.items[0].insert {
+			m.completion = completion{}
+			m.viewport.SetHeight(m.vpHeight())
+		}
+	}
 }
 
-// completionExactLabel 报告当前输入是否与选中项的命令完全一致（此时 Enter 应直接执行）。
+// completionExactLabel 报告当前输入是否与选中项的命令完全一致（此时 Enter 应直接
+// 执行；仅斜杆命令菜单适用，@ 菜单的 Enter 一律视为补全确认）。
 func (m *Model) completionExactLabel() bool {
-	if !m.completion.active || m.completion.sel >= len(m.completion.items) {
+	if !m.completion.active || m.completion.kind != compSlash || m.completion.sel >= len(m.completion.items) {
 		return false
 	}
 	return strings.TrimSpace(m.input.Value()) == m.completion.items[m.completion.sel].label
 }
 
-// completionView 渲染命令补全菜单，显示在输入框上方。
+// completionView 渲染补全菜单（输入框上方）：最多显示 maxCompRows 行，超出时窗口
+// 围绕选中项滚动；当前行高亮，hint 置灰。斜杆命令与 @ 文件菜单共用。
 func (m *Model) completionView() string {
 	if !m.completion.active || len(m.completion.items) == 0 {
 		return ""
 	}
+	items := m.completion.items
+	start := 0
+	if len(items) > maxCompRows {
+		start = m.completion.sel - maxCompRows/2
+		if start < 0 {
+			start = 0
+		}
+		if start > len(items)-maxCompRows {
+			start = len(items) - maxCompRows
+		}
+	}
+	end := start + maxCompRows
+	if end > len(items) {
+		end = len(items)
+	}
 	var b strings.Builder
-	for i, it := range m.completion.items {
+	for i := start; i < end; i++ {
+		it := items[i]
 		var line string
 		if i == m.completion.sel {
 			line = "› " + compSelSty.Render(it.label)
@@ -2785,7 +2840,11 @@ func (m *Model) completionView() string {
 		b.WriteString(padToWidth(line, m.width))
 		b.WriteByte('\n')
 	}
-	b.WriteString(padToWidth(dimSty.Render("↑/↓ 选择 · Tab 补全 · Esc 关闭"), m.width))
+	footer := "↑/↓ 选择 · Tab 补全 · Esc 关闭"
+	if m.completion.kind == compAt {
+		footer = "↑/↓ 选择 · Tab/Enter 补全 · Esc 关闭"
+	}
+	b.WriteString(padToWidth(dimSty.Render(footer), m.width))
 	return b.String()
 }
 

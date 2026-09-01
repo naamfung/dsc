@@ -21,16 +21,14 @@ var imageExtMIME = map[string]string{
 // （dsc-img://<sha256><ext>，字节已写入附件库；对齐 DSH：历史只存引用）。
 // 仅把「@ 开头、可解析为本地存在的图片文件」的 token 转为附件；其余 @ 引用
 // （目录、普通文件、不存在的路径）一律忽略，保持输入文本原样（@路径 仍以文字
-// 传给模型作为引用）。图片仅当轮/注入消息携带。TUI 提交与 -input 自动化共用。
+// 传给模型作为引用）。含空格路径可用反斜杆转义（@ 补全菜单的插入形式）保持单一
+// token。图片仅当轮/注入消息携带。TUI 提交与 -input 自动化共用。
 func ResolveImageRefs(line string) []string {
 	wsRoot := os.Getenv("DSC_WORKSPACE_ROOT")
 	var refs []string
 	seen := map[string]bool{}
-	for _, tok := range strings.Fields(line) {
-		if !strings.HasPrefix(tok, "@") || len(tok) < 2 {
-			continue
-		}
-		ref := strings.TrimSpace(tok[1:])
+	for _, tok := range splitRefTokens(line) {
+		ref := strings.TrimSpace(strings.TrimPrefix(tok, "@"))
 		// 去掉常见引号/行尾标点（如 "…。@" 引用后跟标点）
 		ref = strings.Trim(ref, "\"'`，。！？,;")
 		if ref == "" {
@@ -48,6 +46,74 @@ func ResolveImageRefs(line string) []string {
 		refs = append(refs, imgRef)
 	}
 	return refs
+}
+
+// splitRefTokens 按空白把一行拆成 @ token：反斜杆转义的空白（@ 补全菜单对含空格
+// 路径的插入形式）视为 token 一部分并去掉反斜杆；其余空白为 token 边界；行尾常见
+// 标点被剔除（"…。@" 引用后跟标点）。
+func splitRefTokens(line string) []string {
+	var toks []string
+	for i := 0; i < len(line); i++ {
+		if line[i] != '@' {
+			continue
+		}
+		var b strings.Builder
+		j := i + 1
+		for j < len(line) {
+			ch := line[j]
+			if ch == '\\' && j+1 < len(line) && (line[j+1] == ' ' || line[j+1] == '\t') {
+				b.WriteByte(line[j+1])
+				j += 2
+				continue
+			}
+			switch ch {
+			case ' ', '\t', '\n', '\r', '\f':
+				goto done
+			}
+			b.WriteByte(ch)
+			j++
+		}
+	done:
+		if tok := strings.TrimRight(b.String(), "，。！？,;.!?)]}"); tok != "" {
+			toks = append(toks, "@"+tok)
+		}
+		i = j - 1
+	}
+	return toks
+}
+
+// escapeRefPath 把路径中的空格/tab 反斜杆转义（@ 补全菜单的插入形式），使含空格
+// 路径在 @ 引用的空白分隔语法中保持单一 token（splitRefTokens 逆转）；其余字节
+// 原样（Windows 反斜杆分隔符保留含义）。
+func escapeRefPath(path string) string {
+	if !strings.ContainsAny(path, " \t") {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(len(path) + 8)
+	for i := 0; i < len(path); i++ {
+		if path[i] == ' ' || path[i] == '\t' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
+}
+
+// unescapeRefPath 逆转 escapeRefPath：反斜杆+空格/tab 去掉反斜杆，其余原样。
+func unescapeRefPath(path string) string {
+	if !strings.Contains(path, "\\") {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+1 < len(path) && (path[i+1] == ' ' || path[i+1] == '\t') {
+			continue
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
 }
 
 // saveImageAttachment 读取图片文件并把字节写入内容寻址附件库，返回引用
