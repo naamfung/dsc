@@ -169,8 +169,8 @@ fi
 # 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
 echo "Building tool-novelforge plugin..."
 if [ -d "plugins/tool-novelforge" ]; then
-    (cd plugins/tool-novelforge && go build -o novelforge.exe .)
-    pack plugins/tool-novelforge/novelforge.exe
+    (cd plugins/tool-novelforge && go build -o tool-novelforge.exe .)
+    pack plugins/tool-novelforge/tool-novelforge.exe
 else
     echo "  (skip: plugins/tool-novelforge 目录不存在)"
 fi

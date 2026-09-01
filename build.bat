@@ -188,9 +188,9 @@ if exist plugins\tool-2fa-master (
 echo Building tool-novelforge plugin...
 if exist plugins\tool-novelforge (
     cd plugins\tool-novelforge
-    go build -o novelforge.exe .
+    go build -o tool-novelforge.exe .
     cd ..\..
-    call :pack "plugins\tool-novelforge\novelforge.exe"
+    call :pack "plugins\tool-novelforge\tool-novelforge.exe"
 ) else (
     echo   ^(skip: plugins\tool-novelforge 目录不存在^)
 )
