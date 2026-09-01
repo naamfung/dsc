@@ -657,6 +657,14 @@ func (t *unloadDscPluginTool) Execute(_ context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("invalid name %q", p.Name)
 	}
 
+	// persist=true 会在改动前移除 config 条目：先备份，与 load/install/uninstall 的
+	// 「写 config 前必备份」约定保持一致，避免卸载写坏配置。
+	if p.Persist {
+		if _, err := t.m.backupConfig(); err != nil {
+			return "", err
+		}
+	}
+
 	t.m.mu.RLock()
 	_, loaded := t.m.clients[p.Name]
 	t.m.mu.RUnlock()

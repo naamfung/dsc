@@ -323,7 +323,11 @@ func TestLoadUnloadDscPluginE2E(t *testing.T) {
 		t.Fatalf("load 幂等(已加载再 load)失败: %v", err)
 	}
 
-	// ---- 4. unload persist=true：进程停止、条目从 config 移除 ----
+	// ---- 4. unload persist=true：进程停止、条目从 config 移除、改动前备份 ----
+	bakBefore := 0
+	if g, _ := filepath.Glob(cfgPath + ".*.bak"); g != nil {
+		bakBefore = len(g)
+	}
 	res, err = unload.Execute(context.Background(), json.RawMessage(`{"name":"tool-lisp-eval","persist":true}`))
 	if err != nil {
 		t.Fatalf("unload(true): %v", err)
@@ -333,6 +337,9 @@ func TestLoadUnloadDscPluginE2E(t *testing.T) {
 	}
 	if cfgHasEntry() {
 		t.Fatalf("unload(true) 未从 config 移除条目")
+	}
+	if g, _ := filepath.Glob(cfgPath + ".*.bak"); len(g) <= bakBefore {
+		t.Fatalf("unload(true) 应在改动前备份 config（before=%d after=%d）", bakBefore, len(g))
 	}
 	// 幂等：未加载再次 unload 不报错
 	if _, err := unload.Execute(context.Background(), json.RawMessage(`{"name":"tool-lisp-eval","persist":true}`)); err != nil {
