@@ -30,6 +30,17 @@ var (
 // dscPluginDirBase 返回按命名约定拼出的插件目录基名 <type>-<name>。
 func dscPluginDirBase(ptype, name string) string { return ptype + "-" + name }
 
+// normalizeInstallName 兼容 install_dsc_plugin 的两种 name 写法：裸名（musicplayer）
+// 或完整基名（tool-musicplayer）。模型常把 list_dsc_plugins/uninstall 使用的完整
+// 基名直接当 name 传入，去掉冗余的 <type>- 前缀避免拼出 tool-tool-musicplayer；
+// 去掉前缀后为空则保持原样（由后续命名校验兜底拒绝）。
+func normalizeInstallName(ptype, name string) string {
+	if bare := strings.TrimPrefix(name, ptype+"-"); bare != "" {
+		return bare
+	}
+	return name
+}
+
 // binExt 返回当前平台的插件可执行文件后缀。
 func binExt() string {
 	if runtime.GOOS == "windows" {
@@ -97,7 +108,7 @@ func (t *installDscPluginTool) Description() string {
 func (t *installDscPluginTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{
 "type":{"type":"string","enum":["tool","llm","agent","policy","dsc"],"description":"Plugin type (must match the plugin's own declared type)."},
-"name":{"type":"string","description":"Plugin name using [A-Za-z0-9_-]; directory will be plugins/<type>-<name>/."},
+"name":{"type":"string","description":"Plugin name using [A-Za-z0-9_-]; accept either bare name (musicplayer) or full basename (tool-musicplayer); directory will be plugins/<type>-<name>/."},
 "source":{"type":"string","description":"Path to a directory laid out as plugins/<type>-<name>/ (containing <type>-<name>.exe) or to a single <type>-<name>.exe binary."},
 "enabled":{"type":"boolean","description":"Whether to mark the plugin enabled in config. Default true."}},
 "required":["type","name","source"],"additionalProperties":false}`)
@@ -137,6 +148,10 @@ func (t *installDscPluginTool) install(ctx context.Context, ptype, name, source 
 	if !dscPluginNameRe.MatchString(name) || name == "" || name == "." || name == ".." {
 		return fmt.Errorf("invalid name %q: use [A-Za-z0-9_-] only (prevents path traversal)", name)
 	}
+	// 兼容两种 name 写法：裸名（musicplayer）或完整基名（tool-musicplayer）。
+	// 模型常把 list_dsc_plugins/uninstall 使用的完整基名直接当 name 传入，
+	// 这里去掉冗余的 <type>- 前缀，避免拼出 tool-tool-musicplayer。
+	name = normalizeInstallName(ptype, name)
 	dirBase := dscPluginDirBase(ptype, name)
 	pluginRoot := filepath.Join(t.m.pluginsRoot(), dirBase)
 

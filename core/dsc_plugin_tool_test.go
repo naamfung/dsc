@@ -35,6 +35,23 @@ func TestInstallDscPluginValidation(t *testing.T) {
 	}
 }
 
+// TestNormalizeInstallName 校验 install_dsc_plugin 兼容裸名与完整基名两种 name 写法，
+// 避免把 tool-musicplayer 重复拼成 tool-tool-musicplayer。
+func TestNormalizeInstallName(t *testing.T) {
+	cases := []struct{ ptype, name, want string }{
+		{"tool", "musicplayer", "musicplayer"},      // 裸名原样
+		{"tool", "tool-musicplayer", "musicplayer"}, // 完整基名去冗余前缀
+		{"tool", "toolbox", "toolbox"},              // 裸名以 type 开头但不带 - 不改
+		{"llm", "llm-anthropic", "anthropic"},
+		{"tool", "tool-", "tool-"}, // 去前缀后为空则保持原样（后续校验兜底拒绝）
+	}
+	for _, c := range cases {
+		if got := normalizeInstallName(c.ptype, c.name); got != c.want {
+			t.Errorf("normalizeInstallName(%q,%q)=%q, want %q", c.ptype, c.name, got, c.want)
+		}
+	}
+}
+
 // TestBackupConfig 校验写 config 前的备份会生成 .bak 副本且内容一致。
 func TestBackupConfig(t *testing.T) {
 	dir := t.TempDir()
