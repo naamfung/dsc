@@ -44,5 +44,6 @@ rm -rf ./config/config-backups
 rm -rf ./plugins-backup
 rm -rf ./sessions
 rm -rf ./memory
+rm -rf ./temp
 
 echo "Clean completed."
