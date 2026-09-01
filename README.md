@@ -99,9 +99,28 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 ## 支持的插件
 
 ### LLM 插件
-- `llm-openai`
-- `llm-anthropic`
+- `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等）
+- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等）
 - `llm-ollama`
+
+#### 图像输入（视觉）
+`llm-openai` 与 `llm-anthropic` 支持把本地图片作为视觉输入传给视觉模型（如
+`deepseek-v4-flash-vision-exp`；llamacpp server 的 OpenAI/Anthropic 兼容端点同样
+接受该格式）：
+- 图像**只在用户消息**携带；图片字节以**内容寻址附件库**存储
+  （`~/.dsc/attachments/v1/objects/<sha256><ext>`，同内容去重），会话历史只保存
+  引用（`dsc-img://<sha256><ext>`），不随历史膨胀；上下文窗口内后续轮次模型仍可见；
+- LLM 请求时把引用解析为 base64 嵌入（OpenAI 端点为 `image_url` 块，Anthropic
+  端点为 `image` 块）；
+- 单图超过约 20 MiB 且端点指向 DeepSeek 时自动上传 Files API（`purpose=user_data`）
+  并以 `file_id` 引用（Anthropic 端点自动附带 `anthropic-beta: files-api-2025-04-14` 头）；
+  llama.cpp 等本地 server 无 Files API，始终内联；
+- 是否启用：模型名含 `vision` 自动开启，可用 `DSC_VISION=1/0` 强制开/关；
+  附件库根目录可用 `DSC_ATTACHMENT_DIR` 覆盖（缺省 `~/.dsc/attachments/v1/objects`）。
+
+TUI 输入中以 `@图片路径` 引用本地图片（支持 `/workspace` 虚拟根别名与绝对路径），
+该图会作为附件随本轮（或运行中注入）发送给模型；`@` 引用的文字本身仍作为提示传给
+模型。
 
 ### Agent 插件
 - `agent-react-loop`
