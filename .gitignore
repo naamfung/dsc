@@ -17,6 +17,7 @@ protoc_dir/
 plugins/tool-harness-webui/webui/dist/
 plugins/tool-novelforge/
 plugins/tool-jyutzyun/
+plugins/tool-2fa-master/
 workspace/
 plugins-backup/
 config/config-backups/
