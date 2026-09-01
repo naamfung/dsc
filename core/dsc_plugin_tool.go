@@ -88,7 +88,9 @@ func (t *installDscPluginTool) Description() string {
 		"and its executable <name>.exe. <type> is one of tool|llm|agent|policy|dsc and must match the plugin's own declared type. " +
 		"Provide source as a directory already laid out as plugins/<name>/ (containing <name>.exe), or as a single built <name>.exe binary. " +
 		"The tool validates naming, backs up config.yaml, live-loads the plugin to verify it starts (type/metadata must match), " +
-		"and only then persists it to config.yaml so it survives restart. On failure nothing is persisted and the copied directory is removed."
+		"and only then persists it to config.yaml so it survives restart. On failure nothing is persisted and the copied directory is removed. " +
+		"A successful return (ok:true) is sufficient confirmation: the plugin is already live-loaded and its commands are immediately usable in this session — " +
+		"they appear in your available tool list. Do NOT verify with the shell tool or inspect files on disk."
 }
 
 func (t *installDscPluginTool) ParametersSchema() json.RawMessage {
@@ -301,7 +303,7 @@ type listDscPluginsTool struct{ m *Manager }
 func (t *listDscPluginsTool) Name() string { return "list_dsc_plugins" }
 
 func (t *listDscPluginsTool) Description() string {
-	return "List the DSC plugins declared in config.yaml for this DSC instance (name, type, enabled, binary_path)."
+	return "List the DSC plugins for this instance (name, type, enabled, binary_path). This is the authoritative single source: it merges three sources — plugins declared in config.yaml, plugins currently loaded at runtime (state=loaded), and plugins present on disk under plugins/ but not configured (state=orphan). Use this to discover plugins and their state; do NOT enumerate the plugins/ directory yourself with the shell tool."
 }
 
 func (t *listDscPluginsTool) ParametersSchema() json.RawMessage {
@@ -692,7 +694,9 @@ func (t *loadDscPluginTool) Description() string {
 		"Give the plugin id as the directory name under plugins/ (e.g. tool-musicplayer). The binary is resolved automatically " +
 		"(plugins/<name>/<name>.exe, honoring versioned binaries) unless binary_path is given, and type defaults to tool. " +
 		"This does NOT modify config.yaml (the change lasts only for the current process; after a restart you can reload it again). " +
-		"Discover what is on disk by listing the plugins/ directory with the shell tool, or list configured plugins with list_dsc_plugins."
+		"A successful return (ok:true, status=loaded) is sufficient confirmation: the plugin is active and its commands are immediately usable this session — " +
+		"they appear in your available tool list. Do NOT verify with the shell tool or inspect files on disk. " +
+		"Discover plugins and their state with list_dsc_plugins (it merges config, runtime, and disk orphans)."
 }
 
 func (t *loadDscPluginTool) ParametersSchema() json.RawMessage {
@@ -785,6 +789,12 @@ func (t *loadDscPluginTool) persistEntry(name, typ, bin string) error {
 }
 
 func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded, persist bool) (string, error) {
+	note := "插件已载入本进程，其工具立即可用（出现在你的工具列表中），无需磁盘验证"
+	if persist {
+		note += "；已写入 config.yaml，重启后仍自动加载"
+	} else {
+		note += "；未改配置（重启后失效，可再次 load）"
+	}
 	b, err := json.Marshal(map[string]any{
 		"ok":      true,
 		"name":    name,
@@ -793,7 +803,7 @@ func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded, persis
 		"status":  status,
 		"loaded":  loaded,
 		"persist": persist,
-		"note":    fmt.Sprintf("插件已载入本进程，其工具立即可用；persist=%v", persist),
+		"note":    note,
 	})
 	if err != nil {
 		return "", err
@@ -817,7 +827,8 @@ func (t *unloadDscPluginTool) Description() string {
 	return "Unload a DSC plugin that is currently loaded (stops it in this process and removes its tools). " +
 		"Give the plugin id as the plugins/ directory name (e.g. tool-musicplayer). " +
 		"Set persist=true to also remove its entry from config.yaml so it no longer loads on restart (config is backed up first); " +
-		"files under plugins/ are always kept. This complements uninstall_dsc_plugin (which removes config and optionally the directory)."
+		"files under plugins/ are always kept. This complements uninstall_dsc_plugin (which removes config and optionally the directory). " +
+		"A successful return (ok:true) is sufficient confirmation: the plugin's commands are removed from your available tool list. Do NOT verify with the shell tool."
 }
 
 func (t *unloadDscPluginTool) ParametersSchema() json.RawMessage {
