@@ -27,20 +27,6 @@ var (
 	dscPluginTypes  = map[string]bool{"tool": true, "llm": true, "agent": true, "policy": true, "dsc": true}
 )
 
-// dscPluginDirBase 返回按命名约定拼出的插件目录基名 <type>-<name>。
-func dscPluginDirBase(ptype, name string) string { return ptype + "-" + name }
-
-// normalizeInstallName 兼容 install_dsc_plugin 的两种 name 写法：裸名（musicplayer）
-// 或完整基名（tool-musicplayer）。模型常把 list_dsc_plugins/uninstall 使用的完整
-// 基名直接当 name 传入，去掉冗余的 <type>- 前缀避免拼出 tool-tool-musicplayer；
-// 去掉前缀后为空则保持原样（由后续命名校验兜底拒绝）。
-func normalizeInstallName(ptype, name string) string {
-	if bare := strings.TrimPrefix(name, ptype+"-"); bare != "" {
-		return bare
-	}
-	return name
-}
-
 // binExt 返回当前平台的插件可执行文件后缀。
 func binExt() string {
 	if runtime.GOOS == "windows" {
@@ -97,19 +83,19 @@ func (t *installDscPluginTool) TimeoutMs() int { return 120000 } // 安装+live 
 
 func (t *installDscPluginTool) Description() string {
 	return "Install a DSC plugin (our own binary plugin, a Go program built with the dsc-sdk and loaded via go-plugin/gRPC) into this DSC instance so it can be used. " +
-		"Follow the naming convention: plugin directory must be plugins/<type>-<name>/ and its executable " +
-		"must be <type>-<name>.exe, where <type> is one of tool|llm|agent|policy|dsc and <name> uses only " +
-		"[A-Za-z0-9_-]. Provide source as a directory already laid out as plugins/<type>-<name>/ (containing " +
-		"<type>-<name>.exe), or as a single built <type>-<name>.exe binary. The tool validates naming, backs up " +
-		"config.yaml, live-loads the plugin to verify it starts (type/metadata must match), and only then persists " +
-		"it to config.yaml so it survives restart. On failure nothing is persisted and the copied directory is removed."
+		"Give name as the full plugin directory basename under plugins/ (e.g. tool-musicplayer), consistent with " +
+		"load_dsc_plugin/unload_dsc_plugin/uninstall_dsc_plugin/upgrade_dsc_plugin: the directory will be plugins/<name>/ " +
+		"and its executable <name>.exe. <type> is one of tool|llm|agent|policy|dsc and must match the plugin's own declared type. " +
+		"Provide source as a directory already laid out as plugins/<name>/ (containing <name>.exe), or as a single built <name>.exe binary. " +
+		"The tool validates naming, backs up config.yaml, live-loads the plugin to verify it starts (type/metadata must match), " +
+		"and only then persists it to config.yaml so it survives restart. On failure nothing is persisted and the copied directory is removed."
 }
 
 func (t *installDscPluginTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{
 "type":{"type":"string","enum":["tool","llm","agent","policy","dsc"],"description":"Plugin type (must match the plugin's own declared type)."},
-"name":{"type":"string","description":"Plugin name using [A-Za-z0-9_-]; accept either bare name (musicplayer) or full basename (tool-musicplayer); directory will be plugins/<type>-<name>/."},
-"source":{"type":"string","description":"Path to a directory laid out as plugins/<type>-<name>/ (containing <type>-<name>.exe) or to a single <type>-<name>.exe binary."},
+"name":{"type":"string","description":"Full plugin directory basename (e.g. tool-musicplayer), consistent with load/unload/uninstall/upgrade; directory will be plugins/<name>/."},
+"source":{"type":"string","description":"Path to a directory laid out as plugins/<name>/ (containing <name>.exe) or to a single <name>.exe binary."},
 "enabled":{"type":"boolean","description":"Whether to mark the plugin enabled in config. Default true."}},
 "required":["type","name","source"],"additionalProperties":false}`)
 }
@@ -133,7 +119,7 @@ func (t *installDscPluginTool) Execute(ctx context.Context, args json.RawMessage
 	}
 	res, _ := json.Marshal(map[string]any{
 		"ok":      true,
-		"name":    dscPluginDirBase(p.Type, p.Name),
+		"name":    p.Name,
 		"type":    p.Type,
 		"enabled": enabled,
 		"note":    "已安装并热加载；已备份原配置，重启后仍生效；卸载可用 uninstall_dsc_plugin",
@@ -148,11 +134,9 @@ func (t *installDscPluginTool) install(ctx context.Context, ptype, name, source 
 	if !dscPluginNameRe.MatchString(name) || name == "" || name == "." || name == ".." {
 		return fmt.Errorf("invalid name %q: use [A-Za-z0-9_-] only (prevents path traversal)", name)
 	}
-	// 兼容两种 name 写法：裸名（musicplayer）或完整基名（tool-musicplayer）。
-	// 模型常把 list_dsc_plugins/uninstall 使用的完整基名直接当 name 传入，
-	// 这里去掉冗余的 <type>- 前缀，避免拼出 tool-tool-musicplayer。
-	name = normalizeInstallName(ptype, name)
-	dirBase := dscPluginDirBase(ptype, name)
+	// name 即完整目录基名（如 tool-musicplayer），与 load/unload/uninstall/upgrade
+	// 一致，直接作为 plugins/ 下的目录基名；type 仅用于条目声明与 live 加载元数据校验。
+	dirBase := name
 	pluginRoot := filepath.Join(t.m.pluginsRoot(), dirBase)
 
 	// 拷贝来源到约定目录
