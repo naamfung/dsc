@@ -81,58 +81,99 @@ func stopCurrentPlayback() {
 	}
 }
 
-// playTrack 播放单个文件（已重采样为 44100/2ch/16bit PCM）。异步：Play 后等待播放时长，
+// pcmDuration 由统一 44100/2ch/16bit PCM 字节数计算精确播放时长。
+// 用浮点运算，避免整型除法截断小数秒导致每首被截短近 1 秒。
+func pcmDuration(pcm []byte) time.Duration {
+	bytesPerSecond := globalSampleRate * globalChannels * bytesPerSample
+	return time.Duration(float64(len(pcm)) / float64(bytesPerSecond) * float64(time.Second))
+}
+
+// playPCM 播放已解码的 44100/2ch/16bit PCM。异步：Play 后等待精确播放时长，
+// 再等内部缓冲排空（IsPlaying 转 false），保证结尾完整且不引入固定等待；
 // 期间可被 ctx 取消（立即停止）。返回 context.Canceled 表示被主动停止。
-func playTrack(ctx context.Context, path string, vol float64) error {
-	pcm, err := decodeFile(path)
-	if err != nil {
-		return err
-	}
+func playPCM(ctx context.Context, pcm []byte, vol float64) error {
 	player := globalCtx.NewPlayer(bytes.NewReader(pcm))
 	player.SetVolume(vol)
 	player.Play()
-
-	bytesPerSecond := globalSampleRate * globalChannels * bytesPerSample
-	dur := time.Duration(len(pcm)/bytesPerSecond) * time.Second
-	if dur == 0 {
-		dur = 1 * time.Second
-	}
+	defer player.Close()
 
 	select {
 	case <-ctx.Done():
-		player.Close()
 		return ctx.Err()
-	case <-time.After(dur):
+	case <-time.After(pcmDuration(pcm)):
 	}
-	// 缓冲尾部排空，避免结尾被截断
-	select {
-	case <-ctx.Done():
-	default:
-		time.Sleep(200 * time.Millisecond)
+	// 缓冲尾部排空：等 IsPlaying 变 false（数据已全部交给驱动），避免结尾被截断
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if !player.IsPlaying() {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	player.Close()
 	return nil
 }
 
+// decodedTrack 一首已解码曲目（含解码错误）。
+type decodedTrack struct {
+	pcm []byte
+	err error
+}
+
 // runLoop 按循环策略顺序播放文件列表（files 已过滤并排序）。
+// 下一首在后台预解码（prefetch），消除曲间因解码造成的静默等待。
 // loop=off 播完一轮即止；loop=one/list 循环播放直到被停止。
 func runLoop(ctx context.Context, files []string, loop string, vol float64) {
 	count := len(files)
+
+	// prefetchCh 容量 1：后台预解码下一首，播放当前期间即完成解码
+	prefetchCh := make(chan decodedTrack, 1)
+	prefetch := func(idx int) {
+		go func() {
+			if ctx.Err() != nil {
+				return
+			}
+			pcm, err := decodeFile(files[idx])
+			select {
+			case <-ctx.Done():
+			case prefetchCh <- decodedTrack{pcm: pcm, err: err}:
+			}
+		}()
+	}
+
+	// 第一首同步解码，保证立即开播
+	pcm, err := decodeFile(files[0])
+	cur := decodedTrack{pcm: pcm, err: err}
+
 	for i := 0; ; i++ {
 		idx := i % count
-		err := playTrack(ctx, files[idx], vol)
-		if err == context.Canceled {
+
+		// 预解码下一首（loop=off 的最后一首无需预取）
+		if !(loop == "off" && idx == count-1) {
+			prefetch((i + 1) % count)
+		}
+
+		if cur.err != nil {
+			log.Printf("❌ 播放失败 %s: %v", files[idx], cur.err)
+		} else if err := playPCM(ctx, cur.pcm, vol); err == context.Canceled {
 			log.Printf("⏹ 已停止播放")
 			return
-		}
-		if err != nil {
+		} else if err != nil {
 			log.Printf("❌ 播放失败 %s: %v", files[idx], err)
 		}
+
 		// loop=off：一整轮（count 个文件）播完后自然结束
 		if loop == "off" && idx == count-1 {
 			log.Printf("✅ 播放队列结束（共 %d 首）", count)
 			return
 		}
+
+		// 取下首预解码结果
+		cur = <-prefetchCh
 	}
 }
 

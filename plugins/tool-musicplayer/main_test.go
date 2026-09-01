@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -136,6 +137,22 @@ func TestDecodeWAV(t *testing.T) {
 	first := int16(binary.LittleEndian.Uint16(pcm[0:2]))
 	if first != 100 {
 		t.Fatalf("first sample=%d, want 100", first)
+	}
+}
+
+// ---------- pcmDuration ----------
+
+func TestPCMDurationNoTruncation(t *testing.T) {
+	bytesPerSecond := globalSampleRate * globalChannels * bytesPerSample
+	// 10.5 秒的 PCM：整型除法曾截成 10s，现应精确返回 10.5s
+	pcm := make([]byte, int(10.5*float64(bytesPerSecond)))
+	dur := pcmDuration(pcm)
+	if got := dur.Seconds(); math.Abs(got-10.5) > 1e-6 {
+		t.Fatalf("duration = %v (%.3fs), want 10.5s", dur, got)
+	}
+	// 空 PCM 时长应为 0
+	if d := pcmDuration(nil); d != 0 {
+		t.Fatalf("empty pcm duration = %v, want 0", d)
 	}
 }
 
