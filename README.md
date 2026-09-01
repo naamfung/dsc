@@ -41,7 +41,7 @@
 | `install_dsc_plugin` | 安裝插件 | 拷貝到 `plugins/<type>-<name>/`，live 加載校驗後落盤 config，失敗回滾 |
 | `upgrade_dsc_plugin` | 升級插件 | 部署版本化二進制 `<name>-v<版本><ext>` 並觸發宿主熱更替；失敗保留舊實例、新文件供重啟兜底 |
 | `uninstall_dsc_plugin` | 卸載插件 | 從 config 移除條目，可選刪除 `plugins/<name>/` 目錄 |
-| `list_dsc_plugins` | 列出插件 | 列出 config.yaml 聲明的插件（name/type/enabled/binary_path） |
+| `list_dsc_plugins` | 列出插件 | 合并 config 声明 + 运行态 + 磁盘三源，逐条标注 `state`（loaded=/configured=/orphan=磁盘孤儿) |
 | `load_dsc_plugin` | 運行期載入 | 載入「已存在於 plugins/ 但未在 config 聲明」的插件；默認僅當前進程生效，可選持久化 |
 | `unload_dsc_plugin` | 運行期卸載 | 停止本進程服務並註銷其工具；可選從 config 移除條目 |
 

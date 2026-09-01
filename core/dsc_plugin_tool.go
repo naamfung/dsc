@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -309,22 +310,133 @@ func (t *listDscPluginsTool) ParametersSchema() json.RawMessage {
 }
 
 func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
-	entries, err := t.m.listDscPluginConfig()
+	m := t.m
+	entries, err := m.listDscPluginConfig()
 	if err != nil {
 		return "", err
 	}
+
+	// 运行态：当前已加载的插件（活 client 进程）→ 类型映射
+	m.mu.RLock()
+	loadedNames := make(map[string]bool, len(m.clients))
+	for n := range m.clients {
+		loadedNames[n] = true
+	}
+	typeBy := make(map[string]string, len(m.typeMap))
+	for n, typ := range m.typeMap {
+		typeBy[n] = typ
+	}
+	m.mu.RUnlock()
+
+	// 磁盘孤儿候选：plugins/<name>/<name><ext> 存在但未在 config 声明
+	diskNames := m.listPluginDiskNames()
+
 	type row struct {
 		Name       string `json:"name"`
 		Type       string `json:"type"`
+		State      string `json:"state"` // loaded=运行期已加载; configured=config 声明未加载; orphan=磁盘孤儿/未配
 		Enabled    bool   `json:"enabled"`
 		BinaryPath string `json:"binary_path,omitempty"`
 	}
-	rows := make([]row, 0, len(entries))
+
+	// 合并三方（config + 运行态 + 磁盘），按名升序稳定输出
+	confByName := make(map[string]PluginEntry, len(entries))
+	names := make(map[string]bool, len(entries)+len(loadedNames)+len(diskNames))
 	for _, e := range entries {
-		rows = append(rows, row{Name: e.Name, Type: e.Type, Enabled: e.Enabled, BinaryPath: e.BinaryPath})
+		confByName[e.Name] = e
+		names[e.Name] = true
 	}
-	b, _ := json.Marshal(map[string]any{"plugins": rows, "count": len(rows)})
+	for n := range loadedNames {
+		names[n] = true
+	}
+	for _, n := range diskNames {
+		names[n] = true
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
+	rows := make([]row, 0, len(sorted))
+	for _, name := range sorted {
+		conf, inConf := confByName[name]
+		r := row{Name: name}
+		switch {
+		case loadedNames[name]:
+			r.State = "loaded"
+			r.Type = typeBy[name]
+			if r.Type == "" {
+				r.Type = conf.Type
+			}
+			r.Enabled = true
+			r.BinaryPath = m.resolveDiskBinary(name)
+			if inConf && conf.BinaryPath != "" {
+				r.BinaryPath = conf.BinaryPath
+			}
+		case inConf:
+			r.State = "configured"
+			r.Type = conf.Type
+			r.Enabled = conf.Enabled
+			r.BinaryPath = conf.BinaryPath
+			if r.BinaryPath == "" {
+				r.BinaryPath = m.resolveDiskBinary(name)
+			}
+		default:
+			r.State = "orphan"
+			r.Type = inferPluginTypeFromDir(name)
+			r.Enabled = false
+			r.BinaryPath = m.resolveDiskBinary(name)
+		}
+		rows = append(rows, r)
+	}
+	b, _ := json.Marshal(map[string]any{
+		"plugins": rows,
+		"count":   len(rows),
+		"note":    "state: loaded=运行期已加载; configured=config 声明但未加载; orphan=磁盘存在但未配置",
+	})
 	return string(b), nil
+}
+
+// resolveDiskBinary 按约定返回 plugins/<name>/<name><ext> 的路径（不校验存在性）。
+func (m *Manager) resolveDiskBinary(name string) string {
+	return filepath.Join(m.pluginsRoot(), name, name+binExt())
+}
+
+// listPluginDiskNames 扫描 pluginsRoot 下的插件目录名（约定可执行文件齐备者），
+// 作为孤儿/未配插件的候选来源。
+func (m *Manager) listPluginDiskNames() []string {
+	ents, err := os.ReadDir(m.pluginsRoot())
+	if err != nil {
+		return nil
+	}
+	ext := binExt()
+	var out []string
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !dscPluginNameRe.MatchString(name) {
+			continue
+		}
+		// 要求可执行文件存在（与 load_dsc_plugin 的解析约定一致）
+		if _, err := os.Stat(filepath.Join(m.pluginsRoot(), name, name+ext)); err != nil {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// inferPluginTypeFromDir 从目录名 <type>-<name> 推断插件类型；无法识别返回空串。
+func inferPluginTypeFromDir(base string) string {
+	for _, p := range []string{"tool-", "llm-", "agent-", "policy-", "dsc-"} {
+		if strings.HasPrefix(base, p) {
+			return strings.TrimSuffix(p, "-")
+		}
+	}
+	return ""
 }
 
 func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
@@ -332,6 +444,7 @@ func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawM
 		Plugins []struct {
 			Name    string `json:"name"`
 			Type    string `json:"type"`
+			State   string `json:"state"`
 			Enabled bool   `json:"enabled"`
 		} `json:"plugins"`
 	}
@@ -340,18 +453,37 @@ func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawM
 	}
 	rows := make([]ViewRow, 0, len(r.Plugins))
 	for _, p := range r.Plugins {
-		rows = append(rows, ViewRow{"name": p.Name, "type": p.Type, "enabled": fmt.Sprint(p.Enabled)})
+		rows = append(rows, ViewRow{
+			"name":    p.Name,
+			"type":    p.Type,
+			"state":   stateLabel(p.State),
+			"enabled": fmt.Sprint(p.Enabled),
+		})
 	}
 	v, verr := json.Marshal(ToolView{
 		Kind:    "table",
 		Title:   "DscPlugins",
-		Columns: []ViewColumn{{Key: "name", Title: "插件"}, {Key: "type", Title: "类型"}, {Key: "enabled", Title: "启用"}},
+		Columns: []ViewColumn{{Key: "name", Title: "插件"}, {Key: "type", Title: "类型"}, {Key: "state", Title: "状态"}, {Key: "enabled", Title: "启用"}},
 		Rows:    rows,
 	})
 	if verr != nil {
 		return result, "", nil
 	}
 	return result, string(v), nil
+}
+
+// stateLabel 把运行态/状态 token 转为人读中文标签。
+func stateLabel(s string) string {
+	switch s {
+	case "loaded":
+		return "已加载"
+	case "configured":
+		return "未加载"
+	case "orphan":
+		return "未配置"
+	default:
+		return s
+	}
 }
 
 // ============================================================

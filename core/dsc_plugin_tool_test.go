@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"dsc/proto"
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // TestInstallDscPluginValidation 校验命名约定：非法 type / 非法 name（含路径穿越字符）
@@ -344,5 +345,76 @@ func TestLoadUnloadDscPluginE2E(t *testing.T) {
 	// 幂等：未加载再次 unload 不报错
 	if _, err := unload.Execute(context.Background(), json.RawMessage(`{"name":"tool-lisp-eval","persist":true}`)); err != nil {
 		t.Fatalf("unload 幂等(未加载再 unload)失败: %v", err)
+	}
+}
+
+// TestListDscPluginsThreeStates 校验 list_dsc_plugins 合并三方来源并按状态打标：
+//   - loaded：config 声明 + 运行期已加载；
+//   - configured：config 声明但未加载（enabled=false）；
+//   - orphan：磁盘存在（含约定可执行文件）但未在 config 声明。
+//
+// 同时校验非约定命名目录不被当作孤儿。
+func TestListDscPluginsThreeStates(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "plugins:\n  - name: tool-a\n    type: tool\n    enabled: true\n  - name: tool-b\n    type: tool\n    enabled: false\n"
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+	m.SetConfigPath(cfgPath)
+
+	// 磁盘：tool-a/tool-b 约定可执行文件齐备；tool-c 仅磁盘（孤儿）；bad-dir 名字不合法
+	ext := binExt()
+	for _, name := range []string{"tool-a", "tool-b", "tool-c"} {
+		pd := filepath.Join(dir, "plugins", name)
+		if err := os.MkdirAll(pd, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pd, name+ext), []byte("bin"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "plugins", "bad dir!"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 运行态：tool-a 已加载
+	m.mu.Lock()
+	m.clients["tool-a"] = &plugin.Client{}
+	m.typeMap["tool-a"] = "tool"
+	m.mu.Unlock()
+
+	tool := &listDscPluginsTool{m: m}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var out struct {
+		Plugins []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		} `json:"plugins"`
+	}
+	if err := json.Unmarshal([]byte(res), &out); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	state := map[string]string{}
+	for _, p := range out.Plugins {
+		state[p.Name] = p.State
+	}
+	want := map[string]string{"tool-a": "loaded", "tool-b": "configured", "tool-c": "orphan"}
+	for name, s := range want {
+		if state[name] != s {
+			t.Errorf("%s state = %q, want %q (all=%v)", name, state[name], s, state)
+		}
+	}
+	// 非约定命名目录不应进入候选
+	if len(out.Plugins) != 3 {
+		t.Errorf("len = %d, want 3 (bad-dir 不应计入): %v", len(out.Plugins), out.Plugins)
 	}
 }
