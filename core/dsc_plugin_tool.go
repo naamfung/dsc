@@ -370,7 +370,7 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 				r.Type = conf.Type
 			}
 			r.Enabled = true
-			r.BinaryPath = m.diskPluginBinary(name)
+			r.BinaryPath = m.resolveDiskBinary(name)
 			if inConf && conf.BinaryPath != "" {
 				r.BinaryPath = conf.BinaryPath
 			}
@@ -380,13 +380,13 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 			r.Enabled = conf.Enabled
 			r.BinaryPath = conf.BinaryPath
 			if r.BinaryPath == "" {
-				r.BinaryPath = m.diskPluginBinary(name)
+				r.BinaryPath = m.resolveDiskBinary(name)
 			}
 		default:
 			r.State = "orphan"
 			r.Type = inferPluginTypeFromDir(name)
 			r.Enabled = false
-			r.BinaryPath = m.diskPluginBinary(name)
+			r.BinaryPath = m.resolveDiskBinary(name)
 		}
 		rows = append(rows, r)
 	}
@@ -398,82 +398,19 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 	return string(b), nil
 }
 
-// 插件二进制命名约定：
-//   可执行文件主名须与目录名一致；类型前缀可省略（由目录级校验即可）。
-//   即目录 tool-musicplayer 的合法主名可为 tool-musicplayer 或 musicplayer；
-//   若带版本号（升级部署按 -v<semver> 后缀），版本号须符合语义版本约定。
-//   目录内存在合规二进制则该目录是一个插件（孤儿候选）。
-// 例如：tools/tool-novelforge/novelforge.exe（省略 tool- 前缀，合规）；
-//      dsc-plugin-tool-musicplayer.exe（主名与目录不符，不合规，系旧残留）。
-
-// pluginVersionSuffixRe 匹配 -v<semver> 版本后缀（形如 2 / 2.3 / 2.3.1）。
-var pluginVersionSuffixRe = regexp.MustCompile(`^v[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z.-]+)?$`)
-
-// stripPluginTypePrefix 去掉目录名的类型前缀（tool-/llm-/agent-/policy-/dsc-），
-// 得到类型无关的名称；无法识别前缀时原样返回。
-func stripPluginTypePrefix(dir string) string {
-	for _, p := range []string{"tool-", "llm-", "agent-", "policy-", "dsc-"} {
-		if strings.HasPrefix(dir, p) {
-			return strings.TrimPrefix(dir, p)
-		}
-	}
-	return dir
+// resolveDiskBinary 按约定返回 plugins/<name>/<name><ext> 的路径（不校验存在性）。
+func (m *Manager) resolveDiskBinary(name string) string {
+	return filepath.Join(m.pluginsRoot(), name, name+binExt())
 }
 
-// pluginBinaryStemValid 判断可执行文件主名（去扩展名后的 stem）对给定目录名是否合规：
-// 等于目录名、等于目录名去类型前缀，或这两者带 -v<semver> 版本后缀。
-func pluginBinaryStemValid(dir, stem string) bool {
-	bare := stripPluginTypePrefix(dir)
-	if stem == dir || stem == bare {
-		return true
-	}
-	if i := strings.LastIndex(stem, "-v"); i > 0 {
-		pre, ver := stem[:i], stem[i+1:]
-		if (pre == dir || pre == bare) && pluginVersionSuffixRe.MatchString(ver) {
-			return true
-		}
-	}
-	return false
-}
-
-// diskPluginBinary 在插件目录内查找合规的可执行文件路径；无则返回空串。
-// 返回首个（目录序）合规二进制，多版本共存时上层自然取到其一。
-func (m *Manager) diskPluginBinary(name string) string {
-	dir := filepath.Join(m.pluginsRoot(), name)
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	for _, e := range ents {
-		if e.IsDir() {
-			continue
-		}
-		fn := e.Name()
-		if runtime.GOOS == "windows" {
-			if !strings.EqualFold(filepath.Ext(fn), ".exe") {
-				continue
-			}
-		} else {
-			fi, err := e.Info()
-			if err != nil || fi.Mode().Perm()&0111 == 0 {
-				continue
-			}
-		}
-		stem := strings.TrimSuffix(fn, binExt())
-		if pluginBinaryStemValid(name, stem) {
-			return filepath.Join(dir, fn)
-		}
-	}
-	return ""
-}
-
-// listPluginDiskNames 扫描 pluginsRoot 下的插件目录名（目录内置合规可执行文件者），
-// 作为孤儿/未配插件的候选来源。仅在目录内存在合法插件二进制时把该目录计入。
+// listPluginDiskNames 扫描 pluginsRoot 下的插件目录名（约定可执行文件齐备者），
+// 作为孤儿/未配插件的候选来源。
 func (m *Manager) listPluginDiskNames() []string {
 	ents, err := os.ReadDir(m.pluginsRoot())
 	if err != nil {
 		return nil
 	}
+	ext := binExt()
 	var out []string
 	for _, e := range ents {
 		if !e.IsDir() {
@@ -483,7 +420,8 @@ func (m *Manager) listPluginDiskNames() []string {
 		if !dscPluginNameRe.MatchString(name) {
 			continue
 		}
-		if m.diskPluginBinary(name) == "" {
+		// 要求可执行文件存在（与 load_dsc_plugin 的解析约定一致）
+		if _, err := os.Stat(filepath.Join(m.pluginsRoot(), name, name+ext)); err != nil {
 			continue
 		}
 		out = append(out, name)
