@@ -52,7 +52,7 @@ func TestViewCursorTracksMultiLineInput(t *testing.T) {
 	}
 }
 
-// TestViewMouseModeFollowsToggle 验证 /mouse 切换释放鼠标（MouseModeNone），
+// TestViewMouseModeFollowsToggle 验证 /settings mouse on|off 切换释放鼠标（MouseModeNone），
 // 恢复终端原生选中/复制（模型工作期间也可用）。
 func TestViewMouseModeFollowsToggle(t *testing.T) {
 	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
@@ -63,25 +63,25 @@ func TestViewMouseModeFollowsToggle(t *testing.T) {
 		t.Fatalf("默认 MouseMode = %v, want CellMotion", v.MouseMode)
 	}
 
-	// /mouse → 释放
-	handled, _ := m.runSlashCommand("/mouse")
+	// /settings mouse off → 释放
+	handled, _ := m.runSlashCommand("/settings mouse off")
 	if !handled {
-		t.Fatal("/mouse 应被 runSlashCommand 处理")
+		t.Fatal("/settings mouse off 应被 runSlashCommand 处理")
 	}
 	if !m.mouseCaptureOff {
-		t.Fatal("切换后 mouseCaptureOff 应为 true")
+		t.Fatal("off 后 mouseCaptureOff 应为 true")
 	}
 	if v := m.View(); v.MouseMode != tea.MouseModeNone {
-		t.Fatalf("/mouse 后 MouseMode = %v, want None", v.MouseMode)
+		t.Fatalf("/settings mouse off 后 MouseMode = %v, want None", v.MouseMode)
 	}
 
-	// 再 /mouse → 恢复捕获
-	handled, _ = m.runSlashCommand("/mouse")
+	// /settings mouse on → 恢复捕获
+	handled, _ = m.runSlashCommand("/settings mouse on")
 	if !handled {
-		t.Fatal("第二次 /mouse 应被处理")
+		t.Fatal("/settings mouse on 应被处理")
 	}
 	if m.mouseCaptureOff {
-		t.Fatal("再次切换后 mouseCaptureOff 应为 false")
+		t.Fatal("on 后 mouseCaptureOff 应为 false")
 	}
 	if v := m.View(); v.MouseMode != tea.MouseModeCellMotion {
 		t.Fatalf("恢复后 MouseMode = %v, want CellMotion", v.MouseMode)

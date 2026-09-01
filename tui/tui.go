@@ -319,7 +319,7 @@ type Model struct {
 	todoArgs string
 
 	// mouseCaptureOff 为 true 时释放鼠标给终端（MouseModeNone），恢复终端原生
-	// 文字选中/复制（模型工作期间也可用）；由 /mouse 命令或 DSC_DISABLE_MOUSE
+	// 文字选中/复制（模型工作期间也可用）；由 /settings mouse 命令或 DSC_DISABLE_MOUSE
 	// 切换，代价是应用内滚轮滚动与正文拖选复制暂时失效。
 	mouseCaptureOff bool
 
@@ -401,7 +401,7 @@ func defaultSessionID(m *core.Manager) string {
 }
 
 // mouseCaptureOffByDefault 允许用户通过 DSC_DISABLE_MOUSE 环境变量在启动时默认
-// 释放鼠标（对齐 REX 的 REX_DISABLE_MOUSE），免去每次会话敲 /mouse。
+// 释放鼠标（对齐 REX 的 REX_DISABLE_MOUSE），免去每次会话敲 /settings mouse off。
 func mouseCaptureOffByDefault() bool {
 	v := strings.TrimSpace(os.Getenv("DSC_DISABLE_MOUSE"))
 	return v != "" && v != "0"
@@ -704,7 +704,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveCompletion(1)
 				return m, nil
 			case "tab", "enter":
-				if msg.String() == "enter" && m.completionExactLabel() {
+				// 分组入口（descend）即使已输入完整命令也应「进入子菜单」而非执行；
+				// 其余命令已输完整时关闭菜单交给下面 Enter 的提交逻辑。
+				if msg.String() == "enter" && m.completionExactLabel() && !m.completion.items[m.completion.sel].descend {
 					m.completion = completion{}
 					break // 已输入完整命令，交给下面 Enter 的提交逻辑
 				}
@@ -2062,7 +2064,9 @@ func resultGutter(body string) string {
 	return b.String()
 }
 
-// 内置斜杆命令列表（当前为宿主可直接执行的命令）。
+// 内置斜杆命令列表（当前为宿主可直接执行的命令）。一级菜单只展示各命令入口；
+// 分组命令（如 /settings）以单个入口呈现，选中进入后（输入 "<入口> " 前缀）再展示其
+// 子命令（见 slashGroups），使一级菜单保持精简。
 var slashCommands = []compItem{
 	{label: "/help", insert: "/help", hint: "显示帮助与快捷键"},
 	{label: "/clear", insert: "/clear", hint: "清空聊天记录"},
@@ -2073,24 +2077,64 @@ var slashCommands = []compItem{
 	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
 	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
 	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
-	{label: "/jobs", insert: "/jobs", hint: "列出后台任务（含 workflow）状态"},
-	{label: "/jobs output", insert: "/jobs output ", hint: "读取后台任务输出（如 /jobs output workflow-1）"},
-	{label: "/jobs kill", insert: "/jobs kill ", hint: "取消后台任务（如 /jobs kill workflow-1）"},
-	{label: "/settings history", insert: "/settings history ", hint: "历史注入条数（如 10 / off / unlimited）：控制模型预填充长度"},
+	{label: "/jobs", insert: "/jobs ", hint: "后台任务子命令（list / output / kill），选中进入后展开", descend: true},
+	{label: "/settings", insert: "/settings ", hint: "设置子命令（history / mouse），选中进入后展开", descend: true},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
-	{label: "/crons", insert: "/crons", hint: "列出所有定时任务"},
-	{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
-	{label: "/cron remove", insert: "/cron remove ", hint: "删除定时任务"},
-	{label: "/cron on", insert: "/cron on ", hint: "启用定时任务"},
-	{label: "/cron off", insert: "/cron off ", hint: "停用定时任务"},
+	{label: "/cron", insert: "/cron ", hint: "定时任务子命令（list / add / remove / on / off），选中进入后展开", descend: true},
 	{label: "/plan", insert: "/plan", hint: "进入 plan 模式（先探索设计，再经 exit_plan_mode 呈现计划）"},
 	{label: "/plan off", insert: "/plan off", hint: "退出 plan 模式"},
 	{label: "/session new", insert: "/session new", hint: "新建会话并切换"},
 	{label: "/session default", insert: "/session default", hint: "切换到指定会话（如 /session session-3）"},
 	{label: "/session delete", insert: "/session delete ", hint: "删除指定会话（如 /session delete session-3）"},
 	{label: "/export", insert: "/export", hint: "导出当前会话为 Markdown 文件"},
-	{label: "/mouse", insert: "/mouse", hint: "切换鼠标捕获（释放鼠标以使用终端原生复制）"},
 	{label: "/exit", insert: "/exit", hint: "退出聊天"},
+}
+
+// slashGroup 斜杆命令分组：entry 为一级菜单入口（descend=true，选中后保持菜单打开
+// 下钻一层），subs 为进入该组（输入 "<入口> " 前缀）后展示的子命令。
+type slashGroup struct {
+	entry compItem
+	subs  []compItem
+}
+
+var slashGroups = []slashGroup{
+	{
+		entry: compItem{label: "/cron", insert: "/cron ", hint: "定时任务子命令（list / add / remove / on / off），选中进入后展开", descend: true},
+		subs: []compItem{
+			{label: "/cron list", insert: "/cron list", hint: "列出所有定时任务（=/crons）"},
+			{label: "/cron add", insert: "/cron add ", hint: "添加定时任务（如 /cron add \"0 8 * * *\" 写日报）"},
+			{label: "/cron remove", insert: "/cron remove ", hint: "删除定时任务"},
+			{label: "/cron on", insert: "/cron on ", hint: "启用定时任务"},
+			{label: "/cron off", insert: "/cron off ", hint: "停用定时任务"},
+		},
+	},
+	{
+		entry: compItem{label: "/jobs", insert: "/jobs ", hint: "后台任务子命令（list / output / kill），选中进入后展开", descend: true},
+		subs: []compItem{
+			{label: "/jobs list", insert: "/jobs list", hint: "列出后台任务（含 workflow）状态（= /jobs）"},
+			{label: "/jobs output", insert: "/jobs output ", hint: "读取后台任务输出（如 /jobs output workflow-1）"},
+			{label: "/jobs kill", insert: "/jobs kill ", hint: "取消后台任务（如 /jobs kill workflow-1）"},
+		},
+	},
+	{
+		entry: compItem{label: "/settings", insert: "/settings ", hint: "设置子命令（history / mouse），选中进入后展开", descend: true},
+		subs: []compItem{
+			{label: "/settings history", insert: "/settings history ", hint: "历史注入条数（如 10 / off / unlimited）：控制模型预填充长度"},
+			{label: "/settings mouse on", insert: "/settings mouse on", hint: "恢复应用内鼠标捕获（滚轮滚动与拖选复制生效）"},
+			{label: "/settings mouse off", insert: "/settings mouse off", hint: "释放鼠标给终端（终端原生选中/复制，模型工作时可用）"},
+		},
+	},
+}
+
+// slashGroupFor 若输入已进入某个斜杆命令分组（顶层入口 label 后跟空格，如
+// "/settings "），返回该分组；否则返回 nil。
+func slashGroupFor(val string) *slashGroup {
+	for i := range slashGroups {
+		if strings.HasPrefix(val, slashGroups[i].entry.label+" ") {
+			return &slashGroups[i]
+		}
+	}
+	return nil
 }
 
 // readSkillFrontmatter 解析 SKILL.md 可选 frontmatter 的 name/description。
@@ -2203,7 +2247,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"",
 			"鼠标:",
 			"  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
-			"  /mouse 可释放鼠标给终端（终端原生选中/复制，模型工作时也可用）；状态栏会显示当前状态。",
+			"  /settings mouse off 可释放鼠标给终端（终端原生选中/复制，模型工作时也可用）；on 恢复应用内捕获；状态栏会显示当前状态。",
 			"",
 			"斜杆命令:",
 			"  /help        显示本帮助",
@@ -2228,6 +2272,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /plan off   退出 plan 模式",
 			"  /settings history <N|off|unlimited>  历史注入条数：控制模型预填充长度",
 			"    （N 为注入最近 N 条；off 不注入历史；unlimited/on 不限制，默认）",
+			"  /settings mouse on|off  切换鼠标捕获（on 恢复应用内捕获；off 释放给终端原生选中/复制）",
 			"  /session <id>  切换到指定会话（如 /session session-3）",
 			"  /session new  新建会话并切换",
 			"  /session delete <id>  删除指定会话",
@@ -2434,11 +2479,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.virtualGotoBottom()
 		return true, nil
 	case "/crons":
-		if m.manager == nil {
-			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-		} else {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + "\n" + m.renderCrons())
-		}
+		m.appendCronList()
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
@@ -2446,20 +2487,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		m.virtualGotoBottom()
 		return true, nil
 	case "/cron":
-		m.appendMessage(errorSty.Render("用法: /cron add <cron(5 段)> <prompt>，/cron remove <id>，/cron on|off <id>"))
-		m.input.SetValue("")
-		m.completion = completion{}
-		m.syncInputHeight()
-		m.render()
-		m.virtualGotoBottom()
-		return true, nil
-	case "/mouse":
-		m.mouseCaptureOff = !m.mouseCaptureOff
-		if m.mouseCaptureOff {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已释放鼠标给终端：终端原生文字选中/复制可用（模型工作期间也可用）；应用内滚轮滚动与拖选复制暂停。")
-		} else {
-			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已恢复应用内鼠标捕获：滚轮滚动与正文拖选复制生效。")
-		}
+		m.appendMessage(errorSty.Render("用法: /cron list（= /crons）、add <cron(5 段)> <prompt>、remove <id>、on|off <id>"))
 		m.input.SetValue("")
 		m.completion = completion{}
 		m.syncInputHeight()
@@ -2523,13 +2551,24 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	}
 	// /settings history <N|off|unlimited>：控制历史注入条数（模型预填充长度）。
 	// off/0 不注入历史；N 注入最近 N 条；unlimited/on/-1 不限制（默认）。
+	// /settings mouse on|off：切换鼠标捕获（on 恢复应用内捕获；off 释放给终端原生选中/复制）。
 	if strings.HasPrefix(cmd, "/settings") {
 		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/settings"))
 		sub, arg, _ := strings.Cut(strings.TrimSpace(rest), " ")
 		arg = strings.TrimSpace(arg)
-		if sub != "history" {
-			m.appendMessage(errorSty.Render("用法: /settings history <N|off|unlimited>（当前仅支持 history 子项）"))
-		} else {
+		switch sub {
+		case "mouse":
+			switch arg {
+			case "on":
+				m.mouseCaptureOff = false
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已恢复应用内鼠标捕获：滚轮滚动与正文拖选复制生效。")
+			case "off":
+				m.mouseCaptureOff = true
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已释放鼠标给终端：终端原生文字选中/复制可用（模型工作期间也可用）；应用内滚轮滚动与拖选复制暂停。")
+			default:
+				m.appendMessage(errorSty.Render("用法: /settings mouse on | off"))
+			}
+		case "history":
 			count, err := parseHistoryInjection(arg)
 			if err != nil {
 				m.appendMessage(errorSty.Render("用法: /settings history <N|off|unlimited>（N 为注入最近 N 条；off 不注入；unlimited/on 不限制）"))
@@ -2548,6 +2587,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 						"\n历史注入已设置为 " + historyInjectionLabel(count) + "，并已持久化到配置。" + persistNote)
 				}
 			}
+		default:
+			m.appendMessage(errorSty.Render("用法: /settings history <N|off|unlimited> 或 /settings mouse on|off"))
 		}
 		m.input.SetValue("")
 		m.completion = completion{}
@@ -2560,6 +2601,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	if strings.HasPrefix(cmd, "/cron ") {
 		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/cron "))
 		switch {
+		case rest == "list":
+			m.appendCronList()
 		case strings.HasPrefix(rest, "add "):
 			tokens := strings.Fields(strings.TrimPrefix(rest, "add "))
 			if len(tokens) < 6 {
@@ -2674,6 +2717,15 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	return false, nil
 }
 
+// appendCronList 输出定时任务列表（/crons 与 /cron list 共用）。
+func (m *Model) appendCronList() {
+	if m.manager == nil {
+		m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+	} else {
+		m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 定时任务") + "\n" + m.renderCrons())
+	}
+}
+
 // renderCrons 渲染定时任务列表（/crons 命令）。
 func (m *Model) renderCrons() string {
 	list := m.manager.ListCronJobs()
@@ -2699,7 +2751,8 @@ func (m *Model) renderCrons() string {
 }
 
 // updateCompletion 根据当前输入重新计算补全菜单：优先 @ 文件引用 token（可出现在
-// 行中），其次「/」开头的单个词（不含空格）的斜杆命令，并按前缀/子序列过滤。
+// 行中），其次「/」开头的斜杆命令——无空白时匹配一级命令；已进入分组（"<入口> " 前缀）
+// 时展示其子命令，并按前缀/子序列过滤。
 func (m *Model) updateCompletion() {
 	val := m.input.Value()
 	// @ 文件引用 token 优先：可出现在行中（含斜杆命令参数后），如 "@foo"
@@ -2710,9 +2763,16 @@ func (m *Model) updateCompletion() {
 			return
 		}
 	}
-	// 斜杆命令：整行以 / 开头且不含空白
-	if strings.HasPrefix(val, "/") && !strings.ContainsAny(val, " \t\n") {
-		items := filterSlash(slashCommands, val)
+	// 斜杆命令：整行以 / 开头
+	if strings.HasPrefix(val, "/") {
+		var items []compItem
+		if !strings.ContainsAny(val, " \t\n") {
+			// 一级命令（含分组入口）
+			items = filterSlash(slashCommands, val)
+		} else if group := slashGroupFor(val); group != nil {
+			// 已进入分组（如 "/settings "）→ 展示其子命令
+			items = filterSlash(group.subs, val)
+		}
 		if len(items) == 0 {
 			m.completion = completion{}
 			m.viewport.SetHeight(m.vpHeight())
@@ -3060,7 +3120,7 @@ func (m *Model) statusBar() string {
 	}
 	left = "  " + left
 	if m.mouseCaptureOff {
-		left += " · " + dimSty.Render("鼠标已释放(/mouse 恢复)")
+		left += " · " + dimSty.Render("鼠标已释放(/settings mouse on 恢复)")
 	}
 	right := "Enter 发送 · 选中复制 · Ctrl+J 换行 · Ctrl+Q 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)
@@ -3131,7 +3191,7 @@ func (m *Model) View() tea.View {
 
 // viewOf 把内容包装成视图并声明终端特性：进入备用屏幕并保持鼠标捕获。
 // 鼠标捕获开启（CellMotion）时滚轮滚动、正文拖拽选中自动复制内建工作；
-// /mouse 或 DSC_DISABLE_MOUSE 可释放鼠标给终端（MouseModeNone），恢复终端
+// /settings mouse off 或 DSC_DISABLE_MOUSE 可释放鼠标给终端（MouseModeNone），恢复终端
 // 原生文字选中/复制（模型工作期间同样可用）。
 // 真实光标由 View 显式锚定到输入插入点：SetVirtualCursor(false) 后 textarea
 // 不再渲染虚拟光标，若不在此给出位置，输入框光标会丢失。

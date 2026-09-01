@@ -226,13 +226,13 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 | 命令                                                    | 用途                                                                                                       |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `/sandbox read-only \| workspace \| full-access`      | 切換沙箱策略（狀態欄即時顯示工作範圍）                                                                                      |
-| `/settings history <N\|off\|unlimited>`               | 歷史注入條數（實時生效並持久化到配置）                                                                                      |
+| `/settings history <N\|off\|unlimited>` · `/settings mouse on\|off` | 歷史注入條數（實時生效並持久化到配置）/ 鼠標捕獲（on 恢復應用內捕獲；off 釋放給終端） |
 | `/jobs [list\|output <id>\|kill <id> [reason]]`       | 管理後台任務（含 workflow）                                                                                       |
 | `/session <id>\|new\|delete <id>` · `/sessions`       | 多會話管理                                                                                                    |
-| `/cron add\|remove\|on\|off` · `/crons`               | 定時任務                                                                                                     |
+| `/cron list\|add\|remove\|on\|off` · `/crons`          | 定時任務                                                                                                     |
 | `/plan [off]`                                         | plan 模式開關                                                                                                |
 | `/mode minimal\|standard\|creation\|ptc`              | 切換模式（`ptc` 开启 PTC 程序化工具组合呈现：直接把工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调；其余模式为 native，`run_code` 对模型隐藏） |
-| `/skills` · `/help` · `/clear` · `/export` · `/mouse` | 技能 / 幫助 / 清屏 / 導出 / 鼠標                                                                                   |
+| `/skills` · `/help` · `/clear` · `/export`            | 技能 / 幫助 / 清屏 / 導出                                                                                             |
 
 ## 啟動參數（CLI 旗標）
 
