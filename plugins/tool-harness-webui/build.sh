@@ -16,7 +16,10 @@ if [ -d "webui" ] && [ -f "webui/package.json" ]; then
     (cd webui && bun run build)
 fi
 
-# 编译 Go 插件（嵌入前端静态资源）
+# 编译 Go 插件（嵌入前端静态资源）。可执行文件后缀按平台：Windows 为 .exe，其余为空。
+GOOS="$(go env GOOS)"
+BINEXT=""
+if [ "$GOOS" = "windows" ]; then BINEXT=".exe"; fi
 echo "tool-harness-webui: building go plugin..."
-go build -o tool-harness-webui.exe .
-echo "tool-harness-webui: built -> tool-harness-webui.exe"
+go build -o "tool-harness-webui$BINEXT" .
+echo "tool-harness-webui: built -> tool-harness-webui$BINEXT"
