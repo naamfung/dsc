@@ -50,10 +50,10 @@ plugins:
     enabled: true
 
   # WEB UI：独立工具插件，SvelteKit 前端（bun 构建后 go:embed 嵌入），独立 HTTP 端口代理宿主 admin
-  - name: tool-harness-webui
-    type: tool
-    binary_path: ./plugins/tool-harness-webui/tool-harness-webui.exe
-    enabled: true
+  # - name: tool-harness-webui
+  #   type: tool
+  #   binary_path: ./plugins/tool-harness-webui/tool-harness-webui.exe
+  #   enabled: true
 
   # SSH 终端：ssh_connect / ssh_exec / ssh_list / ssh_close，远程命令执行（持久会话）
   - name: tool-ssh
