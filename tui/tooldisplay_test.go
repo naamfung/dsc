@@ -19,7 +19,7 @@ func TestToolDisplayName(t *testing.T) {
 		"exit_plan_mode":     "ExitPlanMode",
 		"str_replace_editor": "StrReplaceEditor",
 		"lisp_eval":          "LispEval",
-		"fetch_url":          "FetchUrl",
+		"web_fetch":          "WebFetch",
 		"web_search":         "WebSearch",
 		"browser_screenshot": "BrowserScreenshot",
 		"shell":              "Shell",

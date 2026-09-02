@@ -7,9 +7,9 @@ import (
 	"dsc-sdk"
 )
 
-// TestFetchUrlView fetch_url 视图：纯文本，成功/失败徽标。
-func TestFetchUrlView(t *testing.T) {
-	view, _ := fetchUrlView(`{"success":true,"url":"https://example.com","content":"Hello 世界"}`)
+// TestWebFetchView web_fetch 视图：纯文本，成功/失败徽标。
+func TestWebFetchView(t *testing.T) {
+	view, _ := webFetchView(`{"success":true,"url":"https://example.com","content":"Hello 世界"}`)
 	var v dsc.View
 	if err := json.Unmarshal(view, &v); err != nil {
 		t.Fatalf("视图 JSON 非法: %v", err)
@@ -21,7 +21,7 @@ func TestFetchUrlView(t *testing.T) {
 		t.Fatalf("body = %q", v.Body)
 	}
 
-	view, _ = fetchUrlView(`{"success":false,"url":"https://example.com","error":"timeout"}`)
+	view, _ = webFetchView(`{"success":false,"url":"https://example.com","error":"timeout"}`)
 	var v2 dsc.View
 	if err := json.Unmarshal(view, &v2); err != nil {
 		t.Fatalf("视图 JSON 非法: %v", err)

@@ -216,7 +216,7 @@ func assertView(t *testing.T, resp *proto.ExecuteToolResponse) core.ToolView {
 }
 
 // TestE2EWithMockChromium 以 mock CDP 服务器替代真实 chromium，验证
-// fetch_url 全链路：插件经 rod 连接假浏览器 → 读取 innerText → 结果与
+// web_fetch 全链路：插件经 rod 连接假浏览器 → 读取 innerText → 结果与
 // ViewJson 穿透 gRPC 返回，全程不依赖本机 chromium / 网络。
 func TestE2EWithMockChromium(t *testing.T) {
 	// 1. 启动 mock CDP 服务器（假 chromium，innerText 恒定）
@@ -262,19 +262,19 @@ func TestE2EWithMockChromium(t *testing.T) {
 		t.Fatalf("ListTools = %+v, err %v", list, err)
 	}
 
-	// 5. 真实执行 fetch_url（user_mode=false 走隔离路径，经 mock 浏览器）
+	// 5. 真实执行 web_fetch（user_mode=false 走隔离路径，经 mock 浏览器）
 	resp, err := tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{
-		ToolName:      "fetch_url",
+		ToolName:      "web_fetch",
 		ArgumentsJson: `{"url":"https://example.com","user_mode":false}`,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteTool(fetch_url): %v", err)
+		t.Fatalf("ExecuteTool(web_fetch): %v", err)
 	}
 	if resp.Error != "" {
-		t.Fatalf("fetch_url 应成功: %+v", resp)
+		t.Fatalf("web_fetch 应成功: %+v", resp)
 	}
 	if !strings.Contains(resp.Content, "MOCK_PAGE_BODY_TEXT") {
-		t.Fatalf("fetch_url 应返回 mock innerText: %+v", resp)
+		t.Fatalf("web_fetch 应返回 mock innerText: %+v", resp)
 	}
 	// ViewJson 穿透完整链路：plain 视图 + ok 徽标
 	if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Fetch" || v.Badge == nil || v.Badge.Text != "ok" || !strings.Contains(v.Body, "MOCK_PAGE_BODY_TEXT") {
