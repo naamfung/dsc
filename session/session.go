@@ -52,6 +52,9 @@ const (
 	// 对齐 DSH approval/asked + approval/decided 会话审计；由 agent 经宿主 OnEvent 桥落盘）。
 	ApprovalAsked   EventType = "approval/asked"
 	ApprovalDecided EventType = "approval/decided"
+	// ApprovalPolicy 审批策略（log-only：整值替换，最后一条生效，fold 恢复；缺省回退部署值）。
+	// 对齐 DSH approval/policy 会话态：per-session，resume/fork 后经事件日志折叠还原。
+	ApprovalPolicy EventType = "approval/policy"
 )
 
 // Surface op 取值。

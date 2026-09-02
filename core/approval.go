@@ -66,6 +66,7 @@ func (m *Manager) GetApprovalPolicy() ApprovalPolicy {
 
 // SetSessionApprovalPolicy 为指定会话设置审批策略覆盖（per-session，对齐 DSH
 // approval/policy 会话态；TUI /approval 对当前会话调用）。空会话视为设置全局。
+// 设置后广播 EventApprovalPolicy，使 agent 把该值落进会话日志（持久化/折叠恢复）。
 func (m *Manager) SetSessionApprovalPolicy(sessionID string, p ApprovalPolicy) {
 	if sessionID == "" {
 		m.SetApprovalPolicy(p)
@@ -77,6 +78,9 @@ func (m *Manager) SetSessionApprovalPolicy(sessionID string, p ApprovalPolicy) {
 	}
 	m.sessionApproval[sessionID] = p
 	m.sessionApprovalMu.Unlock()
+	m.events.Emit(EventApprovalPolicy, EventContext{Data: map[string]string{
+		"session": sessionID, "policy": ApprovalPolicyName(p),
+	}})
 }
 
 // GetSessionApprovalPolicy 读取指定会话的审批策略（覆盖 ?? 全局缺省）。
@@ -178,6 +182,10 @@ const EventApprovalAsked EventName = "approval/asked"
 
 // EventApprovalDecided 审批已有结论（emit）。
 const EventApprovalDecided EventName = "approval/decided"
+
+// EventApprovalPolicy 会话审批策略变化（emit）：TUI /approval 设当前会话后广播，
+// agent 经 OnEvent 桥把 approval/policy 落进会话日志（持久化/折叠恢复）。
+const EventApprovalPolicy EventName = "approval/policy"
 
 // approvalEscalation 工具流水线 pre-execute 瀑布审批门（对齐 DSH approveEscalation）：
 // 在沙箱判定**之前**运行——检测被拒工具族的升级重试（sandbox_permissions+justification），

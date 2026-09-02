@@ -152,6 +152,25 @@ func TestNonWriteToolIgnoresEscalationArgs(t *testing.T) {
 	}
 }
 
+func TestApprovalPolicyChangeEmitted(t *testing.T) {
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
+	var gotPolicy string
+	var gotSession string
+	m.events.OnAny(func(ctx EventContext) (any, error) {
+		if ctx.Name != EventApprovalPolicy {
+			return nil, nil
+		}
+		d, _ := ctx.Data.(map[string]string)
+		gotSession, gotPolicy = d["session"], d["policy"]
+		return nil, nil
+	})
+
+	m.SetSessionApprovalPolicy("sess-5", ApprovalNever)
+	if gotSession != "sess-5" || gotPolicy != "never" {
+		t.Fatalf("policy-change event = (%q,%q), want (sess-5,never)", gotSession, gotPolicy)
+	}
+}
+
 func TestPerSessionApprovalPolicy(t *testing.T) {
 	orig := WorkspaceRoot
 	WorkspaceRoot = t.TempDir()

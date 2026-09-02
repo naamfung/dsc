@@ -74,6 +74,12 @@ type ReactLoopAgent struct {
 	// 策略与工作区真实根路径，避免臆造不存在的 /workspace 虚拟路径而陷入死循环。
 	sandboxPolicy string
 
+	// 审批策略（宿主演 DSC_APPROVAL_POLICY 傳入，缺省 ask）：渲染进 system prompt 的
+	// approval:policy 上下文片段。每 Run 从会话事件日志折疊（approval/policy，resume/fork
+	// 后恢復）；无事件時回退部署缺省。审批门 enforcement 由宿主按会话解析，二者经
+	// /approval → 宿主广播 → 本 agent 落会话日志保持同步。
+	approvalPolicy string
+
 	// 历史注入条数上限（-1 = 不限制，缺省；0 = 不注入历史；>0 = 只注入最近 N 条）。
 	// 会话级设置以 log-only history/limit 事件持久化（每次 Run 折叠还原），
 	// 无事件时退回 DSC_HISTORY_INJECTION 环境变量默认。用于控制本地模型预填充长度。
@@ -274,6 +280,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 	}
 	// plan 模式每次 Run 从事件日志折叠（SetPlanMode/exit_plan_mode 已提交的变更即时生效）
 	a.planActive = session.FoldPlanMode(a.sess.Events())
+	// 审批策略每次 Run 从事件日志折叠（/approval 经宿主广播落会话，resume/fork 恢复）；
+	// 无事件时保留 newAgent 读入的 DSC_APPROVAL_POLICY 部署缺省（默认 ask）。
+	if p := session.FoldApprovalPolicy(a.sess.Events()); p != "" {
+		a.approvalPolicy = p
+	}
 	// 历史注入条数每次 Run 从事件日志折叠（/settings history 已提交的变更即时生效）；
 	// 无记录时保留 newAgent 读入的 DSC_HISTORY_INJECTION 部署默认（缺省 -1 = 不限制）。
 	if limit, found := session.FoldHistoryLimit(a.sess.Events()); found {
@@ -784,7 +795,7 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	}
 	// 审批策略上下文（对齐 DSH approval:policy）：让模型知道当前是否会被审批提问，
 	// 以及升级重试（sandbox_permissions+justification）在 never 下会被自动拒。
-	if ap := approvalPolicyContext(); ap != "" {
+	if ap := a.approvalPolicyContext(); ap != "" {
 		parts = append(parts, ap)
 	}
 	return strings.Join(parts, "\n\n")
@@ -895,10 +906,10 @@ func (a *ReactLoopAgent) sandboxPolicyContext() string {
 }
 
 // approvalPolicyContext 渲染当前审批策略上下文片段（对齐 DSH approval:policy 两句）：
-// 由宿主注入的 DSC_APPROVAL_POLICY（ask/never）驱动。ask 声明须审批的操作会经评审通道询问；
-// never 声明审批提示关闭、升级重试（sandbox_permissions）会被自动拒。
-func approvalPolicyContext() string {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_APPROVAL_POLICY"))) {
+// 由 a.approvalPolicy（会话事件折叠 ?? 部署缺省 DSC_APPROVAL_POLICY）驱动。ask 声明须审批
+// 的操作会经评审通道询问；never 声明审批提示关闭、升级重试（sandbox_permissions）自动拒。
+func (a *ReactLoopAgent) approvalPolicyContext() string {
+	switch strings.ToLower(strings.TrimSpace(a.approvalPolicy)) {
 	case "never", "off":
 		return "Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
 	default: // ask（缺省）
@@ -1181,15 +1192,17 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*core.AgentDebugSna
 	return snap, nil
 }
 
-// handleHostEvent 订阅宿主事件（SDK Hook.OnEvent）：把沙箱升级审批的审计事件
-// （approval/asked / approval/decided）落进当前会话日志（对齐 DSH：审批审计写会话），
+// handleHostEvent 订阅宿主事件（SDK Hook.OnEvent）：
+//   - 沙箱升级审批审计事件（approval/asked / approval/decided）落进当前会话日志（对齐 DSH）；
+//   - 会话审批策略变化（approval/policy）落进当前会话日志并即时刷新 a.approvalPolicy（上下文）。
+//
 // 仅匹配宿主带上的同一会话 id 的事件。
 func (a *ReactLoopAgent) handleHostEvent(_ context.Context, eventType, dataJSON string) {
-	if eventType != string(core.EventApprovalAsked) && eventType != string(core.EventApprovalDecided) {
+	if eventType != string(core.EventApprovalAsked) && eventType != string(core.EventApprovalDecided) && eventType != string(core.EventApprovalPolicy) {
 		return
 	}
 	var payload struct {
-		Session, Tool, Mode, Reason, Outcome string
+		Session, Tool, Mode, Reason, Outcome, Policy string
 	}
 	if err := json.Unmarshal([]byte(dataJSON), &payload); err != nil {
 		return
@@ -1208,6 +1221,11 @@ func (a *ReactLoopAgent) handleHostEvent(_ context.Context, eventType, dataJSON 
 		a.sess.Append(session.ApprovalDecided, &session.ApprovalDecidedData{
 			Tool: payload.Tool, Mode: payload.Mode, Outcome: payload.Outcome,
 		}, nil)
+	case string(core.EventApprovalPolicy):
+		a.sess.Append(session.ApprovalPolicy, &session.ApprovalPolicyData{Policy: payload.Policy}, nil)
+		if payload.Policy != "" {
+			a.approvalPolicy = payload.Policy
+		}
 	}
 	if err := a.store.Save(a.sess); err != nil {
 		fmt.Printf("[Agent Loop] failed to save session after approval audit: %v\n", err)
@@ -1290,6 +1308,12 @@ func newAgent() (*ReactLoopAgent, error) {
 	agent.sandboxPolicy = os.Getenv("DSC_SANDBOX_POLICY")
 	if agent.sandboxPolicy == "" {
 		agent.sandboxPolicy = "workspace-write"
+	}
+	// 讀取宿主傳入的审批策略缺省（DSC_APPROVAL_POLICY，缺省 ask）；每个会话可在事件
+	// 日志上 override（/approval → 宿主广播落地），Run 时折叠优先于此缺省。
+	agent.approvalPolicy = os.Getenv("DSC_APPROVAL_POLICY")
+	if agent.approvalPolicy == "" {
+		agent.approvalPolicy = "ask"
 	}
 	// 讀取宿主傳入的历史注入条数默认值（DSC_HISTORY_INJECTION）：-1 不限制（缺省），
 	// 0 不注入历史，>0 只注入最近 N 条。会话内可通过 /settings history 以 history/limit

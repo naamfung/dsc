@@ -140,6 +140,12 @@ func unmarshalData(typ EventType, raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return &d, nil
+	case ApprovalPolicy:
+		var d ApprovalPolicyData
+		if err := decode(&d); err != nil {
+			return nil, err
+		}
+		return &d, nil
 	default:
 		// 未知类型：DSH fail-closed 守则——拒绝重建而非静默丢弃。日志里出现
 		// 本构建不认识的事件，通常由更新的运行时所写；由调用方（Load）补上
