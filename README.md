@@ -2,6 +2,24 @@
 
 本项目系使用 Golang 實現的編程代理系統，遵循 DeepSeek Harness 的一切皆插件的设计哲学，插件都可以热插拔方式加载或卸载。
 
+## 克隆指南
+
+### 推荐稳定版本（v1）
+
+体验稳定的运行时建议克隆 **v1** 稳定分支：
+
+```bash
+git clone -b v1 https://github.com/naamfung/dsc.git
+```
+
+### 体验开发版本（master）
+
+追求最新特性/在途开发请克隆 **master** 分支（默认分支，无需 `-b`）：
+
+```bash
+git clone https://github.com/naamfung/dsc.git
+```
+
 ## 核心功能
 
 - **插件架構**：基於 `go-plugin` 与 gRPC 的宿主與插件通信機制，支持熱插拔加載或卸載。
@@ -223,16 +241,16 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ## TUI 斜杆命令
 
-| 命令                                                    | 用途                                                                                                       |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/sandbox read-only \| workspace \| full-access`      | 切換沙箱策略（狀態欄即時顯示工作範圍）                                                                                      |
-| `/settings history <N\|off\|unlimited>` · `/settings mouse on\|off` | 歷史注入條數（實時生效並持久化到配置）/ 鼠標捕獲（on 恢復應用內捕獲；off 釋放給終端） |
-| `/jobs [list\|output <id>\|kill <id> [reason]]`       | 管理後台任務（含 workflow）                                                                                       |
-| `/session <id>\|new\|delete <id>` · `/sessions`       | 多會話管理                                                                                                    |
-| `/cron list\|add\|remove\|on\|off` · `/crons`          | 定時任務                                                                                                     |
-| `/plan [off]`                                         | plan 模式開關                                                                                                |
-| `/mode minimal\|standard\|creation\|ptc`              | 切換模式（`ptc` 开启 PTC 程序化工具组合呈现：直接把工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调；其余模式为 native，`run_code` 对模型隐藏） |
-| `/skills` · `/help` · `/clear` · `/export`            | 技能 / 幫助 / 清屏 / 導出                                                                                             |
+| 命令                                                                  | 用途                                                                                                       |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/sandbox read-only \| workspace \| full-access`                    | 切換沙箱策略（狀態欄即時顯示工作範圍）                                                                                      |
+| `/settings history <N\|off\|unlimited>` · `/settings mouse on\|off` | 歷史注入條數（實時生效並持久化到配置）/ 鼠標捕獲（on 恢復應用內捕獲；off 釋放給終端）                                                          |
+| `/jobs [list\|output <id>\|kill <id> [reason]]`                     | 管理後台任務（含 workflow）                                                                                       |
+| `/session <id>\|new\|delete <id>` · `/sessions`                     | 多會話管理                                                                                                    |
+| `/cron list\|add\|remove\|on\|off` · `/crons`                       | 定時任務                                                                                                     |
+| `/plan [off]`                                                       | plan 模式開關                                                                                                |
+| `/mode minimal\|standard\|creation\|ptc`                            | 切換模式（`ptc` 开启 PTC 程序化工具组合呈现：直接把工具调用**折叠**为唯一 `run_code`，其余工具仅经其程序内 SDK 可调；其余模式为 native，`run_code` 对模型隐藏） |
+| `/skills` · `/help` · `/clear` · `/export`                          | 技能 / 幫助 / 清屏 / 導出                                                                                        |
 
 ## 啟動參數（CLI 旗標）
 
@@ -368,7 +386,7 @@ DISPOSED / FAILED（終態，不再遷移）
 4. **握手與校驗**：provider 加載時 `SPAWNED → CONNECTING`（建鏈）→ `READY`（元數據校驗：API 版本 `>=1.0, <2.0` + 類型一致；Tool 再經「暫存 + 提交」兩階段完成 broker 掛載、互通注入與工具列清單）。
 5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的 `DependsOn` 一次性 `RegisterServices` 注入並置 `ACTIVE`；若 agent 聲明的 LLM 缺失則退回 `PENDING` 等待。
 6. **運行期**：插件以 `ACTIVE` 對外服務；故障進入 `FAILED`（可被熱重載重新走流程）；熱重載採用「暫存 + 提交」兩階段，先拉起並驗證新進程，成功後才交換並卸載舊進程，預備/驗證任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**（見「Golang 插件熱更新實操」）。
-7. **卸載/關機**：`Shutdown` 先停熱重載 watch 與 cron，再逐個插件 `ACTIVE → UNLOADING`（先執行對稱清理 stop hooks，如 agent 的 `Shutdown`）→ Kill 子進程 → `DISPOSED`（終態）。正常退出走此路徑；終止訊號（Ctrl+C / 直接關終端 / SIGTERM 等）同樣先 `Shutdown` 收齊插件子進程再退出，避免 defers 不執行時殘留孤兒進程（Unix 經 `signal.Notify` 捕 SIGINT/SIGTERM/SIGHUP/SIGQUIT；Windows 以 `SetConsoleCtrlHandler` 兜底點視窗關閉事件，見 [graceful_exit.go](graceful_exit.go) / [signal_unix.go](signal_unix.go) / [signal_windows.go](signal_windows.go)）。
+7. **卸載/關機**：`Shutdown` 先停熱重載 watch 與 cron，再逐個插件 `ACTIVE → UNLOADING`（先執行對稱清理 stop hooks，如 agent 的 `Shutdown`）→ Kill 子進程 → `DISPOSED`（終態）。正常退出走此路徑；終止訊號（Ctrl+C / 直接關終端 / SIGTERM 等）同樣先 `Shutdown` 收齊插件子進程再退出，避免 defers 不執行時殘留孤兒進程（Unix 經 `signal.Notify` 捕 SIGINT/SIGTERM/SIGHUP/SIGQUIT；Windows 以 `SetConsoleCtrlHandler` 兜底點視窗關閉事件，見 [graceful\_exit.go](graceful_exit.go) / [signal\_unix.go](signal_unix.go) / [signal\_windows.go](signal_windows.go)）。
 8. **動態注入與 PENDING 修復**：運行期經 ADMIN `/plugins/load` 注入的條目若依賴未滿足同樣進入 `PENDING`；後續注入補足缺口後，`repairPendingLocked` 會提升等待中的 provider、並把因缺 LLM 而 `PENDING` 的 agent 重新注入 `RegisterServices` 並激活（見 [core/inject.go](core/inject.go)）。
 
 ## 許可證
