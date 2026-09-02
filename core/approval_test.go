@@ -295,6 +295,29 @@ func TestPermissionPresetBindingAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestPluginMgmtToolOptInApproval(t *testing.T) {
+	m := approvalTestManager(t, SandboxWorkspaceWrite, ApprovalAsk)
+	// RegisterUserQuestionProvider：拒绝 → 断言真实插件管理工具被入口②拦截。
+	if err := m.RegisterUserQuestionProvider(func(context.Context, *userquestions.Request) (*userquestions.Answer, error) {
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Reject"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 变更类工具（install/load/unload/uninstall/upgrade）已 opt-in ApprovalRequester → 被门拦截。
+	for _, name := range []string{"install_dsc_plugin", "load_dsc_plugin", "unload_dsc_plugin", "uninstall_dsc_plugin", "upgrade_dsc_plugin"} {
+		_, err := m.ExecuteTool(context.Background(), name, json.RawMessage(`{}`))
+		if err == nil || !strings.Contains(err.Error(), `user rejected tool "`+name+`"`) {
+			t.Fatalf("%s 应被审批门拦截（reject），got %v", name, err)
+		}
+	}
+
+	// 只读工具 list_dsc_plugins 未 opt-in → 不被审批拦截（测试环境缺 config.yaml 的执行错误不算）。
+	if _, err := m.ExecuteTool(context.Background(), "list_dsc_plugins", json.RawMessage(`{}`)); err != nil && strings.Contains(err.Error(), "user rejected tool") {
+		t.Fatalf("list_dsc_plugins 不应被审批拦截，got %v", err)
+	}
+}
+
 func TestApprovalPolicyForwardedByCaller(t *testing.T) {
 	orig := WorkspaceRoot
 	WorkspaceRoot = t.TempDir()

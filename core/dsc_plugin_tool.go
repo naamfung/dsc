@@ -79,6 +79,12 @@ type installDscPluginTool struct{ m *Manager }
 
 func (t *installDscPluginTool) Name() string { return "install_dsc_plugin" }
 
+// ApprovalReason 实现 ApprovalRequester（入口②工具声明需审批）：安装并活加载插件
+// 即执行任意二进制，属高风险变更，须经用户审批。
+func (t *installDscPluginTool) ApprovalReason(_ string) string {
+	return "Installs and live-loads a plugin binary (arbitrary executable) into the DSC host."
+}
+
 func (t *installDscPluginTool) TimeoutMs() int { return 120000 } // 安装+live 加载插件可能较慢
 
 func (t *installDscPluginTool) Description() string {
@@ -211,6 +217,11 @@ func copyPluginSource(source, pluginRoot, execFile string) error {
 type uninstallDscPluginTool struct{ m *Manager }
 
 func (t *uninstallDscPluginTool) Name() string { return "uninstall_dsc_plugin" }
+
+// ApprovalReason 实现 ApprovalRequester：卸载并删除插件配置，属不可逆高影响变更，须经用户审批。
+func (t *uninstallDscPluginTool) ApprovalReason(_ string) string {
+	return "Uninstalls a DSC plugin and removes its config entry (irreversible)."
+}
 
 func (t *uninstallDscPluginTool) Description() string {
 	return "Uninstall a DSC plugin by its config entry name (the directory basename like tool-filesystem or dsc-notify). " +
@@ -546,6 +557,11 @@ type upgradeDscPluginTool struct{ m *Manager }
 
 func (t *upgradeDscPluginTool) Name() string { return "upgrade_dsc_plugin" }
 
+// ApprovalReason 实现 ApprovalRequester：部署新二进制并热更替运行进程，须经用户审批。
+func (t *upgradeDscPluginTool) ApprovalReason(_ string) string {
+	return "Deploys a new plugin binary and hot-replaces the running process."
+}
+
 func (t *upgradeDscPluginTool) TimeoutMs() int { return 120000 } // 部署+热更替新进程可能较慢
 
 func (t *upgradeDscPluginTool) Description() string {
@@ -687,6 +703,11 @@ type loadDscPluginTool struct{ m *Manager }
 
 func (t *loadDscPluginTool) Name() string { return "load_dsc_plugin" }
 
+// ApprovalReason 实现 ApprovalRequester：加载插件二进制（执行任意代码）并上线注册，须经用户审批。
+func (t *loadDscPluginTool) ApprovalReason(_ string) string {
+	return "Loads a DSC plugin binary (arbitrary executable) and registers it live."
+}
+
 func (t *loadDscPluginTool) TimeoutMs() int { return 120000 } // 加载插件进程可能较慢
 
 func (t *loadDscPluginTool) Description() string {
@@ -820,6 +841,11 @@ func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded, persis
 type unloadDscPluginTool struct{ m *Manager }
 
 func (t *unloadDscPluginTool) Name() string { return "unload_dsc_plugin" }
+
+// ApprovalReason 实现 ApprovalRequester：卸载插件（停止其进程、撤销注册），须经用户审批。
+func (t *unloadDscPluginTool) ApprovalReason(_ string) string {
+	return "Unloads a DSC plugin (stops its process and unregisters it)."
+}
 
 func (t *unloadDscPluginTool) TimeoutMs() int { return 120000 }
 
