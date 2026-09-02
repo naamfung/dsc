@@ -55,7 +55,7 @@ func TestHotReloadAgentReconnect(t *testing.T) {
 	const name = "agent-react-loop"
 
 	// 手工加载"旧 agent"，在其 broker 上挂载聚合服务（mock LLM/Tool/UQ）
-	oldImpl := loadTestAgent(t, m, name, baseExe, tmpDir)
+	oldImpl, _ := loadTestAgent(t, m, name, baseExe, tmpDir)
 	runTestAgentTurn(t, oldImpl, "ping") // 首次 RunStream：加载期链路正常
 
 	// 热重载到"新 agent"（更高版本二进制）
@@ -143,8 +143,9 @@ func GetAgentForTest(m *Manager, name string) (Agent, bool) {
 }
 
 // loadTestAgent 手工加载 agent 进程，并在其 broker 上挂载聚合 LLM/Tool/UQ 服务
-// （与 loadAgentAndGetBroker + provider 就绪后挂载流程等价），返回 agent 实现。
-func loadTestAgent(t *testing.T, m *Manager, name, exe, execDir string) Agent {
+// （与 loadAgentAndGetBroker + provider 就绪后挂载流程等价），返回 agent 实现与
+// 其 gRPC client（供 host↔agent 双进程测试直接调用 agent 的 HookService）。
+func loadTestAgent(t *testing.T, m *Manager, name, exe, execDir string) (Agent, *plugin.GRPCClient) {
 	t.Helper()
 	cmd := exec.Command(exe)
 	cmd.Dir = execDir
@@ -216,5 +217,5 @@ func loadTestAgent(t *testing.T, m *Manager, name, exe, execDir string) Agent {
 	if err := impl.SwitchSession(context.Background(), "default"); err != nil {
 		t.Fatalf("SwitchSession: %v", err)
 	}
-	return impl
+	return impl, grpcClient
 }
