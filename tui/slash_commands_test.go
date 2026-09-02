@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // TestSlashCommandHelp 校验 /help：被处理且输出帮助文本（含各斜杆命令说明）。
@@ -250,5 +252,45 @@ func TestSlashCommandQuitExit(t *testing.T) {
 		if cmd == nil {
 			t.Fatalf("%s should return a quit cmd", c)
 		}
+	}
+}
+
+// TestSlashCompletionEscReturnsToParent 校验 esc 从分组子菜单回到上一层（一级命令菜单），
+// 而非直接关闭整个菜单；未进入分组时 esc 仍关闭菜单。
+func TestSlashCompletionEscReturnsToParent(t *testing.T) {
+	m := newRenderCacheModel(t)
+
+	// 进入 /settings 分组子菜单
+	m.input.SetValue("/settings ")
+	m.updateCompletion()
+	if !m.completion.active || m.completion.kind != compSlash || len(m.completion.items) != 3 {
+		t.Fatalf("前置：/settings 子菜单未就绪: %+v", m.completion.items)
+	}
+
+	// esc → 回到上一层：输入收缩为分组入口 /settings，菜单保持打开并展示一级命令
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if got := m.input.Value(); got != "/settings" {
+		t.Fatalf("esc 后输入应为 \"/settings\", got %q", got)
+	}
+	if !m.completion.active || m.completion.kind != compSlash {
+		t.Fatal("esc 回到上一层后菜单应保持打开（一级命令）")
+	}
+	foundEntry := false
+	for _, it := range m.completion.items {
+		if it.label == "/settings" {
+			foundEntry = true
+		}
+		if it.descend == false && strings.Contains(it.label, " ") {
+			t.Fatalf("一级命令不应出现子命令 %q", it.label)
+		}
+	}
+	if !foundEntry {
+		t.Fatalf("回到上一层后应可见 /settings 分组入口: %+v", m.completion.items)
+	}
+
+	// 再次 esc（此时未进入分组）→ 关闭整菜单
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.completion.active {
+		t.Fatal("未进入分组时的 esc 应关闭菜单")
 	}
 }

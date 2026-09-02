@@ -713,6 +713,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.acceptCompletion()
 				return m, nil
 			case "esc":
+				// 已进入斜杆分组子菜单（如 "/settings " 后的子命令）→ 回到上一层
+				// （一级命令菜单），而非直接关闭；未进入分组则关闭菜单。
+				if g := slashGroupFor(m.input.Value()); g != nil {
+					m.input.SetValue(g.entry.label)
+					m.syncInputHeight()
+					m.updateCompletion()
+					return m, nil
+				}
 				m.completion = completion{}
 				return m, nil
 			}
@@ -2901,6 +2909,10 @@ func (m *Model) completionView() string {
 		b.WriteByte('\n')
 	}
 	footer := "↑/↓ 选择 · Tab 补全 · Esc 关闭"
+	if slashGroupFor(m.input.Value()) != nil {
+		// 已进入斜杆分组子菜单：Esc 回到上一层（而非关闭整个菜单）
+		footer = "↑/↓ 选择 · Tab 补全 · Esc 返回上一级"
+	}
 	if m.completion.kind == compAt {
 		footer = "↑/↓ 选择 · Tab/Enter 补全 · Esc 关闭"
 	}
