@@ -381,6 +381,15 @@ func main() {
 			"insert_line": {
 				"type": "integer",
 				"description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
+			},
+			"sandbox_permissions": {
+				"type": "string",
+				"enum": ["workspace-write", "danger-full-access"],
+				"description": "Optional sandbox escalation: if a prior write was denied under the current sandbox mode, retry this exact operation once with a strictly wider mode (read-only → workspace-write/danger-full-access; workspace-write → danger-full-access) to request user approval for this one call. Omit for a normal call."
+			},
+			"justification": {
+				"type": "string",
+				"description": "Required together with 'sandbox_permissions': a one-sentence reason shown to the user in the approval prompt."
 			}
 		},
 		"required": ["command", "path"]

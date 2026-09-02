@@ -177,6 +177,15 @@ func main() {
 			"session_id": {
 				"type": "string",
 				"description": "Persistent session ID to maintain state (cwd, environment variables). If not provided or 'new', a new session is created."
+			},
+			"sandbox_permissions": {
+				"type": "string",
+				"enum": ["workspace-write", "danger-full-access"],
+				"description": "Optional sandbox escalation: if a command was denied because this interpreter may write files under the current sandbox mode, retry this exact command once with a strictly wider mode (read-only → workspace-write/danger-full-access; workspace-write → danger-full-access) to request user approval for this one call. Omit for a normal call."
+			},
+			"justification": {
+				"type": "string",
+				"description": "Required together with 'sandbox_permissions': a one-sentence reason shown to the user in the approval prompt."
 			}
 		},
 		"required": ["command"]
