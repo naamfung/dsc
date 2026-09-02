@@ -279,6 +279,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// （approved 后把更宽档标到调用上，后续 sandboxPolicy 以此复审放行本次）。
 	m.approvalPolicyVal.Store(int32(DefaultApprovalPolicy()))
 	m.events.OnWaterfall(EventToolPreExecute, m.approvalEscalation())
+	m.events.OnWaterfall(EventToolPreExecute, m.toolApprovalGate())
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(m.GetSandboxPolicy))
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))

@@ -9,14 +9,15 @@ import (
 	"dsc/userquestions"
 )
 
-// approvalTestManager 组装审批门 + 沙箱判定的测试 manager（因 newRouterManager
-// 重置了事件总线，listeners 需显式注册：先审批门后沙箱，与生产一致）。
+// approvalTestManager 组装审批门 + 工具声明审批门 + 沙箱判定的测试 manager（因
+// newRouterManager 重置了事件总线，listeners 需显式注册：顺序与生产一致）。
 func approvalTestManager(t testing.TB, sandbox SandboxPolicy, policy ApprovalPolicy) *Manager {
 	t.Helper()
 	m := newRouterManager()
 	m.SetSandboxPolicy(sandbox)
 	m.SetApprovalPolicy(policy)
 	m.events.OnWaterfall(EventToolPreExecute, m.approvalEscalation())
+	m.events.OnWaterfall(EventToolPreExecute, m.toolApprovalGate())
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(m.GetSandboxPolicy))
 	return m
 }
@@ -233,5 +234,66 @@ func TestApprovalAuditEmittedWithSession(t *testing.T) {
 	}
 	if got[1].outcome != "rejected" {
 		t.Fatalf("decided outcome = %q, want rejected", got[1].outcome)
+	}
+}
+
+// askApprovalTool 一个实现 ApprovalRequester 的 mock 工具（入口②工具声明需审批）。
+type askApprovalTool struct {
+	name, reason string
+}
+
+func (t *askApprovalTool) Name() string                      { return t.name }
+func (t *askApprovalTool) Description() string               { return "declares approval need" }
+func (t *askApprovalTool) ParametersSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (t *askApprovalTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	return "mock-result", nil
+}
+func (t *askApprovalTool) ApprovalReason(_ string) string { return t.reason }
+
+func TestToolDeclaredApprovalAllowedOnce(t *testing.T) {
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
+	_ = m.toolRegistry.Register(&askApprovalTool{name: "danger_tool", reason: "needs approval"})
+	if err := m.RegisterUserQuestionProvider(func(context.Context, *userquestions.Request) (*userquestions.Answer, error) {
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Allow once"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.ExecuteTool(context.Background(), "danger_tool", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("允许应放行执行: %v", err)
+	}
+	if strings.TrimSpace(result) != "mock-result" {
+		t.Fatalf("result = %q, want mock-result", result)
+	}
+}
+
+func TestToolDeclaredApprovalRejected(t *testing.T) {
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
+	_ = m.toolRegistry.Register(&askApprovalTool{name: "danger_tool", reason: "needs approval"})
+	if err := m.RegisterUserQuestionProvider(func(context.Context, *userquestions.Request) (*userquestions.Answer, error) {
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Reject"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.ExecuteTool(context.Background(), "danger_tool", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), `user rejected tool "danger_tool"`) {
+		t.Fatalf("拒绝应返回被拒，got %v", err)
+	}
+}
+
+func TestToolDeclaredApprovalNeverAutoReject(t *testing.T) {
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalNever)
+	_ = m.toolRegistry.Register(&askApprovalTool{name: "danger_tool", reason: "needs approval"})
+	_, err := m.ExecuteTool(context.Background(), "danger_tool", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "approval prompts are disabled") {
+		t.Fatalf("never 应自动拒，got %v", err)
+	}
+}
+
+func TestToolDeclaredApprovalEmptyReasonPasses(t *testing.T) {
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalNever)
+	_ = m.toolRegistry.Register(&askApprovalTool{name: "benign_tool", reason: ""})
+	if _, err := m.ExecuteTool(context.Background(), "benign_tool", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("空 reason 应正常执行，got %v", err)
 	}
 }

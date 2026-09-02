@@ -187,6 +187,52 @@ const EventApprovalDecided EventName = "approval/decided"
 // agent 经 OnEvent 桥把 approval/policy 落进会话日志（持久化/折叠恢复）。
 const EventApprovalPolicy EventName = "approval/policy"
 
+// ApprovalRequester 可选接口（入口②工具声明需审批，对齐 DSH tools kind:'ask' 决策 /
+// serviceAsk）：工具实现它并对本次调用返回非空 reason 时，执行前经审批门问人。
+// reason 会展示给用户并写入审计；空串表示正常执行。工具按每次调用的参数自行判定。
+type ApprovalRequester interface {
+	ApprovalReason(argumentsJSON string) string
+}
+
+// toolApprovalGate 工具流水线 pre-execute 瀑布审批门（对齐 DSH serviceAsk 入口②）：
+// 工具实现 ApprovalRequester 且对本次调用返回非空 reason 时，按审批策略问人；
+// allowed-once 放行本次执行，rejected/cancelled/unavailable 与 never 自动拒均
+// fail-closed 返回各自错误。必须注册在 sandboxPolicy 之前。
+func (m *Manager) toolApprovalGate() WaterfallListener {
+	return func(ev EventContext, next func(EventContext) error) error {
+		inv, _ := ev.Data.(*ToolInvocation)
+		if inv == nil {
+			return next(ev)
+		}
+		tool, ok := m.toolRegistry.Get(inv.ToolName)
+		if !ok {
+			return next(ev)
+		}
+		ar, ok := tool.(ApprovalRequester)
+		if !ok {
+			return next(ev)
+		}
+		reason := ar.ApprovalReason(inv.ArgumentsJSON)
+		if strings.TrimSpace(reason) == "" {
+			return next(ev)
+		}
+		if m.approvalPolicyFor(inv.SessionID) == ApprovalNever {
+			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
+		}
+		outcome := m.askApproval(inv, fmt.Sprintf("Approve running tool %q?", inv.ToolName), inv.ToolName, reason)
+		switch outcome {
+		case "allowed-once":
+			return next(ev)
+		case "rejected":
+			return fmt.Errorf("the user rejected tool %q", inv.ToolName)
+		case "cancelled":
+			return fmt.Errorf("approval for tool %q was cancelled", inv.ToolName)
+		default:
+			return fmt.Errorf("tool %q requires approval, but no approval channel is available", inv.ToolName)
+		}
+	}
+}
+
 // approvalEscalation 工具流水线 pre-execute 瀑布审批门（对齐 DSH approveEscalation）：
 // 在沙箱判定**之前**运行——检测被拒工具族的升级重试（sandbox_permissions+justification），
 // 校验配对与严格加宽、按审批策略问人，allowed-once 则为本**这一次**调用打上更宽档标记
@@ -224,7 +270,9 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 			// 'never'：不问人，自动拒绝（对齐 DSH NEVER 语义）。
 			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
 		}
-		outcome := m.approveAsk(inv, target, just)
+		outcome := m.askApproval(inv,
+			fmt.Sprintf("Approve sandbox escalation to %s for %s?", sandboxModeString(target), inv.ToolName),
+			sandboxModeString(target), just)
 		switch outcome {
 		case "allowed-once":
 			inv.Escalated = true
@@ -240,28 +288,29 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 	}
 }
 
-// approveAsk 发起一次审批提问并映射结果：先广播 approval/asked，经用户评审通道
-// 阻塞等待用户选择，再广播 approval/decided。返回 closed 结果
-// （allowed-once / rejected / cancelled / unavailable）。无评审通道时 fail-closed。
-func (m *Manager) approveAsk(inv *ToolInvocation, target SandboxPolicy, justification string) string {
+// askApproval 发起一次审批提问并映射结果（入口①沙箱升级 / 入口②工具声明共用）：
+// 先广播 approval/asked，经用户评审通道阻塞等待用户选择，再广播 approval/decided。
+// 返回 closed 结果（allowed-once / rejected / cancelled / unavailable）。
+// 无评审通道时 fail-closed。mode 为审计用档位/标识；question 为用户可见的提问文案。
+func (m *Manager) askApproval(inv *ToolInvocation, question, mode, reason string) string {
 	outcome := "unavailable"
 	m.events.Emit(EventApprovalAsked, EventContext{Data: map[string]string{
-		"session": inv.SessionID, "tool": inv.ToolName, "mode": sandboxModeString(target), "reason": justification,
+		"session": inv.SessionID, "tool": inv.ToolName, "mode": mode, "reason": reason,
 	}})
 	defer func() {
 		m.events.Emit(EventApprovalDecided, EventContext{Data: map[string]string{
-			"session": inv.SessionID, "tool": inv.ToolName, "mode": sandboxModeString(target), "outcome": outcome,
+			"session": inv.SessionID, "tool": inv.ToolName, "mode": mode, "outcome": outcome,
 		}})
 	}()
 
 	req := &userquestions.Request{Questions: []userquestions.Question{{
 		ID:       "approval",
 		Header:   "Approval",
-		Question: fmt.Sprintf("Approve escalating sandbox to %s for %s?", sandboxModeString(target), inv.ToolName),
-		Detail:   justification,
+		Question: question,
+		Detail:   reason,
 		Options: []userquestions.Option{
-			{Label: approvalAllowLabel, Description: "Allow this one-time escalation; the operation runs once under the wider mode."},
-			{Label: approvalRejectLabel, Description: "Reject this escalation; the operation is not run."},
+			{Label: approvalAllowLabel, Description: "Allow this operation once."},
+			{Label: approvalRejectLabel, Description: "Reject this operation; it is not run."},
 		},
 	}}}
 	ans, err := m.Ask(context.Background(), req)
