@@ -59,9 +59,42 @@ func (m *Manager) SetApprovalPolicy(p ApprovalPolicy) {
 	m.approvalPolicyVal.Store(int32(p))
 }
 
-// GetApprovalPolicy 读取当前审批策略。
+// GetApprovalPolicy 读取当前审批策略（全局/缺省）。
 func (m *Manager) GetApprovalPolicy() ApprovalPolicy {
 	return ApprovalPolicy(m.approvalPolicyVal.Load())
+}
+
+// SetSessionApprovalPolicy 为指定会话设置审批策略覆盖（per-session，对齐 DSH
+// approval/policy 会话态；TUI /approval 对当前会话调用）。空会话视为设置全局。
+func (m *Manager) SetSessionApprovalPolicy(sessionID string, p ApprovalPolicy) {
+	if sessionID == "" {
+		m.SetApprovalPolicy(p)
+		return
+	}
+	m.sessionApprovalMu.Lock()
+	if m.sessionApproval == nil {
+		m.sessionApproval = map[string]ApprovalPolicy{}
+	}
+	m.sessionApproval[sessionID] = p
+	m.sessionApprovalMu.Unlock()
+}
+
+// GetSessionApprovalPolicy 读取指定会话的审批策略（覆盖 ?? 全局缺省）。
+func (m *Manager) GetSessionApprovalPolicy(sessionID string) ApprovalPolicy {
+	if sessionID != "" {
+		m.sessionApprovalMu.RLock()
+		p, ok := m.sessionApproval[sessionID]
+		m.sessionApprovalMu.RUnlock()
+		if ok {
+			return p
+		}
+	}
+	return m.GetApprovalPolicy()
+}
+
+// approvalPolicyFor 审批门决定所用策略：会话覆盖 ?? 全局缺省。
+func (m *Manager) approvalPolicyFor(sessionID string) ApprovalPolicy {
+	return m.GetSessionApprovalPolicy(sessionID)
 }
 
 // sandboxModeString 把沙箱档位转成 DSH 模式名。
@@ -179,7 +212,7 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 		if err := validateEscalationArgs(perm, just); err != nil {
 			return err
 		}
-		if m.GetApprovalPolicy() == ApprovalNever {
+		if m.approvalPolicyFor(inv.SessionID) == ApprovalNever {
 			// 'never'：不问人，自动拒绝（对齐 DSH NEVER 语义）。
 			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
 		}
@@ -205,11 +238,11 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 func (m *Manager) approveAsk(inv *ToolInvocation, target SandboxPolicy, justification string) string {
 	outcome := "unavailable"
 	m.events.Emit(EventApprovalAsked, EventContext{Data: map[string]string{
-		"tool": inv.ToolName, "mode": sandboxModeString(target), "reason": justification,
+		"session": inv.SessionID, "tool": inv.ToolName, "mode": sandboxModeString(target), "reason": justification,
 	}})
 	defer func() {
 		m.events.Emit(EventApprovalDecided, EventContext{Data: map[string]string{
-			"tool": inv.ToolName, "mode": sandboxModeString(target), "outcome": outcome,
+			"session": inv.SessionID, "tool": inv.ToolName, "mode": sandboxModeString(target), "outcome": outcome,
 		}})
 	}()
 

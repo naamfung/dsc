@@ -221,32 +221,32 @@ func TestApprovalCommandToggle(t *testing.T) {
 	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
 	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
 
-	if got := mgr.GetApprovalPolicy(); got != core.ApprovalAsk {
+	if got := mgr.GetSessionApprovalPolicy(m.currentSessionID); got != core.ApprovalAsk {
 		t.Fatalf("initial policy = %v, want ask", got)
 	}
 	if handled, _ := m.runSlashCommand("/approval never"); !handled {
 		t.Fatal("/approval never should be handled")
 	}
-	if got := mgr.GetApprovalPolicy(); got != core.ApprovalNever {
+	if got := mgr.GetSessionApprovalPolicy(m.currentSessionID); got != core.ApprovalNever {
 		t.Fatalf("after never, policy = %v, want never", got)
 	}
 	if handled, _ := m.runSlashCommand("/approval ask"); !handled {
 		t.Fatal("/approval ask should be handled")
 	}
-	if got := mgr.GetApprovalPolicy(); got != core.ApprovalAsk {
+	if got := mgr.GetSessionApprovalPolicy(m.currentSessionID); got != core.ApprovalAsk {
 		t.Fatalf("after ask, policy = %v, want ask", got)
 	}
 	// off/on 兼容别名
 	if handled, _ := m.runSlashCommand("/approval off"); !handled {
 		t.Fatal("/approval off should be handled")
 	}
-	if got := mgr.GetApprovalPolicy(); got != core.ApprovalNever {
+	if got := mgr.GetSessionApprovalPolicy(m.currentSessionID); got != core.ApprovalNever {
 		t.Fatalf("after off, policy = %v, want never", got)
 	}
 	if handled, _ := m.runSlashCommand("/approval on"); !handled {
 		t.Fatal("/approval on should be handled")
 	}
-	if got := mgr.GetApprovalPolicy(); got != core.ApprovalAsk {
+	if got := mgr.GetSessionApprovalPolicy(m.currentSessionID); got != core.ApprovalAsk {
 		t.Fatalf("after on, policy = %v, want ask", got)
 	}
 	full := strings.Join(m.lines, "\n")

@@ -44,6 +44,9 @@ type ToolInvocation struct {
 	Result        string // post-execute 阶段：执行结果
 	Err           error  // 执行错误或 pre 阶段 veto 原因
 	ViewJSON      string // 工具声明的结构化视图 spec（可选，见 ViewExecutor）
+	// SessionID 调用方会话标识（来自 ExecuteToolWithView 的 ctx，agent 每次调用都会带）；
+	// 供 per-session 审批策略（approvalPolicyFor）与审计事件归属使用。
+	SessionID string
 
 	// Escalated / EscalatedMode 沙箱升级审批（对齐 DSH approveEscalation）字段：
 	// 审批门 allowed 后置 Escalated=true，并把本次调用目标更宽档暂存，随后
@@ -87,7 +90,7 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 // （ViewJson）：插件工具透传 Tool.ViewFn 产物（经 RemoteTool），宿主工具按需实现
 // ViewExecutor。聚合 Tool 服务（ToolGRPCServer）据此把视图一并回给调用方。
 func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, error) {
-	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON)}
+	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON), SessionID: CallerFromContext(ctx)}
 
 	// pre-execute（waterfall）：守卫。不调 next 即 veto（阻止执行，execute 不运行）。
 	// 语义对齐 DSH tools/pre-execute guards。

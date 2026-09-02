@@ -125,7 +125,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 ### 功能對齊程度
 
-- **完全對齊（概念同構）**：事件溯源會話、沙箱三檔策略語義、沙箱升級審批（`approveEscalation`：被拒操作携 `sandbox_permissions`+`justification` 升級重試 → `ask` 審人 / `never` 自動拒，非嚴格加寬執行前拒絕）、上下文壓縮（pre-step 壓力檢查 + 尾部保留）、plan/goal/todo 領域、以真實路徑呈現 workspace 根給模型、`approval:policy` 運行時上下文、技能注入。
+- **完全對齊（概念同構）**：事件溯源會話、審批策略按會話（`/approval` 設當前會話，缺省 ask）、沙箱三檔策略語義、沙箱升級審批（`approveEscalation`：被拒操作携 `sandbox_permissions`+`justification` 升級重試 → `ask` 審人 / `never` 自動拒，非嚴格加寬執行前拒絕）、審批審計寫入會話日誌（`approval/asked`+`approval/decided`）、上下文壓縮（pre-step 壓力檢查 + 尾部保留）、plan/goal/todo 領域、以真實路徑呈現 workspace 根給模型、`approval:policy` 運行時上下文、技能注入。
 
 - **部分對齊（同概念、異實現）**：沙箱從 DSH 的內核級（bwrap/Landlock）改為 DSC 的宿主工具級攔截（換取 Windows 兼容與可移植性，代價是「策略圍欄」而非「內核邊界」）；雖為工具級，但對已知寫路徑、Windows junction/symlink 穿越、以及不可定位寫路徑的解釋器逃逸，均已於工具流水線 pre-execute 階段 fail-closed 封堵（見下方「各自獨特實現」）；token 計量從 DSH 的 TokenMeter（本地精確 tokenizer）改為 DSC 的「服務端 usage + 字节级启发式估算回退」；技能注入從 DSH 的 provider registry 改為目錄掃描 + `ListContext` 索引。
 
@@ -244,7 +244,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 | 命令                                                                  | 用途                                                                                                       |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `/sandbox read-only \| workspace \| full-access`                    | 切換沙箱策略（狀態欄即時顯示工作範圍）                                                                                      |
-| `/approval ask \| never`                                            | 切換審批策略（沙箱升級審批：ask 經評審通道詢問，never 自動拒絕；on/off 為 ask/never 別名）                                              |
+| `/approval ask \| never`                    | 切換當前會話的審批策略（沙箱升級審批：ask 經評審通道詢問，never 自動拒絕；on/off 為 ask/never 別名）                                             |
 | `/settings history <N\|off\|unlimited>` · `/settings mouse on\|off` | 歷史注入條數（實時生效並持久化到配置）/ 鼠標捕獲（on 恢復應用內捕獲；off 釋放給終端）                                                          |
 | `/jobs [list\|output <id>\|kill <id> [reason]]`                     | 管理後台任務（含 workflow）                                                                                       |
 | `/session <id>\|new\|delete <id>` · `/sessions`                     | 多會話管理                                                                                                    |

@@ -2568,7 +2568,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if m.manager != nil {
-			m.manager.SetApprovalPolicy(policy)
+			m.manager.SetSessionApprovalPolicy(m.currentSessionID, policy)
 			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 审批") + "\n已切换审批策略为 " + label + "。")
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))

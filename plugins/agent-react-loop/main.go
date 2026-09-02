@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -1180,6 +1181,39 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*core.AgentDebugSna
 	return snap, nil
 }
 
+// handleHostEvent 订阅宿主事件（SDK Hook.OnEvent）：把沙箱升级审批的审计事件
+// （approval/asked / approval/decided）落进当前会话日志（对齐 DSH：审批审计写会话），
+// 仅匹配宿主带上的同一会话 id 的事件。
+func (a *ReactLoopAgent) handleHostEvent(_ context.Context, eventType, dataJSON string) {
+	if eventType != string(core.EventApprovalAsked) && eventType != string(core.EventApprovalDecided) {
+		return
+	}
+	var payload struct {
+		Session, Tool, Mode, Reason, Outcome string
+	}
+	if err := json.Unmarshal([]byte(dataJSON), &payload); err != nil {
+		return
+	}
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	if a.sess == nil || (payload.Session != "" && payload.Session != a.sess.ID()) {
+		return
+	}
+	switch eventType {
+	case string(core.EventApprovalAsked):
+		a.sess.Append(session.ApprovalAsked, &session.ApprovalAskedData{
+			Tool: payload.Tool, Mode: payload.Mode, Reason: payload.Reason,
+		}, nil)
+	case string(core.EventApprovalDecided):
+		a.sess.Append(session.ApprovalDecided, &session.ApprovalDecidedData{
+			Tool: payload.Tool, Mode: payload.Mode, Outcome: payload.Outcome,
+		}, nil)
+	}
+	if err := a.store.Save(a.sess); err != nil {
+		fmt.Printf("[Agent Loop] failed to save session after approval audit: %v\n", err)
+	}
+}
+
 func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 	a.shutdownMu.Lock()
 	defer a.shutdownMu.Unlock()
@@ -1343,6 +1377,8 @@ func main() {
 
 	sdk := dsc.New(dsc.Config{Name: "agent-react-loop", Version: "1.1.0", Type: dsc.TypeAgent})
 	sdk.Agent(agent)
+	// 订阅宿主事件：把沙箱升级审批审计（approval/asked + approval/decided）写进当前会话日志。
+	sdk.Hook(dsc.Hook{OnEvent: agent.handleHostEvent})
 	sdk.AgentBroker(func(b *dsc.AgentBroker) error {
 		agent.broker = b
 		return nil

@@ -151,3 +151,68 @@ func TestNonWriteToolIgnoresEscalationArgs(t *testing.T) {
 		t.Fatalf("非写工具应忽略 sandbox_permissions，got %v", err)
 	}
 }
+
+func TestPerSessionApprovalPolicy(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+	if err := m.RegisterUserQuestionProvider(func(context.Context, *userquestions.Request) (*userquestions.Answer, error) {
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Allow once"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 会话 A 覆盖为 never：升级自动拒（不问人）。
+	m.SetSessionApprovalPolicy("sessionA", ApprovalNever)
+	if _, err := m.ExecuteTool(WithCaller(context.Background(), "sessionA"), "str_replace_editor",
+		escArgs("workspace-write", "need it")); err == nil || !strings.Contains(err.Error(), "approval prompts are disabled") {
+		t.Fatalf("sessionA never 应自动拒，got %v", err)
+	}
+	// 会话 B 无覆盖（回退默认 ask）：升级获批放行。
+	_, err := m.ExecuteTool(WithCaller(context.Background(), "sessionB"), "str_replace_editor",
+		escArgs("workspace-write", "need it"))
+	if err != nil {
+		t.Fatalf("sessionB 默认 ask 应获批放行，got %v", err)
+	}
+}
+
+func TestApprovalAuditEmittedWithSession(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+	if err := m.RegisterUserQuestionProvider(func(context.Context, *userquestions.Request) (*userquestions.Answer, error) {
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Reject"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type audit struct{ name, session, outcome string }
+	var got []audit
+	m.events.OnAny(func(ctx EventContext) (any, error) {
+		if ctx.Name != EventApprovalAsked && ctx.Name != EventApprovalDecided {
+			return nil, nil
+		}
+		d, _ := ctx.Data.(map[string]string)
+		got = append(got, audit{name: string(ctx.Name), session: d["session"], outcome: d["outcome"]})
+		return nil, nil
+	})
+
+	ctx := WithCaller(context.Background(), "sess-1")
+	_, err := m.ExecuteTool(ctx, "str_replace_editor", escArgs("workspace-write", "need it"))
+	if err == nil || !strings.Contains(err.Error(), "user rejected") {
+		t.Fatalf("reject 应返回被拒，got %v", err)
+	}
+	if len(got) != 2 || got[0].name != "approval/asked" || got[1].name != "approval/decided" {
+		t.Fatalf("audit = %+v, want asked+decided", got)
+	}
+	if got[0].session != "sess-1" || got[1].session != "sess-1" {
+		t.Fatalf("audit 应带会话 id，got %+v", got)
+	}
+	if got[1].outcome != "rejected" {
+		t.Fatalf("decided outcome = %q, want rejected", got[1].outcome)
+	}
+}

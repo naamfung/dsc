@@ -48,6 +48,10 @@ const (
 	// TodoWrite 任务清单整表替换（log-only：投影/UI 状态，不进模型历史；
 	// 每个 turn/start 使当前有效计划失效，见 FoldTodos）。
 	TodoWrite EventType = "todo/write"
+	// ApprovalAsked/ApprovalDecided 审批审计事件（log-only：沙箱升级审批的提问与结论，
+	// 对齐 DSH approval/asked + approval/decided 会话审计；由 agent 经宿主 OnEvent 桥落盘）。
+	ApprovalAsked   EventType = "approval/asked"
+	ApprovalDecided EventType = "approval/decided"
 )
 
 // Surface op 取值。

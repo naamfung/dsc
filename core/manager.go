@@ -107,6 +107,10 @@ type Manager struct {
 	// approvalPolicyVal 运行时审批策略 ask/never（atomic，支持 TUI /approval 命令动态切换）。
 	// 审批链 = 沙箱升级审批（对齐 DSH approveEscalation），见 approval.go。
 	approvalPolicyVal atomic.Int32
+	// sessionApproval 按会话覆盖的审批策略（per-session，对齐 DSH approval/policy 会话态）；
+	// 缺省回退全局 approvalPolicyVal。key = 调用方会话标识（agent 每次工具调用随 SessionId 传入）。
+	sessionApproval   map[string]ApprovalPolicy
+	sessionApprovalMu sync.RWMutex
 
 	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
@@ -201,6 +205,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		events:              NewEventBus(),
 		policyClients:       make(map[string]proto.FsObservationPolicyServiceClient),
 		policyOff:           make(map[string][]func()),
+		sessionApproval:     make(map[string]ApprovalPolicy),
 		jobs:                jobs.NewRegistry(),
 	}
 	m.jobs.SetLogger(m.logger)
