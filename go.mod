@@ -29,6 +29,7 @@ require (
 	github.com/wippyai/go-lua v1.5.17
 	github.com/yuin/goldmark v1.8.5
 	github.com/zeebo/blake3 v0.2.4
+	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.83.0
@@ -74,7 +75,6 @@ require (
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
 	google.golang.org/appengine v1.6.5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )

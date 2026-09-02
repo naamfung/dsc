@@ -465,6 +465,9 @@ func main() {
 		PTC: mode == "ptc" || ptcEnvEnabled(),
 	})
 	defer mgr.Shutdown()
+	// 安装退出信号处理：直接关闭终端等终止信号也能先逐只 Kill 插件子进程再退出，
+	// 避免 defers 不执行时孤儿插件进程残留（Windows console 关闭事件亦一并兜底）。
+	installShutdownSignals(mgr)
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
 	// 使运行期增删的插件在进程重启后依旧保留
 	mgr.SetConfigPath(filepath.Join(execDir, "config", "config.yaml"))
