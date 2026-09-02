@@ -74,6 +74,15 @@ LLM 请求的前缀（system prompt、工具目录、上下文片段等）参与
 - **红线之算法一致**：同一次请求内的所有片段（tools、ListContext 等）须用**同一排序算法**（统一按名/键升序），避免「此处排序、彼处不排」或「一处升序、一处其它」导致前缀仍不一致。
 - **例外**：随会话变化的动态内容（用户输入、历史、记忆）不属固定前缀命中区，不强制作稳定排序；但若某动态段被明确用作缓存前缀的一部分，仍需稳定。已在好状态的点（如 agent 端 `availableTools`、tool-skill `scanSkillDir`）应保持不变，不得退化。
 
+### 7. 代码须考虑跨平台（Windows 与 Unix 都要能编译且行为正确）
+
+本项目运行于 Windows 与 Unix（Linux/macOS）两大类平台，涉及进程生命周期、信号、控制台、系统调用、路径分隔相关的代码，不得只按单一平台写死：
+
+- **判据**：凡假设「某信号 / 某 API / 某路径写法在另一平台存在且语义一致」即须拆分另判。典型：进程退出/终止信号（`os/signal`、控制台关闭事件）、路径分隔（`/` 与 `\`，必要时用 `filepath`/`filepath.ToSlash` 归一）、进程/超时管理、系统特有 syscall。
+- **红线**：同一逻辑在两平台行为不同或无共同实现时，用 build tag（`//go:build windows` / `//go:build !windows`）拆成**独立平台文件**，通用部分留在无 tag 的同包文件；不得把各平台分支全塞进单个通用文件，也不得因仅在一台平台编译通过就以为可移植。不存在的平台 API 应回退到显式、可口的兜底，而非静默假设。
+- **先例**：`installShutdownSignals`（配套 `graceful_exit.go` / `signal_unix.go` / `signal_windows.go`）即为范例——Unix 用 `signal.Notify` 捕 SIGINT/SIGTERM/SIGHUP/SIGQUIT；Windows 用 `kernel32.SetConsoleCtrlHandler` 兜底点窗口的 console 关闭事件（`os/signal` 捕获不到），共享收尸逻辑抽在无 tag 的 `gracefulShutdown`。
+- **验证红线**：涉及上述能力的改动，提交前除本平台 `go build ./...` 外，必须**交叉编译另一平台一次**确认平台文件都能编过——Windows 上 `GOOS=linux go build`，Unix 上 `GOOS=windows go build`（PowerShell 用 `$env:GOOS='linux'; go build`）。平台 API/签名用错应在交叉编译期暴露，勿拖到真机。
+
 ## 提交约定
 
 - 遵循一步一提交（一个特性/修复一次提交），便于回滚。
