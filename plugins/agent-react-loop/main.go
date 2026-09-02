@@ -781,6 +781,11 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	if policy := a.sandboxPolicyContext(); policy != "" {
 		parts = append(parts, policy)
 	}
+	// 审批策略上下文（对齐 DSH approval:policy）：让模型知道当前是否会被审批提问，
+	// 以及升级重试（sandbox_permissions+justification）在 never 下会被自动拒。
+	if ap := approvalPolicyContext(); ap != "" {
+		parts = append(parts, ap)
+	}
 	return strings.Join(parts, "\n\n")
 }
 
@@ -885,6 +890,18 @@ func (a *ReactLoopAgent) sandboxPolicyContext() string {
 	default: // workspace / workspace-write（缺省，为便利而非对齐 DSH 默认的 read-only）
 		return "Current DSC file policy: workspace-write. Available tool operations may modify files under the session workspace: " +
 			strconv.Quote(ws) + `. The "/workspace" prefix is an alias for that root; native commands (e.g. shell) can only use the real path.`
+	}
+}
+
+// approvalPolicyContext 渲染当前审批策略上下文片段（对齐 DSH approval:policy 两句）：
+// 由宿主注入的 DSC_APPROVAL_POLICY（ask/never）驱动。ask 声明须审批的操作会经评审通道询问；
+// never 声明审批提示关闭、升级重试（sandbox_permissions）会被自动拒。
+func approvalPolicyContext() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_APPROVAL_POLICY"))) {
+	case "never", "off":
+		return "Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`)."
+	default: // ask（缺省）
+		return "Approval policy: ask. Operations that require approval may ask through the configured answerer; without an available answerer, the request fails closed."
 	}
 }
 

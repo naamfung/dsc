@@ -48,7 +48,7 @@ func TestSandboxReadOnlyBlocksWrite(t *testing.T) {
 
 	_, err := m.ExecuteTool(context.Background(), "str_replace_editor",
 		json.RawMessage(`{"command":"str_replace","path":"/tmp/x.txt","old_str":"a","new_str":"b"}`))
-	if err == nil || !strings.Contains(err.Error(), "read-only policy blocks write") {
+	if err == nil || !strings.Contains(err.Error(), "file access denied under read-only mode") {
 		t.Fatalf("err = %v, want read-only block", err)
 	}
 }
@@ -71,7 +71,7 @@ func TestSandboxReadOnlyBlocksShellExecutor(t *testing.T) {
 
 	// shell 是解释器/执行器，read-only 下即使命令看似只读也须整体禁用（无法判定是否写文件）。
 	if _, err := m.ExecuteTool(context.Background(), "shell",
-		json.RawMessage(`{"command":"echo hello"}`)); err == nil || !strings.Contains(err.Error(), "read-only policy blocks write") {
+		json.RawMessage(`{"command":"echo hello"}`)); err == nil || !strings.Contains(err.Error(), "file access denied under read-only mode") {
 		t.Fatalf("shell should be blocked under read-only: %v", err)
 	}
 }
@@ -112,7 +112,7 @@ func TestSandboxWorkspaceBlocksOutside(t *testing.T) {
 
 	_, err := m.ExecuteTool(context.Background(), "str_replace_editor",
 		json.RawMessage(`{"command":"insert","path":"/etc/hosts","new_str":"x","insert_line":1}`))
-	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
+	if err == nil || !strings.Contains(err.Error(), "file access denied under workspace-write mode") {
 		t.Fatalf("err = %v, want workspace-write block", err)
 	}
 }

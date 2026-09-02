@@ -44,6 +44,12 @@ type ToolInvocation struct {
 	Result        string // post-execute 阶段：执行结果
 	Err           error  // 执行错误或 pre 阶段 veto 原因
 	ViewJSON      string // 工具声明的结构化视图 spec（可选，见 ViewExecutor）
+
+	// Escalated / EscalatedMode 沙箱升级审批（对齐 DSH approveEscalation）字段：
+	// 审批门 allowed 后置 Escalated=true，并把本次调用目标更宽档暂存，随后
+	// sandboxPolicy 以 EscalatedMode 复审放行（仅作用于这一个调用）。
+	Escalated     bool
+	EscalatedMode SandboxPolicy
 }
 
 // filePathFromArgs 从工具参数 JSON 中提取 file_path 字段（观测策略用）。

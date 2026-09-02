@@ -119,8 +119,9 @@ func modelExt() string {
 	return ""
 }
 
-// injectRuntimeEnv 向所有插件进程注入当前模式/工作根/沙箱档（主路径与「失败重试」共用）。
+// injectRuntimeEnv 向所有插件进程注入当前模式/工作根/沙箱档/审批策略（主路径与「失败重试」共用）。
 func injectRuntimeEnv(merged *core.Config, mode, workspaceRoot, sandboxPolicy string) {
+	approvalPolicy := core.ApprovalPolicyName(core.DefaultApprovalPolicy())
 	for i := range merged.Plugins {
 		e := &merged.Plugins[i]
 		if e.Env == nil {
@@ -129,5 +130,6 @@ func injectRuntimeEnv(merged *core.Config, mode, workspaceRoot, sandboxPolicy st
 		e.Env["DSC_MODE"] = mode
 		e.Env["DSC_WORKSPACE_ROOT"] = workspaceRoot
 		e.Env["DSC_SANDBOX_POLICY"] = sandboxPolicy
+		e.Env["DSC_APPROVAL_POLICY"] = approvalPolicy
 	}
 }

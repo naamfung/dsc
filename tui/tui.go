@@ -2085,6 +2085,8 @@ var slashCommands = []compItem{
 	{label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
 	{label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
 	{label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：不额外拦截文件写"},
+	{label: "/approval ask", insert: "/approval ask", hint: "审批：经评审通道询问（默认）"},
+	{label: "/approval never", insert: "/approval never", hint: "审批：自动拒绝、不问人"},
 	{label: "/jobs", insert: "/jobs ", hint: "后台任务子命令（list / output / kill），选中进入后展开", descend: true},
 	{label: "/settings", insert: "/settings ", hint: "设置子命令（history / mouse），选中进入后展开", descend: true},
 	{label: "/sessions", insert: "/sessions", hint: "列出所有会话"},
@@ -2268,6 +2270,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			"  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
 			"  /sandbox full-access 沙箱全开（不额外拦截文件写）",
 			"  （/sandbox on / off 为 read-only / full-access 的兼容别名）",
+			"  /approval ask     审批经评审通道询问（默认）",
+			"  /approval never   审批自动拒绝、不问人",
 			"  /jobs        列出后台任务（含 workflow）与状态",
 			"  /jobs output <id>  读取后台任务输出（如 /jobs output workflow-1）",
 			"  /jobs kill <id> [reason]  取消后台任务",
@@ -2532,6 +2536,40 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 		if m.manager != nil {
 			m.manager.SetSandboxPolicy(policy)
 			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 沙箱") + "\n已切换沙箱策略为 " + label + "。")
+		} else {
+			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+		}
+		m.input.SetValue("")
+		m.completion = completion{}
+		m.syncInputHeight()
+		m.render()
+		m.virtualGotoBottom()
+		return true, nil
+	}
+	// /approval ask|never（对齐 DSH approval policy：ask 审人 / never 自动拒；on/off 为别名）
+	if strings.HasPrefix(cmd, "/approval") {
+		arg := strings.TrimSpace(strings.TrimPrefix(cmd, "/approval"))
+		var policy core.ApprovalPolicy
+		var label string
+		switch arg {
+		case "", "on", "ask":
+			policy = core.ApprovalAsk
+			label = "ask（经评审通道询问）"
+		case "off", "never":
+			policy = core.ApprovalNever
+			label = "never（自动拒绝、不问人）"
+		default:
+			m.appendMessage(errorSty.Render("用法: /approval ask | never（on/off 为 ask/never 别名）"))
+			m.input.SetValue("")
+			m.completion = completion{}
+			m.syncInputHeight()
+			m.render()
+			m.virtualGotoBottom()
+			return true, nil
+		}
+		if m.manager != nil {
+			m.manager.SetApprovalPolicy(policy)
+			m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 审批") + "\n已切换审批策略为 " + label + "。")
 		} else {
 			m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
 		}

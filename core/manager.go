@@ -104,6 +104,10 @@ type Manager struct {
 	// sandboxPolicyVal 运行时沙箱策略（atomic，支持 TUI /sandbox 命令动态切换）。
 	sandboxPolicyVal atomic.Int32
 
+	// approvalPolicyVal 运行时审批策略 ask/never（atomic，支持 TUI /approval 命令动态切换）。
+	// 审批链 = 沙箱升级审批（对齐 DSH approveEscalation），见 approval.go。
+	approvalPolicyVal atomic.Int32
+
 	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
 
@@ -265,6 +269,11 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// sandbox：进程效应策略层（DSC_SANDBOX: full/workspace/readonly，缺省 workspace），
 	// pre-execute fail-closed 拦截写操作；运行时可用 SetSandboxPolicy 动态切换
 	m.sandboxPolicyVal.Store(int32(ParseSandboxPolicy(os.Getenv("DSC_SANDBOX"))))
+	// 审批：沙箱升级审批链（DSC_APPROVAL: ask/never，缺省 ask）——对齐 DSH approveEscalation，
+	// 被拒工具调用携 sandbox_permissions 升级重试时审人；门须在 sandbox 之前运行
+	// （approved 后把更宽档标到调用上，后续 sandboxPolicy 以此复审放行本次）。
+	m.approvalPolicyVal.Store(int32(DefaultApprovalPolicy()))
+	m.events.OnWaterfall(EventToolPreExecute, m.approvalEscalation())
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(m.GetSandboxPolicy))
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))

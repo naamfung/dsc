@@ -174,14 +174,21 @@ func (m *Manager) GetSandboxPolicy() SandboxPolicy {
 
 // sandboxPolicy 工具流水线 pre-execute 瀑布策略：fail-closed 拦截写操作。
 // 策略经 get 动态读取，支持运行时切换（TUI /sandbox 命令）。
+// 审批门（approvalEscalation）已 approved 的升级调用以更宽档 EscalatedMode 复审。
+// 被拒时返回对齐 DSH 的拒绝标记 + 升级提示，模型据此携 sandbox_permissions 升级重试。
 func sandboxPolicy(get func() SandboxPolicy) WaterfallListener {
 	return func(ctx EventContext, next func(EventContext) error) error {
 		inv, _ := ctx.Data.(*ToolInvocation)
 		if inv == nil {
 			return next(ctx)
 		}
-		if err := sandboxCheck(get(), inv.ToolName, inv.ArgumentsJSON); err != nil {
-			return err // fail-closed：拒绝，不执行
+		mode := get()
+		if inv.Escalated {
+			mode = inv.EscalatedMode // 本调用已升级获批：以更宽档复审
+		}
+		if err := sandboxCheck(mode, inv.ToolName, inv.ArgumentsJSON); err != nil {
+			return fmt.Errorf("%s\n%s",
+				sandboxDenialMarker(sandboxModeString(mode)), escalationHintMarker("operation"))
 		}
 		return next(ctx)
 	}

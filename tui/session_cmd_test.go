@@ -215,3 +215,54 @@ func TestSandboxCommandWithoutManager(t *testing.T) {
 		t.Fatalf("should show manager-unavailable error, got: %q", full)
 	}
 }
+
+// TestApprovalCommandToggle 校验 /approval 切换审批策略（on/off 为 ask/never 别名）。
+func TestApprovalCommandToggle(t *testing.T) {
+	mgr := core.NewManager(&core.ManagerConfig{ExecDir: t.TempDir()})
+	m := New(&stubAgent{}, mgr, context.Background(), "m", "minimal", 131072)
+
+	if got := mgr.GetApprovalPolicy(); got != core.ApprovalAsk {
+		t.Fatalf("initial policy = %v, want ask", got)
+	}
+	if handled, _ := m.runSlashCommand("/approval never"); !handled {
+		t.Fatal("/approval never should be handled")
+	}
+	if got := mgr.GetApprovalPolicy(); got != core.ApprovalNever {
+		t.Fatalf("after never, policy = %v, want never", got)
+	}
+	if handled, _ := m.runSlashCommand("/approval ask"); !handled {
+		t.Fatal("/approval ask should be handled")
+	}
+	if got := mgr.GetApprovalPolicy(); got != core.ApprovalAsk {
+		t.Fatalf("after ask, policy = %v, want ask", got)
+	}
+	// off/on 兼容别名
+	if handled, _ := m.runSlashCommand("/approval off"); !handled {
+		t.Fatal("/approval off should be handled")
+	}
+	if got := mgr.GetApprovalPolicy(); got != core.ApprovalNever {
+		t.Fatalf("after off, policy = %v, want never", got)
+	}
+	if handled, _ := m.runSlashCommand("/approval on"); !handled {
+		t.Fatal("/approval on should be handled")
+	}
+	if got := mgr.GetApprovalPolicy(); got != core.ApprovalAsk {
+		t.Fatalf("after on, policy = %v, want ask", got)
+	}
+	full := strings.Join(m.lines, "\n")
+	if !strings.Contains(full, "审批") {
+		t.Fatalf("should show approval messages, got: %q", full)
+	}
+}
+
+// TestApprovalCommandWithoutManager 校验 manager 缺失时的错误分支。
+func TestApprovalCommandWithoutManager(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "m", "minimal", 131072)
+	if handled, _ := m.runSlashCommand("/approval on"); !handled {
+		t.Fatal("/approval on should be handled")
+	}
+	full := strings.Join(m.lines, "\n")
+	if !strings.Contains(full, "插件管理器不可用") {
+		t.Fatalf("should show manager-unavailable error, got: %q", full)
+	}
+}
