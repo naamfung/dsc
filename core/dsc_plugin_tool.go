@@ -303,7 +303,7 @@ type listDscPluginsTool struct{ m *Manager }
 func (t *listDscPluginsTool) Name() string { return "list_dsc_plugins" }
 
 func (t *listDscPluginsTool) Description() string {
-	return "List the DSC plugins for this instance (name, type, enabled, binary_path). This is the authoritative single source: it merges three sources — plugins declared in config.yaml, plugins currently loaded at runtime (state=loaded), and plugins present on disk under plugins/ but not configured (state=orphan). Use this to discover plugins and their state; do NOT enumerate the plugins/ directory yourself with the shell tool."
+	return "List the DSC plugins for this instance (name, type, enabled, state). This is the authoritative single source: it merges three sources — plugins declared in config.yaml, plugins currently loaded at runtime (state=loaded), and plugins present on disk under plugins/ but not configured (state=orphan). Use this to discover plugins and their state; do NOT enumerate the plugins/ directory yourself with the shell tool, and never try to invoke a plugin binary directly — plugins are used exclusively through their tools."
 }
 
 func (t *listDscPluginsTool) ParametersSchema() json.RawMessage {
@@ -333,11 +333,10 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 	diskNames := m.listPluginDiskNames()
 
 	type row struct {
-		Name       string `json:"name"`
-		Type       string `json:"type"`
-		State      string `json:"state"` // loaded=运行期已加载; configured=config 声明未加载; orphan=磁盘孤儿/未配
-		Enabled    bool   `json:"enabled"`
-		BinaryPath string `json:"binary_path,omitempty"`
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		State   string `json:"state"` // loaded=运行期已加载; configured=config 声明未加载; orphan=磁盘孤儿/未配
+		Enabled bool   `json:"enabled"`
 	}
 
 	// 合并三方（config + 运行态 + 磁盘），按名升序稳定输出
@@ -371,23 +370,14 @@ func (t *listDscPluginsTool) Execute(_ context.Context, _ json.RawMessage) (stri
 				r.Type = conf.Type
 			}
 			r.Enabled = true
-			r.BinaryPath = m.diskPluginBinary(name)
-			if inConf && conf.BinaryPath != "" {
-				r.BinaryPath = conf.BinaryPath
-			}
 		case inConf:
 			r.State = "configured"
 			r.Type = conf.Type
 			r.Enabled = conf.Enabled
-			r.BinaryPath = conf.BinaryPath
-			if r.BinaryPath == "" {
-				r.BinaryPath = m.diskPluginBinary(name)
-			}
 		default:
 			r.State = "orphan"
 			r.Type = inferPluginTypeFromDir(name)
 			r.Enabled = false
-			r.BinaryPath = m.diskPluginBinary(name)
 		}
 		rows = append(rows, r)
 	}
@@ -692,7 +682,7 @@ func (t *loadDscPluginTool) TimeoutMs() int { return 120000 } // 加载插件进
 func (t *loadDscPluginTool) Description() string {
 	return "Activate an existing DSC plugin that is already on disk under the plugins/ directory but not yet loaded (e.g. it exists but is not in the running config), so its tools become usable by the model this session. " +
 		"Give the plugin id as the directory name under plugins/ (e.g. tool-musicplayer). The binary is resolved automatically " +
-		"(plugins/<name>/<name>.exe, honoring versioned binaries) unless binary_path is given, and type defaults to tool. " +
+		"(plugins/<name>/<name>.exe, honoring versioned binaries), and type defaults to tool. " +
 		"This does NOT modify config.yaml (the change lasts only for the current process; after a restart you can reload it again). " +
 		"A successful return (ok:true, status=loaded) is sufficient confirmation: the plugin is active and its commands are immediately usable this session — " +
 		"they appear in your available tool list. Do NOT verify with the shell tool or inspect files on disk. " +
@@ -703,17 +693,15 @@ func (t *loadDscPluginTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{
 "name":{"type":"string","description":"插件 id，即 plugins/ 下的目录名（如 tool-musicplayer），须匹配 [A-Za-z0-9_-]。"},
 "type":{"type":"string","enum":["tool","llm","agent","policy","dsc"],"description":"插件类型，默认 tool。"},
-"binary_path":{"type":"string","description":"可选：显式指定插件可执行文件路径；缺省按约定 plugins/<name>/<name>.exe 解析。"},
 "persist":{"type":"boolean","description":"是否写回 config.yaml 使重启后仍加载。默认 false：仅当前进程生效、不改配置；true：持久化（先备份 config）。"}},
 "required":["name"],"additionalProperties":false}`)
 }
 
 func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	var p struct {
-		Name       string `json:"name"`
-		Type       string `json:"type"`
-		BinaryPath string `json:"binary_path"`
-		Persist    bool   `json:"persist"`
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		Persist bool   `json:"persist"`
 	}
 	if err := json.Unmarshal(args, &p); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -728,14 +716,13 @@ func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (
 		return "", fmt.Errorf("invalid type %q", p.Type)
 	}
 
-	bin := p.BinaryPath
-	if bin == "" {
-		pluginDir := filepath.Join(t.m.pluginsRoot(), p.Name)
-		if st, err := os.Stat(pluginDir); err != nil || !st.IsDir() {
-			return "", fmt.Errorf("插件目录 %s 不存在（插件须已置于 plugins/ 目录下）", pluginDir)
-		}
-		bin = ResolveLatestBinary(filepath.Join(pluginDir, p.Name+binExt()))
+	// 二进制一律按命名约定自动解析（plugins/<name>/<name>.exe，含版本化），不向模型
+	// 暴露插件文件路径，也不接受模型传入路径。
+	pluginDir := filepath.Join(t.m.pluginsRoot(), p.Name)
+	if st, err := os.Stat(pluginDir); err != nil || !st.IsDir() {
+		return "", fmt.Errorf("插件目录 %s 不存在（插件须已置于 plugins/ 目录下）", pluginDir)
 	}
+	bin := ResolveLatestBinary(filepath.Join(pluginDir, p.Name+binExt()))
 	bin = filepath.Clean(bin)
 	root := strings.ToLower(filepath.Clean(t.m.pluginsRoot()))
 	if !strings.HasPrefix(strings.ToLower(bin), root) {
@@ -755,7 +742,7 @@ func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (
 				return "", err
 			}
 		}
-		return t.result(p.Name, p.Type, bin, "already-active", false, p.Persist)
+		return t.result(p.Name, p.Type, "already-active", false, p.Persist)
 	}
 
 	// 持久化需在改动前先备份 config；persist=false 则连备份都不做（不改配置）。
@@ -771,7 +758,7 @@ func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (
 	if err != nil {
 		return "", fmt.Errorf("加载失败（可能已加载，或插件自身类型/元数据不匹配）: %w", err)
 	}
-	return t.result(p.Name, p.Type, bin, "loaded", true, p.Persist)
+	return t.result(p.Name, p.Type, "loaded", true, p.Persist)
 }
 
 // persistEntry 把载入的插件条目显式写回 config.yaml（先备份），保证重启后仍加载。
@@ -788,7 +775,7 @@ func (t *loadDscPluginTool) persistEntry(name, typ, bin string) error {
 	return nil
 }
 
-func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded, persist bool) (string, error) {
+func (t *loadDscPluginTool) result(name, typ, status string, loaded, persist bool) (string, error) {
 	note := "插件已载入本进程，其工具立即可用（出现在你的工具列表中），无需磁盘验证"
 	if persist {
 		note += "；已写入 config.yaml，重启后仍自动加载"
@@ -799,7 +786,6 @@ func (t *loadDscPluginTool) result(name, typ, bin, status string, loaded, persis
 		"ok":      true,
 		"name":    name,
 		"type":    typ,
-		"binary":  filepath.ToSlash(bin),
 		"status":  status,
 		"loaded":  loaded,
 		"persist": persist,

@@ -158,7 +158,7 @@ func TestUpgradeDscPlugin(t *testing.T) {
 // TestLoadDscPluginValidation 校验 load_dsc_plugin / unload_dsc_plugin：
 //  1. 工具已入 dscPluginTools 目录（模型可见）；
 //  2. schema 为合法 JSON；
-//  3. 坏命名/坏类型/目录缺失/越界 binary_path 均被拒绝（不触碰插件进程）。
+//  3. 坏命名/坏类型/目录缺失均被拒绝（不触碰插件进程）。
 func TestLoadDscPluginValidation(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	var names []string
@@ -191,8 +191,7 @@ func TestLoadDscPluginValidation(t *testing.T) {
 		`{"name":"../evil"}`,
 		`{"name":"a/b"}`,
 		`{"name":"x","type":"bogus"}`,
-		`{"name":"tool-absent"}`,                       // 目录不存在
-		`{"name":"x","binary_path":"C:\\evil\\x.exe"}`, // 越界 pluginsRoot
+		`{"name":"tool-absent"}`, // 目录不存在
 	}
 	for _, s := range bad {
 		if _, err := loadTool.Execute(context.Background(), json.RawMessage(s)); err == nil {
@@ -409,6 +408,49 @@ func TestListDscPluginsThreeStates(t *testing.T) {
 	// 非约定命名目录不应进入候选
 	if len(out.Plugins) != 3 {
 		t.Errorf("len = %d, want 3 (bad-dir 不应计入): %v", len(out.Plugins), out.Plugins)
+	}
+}
+
+// TestPluginToolsDoNotExposeBinaryPath 守卫：插件管理工具不得把插件二进制路径暴露
+// 给模型——list_dsc_plugins 输出不得含 binary_path 键、load_dsc_plugin schema 不得
+// 接受 binary_path 参数。暴露路径会诱发模型用 shell 直接调用插件可执行文件（绕过
+// 插件机制），e.txt 中 tool-musicplayer 场景即此恶果。
+func TestPluginToolsDoNotExposeBinaryPath(t *testing.T) {
+	dir := t.TempDir()
+	ext := binExt()
+	for _, name := range []string{"tool-a", "tool-b"} {
+		pd := filepath.Join(dir, "plugins", name)
+		if err := os.MkdirAll(pd, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pd, name+ext), []byte("bin"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfgPath := filepath.Join(dir, "config", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("plugins: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(&ManagerConfig{ExecDir: dir})
+	m.SetConfigPath(cfgPath)
+
+	// list_dsc_plugins 输出不得含 binary_path
+	listTool := &listDscPluginsTool{m: m}
+	res, err := listTool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("list Execute: %v", err)
+	}
+	if strings.Contains(res, "binary_path") {
+		t.Errorf("list_dsc_plugins 输出泄露插件路径，不得出现 binary_path:\n%s", res)
+	}
+
+	// load_dsc_plugin schema 不得接受 binary_path 参数
+	loadTool := &loadDscPluginTool{m: m}
+	if strings.Contains(string(loadTool.ParametersSchema()), "binary_path") {
+		t.Errorf("load_dsc_plugin schema 不得暴露 binary_path 参数: %s", loadTool.ParametersSchema())
 	}
 }
 
