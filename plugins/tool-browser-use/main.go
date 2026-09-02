@@ -454,21 +454,21 @@ func getOrCreatePage(sessionID, pageID, url string, userMode bool) (*rod.Page, *
 	return page, sess, nil
 }
 
-// FetchUrlResult 獲取網頁內容結果
-type FetchUrlResult struct {
+// WebFetchResult 獲取網頁內容結果
+type WebFetchResult struct {
 	Success bool   `json:"success"`
 	URL     string `json:"url"`
 	Content string `json:"content,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
-// fetchUrlImpl 抓取网页内容。plainText 为真时返回剥离结构的纯文本（默认，
+// webFetchImpl 抓取网页内容。plainText 为真时返回剥离结构的纯文本（默认，
 // 便于模型直接阅读、避免对大量 HTML 产生抗拒），为假时返回原始 HTML 供需要
 // 结构化内容的场景使用。结果用 json.Marshal 序列化，避免手拼字符串破坏转义。
-func fetchUrlImpl(sessionID, url string, plainText, userMode bool) (string, error) {
+func webFetchImpl(sessionID, url string, plainText, userMode bool) (string, error) {
 	page, _, err := getOrCreatePage(sessionID, "default", url, userMode)
 	if err != nil {
-		e := FetchUrlResult{Success: false, URL: url, Error: err.Error()}
+		e := WebFetchResult{Success: false, URL: url, Error: err.Error()}
 		b, _ := json.Marshal(e)
 		return string(b), nil
 	}
@@ -485,7 +485,7 @@ func fetchUrlImpl(sessionID, url string, plainText, userMode bool) (string, erro
 		content = page.MustEval("() => document.documentElement.outerHTML").Str()
 	}
 
-	e := FetchUrlResult{Success: true, URL: url, Content: content}
+	e := WebFetchResult{Success: true, URL: url, Content: content}
 	b, _ := json.Marshal(e)
 	return string(b), nil
 }
@@ -793,9 +793,9 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 	return string(jsonData), nil
 }
 
-// fetchUrlView 构造 fetch_url 结果的结构化视图（纯文本）。
-func fetchUrlView(result string) (json.RawMessage, error) {
-	var r FetchUrlResult
+// webFetchView 构造 web_fetch 结果的结构化视图（纯文本）。
+func webFetchView(result string) (json.RawMessage, error) {
+	var r WebFetchResult
 	if err := json.Unmarshal([]byte(result), &r); err != nil {
 		return nil, nil
 	}
@@ -891,8 +891,8 @@ func browserScreenshotView(result string) (json.RawMessage, error) {
 // ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 // ============================================================
 func main() {
-	// 定義 fetch_url 工具
-	fetchUrlSchema := json.RawMessage(`{
+	// 定義 web_fetch 工具
+	webFetchSchema := json.RawMessage(`{
 		"type": "object",
 		"properties": {
 			"session_id": {
@@ -914,7 +914,7 @@ func main() {
 		},
 		"required": ["url"]
 	}`)
-	fetchUrlHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
+	webFetchHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			SessionID  string `json:"session_id"`
 			URL        string `json:"url"`
@@ -935,7 +935,7 @@ func main() {
 		if params.UserMode != nil {
 			userMode = *params.UserMode
 		}
-		return fetchUrlImpl(sessionID, params.URL, !params.ReturnHTML, userMode)
+		return webFetchImpl(sessionID, params.URL, !params.ReturnHTML, userMode)
 	}
 
 	// 定義 web_search 工具
@@ -1110,9 +1110,9 @@ func main() {
 	}
 
 	sdk := dsc.New(dsc.Config{Name: "browser-use", Version: "1.0.0", Type: dsc.TypeTool})
-	sdk.Tool(dsc.Tool{Name: "fetch_url", Description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering", Schema: fetchUrlSchema, Handler: fetchUrlHandler,
+	sdk.Tool(dsc.Tool{Name: "web_fetch", Description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering", Schema: webFetchSchema, Handler: webFetchHandler,
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
-			return fetchUrlView(result)
+			return webFetchView(result)
 		},
 	})
 	sdk.Tool(dsc.Tool{Name: "web_search", Description: "Perform a web search using a headless browser and extract search results", Schema: webSearchSchema, Handler: webSearchHandler,

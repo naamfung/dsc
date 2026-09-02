@@ -68,7 +68,7 @@ func TestE2EWithHostClient(t *testing.T) {
 			t.Fatalf("tool %s 缺 description/schema", tl.Name)
 		}
 	}
-	for _, want := range []string{"fetch_url", "web_search", "browser_click", "browser_type", "browser_screenshot"} {
+	for _, want := range []string{"web_fetch", "web_search", "browser_click", "browser_type", "browser_screenshot"} {
 		if !names[want] {
 			t.Fatalf("missing tool %s", want)
 		}
@@ -76,7 +76,7 @@ func TestE2EWithHostClient(t *testing.T) {
 
 	// 5. 空钩子：宿主调用无副作用（SDK 默认注册 PluginHookService）
 	hook := proto.NewPluginHookServiceClient(conn)
-	bt, err := hook.BeforeTool(ctx, &proto.BeforeToolRequest{ToolName: "fetch_url", ArgumentsJson: `{"url":"https://example.com"}`})
+	bt, err := hook.BeforeTool(ctx, &proto.BeforeToolRequest{ToolName: "web_fetch", ArgumentsJson: `{"url":"https://example.com"}`})
 	if err != nil || bt.Veto || bt.ArgumentsJson != `{"url":"https://example.com"}` {
 		t.Fatalf("BeforeTool(空钩子) = %+v, err %v", bt, err)
 	}

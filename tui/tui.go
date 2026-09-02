@@ -1527,7 +1527,7 @@ var toolArgKey = map[string]string{
 	"shell":              "command",
 	"str_replace_editor": "path",
 	"lisp_eval":          "expression",
-	"fetch_url":          "url",
+	"web_fetch":          "url",
 	"web_search":         "query",
 	"browser_click":      "selector",
 	"browser_type":       "selector",
