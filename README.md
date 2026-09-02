@@ -244,7 +244,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 | 命令                                                                  | 用途                                                                                                       |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `/sandbox read-only \| workspace \| full-access`                    | 切換沙箱策略（狀態欄即時顯示工作範圍）                                                                                      |
-| `/approval ask \| never`                    | 切換當前會話的審批策略（沙箱升級審批：ask 經評審通道詢問，never 自動拒絕；on/off 為 ask/never 別名）                                             |
+| `/approval ask \| never`                                            | 切換當前會話的審批策略（沙箱升級審批：ask 經評審通道詢問，never 自動拒絕；on/off 為 ask/never 別名）                                         |
 | `/settings history <N\|off\|unlimited>` · `/settings mouse on\|off` | 歷史注入條數（實時生效並持久化到配置）/ 鼠標捕獲（on 恢復應用內捕獲；off 釋放給終端）                                                          |
 | `/jobs [list\|output <id>\|kill <id> [reason]]`                     | 管理後台任務（含 workflow）                                                                                       |
 | `/session <id>\|new\|delete <id>` · `/sessions`                     | 多會話管理                                                                                                    |
