@@ -874,13 +874,16 @@ func (a *ReactLoopAgent) sandboxPolicyContext() string {
 		ws = "."
 	}
 	ws = filepath.ToSlash(ws)
+	// 对齐 DSH renderPolicyContext：明确「别净凭政策拒绝一次必要修改——照常尝试可用工具，
+	// 并按工具返回的拒绝/升级指引行事」，避免模型因政策提示而过早放弃。
 	switch strings.ToLower(strings.TrimSpace(a.sandboxPolicy)) {
 	case "readonly", "read-only":
-		return "Current DSC file policy: read-only. The file sandbox blocks any file modification."
+		return "Current DSC file policy: read-only. Available tool operations cannot modify files in the standing mode. " +
+			"Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns."
 	case "full", "full-access":
-		return "Current DSC file policy: danger-full-access. The file sandbox does not restrict file modifications."
-	default: // workspace / workspace-write（缺省）
-		return "Current DSC file policy: workspace-write. File modifications are allowed under the session workspace: " +
+		return "Current DSC file policy: danger-full-access. The DSC file sandbox does not restrict file modifications by available tool operations."
+	default: // workspace / workspace-write（缺省，为便利而非对齐 DSH 默认的 read-only）
+		return "Current DSC file policy: workspace-write. Available tool operations may modify files under the session workspace: " +
 			strconv.Quote(ws) + `. The "/workspace" prefix is an alias for that root; native commands (e.g. shell) can only use the real path.`
 	}
 }

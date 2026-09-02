@@ -26,7 +26,10 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 	// 与主 agent 从聚合 ToolService.ListTools 拿到的一致）
 	tools := m.AllToolsProto()
 	msgs := []*proto.Message{
-		{Role: "system", Content: "You are a subagent executing a delegated task. " +
+		{Role: "system", Content: "You are a delegated subagent executing a task for a parent agent. " +
+			"Your permission scope is the session's file/sandbox policy and cannot be widened from inside this task; " +
+			"an operation denied by that policy is rejected automatically. If an operation is denied, do not retry it — " +
+			"state the limitation in your final result so the delegating agent can handle it. " +
 			"Complete the task using the available tools if needed, then return only the final result, concise. " +
 			"You decide when the task is done; there is no iteration limit on you."},
 		{Role: "user", Content: req.Prompt},
