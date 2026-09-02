@@ -200,6 +200,34 @@ func validateEscalationArgs(sandboxPermissions, justification string) error {
 	return nil
 }
 
+// approvalPolicyCtxKey context 键：把调用方会话随调用转发的审批策略注入 ctx。
+type approvalPolicyCtxKey struct{}
+
+// WithApprovalPolicy 把调用方会话的审批策略注入 ctx（agent 每次工具调用随请求转发；
+// 供审批门优先用作该会话的生效策略，实现宿主重启后 per-session 恢复）。
+func WithApprovalPolicy(ctx context.Context, policy string) context.Context {
+	return context.WithValue(ctx, approvalPolicyCtxKey{}, policy)
+}
+
+// ApprovalPolicyFromContext 读取 ctx 中转发来的审批策略（空 = 未随调用提供）。
+func ApprovalPolicyFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(approvalPolicyCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// executionApprovalPolicy 审批门决定一次调用的生效策略：优先采用调用方会话随转发带来的
+// 策略（agent 从会话日志折叠，宿主重启后亦恢复）；未随调用提供时回退本地解析
+// （会话覆盖 ?? 全局显式 ?? 沙箱预设绑定）。
+func (m *Manager) executionApprovalPolicy(inv *ToolInvocation) ApprovalPolicy {
+	switch inv.ApprovalPolicy {
+	case "ask", "never":
+		return ParseApprovalPolicy(inv.ApprovalPolicy)
+	}
+	return m.approvalPolicyFor(inv.SessionID)
+}
+
 // EventApprovalAsked 审批提问已发出（emit，宿主事件总线：UI/插件可观审计）。
 const EventApprovalAsked EventName = "approval/asked"
 
@@ -239,7 +267,8 @@ func (m *Manager) toolApprovalGate() WaterfallListener {
 		if strings.TrimSpace(reason) == "" {
 			return next(ev)
 		}
-		if m.approvalPolicyFor(inv.SessionID) == ApprovalNever {
+		if m.executionApprovalPolicy(inv) == ApprovalNever {
+			// 'never'：不问人，自动拒绝（对齐 DSH NEVER 语义）。
 			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
 		}
 		outcome := m.askApproval(ev.Context, inv, fmt.Sprintf("Approve running tool %q?", inv.ToolName), inv.ToolName, reason)
@@ -289,7 +318,7 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 		if err := validateEscalationArgs(perm, just); err != nil {
 			return err
 		}
-		if m.approvalPolicyFor(inv.SessionID) == ApprovalNever {
+		if m.executionApprovalPolicy(inv) == ApprovalNever {
 			// 'never'：不问人，自动拒绝（对齐 DSH NEVER 语义）。
 			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
 		}

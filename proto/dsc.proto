@@ -359,6 +359,7 @@ message ExecuteToolRequest {
   string arguments_json = 2;  // JSON string
   string tool_call_id = 3;   // 用于关联
   string session_id = 4;     // 调用方会话标识（owner 隔离：job 工具按此授权）
+  string approval_policy = 5; // 调用方会话折叠出的审批策略（"ask"/"never"；空 = 宿主自行解析）
 }
 
 message ExecuteToolResponse {

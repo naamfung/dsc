@@ -622,6 +622,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 					ToolName:      tc.Name,
 					ArgumentsJson: tc.ArgumentsJson,
 					ToolCallId:    tc.Id,
+					// 随调用转发本会话审批策略（从事件日志折叠）：宿主审批门优先使用，
+					// 使宿主重启后 per-session 策略得以恢复（无需重设 /approval）。
+					ApprovalPolicy: a.approvalPolicy,
 				}
 				// owner 隔离：附带调用方会话标识（job 工具按此授权）
 				a.sessMu.Lock()

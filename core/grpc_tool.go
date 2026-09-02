@@ -24,6 +24,10 @@ func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteTool
 	if sid := req.GetSessionId(); sid != "" {
 		ctx = WithCaller(ctx, sid)
 	}
+	// 调用方会话随调用转发的审批策略注入 ctx（审批门优先使用，实现重启后 per-session 恢复）
+	if p := req.GetApprovalPolicy(); p != "" {
+		ctx = WithApprovalPolicy(ctx, p)
+	}
 	var args json.RawMessage = []byte(req.ArgumentsJson)
 	result, viewJSON, err := s.mgr.ExecuteToolWithView(ctx, req.ToolName, args)
 	if err != nil {

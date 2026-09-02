@@ -295,6 +295,30 @@ func TestPermissionPresetBindingAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestApprovalPolicyForwardedByCaller(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	// 宿主本地解析会落到 never（显式全局 never 或 full 沙箱绑定）；但调用方会话随调用
+	// 转发 ask → 审批门应以调用方策略为准（重启后 per-session 恢复）。
+	m := approvalTestManager(t, SandboxWorkspaceWrite, ApprovalNever)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+	if err := m.RegisterUserQuestionProvider(func(context.Context, *userquestions.Request) (*userquestions.Answer, error) {
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Allow once"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := WithApprovalPolicy(WithCaller(context.Background(), "s"), "ask")
+	result, err := m.ExecuteTool(ctx, "str_replace_editor", escArgs("danger-full-access", "need it"))
+	if err != nil {
+		t.Fatalf("调用方转发 ask 应问人获批并放行，got %v", err)
+	}
+	if strings.TrimSpace(result) != "mock-result" {
+		t.Fatalf("result = %q, want mock-result", result)
+	}
+}
+
 func TestEscalationSubject(t *testing.T) {
 	if escalationSubject("shell") != "command" {
 		t.Error("shell 应为 command")
