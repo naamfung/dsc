@@ -14,10 +14,10 @@ git clone -b v1 https://github.com/naamfung/dsc.git
 
 ### 体验开发版本（master）
 
-追求最新特性/在途开发请克隆 **master** 分支（默认分支，无需 `-b`）：
+追求最新特性/在途开发请克隆 **master** 分支（非默认分支，需显式指定）：
 
 ```bash
-git clone https://github.com/naamfung/dsc.git
+git clone -b master https://github.com/naamfung/dsc.git
 ```
 
 ## 核心功能
