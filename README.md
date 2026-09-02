@@ -185,7 +185,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Tool 插件
 
-- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆，边界 `/workspacefoo` 不当别名；与 sandbox 的 `/workspace` 别名语义一致）
+- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致）
 
 - `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根）
 
