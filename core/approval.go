@@ -124,6 +124,14 @@ func escalationHintMarker(subject string) string {
 		" once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]"
 }
 
+// escalationSubject 返回升级提示的工具族名词（对齐 DSH：bash 命令族→command、文件操作族→operation）。
+func escalationSubject(toolName string) string {
+	if toolName == "shell" {
+		return "command"
+	}
+	return "operation"
+}
+
 // parseEscalationTarget 解析模型请求的升级目标档（封闭目标词表：
 // workspace-write / danger-full-access；read-only 是地板，不可升到它）。
 func parseEscalationTarget(s string) (SandboxPolicy, bool) {
@@ -219,7 +227,7 @@ func (m *Manager) toolApprovalGate() WaterfallListener {
 		if m.approvalPolicyFor(inv.SessionID) == ApprovalNever {
 			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
 		}
-		outcome := m.askApproval(inv, fmt.Sprintf("Approve running tool %q?", inv.ToolName), inv.ToolName, reason)
+		outcome := m.askApproval(ev.Context, inv, fmt.Sprintf("Approve running tool %q?", inv.ToolName), inv.ToolName, reason)
 		switch outcome {
 		case "allowed-once":
 			return next(ev)
@@ -270,7 +278,7 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 			// 'never'：不问人，自动拒绝（对齐 DSH NEVER 语义）。
 			return fmt.Errorf("approval prompts are disabled in this session: actions that require approval are rejected automatically")
 		}
-		outcome := m.askApproval(inv,
+		outcome := m.askApproval(ev.Context, inv,
 			fmt.Sprintf("Approve sandbox escalation to %s for %s?", sandboxModeString(target), inv.ToolName),
 			sandboxModeString(target), just)
 		switch outcome {
@@ -292,7 +300,11 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 // 先广播 approval/asked，经用户评审通道阻塞等待用户选择，再广播 approval/decided。
 // 返回 closed 结果（allowed-once / rejected / cancelled / unavailable）。
 // 无评审通道时 fail-closed。mode 为审计用档位/标识；question 为用户可见的提问文案。
-func (m *Manager) askApproval(inv *ToolInvocation, question, mode, reason string) string {
+func (m *Manager) askApproval(ctx context.Context, inv *ToolInvocation, question, mode, reason string) string {
+	askCtx := ctx
+	if askCtx == nil {
+		askCtx = context.Background() // emit/无 ctx 场景：阻塞等待用户，取消由 UI 自行处理
+	}
 	outcome := "unavailable"
 	m.events.Emit(EventApprovalAsked, EventContext{Data: map[string]string{
 		"session": inv.SessionID, "tool": inv.ToolName, "mode": mode, "reason": reason,
@@ -313,7 +325,7 @@ func (m *Manager) askApproval(inv *ToolInvocation, question, mode, reason string
 			{Label: approvalRejectLabel, Description: "Reject this operation; it is not run."},
 		},
 	}}}
-	ans, err := m.Ask(context.Background(), req)
+	ans, err := m.Ask(askCtx, req)
 	if err != nil {
 		if ue, ok := err.(*userquestions.Error); ok {
 			switch ue.Code {

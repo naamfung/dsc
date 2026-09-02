@@ -94,7 +94,7 @@ func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, args
 
 	// pre-execute（waterfall）：守卫。不调 next 即 veto（阻止执行，execute 不运行）。
 	// 语义对齐 DSH tools/pre-execute guards。
-	runErr := m.events.Waterfall(EventToolPreExecute, EventContext{Data: inv}, func(EventContext) error {
+	runErr := m.events.Waterfall(EventToolPreExecute, EventContext{Data: inv, Context: ctx}, func(EventContext) error {
 		// 互通机制 3：插件 BeforeTool 钩子（可 veto/改写参数；按加载顺序调用）
 		if veto := m.runPluginBeforeTool(ctx, inv); veto != nil {
 			inv.Err = veto

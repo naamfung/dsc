@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"sync"
 )
@@ -24,6 +25,9 @@ type EventName string
 type EventContext struct {
 	Name EventName
 	Data any
+	// Context 发起事件的调用方上下文（waterfall 工具流水线把原始请求 ctx 一并携带，
+	// 供监听器感知取消/截止；emit 等无 ctx 的构造可留 nil）。
+	Context context.Context
 }
 
 // Listener 普通监听器：返回值仅对 bail 模式有意义，其余模式忽略。

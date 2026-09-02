@@ -250,6 +250,42 @@ func (t *askApprovalTool) Execute(_ context.Context, _ json.RawMessage) (string,
 }
 func (t *askApprovalTool) ApprovalReason(_ string) string { return t.reason }
 
+func TestEscalationSubject(t *testing.T) {
+	if escalationSubject("shell") != "command" {
+		t.Error("shell 应为 command")
+	}
+	if escalationSubject("str_replace_editor") != "operation" {
+		t.Error("str_replace_editor 应为 operation")
+	}
+	if escalationSubject("grep") != "operation" {
+		t.Error("其它工具默认 operation")
+	}
+}
+
+func TestApprovalCancellationPropagatesToAsk(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+	// provider 感知 ctx 取消：返回 CANCELLED 错误，令审批映射为 cancelled。
+	if err := m.RegisterUserQuestionProvider(func(ctx context.Context, _ *userquestions.Request) (*userquestions.Answer, error) {
+		if ctx.Err() != nil {
+			return nil, &userquestions.Error{Code: userquestions.ErrCanceled, Err: ctx.Err()}
+		}
+		return &userquestions.Answer{Answers: []userquestions.AnswerItem{{ID: "approval", Selected: []string{"Allow once"}}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cctx, cancel := context.WithCancel(WithCaller(context.Background(), "s"))
+	cancel() // 立即取消：审批提问应感知到 → cancelled
+	_, err := m.ExecuteTool(cctx, "str_replace_editor", escArgs("workspace-write", "need it"))
+	if err == nil || !strings.Contains(err.Error(), "was cancelled") {
+		t.Fatalf("取消 ctx 应令审批为 cancelled，got %v", err)
+	}
+}
+
 func TestToolDeclaredApprovalAllowedOnce(t *testing.T) {
 	m := approvalTestManager(t, SandboxReadOnly, ApprovalAsk)
 	_ = m.toolRegistry.Register(&askApprovalTool{name: "danger_tool", reason: "needs approval"})

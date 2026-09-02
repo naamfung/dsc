@@ -188,7 +188,7 @@ func sandboxPolicy(get func() SandboxPolicy) WaterfallListener {
 		}
 		if err := sandboxCheck(mode, inv.ToolName, inv.ArgumentsJSON); err != nil {
 			return fmt.Errorf("%s\n%s",
-				sandboxDenialMarker(sandboxModeString(mode)), escalationHintMarker("operation"))
+				sandboxDenialMarker(sandboxModeString(mode)), escalationHintMarker(escalationSubject(inv.ToolName)))
 		}
 		return next(ctx)
 	}
