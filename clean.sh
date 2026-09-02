@@ -8,8 +8,7 @@ set -e
 #
 # 与 build.sh 对应：build.sh 构建出什么，这里就清掉什么。
 # - 主程序：dsc（Unix）/ dsc.exe（Windows）
-# - 插件产物：plugins/<插件>/ 下的 .exe（末位可执行）以及
-#   tool-lua-host 在 Unix 下无扩展名的二进制 tool-lua-host。
+# - 插件产物：plugins/<插件>/ 下的 <插件>.exe（Windows）或无扩展名 <插件>（Unix）
 # ============================================================
 
 # 删除主程序（覆盖 dsc 与 dsc.exe）
@@ -32,11 +31,18 @@ if [ -d "plugins" ]; then
     done
 fi
 
-# tool-lua-host 在 Unix 构建时无扩展名（见 build.sh：LUA_BIN=tool-lua-host）；
-# 确保其可执行二进制被清理（排除同名目录，仅删文件）
-if [ -f "plugins/tool-lua-host/tool-lua-host" ]; then
-    echo "removing: plugins/tool-lua-host/tool-lua-host"
-    rm -f "plugins/tool-lua-host/tool-lua-host"
+# 删除 Unix 平台无扩展名的插件二进制（build.sh 按平台出后缀：Windows 为
+# <插件名>.exe、Unix 为 <插件名>）。插件产物固定在 plugins/<插件>/<插件><后缀>，
+# 按目录基名逐一清理（排除同名目录、仅删文件），覆盖 tool-lua-host 等全部插件。
+if [ -d "plugins" ]; then
+    for dir in plugins/*/; do
+        [ -d "$dir" ] || continue
+        name="$(basename "$dir")"
+        if [ -f "$dir$name" ]; then
+            echo "removing: $dir$name"
+            rm -f "$dir$name"
+        fi
+    done
 fi
 
 rm -rf ./config/presets/preset-backups

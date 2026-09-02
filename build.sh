@@ -2,9 +2,15 @@
 set -e
 
 # ============================================================
-# build.sh - Unix/Linux/macOS 构建脚本
+# build.sh - 全平台构建脚本（Linux/macOS/FreeBSD + Windows Git Bash/MSYS 等 POSIX shell）
+# 可执行文件后缀按 GOOS 决定：Windows 为 .exe，其余平台为空。
 # 注意：此脚本与 build.bat 须要同步更新
 # ============================================================
+
+# 目标平台 OS 与可执行文件后缀（go env GOOS 反映当前平台）
+GOOS="$(go env GOOS)"
+BINEXT=""
+if [ "$GOOS" = "windows" ]; then BINEXT=".exe"; fi
 
 # 设置 GOPATH 和 PATH 以包含 protoc 生成插件
 GOPATH=$(go env GOPATH)
@@ -15,8 +21,8 @@ export PATH="$PATH:$GOPATH/bin"
 # 用户没有编译器时不应报错，直接复用仓库内已生成的代码即可。
 echo "Generating proto Go code..."
 PROTOC_BIN=""
-if [ -f "protoc_dir/bin/protoc.exe" ]; then
-    PROTOC_BIN="protoc_dir/bin/protoc.exe"
+if [ -f "protoc_dir/bin/protoc$BINEXT" ]; then
+    PROTOC_BIN="protoc_dir/bin/protoc$BINEXT"
 elif command -v protoc >/dev/null 2>&1; then
     PROTOC_BIN="protoc"
 fi
@@ -33,7 +39,6 @@ fi
 # ---- UPX 压缩检测 ----
 # 当系统存在 upx 工具时，用它压缩构建产物以显著减小体积；未检测到则跳过。
 # 压缩失败仅告警并保留原始二进制，不中断后续构建。
-GOOS="$(go env GOOS)"
 UPX_BIN=""
 if command -v upx >/dev/null 2>&1; then
     UPX_BIN="upx"
@@ -56,123 +61,49 @@ pack() {
     fi
 }
 
+# build_plugin <name>：构建单个插件为 plugins/<name>/<name><BINEXT> 并 UPX 压缩。
+# 目录不存在（本地内部插件未随仓库分发）时跳过。
+build_plugin() {
+    local name="$1"
+    if [ ! -d "plugins/$name" ]; then
+        echo "  (skip: plugins/$name 目录不存在)"
+        return
+    fi
+    echo "Building $name plugin..."
+    (cd "plugins/$name" && go build -o "$name$BINEXT" .)
+    pack "plugins/$name/$name$BINEXT"
+}
+
 # 构建主程序
 echo "Building main program..."
 go build
-MAIN_BIN="dsc"
-if [ "$GOOS" = "windows" ]; then MAIN_BIN="dsc.exe"; fi
+MAIN_BIN="dsc$BINEXT"
 pack "$MAIN_BIN"
 
-# 构建 agent-react-loop 插件
-echo "Building agent-react-loop plugin..."
-(cd plugins/agent-react-loop && go build -o agent-react-loop.exe .)
-pack plugins/agent-react-loop/agent-react-loop.exe
+# 构建各插件（独立 module，基于 dsc-sdk；本地内部插件缺失时自动跳过）
+build_plugin agent-react-loop
+build_plugin llm-openai
+build_plugin llm-anthropic
+build_plugin llm-ollama
+build_plugin tool-filesystem
+build_plugin tool-str-replace-editor
+build_plugin tool-browser-use
+build_plugin tool-lisp-eval
+build_plugin tool-skill
+build_plugin tool-memory-service
+build_plugin dsc-notify
+build_plugin tool-lua-host
 
-# 构建 llm-openai 插件
-echo "Building llm-openai plugin..."
-(cd plugins/llm-openai && go build -o llm-openai.exe .)
-pack plugins/llm-openai/llm-openai.exe
-
-# 构建 llm-anthropic 插件（独立 module，基于 dsc-sdk）
-echo "Building llm-anthropic plugin..."
-(cd plugins/llm-anthropic && go build -o llm-anthropic.exe .)
-pack plugins/llm-anthropic/llm-anthropic.exe
-
-# 构建 llm-ollama 插件（独立 module，基于 dsc-sdk）
-echo "Building llm-ollama plugin..."
-(cd plugins/llm-ollama && go build -o llm-ollama.exe .)
-pack plugins/llm-ollama/llm-ollama.exe
-
-# 构建 tool-filesystem 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-filesystem plugin..."
-(cd plugins/tool-filesystem && go build -o tool-filesystem.exe .)
-pack plugins/tool-filesystem/tool-filesystem.exe
-
-# 构建 tool-str-replace-editor 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-str-replace-editor plugin..."
-(cd plugins/tool-str-replace-editor && go build -o tool-str-replace-editor.exe .)
-pack plugins/tool-str-replace-editor/tool-str-replace-editor.exe
-
-# 构建 tool-browser-use 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-browser-use plugin..."
-(cd plugins/tool-browser-use && go build -o tool-browser-use.exe .)
-pack plugins/tool-browser-use/tool-browser-use.exe
-
-# 构建 tool-lisp-eval 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-lisp-eval plugin..."
-(cd plugins/tool-lisp-eval && go build -o tool-lisp-eval.exe .)
-pack plugins/tool-lisp-eval/tool-lisp-eval.exe
-
-# 构建 tool-skill 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-skill plugin..."
-(cd plugins/tool-skill && go build -o tool-skill.exe .)
-pack plugins/tool-skill/tool-skill.exe
-
-# 构建 tool-memory-service 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-memory-service plugin..."
-(cd plugins/tool-memory-service && go build -o tool-memory-service.exe .)
-pack plugins/tool-memory-service/tool-memory-service.exe
-
-# 构建 dsc-notify 插件（独立 module，基于 dsc-sdk）
-echo "Building dsc-notify plugin..."
-(cd plugins/dsc-notify && go build -o dsc-notify.exe .)
-pack plugins/dsc-notify/dsc-notify.exe
-
-# 构建 tool-lua-host 插件
-echo "Building tool-lua-host plugin..."
-cd ./plugins/tool-lua-host && go build && cd ../../
-LUA_BIN="tool-lua-host"
-if [ "$GOOS" = "windows" ]; then LUA_BIN="tool-lua-host.exe"; fi
-pack "plugins/tool-lua-host/$LUA_BIN"
-
-# 构建 tool-harness-webui 插件（先 bun 构建前端再编译 Go）
+# 构建 tool-harness-webui 插件（先 bun 构建前端再编译 Go；其 build.sh 同样按平台出后缀）
 echo "Building tool-harness-webui plugin..."
-cd ./plugins/tool-harness-webui && bash ./build.sh && cd ../../
-pack plugins/tool-harness-webui/tool-harness-webui.exe
+(cd plugins/tool-harness-webui && bash ./build.sh)
+pack "plugins/tool-harness-webui/tool-harness-webui$BINEXT"
 
-# 构建 policy-fs-observation 插件（独立 module，基于 dsc-sdk）
-echo "Building policy-fs-observation plugin..."
-(cd plugins/policy-fs-observation && go build -o policy-fs-observation.exe .)
-pack plugins/policy-fs-observation/policy-fs-observation.exe
-
-# 构建 tool-ssh 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-ssh plugin..."
-(cd plugins/tool-ssh && go build -o tool-ssh.exe .)
-pack plugins/tool-ssh/tool-ssh.exe
-
-# 构建 tool-musicplayer 插件（独立 module，基于 dsc-sdk）
-echo "Building tool-musicplayer plugin..."
-(cd plugins/tool-musicplayer && go build -o tool-musicplayer.exe .)
-pack plugins/tool-musicplayer/tool-musicplayer.exe
-
-# 构建 tool-jyutzyun 插件（独立 module，基于 dsc-sdk；本地内部插件，
-# 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
-echo "Building tool-jyutzyun plugin..."
-if [ -d "plugins/tool-jyutzyun" ]; then
-    (cd plugins/tool-jyutzyun && go build -o tool-jyutzyun.exe .)
-    pack plugins/tool-jyutzyun/tool-jyutzyun.exe
-else
-    echo "  (skip: plugins/tool-jyutzyun 目录不存在)"
-fi
-
-# 构建 tool-2fa-master 插件（独立 module，基于 dsc-sdk；本地内部插件，
-# 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
-echo "Building tool-2fa-master plugin..."
-if [ -d "plugins/tool-2fa-master" ]; then
-    (cd plugins/tool-2fa-master && go build -o tool-2fa-master.exe .)
-    pack plugins/tool-2fa-master/tool-2fa-master.exe
-else
-    echo "  (skip: plugins/tool-2fa-master 目录不存在)"
-fi
-
-# 构建 tool-novelforge 插件（独立 module，基于 dsc-sdk；本地内部插件，
-# 未随仓库分发的环境可能无此目录，存在才编译、否则跳过）
-echo "Building tool-novelforge plugin..."
-if [ -d "plugins/tool-novelforge" ]; then
-    (cd plugins/tool-novelforge && go build -o tool-novelforge.exe .)
-    pack plugins/tool-novelforge/tool-novelforge.exe
-else
-    echo "  (skip: plugins/tool-novelforge 目录不存在)"
-fi
+build_plugin policy-fs-observation
+build_plugin tool-ssh
+build_plugin tool-musicplayer
+build_plugin tool-jyutzyun
+build_plugin tool-2fa-master
+build_plugin tool-novelforge
 
 echo "Build completed successfully."
