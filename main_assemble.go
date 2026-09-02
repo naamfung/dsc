@@ -121,7 +121,12 @@ func modelExt() string {
 
 // injectRuntimeEnv 向所有插件进程注入当前模式/工作根/沙箱档/审批策略（主路径与「失败重试」共用）。
 func injectRuntimeEnv(merged *core.Config, mode, workspaceRoot, sandboxPolicy string) {
-	approvalPolicy := core.ApprovalPolicyName(core.DefaultApprovalPolicy())
+	// 审批策略 env（供 agent 渲染 approval:policy 上下文）：显式 DSC_APPROVAL 尊重之；
+	// 未显式时注入「沙箱预设绑定」默认（对齐 DSH permission-presets：full→never、其餘→ask）。
+	approvalPolicy := core.ApprovalPolicyName(core.SandboxApprovalDefault(core.ParseSandboxPolicy(os.Getenv("DSC_SANDBOX"))))
+	if os.Getenv("DSC_APPROVAL") != "" {
+		approvalPolicy = core.ApprovalPolicyName(core.DefaultApprovalPolicy())
+	}
 	for i := range merged.Plugins {
 		e := &merged.Plugins[i]
 		if e.Env == nil {

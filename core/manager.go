@@ -107,6 +107,10 @@ type Manager struct {
 	// approvalPolicyVal 运行时审批策略 ask/never（atomic，支持 TUI /approval 命令动态切换）。
 	// 审批链 = 沙箱升级审批（对齐 DSH approveEscalation），见 approval.go。
 	approvalPolicyVal atomic.Int32
+	// approvalGlobalExplicit 是否显式设置过全局审批策略（DSC_APPROVAL 或运行时 /approval/F)。
+	// false 时全局级生效值回退「沙箱预设绑定」：full→never、其餘→ask（对齐 DSH
+	// permission-presets）；显式设置后则尊重显式值。会话级覆盖仍优先于全局。
+	approvalGlobalExplicit atomic.Bool
 	// sessionApproval 按会话覆盖的审批策略（per-session，对齐 DSH approval/policy 会话态）；
 	// 缺省回退全局 approvalPolicyVal。key = 调用方会话标识（agent 每次工具调用随 SessionId 传入）。
 	sessionApproval   map[string]ApprovalPolicy
@@ -278,6 +282,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// 被拒工具调用携 sandbox_permissions 升级重试时审人；门须在 sandbox 之前运行
 	// （approved 后把更宽档标到调用上，后续 sandboxPolicy 以此复审放行本次）。
 	m.approvalPolicyVal.Store(int32(DefaultApprovalPolicy()))
+	m.approvalGlobalExplicit.Store(os.Getenv("DSC_APPROVAL") != "")
 	m.events.OnWaterfall(EventToolPreExecute, m.approvalEscalation())
 	m.events.OnWaterfall(EventToolPreExecute, m.toolApprovalGate())
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(m.GetSandboxPolicy))

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -249,6 +250,50 @@ func (t *askApprovalTool) Execute(_ context.Context, _ json.RawMessage) (string,
 	return "mock-result", nil
 }
 func (t *askApprovalTool) ApprovalReason(_ string) string { return t.reason }
+
+func TestSandboxApprovalDefault(t *testing.T) {
+	if SandboxApprovalDefault(SandboxFullAccess) != ApprovalNever {
+		t.Error("full → never")
+	}
+	if SandboxApprovalDefault(SandboxWorkspaceWrite) != ApprovalAsk {
+		t.Error("workspace → ask")
+	}
+	if SandboxApprovalDefault(SandboxReadOnly) != ApprovalAsk {
+		t.Error("read-only → ask")
+	}
+}
+
+func TestPermissionPresetBindingAndPrecedence(t *testing.T) {
+	// 隔离环境：确保审批「未显式设置」（否则绑定默认不生效）。
+	old := os.Getenv("DSC_APPROVAL")
+	_ = os.Setenv("DSC_APPROVAL", "")
+	defer func() { _ = os.Setenv("DSC_APPROVAL", old) }()
+	m := newRouterManager()
+
+	// 绑定默认：full sandbox → never；workspace → ask。
+	m.SetSandboxPolicy(SandboxFullAccess)
+	if got := m.approvalPolicyFor("s1"); got != ApprovalNever {
+		t.Fatalf("full sandbox 绑定默认 = %v, want never", got)
+	}
+	m.SetSandboxPolicy(SandboxWorkspaceWrite)
+	if got := m.approvalPolicyFor("s1"); got != ApprovalAsk {
+		t.Fatalf("workspace sandbox 绑定默认 = %v, want ask", got)
+	}
+
+	// 会话覆盖优先于绑定。
+	m.SetSandboxPolicy(SandboxFullAccess)
+	m.SetSessionApprovalPolicy("s2", ApprovalAsk)
+	if got := m.approvalPolicyFor("s2"); got != ApprovalAsk {
+		t.Fatalf("会话覆盖应优先于绑定，got %v", got)
+	}
+
+	// 显式全局优先于绑定。
+	m.SetApprovalPolicy(ApprovalAsk)
+	m.SetSandboxPolicy(SandboxFullAccess)
+	if got := m.approvalPolicyFor("s3"); got != ApprovalAsk {
+		t.Fatalf("显式全局应优先于绑定，got %v", got)
+	}
+}
 
 func TestEscalationSubject(t *testing.T) {
 	if escalationSubject("shell") != "command" {

@@ -54,9 +54,20 @@ func DefaultApprovalPolicy() ApprovalPolicy {
 	return ParseApprovalPolicy(os.Getenv("DSC_APPROVAL"))
 }
 
-// SetApprovalPolicy 运行时切换审批策略（TUI /approval 命令用；线程安全）。
+// SetApprovalPolicy 运行时设置全局审批策略（显式覆盖沙箱预设绑定；TUI /approval 也走这里）。
 func (m *Manager) SetApprovalPolicy(p ApprovalPolicy) {
+	m.approvalGlobalExplicit.Store(true)
 	m.approvalPolicyVal.Store(int32(p))
+}
+
+// SandboxApprovalDefault 沙箱↔审批预设绑定（对齐 DSH permission-presets）：
+// danger-full-access → never（全开即不再审批提示），read-only/workspace-write → ask。
+// 用作「未显式设置全局审批」时的默认，显式（DSC_APPROVAL / /approval / 会话覆盖）优先。
+func SandboxApprovalDefault(p SandboxPolicy) ApprovalPolicy {
+	if p == SandboxFullAccess {
+		return ApprovalNever
+	}
+	return ApprovalAsk
 }
 
 // GetApprovalPolicy 读取当前审批策略（全局/缺省）。
@@ -83,7 +94,8 @@ func (m *Manager) SetSessionApprovalPolicy(sessionID string, p ApprovalPolicy) {
 	}})
 }
 
-// GetSessionApprovalPolicy 读取指定会话的审批策略（覆盖 ?? 全局缺省）。
+// GetSessionApprovalPolicy 读取指定会话的审批策略
+// （会话覆盖 ?? 全局显式 ?? 沙箱预设绑定默认）。
 func (m *Manager) GetSessionApprovalPolicy(sessionID string) ApprovalPolicy {
 	if sessionID != "" {
 		m.sessionApprovalMu.RLock()
@@ -93,10 +105,13 @@ func (m *Manager) GetSessionApprovalPolicy(sessionID string) ApprovalPolicy {
 			return p
 		}
 	}
-	return m.GetApprovalPolicy()
+	if m.approvalGlobalExplicit.Load() {
+		return m.GetApprovalPolicy()
+	}
+	return SandboxApprovalDefault(m.GetSandboxPolicy())
 }
 
-// approvalPolicyFor 审批门决定所用策略：会话覆盖 ?? 全局缺省。
+// approvalPolicyFor 审批门决定所用策略：会话覆盖 ?? 全局显式 ?? 沙箱预设绑定默认。
 func (m *Manager) approvalPolicyFor(sessionID string) ApprovalPolicy {
 	return m.GetSessionApprovalPolicy(sessionID)
 }
