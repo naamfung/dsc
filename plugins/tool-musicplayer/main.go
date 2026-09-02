@@ -95,7 +95,11 @@ func playPCM(ctx context.Context, pcm []byte, vol float64) error {
 	player := globalCtx.NewPlayer(bytes.NewReader(pcm))
 	player.SetVolume(vol)
 	player.Play()
-	defer player.Close()
+	// oto v3.4 的 Player.Close 是 no-op（清理靠 finalizer 回收，时机不可控），
+	// 退出时须 Pause 才能真正立即停止输出——否则已缓冲的整首 PCM 会一直播完，
+	// 表现为「停止只能在当前歌曲播完后才生效」。Pause 后 mux 对该 player 混音
+	// 返回 0（静音），对已自然播完的 player 调用是 no-op。
+	defer player.Pause()
 
 	select {
 	case <-ctx.Done():
@@ -346,20 +350,20 @@ func main() {
 
 	sdk.Tool(dsc.Tool{
 		Name:        "music_play",
-		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；可省略以使用默认播放目录（用 music_setdir 预先设定）。loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；volume 为音量百分比 0-100。播放即返回，可随时用 music_stop 停止。",
+		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；可省略以使用默认播放目录（用 music_setdir 预先设定）。loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；volume 为音量百分比 1-100（省略或 0 为默认 100，-1 为显式静音）。播放即返回，可随时用 music_stop 停止。",
 		Schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"path":   {"type": "string", "description": "音频文件路径或目录；省略则用默认播放目录（music_setdir 设定）"},
 				"loop":   {"type": "string", "enum": ["off", "one", "list"], "description": "off=播完即止; one=单曲循环(文件)/单曲重复; list=列表循环(目录整列表循环)", "default": "off"},
-				"volume": {"type": "integer", "minimum": 0, "maximum": 100, "description": "音量百分比 0-100，默认 100", "default": 100}
+				"volume": {"type": "integer", "minimum": -1, "maximum": 100, "description": "音量百分比 1-100；省略或 0 为默认 100；-1 为显式静音（仍播放但无声）", "default": 100}
 			}
 		}`),
 		Handler: func(_ context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Path   string `json:"path"`
 				Loop   string `json:"loop"`
-				Volume int    `json:"volume"`
+				Volume *int   `json:"volume"`
 			}
 			if err := json.Unmarshal(args, &p); err != nil {
 				return "", fmt.Errorf("参数解析失败: %w", err)
@@ -376,11 +380,27 @@ func main() {
 			if p.Loop != "off" && p.Loop != "one" && p.Loop != "list" {
 				return "", fmt.Errorf("loop 仅支持 off/one/list，当前为 %q", p.Loop)
 			}
-			if p.Volume < 0 || p.Volume > 100 {
-				return "", fmt.Errorf("volume 须在 0-100 之间，当前为 %d", p.Volume)
-			}
 			if globalCtx == nil {
 				return "", fmt.Errorf("音频设备不可用（可能无音频，或 DSC_MUSICPLAYER_NO_AUDIO=1）")
+			}
+
+			// 音量语义：省略/0 → 默认 100%（Go 的 json.Unmarshal 不套用 JSON Schema 的
+			// default，需显式回退，否则首播会静音）；-1 → 显式静音；其余越界值钳制
+			// 到上限 100% / 最小可闻 1%，不报错。
+			volume := 100
+			if p.Volume != nil {
+				switch {
+				case *p.Volume == -1:
+					volume = 0 // 显式静音（仍播放但无声）
+				case *p.Volume == 0:
+					volume = 100 // 0 与省略等价，默认 100
+				case *p.Volume > 100:
+					volume = 100 // 超大按上限
+				case *p.Volume < -1:
+					volume = 1 // 超小按下限
+				default:
+					volume = *p.Volume // 1-100 原样
+				}
 			}
 
 			files, err := collectAudioFiles(p.Path)
@@ -397,17 +417,17 @@ func main() {
 			pbCancel = cancel
 			pbMu.Unlock()
 
-			vol := float64(p.Volume) / 100.0
-			if p.Volume == 0 {
-				vol = 0
-			}
-			go runLoop(ctx, files, p.Loop, vol)
+			go runLoop(ctx, files, p.Loop, float64(volume)/100.0)
 
 			src := p.Path
 			if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
 				src = fmt.Sprintf("%s（%d 首）", p.Path, len(files))
 			}
-			return fmt.Sprintf("🎵 开始播放 %s（loop=%s, 音量=%d%%）", src, p.Loop, p.Volume), nil
+			volDesc := fmt.Sprintf("%d%%", volume)
+			if p.Volume != nil && *p.Volume == -1 {
+				volDesc = "静音(-1)"
+			}
+			return fmt.Sprintf("🎵 开始播放 %s（loop=%s, 音量=%s）", src, p.Loop, volDesc), nil
 		},
 	})
 
