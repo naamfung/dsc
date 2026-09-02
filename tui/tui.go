@@ -2851,7 +2851,13 @@ func (m *Model) acceptCompletion() {
 	if rf > len(val) {
 		rf = len(val)
 	}
-	m.input.SetValue(val[:rf] + it.insert)
+	// @ 引用选中文件后补一个空格，便于用户接着输入命令；目录项（下钻下一层）不加，
+	// 否则会截断 @ 引用导致菜单提前关闭。
+	insert := it.insert
+	if m.completion.kind == compAt && !it.descend {
+		insert += " "
+	}
+	m.input.SetValue(val[:rf] + insert)
 	m.input.CursorEnd()
 	m.updateCompletion()
 	if m.completion.active && len(m.completion.items) == 1 {

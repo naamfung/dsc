@@ -123,7 +123,8 @@ func TestFileItems(t *testing.T) {
 }
 
 // TestAcceptCompletionAtReplacesToken 校验 @ 补全只替换 token（replaceFrom 起），
-// 而非整行；唯一匹配项选中后菜单自动关闭（下一次 Enter 走提交）。
+// 而非整行；唯一匹配项选中后菜单自动关闭（下一次 Enter 走提交），且文件路径后补
+// 一个空格便于继续输入。
 func TestAcceptCompletionAtReplacesToken(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DSC_WORKSPACE_ROOT", dir)
@@ -135,8 +136,8 @@ func TestAcceptCompletionAtReplacesToken(t *testing.T) {
 	m.completion = completion{active: true, kind: compAt, items: m.fileItems("fo"), sel: 0, replaceFrom: strings.Index("看看 @fo", "@")}
 	m.acceptCompletion()
 
-	if got := m.input.Value(); got != "看看 @foo.txt" {
-		t.Fatalf("value = %q, want %q", got, "看看 @foo.txt")
+	if got := m.input.Value(); got != "看看 @foo.txt " {
+		t.Fatalf("value = %q, want %q", got, "看看 @foo.txt ")
 	}
 	if m.completion.active {
 		t.Fatal("menu should close after accepting the single matching file")
