@@ -40,7 +40,7 @@ type platform struct {
 var platforms = []platform{
 	{Name: "linux-amd64", GOOS: "linux", GOARCH: "amd64", HostDir: "dsc"},
 	{Name: "linux-arm64", GOOS: "linux", GOARCH: "arm64", HostDir: "dsc"},
-	{Name: "loong64", GOOS: "linux", GOARCH: "loong64", HostDir: "dsc"},
+	{Name: "linux-loong64", GOOS: "linux", GOARCH: "loong64", HostDir: "dsc"},
 	{Name: "darwin-amd64", GOOS: "darwin", GOARCH: "amd64", HostDir: "dsc"},
 	{Name: "darwin-arm64", GOOS: "darwin", GOARCH: "arm64", HostDir: "dsc"},
 	{Name: "windows-amd64", GOOS: "windows", GOARCH: "amd64", HostDir: "dsc.exe", Suffix: ".exe"},
@@ -160,7 +160,7 @@ func printHelp(progName string) {
 支持平台列表（cross）:
   linux-amd64       - Linux x86_64
   linux-arm64       - Linux ARM64
-  loong64           - Loong64 龙芯64位
+  linux-loong64     - Loong64 龙芯64位
   darwin-amd64      - macOS Intel
   darwin-arm64      - macOS Apple Silicon
   windows-amd64     - Windows x86_64
