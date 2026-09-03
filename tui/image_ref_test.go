@@ -84,3 +84,29 @@ func TestResolveRefPathWorkspaceAlias(t *testing.T) {
 		t.Fatalf("/workspace alias = %q, want %q", got, filepath.Join(dir, "sub", "x.png"))
 	}
 }
+
+// TestResolveImageRefsPixPinSentence 复现真实用户输入：PixPin 截图（含下划线/连字符
+// 的文件名）在句中引用、文件名在工作区内，应解析出一个附件。
+func TestResolveImageRefsPixPinSentence(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
+	png := filepath.Join(dir, "PixPin_2026-07-18_11-38-34.png")
+	if err := os.WriteFile(png, []byte("fake-png-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DSC_WORKSPACE_ROOT", dir)
+
+	input := "不用了，你帮我睇下这张图 @PixPin_2026-07-18_11-38-34.png , 描述下都有乜信息？"
+	refs := ResolveImageRefs(input)
+	if len(refs) != 1 || !strings.HasPrefix(refs[0], "dsc-img://") {
+		t.Fatalf("句中 PixPin 图片引用（png 后有空格）= %v, want 1 dsc-img ref", refs)
+	}
+
+	// 关键变体：.png 后**紧跟**中文标点再接文字（无空格）——这是句中 @ 最常见的
+	// 写法。若 splitRefTokens 不在此处截断 token，会吞掉后续文字导致查找失败。
+	inputNoSpace := "不用了，你帮我睇下这张图 @PixPin_2026-07-18_11-38-34.png，描述下都有乜信息？"
+	refs2 := ResolveImageRefs(inputNoSpace)
+	if len(refs2) != 1 || !strings.HasPrefix(refs2[0], "dsc-img://") {
+		t.Fatalf("句中 PixPin 图片引用（png 后紧跟标点）= %v, want 1 dsc-img ref（token 未在标点截断，吞掉后续文字）", refs2)
+	}
+}
