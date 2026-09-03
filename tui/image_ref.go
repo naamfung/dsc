@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"dsc/core"
 )
@@ -48,9 +49,10 @@ func ResolveImageRefs(line string) []string {
 	return refs
 }
 
-// splitRefTokens 按空白把一行拆成 @ token：反斜杆转义的空白（@ 补全菜单对含空格
-// 路径的插入形式）视为 token 一部分并去掉反斜杆；其余空白为 token 边界；行尾常见
-// 标点被剔除（"…。@" 引用后跟标点）。
+// splitRefTokens 按空白与句读标点把一行拆成 @ token：反斜杆转义的空白（@ 补全
+// 菜单对含空格路径的插入形式）视为 token 一部分并去掉反斜杆；空白与句读标点
+// （，。！？；： ,;!?）为 token 边界——使句中「@file.png，后续文字」在标点处截断，
+// 不吞掉后续文字导致文件查找失败；行尾常见标点被剔除（"…。@" 引用后跟标点）。
 func splitRefTokens(line string) []string {
 	var toks []string
 	for i := 0; i < len(line); i++ {
@@ -66,20 +68,34 @@ func splitRefTokens(line string) []string {
 				j += 2
 				continue
 			}
-			switch ch {
-			case ' ', '\t', '\n', '\r', '\f':
-				goto done
+			if isRefDelim(line[j:]) {
+				break
 			}
 			b.WriteByte(ch)
 			j++
 		}
-	done:
 		if tok := strings.TrimRight(b.String(), "，。！？,;.!?)]}"); tok != "" {
 			toks = append(toks, "@"+tok)
 		}
 		i = j - 1
 	}
 	return toks
+}
+
+// isRefDelim 判断 @ token 是否在此处结束（句读边界）：ASCII 空白、ASCII ,;!?、
+// 以及中文标点（，。！？；：）。这些字符几乎不会出现在文件名里，作为句中 @
+// 引用的自然分隔符；反斜杆转义过的空白已在上游单独处理，不在此列。
+func isRefDelim(s string) bool {
+	switch s[0] {
+	case ' ', '\t', '\n', '\r', '\f', ',', ';', '!', '?':
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(s)
+	switch r {
+	case '，', '。', '！', '？', '；', '：':
+		return true
+	}
+	return false
 }
 
 // escapeRefPath 把路径中的空格/tab 反斜杆转义（@ 补全菜单的插入形式），使含空格
