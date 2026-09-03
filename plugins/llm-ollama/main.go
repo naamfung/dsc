@@ -141,6 +141,7 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []core.Message, tool
 
 func (p *OllamaProvider) Name(ctx context.Context) string       { return "ollama" }
 func (p *OllamaProvider) Version(ctx context.Context) string    { return "1.0.0" }
+func (p *OllamaProvider) VisionEnabled() bool                   { return false } // 当前未实现图像多模态传输
 func (p *OllamaProvider) HealthCheck(ctx context.Context) error { return nil }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口
