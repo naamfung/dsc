@@ -371,9 +371,10 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 	return true
 }
 
-// goBuild 以目标平台环境在 dir 目录交叉编译到 out。跨平台一律 CGO_ENABLED=0。
+// goBuild 以目标平台环境在 dir 目录交叉编译到 out。跨平台一律 CGO_ENABLED=0；
+// 用 -ldflags="-s -w" 剥离符号表与 DWARF 调试信息，进一步减小二进制体积。
 func goBuild(dir, out string, p platform) error {
-	cmd := exec.Command("go", "build", "-o", out, ".")
+	cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GOOS="+p.GOOS,
