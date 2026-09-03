@@ -1,18 +1,24 @@
-# DSC 絕對插件化配置文件示例
-# 此文件展示了如何配置 LLM、Agent 和 Tool 插件
+# workspace_root: 統一工作空間根（也是 sandbox 文件保護邊界）。默認即以啟動 dsc 的
 
-# 工作區根目錄（可選）：默認以啟動 dsc 的目錄為根（在哪个目录启动，就以哪个目录
-# 为工作区，对齐 REX/Claude Code）。如需覆盖，请配置为绝对路径，例如
-# workspace_root: D:/work/project（相对路径配置不再参与决定根）。
-# workspace_root: ./workspace
+# 目錄為根（在哪个目录启动，就以哪个目录为工作区，对齐 REX/Claude Code）。
 
-# 默認 LLM 提供者（兼容舊配置）
-default_llm: llm-openai
+# 如需覆盖，请配置为绝对路径，例如 workspace_root: D:/work/project
 
-# 插件列表配置
+# （相对路径配置不再参与决定根）。
+
+default_llm: llm-anthropic
+# 上下文窗口容量（token 数）。不配置（0）时：若为本地 LLAMACPP 服务则探测其 /v1/models 的 n_ctx，
+
+# 探测失败则回退默认 128K（按 *1024 计，即 131072）。
+
+#context_window: 131072
+
+# 历史注入持久化编码（/settings history 写回）：-1 禁止（不注入历史）、0 未定义（默认不限制）、
+
+# >0 启用并注入最近 N 条。
+
+#history_injection: -1
 plugins:
-  # LLM 插件配置
-  # env 字段是環境變量的配置文件等價寫法：宿主環境變量與此處變量合併後傳給插件子進程，此處優先。
   - name: llm-anthropic
     type: llm
     binary_path: ./plugins/llm-anthropic/llm-anthropic.exe
@@ -20,27 +26,46 @@ plugins:
     env:
       ANTHROPIC_BASE_URL: "http://192.168.124.197:8008/"
       ANTHROPIC_MODEL: "Agentic-Turbo-Coder"
-
-  # 使用 OpenAI 兼容接口的示例（若需要可同時保留多個 LLM）
-  # - name: llm-openai
-  #   type: llm
-  #   binary_path: ./plugins/llm-openai/llm-openai.exe
-  #   enabled: false
-  #   env:
-  #     OPENAI_BASE_URL: "http://192.168.124.197:8008/v1"
-  #     OPENAI_MODEL: "Agentic-Turbo-Coder"
-
-  # Tool 插件配置（文件系統工具）
+      ANTHROPIC_API_KEY: "sk-your-real-key"
+  - name: llm-openai
+    type: llm
+    binary_path: ./plugins/llm-openai/llm-openai.exe
+    enabled: true
+    env:
+      OPENAI_BASE_URL: "http://192.168.124.197:8008/v1"
+      OPENAI_MODEL: "Agentic-Turbo-Coder"
+      OPENAI_API_KEY: "sk-your-real-key"
   - name: tool-filesystem
     type: tool
     binary_path: ./plugins/tool-filesystem/tool-filesystem.exe
     enabled: true
-
-  # Agent 插件配置
+  # 记忆服务：memory_search / memory_add 工具 + AfterTool 自动记忆钩子
+  - name: tool-memory-service
+    type: tool
+    binary_path: ./plugins/tool-memory-service/tool-memory-service.exe
+    enabled: true
+  # 通知音效：通用(dsc) 类型插件，经 Hook.OnEvent 程序性播放 success/error 完成音效
+  - name: dsc-notify
+    type: dsc
+    binary_path: ./plugins/dsc-notify/dsc-notify.exe
+    enabled: true
+  # LUA HOST：空壳工具插件，加载 LUA 脚本（运行已创建的工具；新脚本仅在创造模式生效）
+  - name: tool-lua-host
+    type: tool
+    binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
+    enabled: true
+  - name: tool-str-replace-editor
+    type: tool
+    binary_path: ./plugins/tool-str-replace-editor/tool-str-replace-editor.exe
+    enabled: true
   - name: agent-react-loop
     type: agent
     binary_path: ./plugins/agent-react-loop/agent-react-loop.exe
     enabled: true
     depends_on:
       llm: llm-anthropic
-      tools: [tool-filesystem]
+      tools: [tool-filesystem, tool-lua-host, tool-str-replace-editor]
+  - name: tool-musicplayer
+    type: tool
+    binary_path: ./plugins/tool-musicplayer/tool-musicplayer.exe
+    enabled: true
