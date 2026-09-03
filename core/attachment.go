@@ -44,20 +44,28 @@ func AttachmentDir() string {
 }
 
 // saveAttachment 把字节以内容寻址方式写入附件库并返回引用（纯哈希文件名）；
-// 同内容已存在时直接返回既有引用（去重不受扩展名影响）。
+// 同内容已存在时直接返回既有引用（去重不受扩展名影响）。已存在分支校验文件大小，
+// 大小与数据不符视为坏文件（如先前写入中断残留的部分文件）删除后重写，避免坏文件
+// 被内容寻址去重永久复用导致后续读到损坏内容。
 func saveAttachment(prefix string, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	name := hex.EncodeToString(sum[:])
 	ref := prefix + name
 	dir := AttachmentDir()
 	path := filepath.Join(dir, name)
-	if _, err := os.Stat(path); err == nil {
-		return ref, nil
+	if fi, err := os.Stat(path); err == nil {
+		if fi.Size() == int64(len(data)) {
+			return ref, nil
+		}
+		// 坏文件：大小不符（写入中断残留），删除后按新内容重写
+		os.Remove(path)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("创建附件库失败: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
+		// 写入失败清理残留，避免坏文件被后续内容寻址去重误复用
+		os.Remove(path)
 		return "", fmt.Errorf("写入附件失败: %w", err)
 	}
 	return ref, nil

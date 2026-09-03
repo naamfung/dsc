@@ -71,6 +71,45 @@ func TestSaveAndResolveImageAttachment(t *testing.T) {
 	}
 }
 
+// TestSaveAttachmentRewritesCorruptFile 坏文件（大小与数据不符的残留）不被内容寻址
+// 去重复用：保存时会识别大小不符、删除并重写为完整内容，解析回完整 data URL。
+func TestSaveAttachmentRewritesCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DSC_ATTACHMENT_DIR", dir)
+
+	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3}
+	sum := sha256SumHex(png)
+	path := filepath.Join(dir, sum)
+
+	// 预置一个内容相同哈希但大小不符的坏文件（模拟写入中断残留的部分文件）
+	if err := os.WriteFile(path, png[:4], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 保存同内容 → 应识别坏文件并重写为完整内容，而非直接复用
+	ref, err := SaveImageAttachment(png)
+	if err != nil {
+		t.Fatalf("SaveImageAttachment: %v", err)
+	}
+	if got := strings.TrimPrefix(ref, "dsc-img://"); got != sum {
+		t.Fatalf("ref = %q, want hash %s", ref, sum)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rewritten file: %v", err)
+	}
+	if string(data) != string(png) {
+		t.Fatalf("corrupt file not rewritten: got %d bytes, want %d", len(data), len(png))
+	}
+	url, err := ResolveImageRef(ref)
+	if err != nil {
+		t.Fatalf("ResolveImageRef after rewrite: %v", err)
+	}
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Fatalf("resolved url = %q, want complete png data url", url)
+	}
+}
+
 // TestResolveImageRefExtensionIrrelevant 同内容改后缀不影响命中（去重不受扩展名
 // 影响）：对同一引用追加假后缀仍按纯哈希读到同一文件。
 func TestResolveImageRefExtensionIrrelevant(t *testing.T) {
