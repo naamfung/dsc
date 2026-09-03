@@ -113,6 +113,27 @@ func TestResolveImageRefsPixPinSentence(t *testing.T) {
 	}
 }
 
+// TestTextRefCapFor 校验文本注入上限随上下文窗口容量换算，并收拢到 [min,max] 区间。
+func TestTextRefCapFor(t *testing.T) {
+	// 未知窗口 → 默认 1 MiB
+	if got := textRefCapFor(0); got != defaultTextRefCapBytes {
+		t.Fatalf("textRefCapFor(0) = %d, want %d", got, defaultTextRefCapBytes)
+	}
+	// 默认 128K 窗口（131072 token）→ cap = 131072*0.25*4 = 131072（约 128 KiB）
+	want := int(float64(128*1024) * textRefBudgetFraction * textRefBytesPerToken)
+	if got := textRefCapFor(128 * 1024); got != want {
+		t.Fatalf("textRefCapFor(128k) = %d, want %d", got, want)
+	}
+	// 异常小窗口 → 抬到下限 minTextRefCapBytes
+	if got := textRefCapFor(1024); got != minTextRefCapBytes {
+		t.Fatalf("textRefCapFor(1k) = %d, want min %d", got, minTextRefCapBytes)
+	}
+	// 异常大窗口 → 收到上限 maxTextRefCapBytes
+	if got := textRefCapFor(1 << 26); got != maxTextRefCapBytes {
+		t.Fatalf("textRefCapFor(64M) = %d, want max %d", got, maxTextRefCapBytes)
+	}
+}
+
 // TestResolveFileRefsText 校验 @文本文件 与图像读取方式对齐，生成 dsc-txt:// 内容
 // 寻址引用；二进制（含 NUL）/目录/缺失路径忽略保留文字。
 func TestResolveFileRefsText(t *testing.T) {
