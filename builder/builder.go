@@ -126,6 +126,8 @@ func main() {
 		os.Exit(1)
 	}
 	printInfo(fmt.Sprintf("当前平台: %s (%s/%s)\n\n", host.Name, host.GOOS, host.GOARCH))
+	// 每次打包先整体清空 dist/，杜绝上一轮残留混入
+	removeAll(filepath.Join(repoRoot, "dist"))
 	buildPlatform(repoRoot, *host, false)
 	printSuccess(fmt.Sprintf("\n=== 打包完成: dist/dsc-for-%s ===\n", host.Name))
 }
@@ -205,6 +207,8 @@ func clean(repoRoot string) {
 // crossBuild 跨平台打包
 func crossBuild(repoRoot string, args []string) {
 	printInfo(fmt.Sprintf("=== DSC 跨平台打包（无需 Docker） ===\n仓库根: %s\n\n", repoRoot))
+	// 每次打包先整体清空 dist/，杜绝上一轮残留混入
+	removeAll(filepath.Join(repoRoot, "dist"))
 
 	buildAll := true
 	includeInternal := false
@@ -403,24 +407,27 @@ func buildWebUIAssets(repoRoot string) bool {
 	if webuiBuilt {
 		return true
 	}
-	if hasTool("bash") && hasTool("bun") {
-		webuiDir := filepath.Join(repoRoot, "plugins", "tool-harness-webui")
-		if _, err := os.Stat(filepath.Join(webuiDir, "webui", "package.json")); err != nil {
-			return false
-		}
-		printInfo("  构建 harness-webui 前端 (bun)...\n")
-		cmd := exec.Command("bash", "-lc", "(cd plugins/tool-harness-webui/webui && bun install >/dev/null 2>&1 || bun install >/dev/null; bunx svelte-kit sync >/dev/null 2>&1; bun run build)")
-		cmd.Dir = repoRoot
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			printWarning(fmt.Sprintf("  前端构建失败: %v\n", err))
-			return false
-		}
-		webuiBuilt = true
-		return true
+	if !hasTool("bash") || !hasTool("bun") {
+		return false
 	}
-	return false
+	webuiDir := filepath.Join(repoRoot, "plugins", "tool-harness-webui", "webui")
+	if _, err := os.Stat(filepath.Join(webuiDir, "package.json")); err != nil {
+		return false
+	}
+	printInfo("  构建 harness-webui 前端 (bun)...\n")
+	// 用绝对前端目录作为 cwd（bash -c，非 login shell），避免 -l 触发 profile 改写 cwd
+	// 导致相对 cd 失效
+	cmd := exec.Command("bash", "-c",
+		"bun install >/dev/null 2>&1 || bun install >/dev/null; bunx svelte-kit sync >/dev/null 2>&1; bun run build")
+	cmd.Dir = webuiDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		printWarning(fmt.Sprintf("  前端构建失败: %v\n", err))
+		return false
+	}
+	webuiBuilt = true
+	return true
 }
 
 // ========== 工具函数 ==========
