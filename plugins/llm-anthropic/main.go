@@ -61,8 +61,10 @@ func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []
 		case "system":
 			systemMsg = m.Content
 		case "user":
-			if p.vision && len(m.Images) > 0 {
-				blocks, usesFile := p.imageBlocks(m.Content, m.Images)
+			if len(m.Images) > 0 {
+				// 多模态分支：文本块 + 文件附件块（图像受 p.vision 门控；
+				// dsc-txt 文本引用不受视觉限制，始终注入）
+				blocks, usesFile := p.fileContentBlocks(m.Content, m.Images)
 				if usesFile {
 					usesBetaHeader = true
 				}
@@ -168,18 +170,32 @@ func isDeepSeekEndpoint(baseURL string) bool {
 	return strings.Contains(baseURL, "deepseek.com")
 }
 
-// imageBlocks 构造用户消息的多模态内容块：文本块 + 每张图像的 image 块。
-// 图像引用（dsc-img:// 或 data URL）先解析为 base64 data URL；单图解码后不超过
-// 内联上限时用 base64 源；超限且 DeepSeek Files API 可用时自动上传并以 file 源
-// 引用 file_id（请求需带 anthropic-beta 头）。返回内容块与是否使用了 file 源。
-func (p *AnthropicProvider) imageBlocks(text string, images []string) ([]anthropic.ContentBlockParamUnion, bool) {
-	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(images)+1)
+// fileContentBlocks 构造用户消息的多模态内容块：文本块 + 文件附件块。
+// 文本引用（dsc-txt://）读取内容作为纯文本块注入，不受视觉限制；图像引用
+// （dsc-img:// 或 data URL）先解析为 base64 data URL，单图解码后不超过内联上限
+// 时用 base64 源、超限且 DeepSeek Files API 可用时自动上传并以 file 源引用 file_id
+// （请求需带 anthropic-beta 头）；图像仅当视觉开启（p.vision）。返回内容块与
+// 是否使用了 file 源。
+func (p *AnthropicProvider) fileContentBlocks(text string, refs []string) ([]anthropic.ContentBlockParamUnion, bool) {
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(refs)+1)
 	usesFile := false
 	if text != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(text))
 	}
-	for _, img := range images {
-		url, err := core.ResolveImageRef(img)
+	for _, ref := range refs {
+		if strings.HasPrefix(ref, core.TextRefPrefix) {
+			content, err := core.ResolveTextRef(ref)
+			if err != nil {
+				log.Printf("⚠️ 忽略无法解析的文本引用: %v", err)
+				continue
+			}
+			blocks = append(blocks, anthropic.NewTextBlock(content))
+			continue
+		}
+		if !p.vision {
+			continue // 视觉关闭：跳过图像引用
+		}
+		url, err := core.ResolveImageRef(ref)
 		if err != nil {
 			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
 			continue

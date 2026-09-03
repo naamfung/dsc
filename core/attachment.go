@@ -18,6 +18,10 @@ import (
 // 引用 file_id）。
 const imageRefPrefix = "dsc-img://"
 
+// TextRefPrefix 文本附件的引用前缀（与 @ 补全的图片引用平行：文件字节写入内容
+// 寻址附件库，会话/LLM 以 dsc-txt://<sha256> 引用读取内容，对齐图像 dsc-img://）。
+const TextRefPrefix = "dsc-txt://"
+
 // 常见图片格式的魔数（用于从字节嗅探 MIME，避免把类型编进文件名）。
 var (
 	pngSig  = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
@@ -39,13 +43,12 @@ func AttachmentDir() string {
 	return "attachments"
 }
 
-// SaveImageAttachment 把图片字节以内容寻址方式写入附件库并返回引用
-// （dsc-img://<sha256>，文件名纯哈希不带后缀）；同内容已存在时直接返回既有引用
-// （去重不受扩展名影响）。
-func SaveImageAttachment(data []byte) (string, error) {
+// saveAttachment 把字节以内容寻址方式写入附件库并返回引用（纯哈希文件名）；
+// 同内容已存在时直接返回既有引用（去重不受扩展名影响）。
+func saveAttachment(prefix string, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	name := hex.EncodeToString(sum[:])
-	ref := imageRefPrefix + name
+	ref := prefix + name
 	dir := AttachmentDir()
 	path := filepath.Join(dir, name)
 	if _, err := os.Stat(path); err == nil {
@@ -58,6 +61,19 @@ func SaveImageAttachment(data []byte) (string, error) {
 		return "", fmt.Errorf("写入附件失败: %w", err)
 	}
 	return ref, nil
+}
+
+// SaveImageAttachment 把图片字节以内容寻址方式写入附件库并返回引用
+// （dsc-img://<sha256>，文件名纯哈希不带后缀）；同内容已存在时直接返回既有引用
+// （去重不受扩展名影响）。
+func SaveImageAttachment(data []byte) (string, error) {
+	return saveAttachment(imageRefPrefix, data)
+}
+
+// SaveTextAttachment 把文本字节以内容寻址方式写入附件库并返回 dsc-txt://<sha256>
+// 引用（同内容去重）；供 @文本文件 引用注入模型读取。
+func SaveTextAttachment(data []byte) (string, error) {
+	return saveAttachment(TextRefPrefix, data)
 }
 
 // ResolveImageRef 把图像引用解析为 data:image/<mime>;base64,... 数据 URL。
@@ -101,6 +117,24 @@ func readAttachment(sha, legacy string) ([]byte, error) {
 		}
 	}
 	return nil, os.ErrNotExist
+}
+
+// ResolveTextRef 把文本附件引用（dsc-txt://<sha256>，兼容旧版带后缀）解析为文本
+// 内容字符串，供 LLM 插件把 @文本文件 内容注入请求。
+func ResolveTextRef(ref string) (string, error) {
+	if !strings.HasPrefix(ref, TextRefPrefix) {
+		return "", fmt.Errorf("不支持的文本引用: %s", ref)
+	}
+	name := strings.TrimPrefix(ref, TextRefPrefix)
+	sha := name
+	if i := strings.IndexByte(sha, '.'); i > 0 {
+		sha = sha[:i]
+	}
+	data, err := readAttachment(sha, name)
+	if err != nil {
+		return "", fmt.Errorf("读取文本附件 %s 失败: %w", sha, err)
+	}
+	return string(data), nil
 }
 
 // sniffImageMime 由字节魔数嗅探图片 MIME（JPEG/PNG/GIF/WebP；未知返回

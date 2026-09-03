@@ -17,7 +17,7 @@ import (
 func TestImageContentPartsInline(t *testing.T) {
 	p := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
 	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("hello"))
-	parts := p.imageContentParts("描述一下", []string{url})
+	parts := p.fileContentBlocks("描述一下", []string{url})
 
 	if len(parts) != 2 {
 		t.Fatalf("want text + image parts, got %d", len(parts))
@@ -40,7 +40,7 @@ func TestImageContentPartsRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
-	parts := p.imageContentParts("", []string{ref})
+	parts := p.fileContentBlocks("", []string{ref})
 	if len(parts) != 1 || parts[0].Type != openai.ChatMessagePartTypeImageURL {
 		t.Fatalf("ref should resolve to image_url, got %+v", parts)
 	}
@@ -49,21 +49,41 @@ func TestImageContentPartsRef(t *testing.T) {
 	}
 }
 
-// TestToOpenAIMessagesVisionGating 视觉关闭时图片不进入 MultiContent，保持纯文本
-// Content；视觉开启时才构造多模态 content 数组。
+// TestToOpenAIMessagesVisionGating 视觉关闭时图像引用被跳过（仅留文本块）；视觉
+// 开启时才构造含图像的完整多模态 content 数组。文本引用（dsc-txt）不受视觉门控。
 func TestToOpenAIMessagesVisionGating(t *testing.T) {
 	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("x"))
 
 	off := &OpenAIProvider{vision: false}
 	msgs := off.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "hi", Images: []string{url}}})
-	if len(msgs[0].MultiContent) != 0 || msgs[0].Content != "hi" {
-		t.Fatalf("vision off should keep plain content, got %+v", msgs[0])
+	if len(msgs[0].MultiContent) != 1 || msgs[0].MultiContent[0].Text != "hi" {
+		t.Fatalf("vision off should keep text block (image skipped), got %+v", msgs[0])
+	}
+	if msgs[0].Content != "" {
+		t.Fatalf("vision off multimodal should not set Content, got %q", msgs[0].Content)
 	}
 
 	on := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
 	msgs = on.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "hi", Images: []string{url}}})
 	if len(msgs[0].MultiContent) != 2 {
 		t.Fatalf("vision on should build multimodal content, got %+v", msgs[0])
+	}
+}
+
+// TestTextRefInjected 文本附件引用（dsc-txt://）即使视觉关闭也会作为文本块注入。
+func TestTextRefInjected(t *testing.T) {
+	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
+	ref, err := core.SaveTextAttachment([]byte("音乐插件状态：播放中"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := &OpenAIProvider{vision: false}
+	msgs := off.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "看看这个", Images: []string{ref}}})
+	if len(msgs[0].MultiContent) != 2 {
+		t.Fatalf("text ref should inject as text block even without vision, got %+v", msgs[0])
+	}
+	if msgs[0].MultiContent[1].Text != "音乐插件状态：播放中" {
+		t.Fatalf("text block content = %q", msgs[0].MultiContent[1].Text)
 	}
 }
 

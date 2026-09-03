@@ -140,9 +140,9 @@ func loadBinaryPath(cfgPath string, defaultRel string) string {
 
 // runOneTurn 以与 TUI 内部一致的 RunStream 方式运行一组输入（不渲染 TUI），
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
-// 输入中的 @图片路径 引用与 TUI 一致解析为图像附件（对齐 DSH：引用入附件库）。
+// 输入中的 @文件引用 与 TUI 一致解析为附件（图片→dsc-img 多模态，文本→dsc-txt 注入）。
 func runOneTurn(agent core.Agent, ctx context.Context, input string) int {
-	ch, err := agent.RunStream(ctx, input, tui.ResolveImageRefs(input))
+	ch, err := agent.RunStream(ctx, input, tui.ResolveFileRefs(input))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
 		return 1

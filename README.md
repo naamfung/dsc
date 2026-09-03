@@ -171,9 +171,11 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
   `DSC_NO_VISION=1` 可强制关闭（自动判断失灵时的逃生口）；
   附件库根目录可用 `DSC_ATTACHMENT_DIR` 覆盖（缺省 `<ExecDir>/attachments`）。
 
-TUI 输入中以 `@图片路径` 引用本地图片（支持 `/workspace` 虚拟根别名与绝对路径），
-该图会作为附件随本轮（或运行中注入）发送给模型；`@` 引用的文字本身仍作为提示传给
-模型。
+TUI 输入中以 `@文件路径` 引用本地文件（支持 `/workspace` 虚拟根别名与绝对路径），
+与图像读取方式对齐：图片文件（`dsc-img://`）作为多模态 image 块随本轮（或运行中
+注入）发送给模型；**文本文件**（`dsc-txt://`，含 NUL 嗅探判二进制、约 1 MiB 上限）
+则把文件内容作为文本块注入请求，供模型直接读取文字而无需用 shell/编辑器再去打开；
+二者 `@` 引用的文字本身仍作为提示传给模型。
 
 TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对齐 REX：目录优先、可下钻，
 `↑/↓` 选择、`Tab`/`Enter` 补全、`Esc` 关闭），随输入过滤并在选中后以
@@ -203,7 +205,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 - `tool-ssh`（SSH 远程命令执行终端：`ssh_connect` / `ssh_exec` / `ssh_list` / `ssh_close` 四类持久会话，登录支持密码或私钥，会话按 id 缓存复用，方便模型在远程主机上连续执行命令）
 
-- `tool-musicplayer`（后台音乐播放器：`music_play` / `music_stop` / `music_setdir`，异步播放 MP3/WAV 文件或目录、单曲/列表循环、音量百分比调节（0-100）；`music_setdir` 持久化默认播放目录到 `~/.dsc/musicplayer_src.txt`，`music_play` 的 path 可省略以用默认目录）
+- `tool-musicplayer`（后台音乐播放器：`music_play` / `music_stop` / `music_status` / `music_setdir`，异步播放 MP3/WAV 文件或目录、单曲/列表循环、随机播放（shuffle）、音量百分比调节；`music_setdir` 持久化默认播放目录到 `~/.dsc/musicplayer_src.txt`，`music_play` 的 path 可省略以用默认目录，`music_status` 查询播放模式/当前曲目/时长/音量）
 
 ### Policy 插件
 
