@@ -126,8 +126,7 @@ func main() {
 		os.Exit(1)
 	}
 	printInfo(fmt.Sprintf("当前平台: %s (%s/%s)\n\n", host.Name, host.GOOS, host.GOARCH))
-	// 每次打包先整体清空 dist/，杜绝上一轮残留混入
-	removeAll(filepath.Join(repoRoot, "dist"))
+	// 单平台默认打包只重建当前平台目录，不动其它平台的发布目录（clean 命令可整体清空 dist）
 	buildPlatform(repoRoot, *host, false)
 	printSuccess(fmt.Sprintf("\n=== 打包完成: dist/dsc-for-%s ===\n", host.Name))
 }
@@ -207,8 +206,6 @@ func clean(repoRoot string) {
 // crossBuild 跨平台打包
 func crossBuild(repoRoot string, args []string) {
 	printInfo(fmt.Sprintf("=== DSC 跨平台打包（无需 Docker） ===\n仓库根: %s\n\n", repoRoot))
-	// 每次打包先整体清空 dist/，杜绝上一轮残留混入
-	removeAll(filepath.Join(repoRoot, "dist"))
 
 	buildAll := true
 	includeInternal := false
@@ -258,6 +255,12 @@ func crossBuild(repoRoot string, args []string) {
 			printError("错误: 没有有效的平台可供打包\n")
 			os.Exit(1)
 		}
+	}
+
+	// 构建所有平台时才整体清空 dist/（本轮全部平台都会重建）；--platforms 指定子集
+	// 时不动其它平台目录，仅由 buildPlatform 重建各自目录
+	if buildAll {
+		removeAll(filepath.Join(repoRoot, "dist"))
 	}
 
 	fmt.Printf("Go 版本: %s\n", goVersion())
