@@ -371,3 +371,12 @@ func (c *llmGRPCClient) HealthCheck(ctx context.Context) error {
 	}
 	return nil
 }
+
+// VisionEnabled 实现 LLMProvider——宿主侧客户端仅需满足接口（真实视觉能力由
+// 服务端 llmMetadataServer.GetInfo 上报 capabilities，TUI 经 GetPluginMetadata 读取），
+// 故此处恒返回 true。
+func (c *llmGRPCClient) VisionEnabled() bool { return true }
+
+// 编译期守卫：确保 llmGRPCClient 完整实现 LLMProvider 接口。此前漏加方法仅导致
+// 运行时 raw.(LLMProvider) 断言失败（编译不报、运行才炸），此断言把问题前移到编译期。
+var _ LLMProvider = (*llmGRPCClient)(nil)
