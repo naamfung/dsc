@@ -19,9 +19,46 @@ var imageExtMIME = map[string]string{
 	".webp": "image/webp",
 }
 
-// maxTextRefBytes @ 文本引用注入的字节上限：超过则跳过（保留 @路径 文字），
-// 避免超大文件把上下文撑爆。
-const maxTextRefBytes = 1 << 20 // 1 MiB
+// 文本引用注入上限的默认/边界（字节）。
+const (
+	// defaultTextRefCapBytes 窗口未知时的默认上限 1 MiB。
+	defaultTextRefCapBytes = 1 << 20
+	// minTextRefCapBytes 下限（64 KiB）：保证小文件总可注入，不因窗口过小被拒。
+	minTextRefCapBytes = 1 << 16
+	// maxTextRefCapBytes 上限（16 MiB）：防空荡，异常大窗口也不撑爆上下文。
+	maxTextRefCapBytes = 1 << 24
+	// textRefBudgetFraction 文本注入占上下文窗口 token 预算的比例（约 25%）。
+	textRefBudgetFraction = 0.25
+	// textRefBytesPerToken 字节/token 换算（保守，中文更长、此值偏安全）。
+	textRefBytesPerToken = 4
+)
+
+// textRefCapBytes @ 文本引用注入的字节上限（动态）：由上下文窗口容量换算，宿主启动
+// 经 SetTextRefContextWindow 设定；超过上限的文件跳过（保留 @路径 文字），避免把
+// 上下文撑爆。
+var textRefCapBytes int64 = defaultTextRefCapBytes
+
+// SetTextRefContextWindow 按上下文窗口容量（token 数）重算文本引用注入上限，宿主
+// 确定 contextWindow 后调用（TUI 与 -input 共用）。窗口未知/非正时保持默认 1 MiB。
+func SetTextRefContextWindow(contextWindow int) {
+	textRefCapBytes = int64(textRefCapFor(contextWindow))
+}
+
+// textRefCapFor 由上下文窗口容量（token）计算文本注入字节上限：取窗口 token 预算的
+// 一定比例并换算为字节，收拢到 [min, max] 区间。
+func textRefCapFor(contextWindow int) int {
+	if contextWindow <= 0 {
+		return defaultTextRefCapBytes
+	}
+	cap := int(float64(contextWindow)*textRefBudgetFraction*textRefBytesPerToken + 0.5)
+	if cap < minTextRefCapBytes {
+		cap = minTextRefCapBytes
+	}
+	if cap > maxTextRefCapBytes {
+		cap = maxTextRefCapBytes
+	}
+	return cap
+}
 
 // refPaths 从输入行解析全部 @ 引用为去重后的绝对路径列表（图片/文本/其它）。
 // 含空格路径可用反斜杆转义（@ 补全菜单的插入形式）保持单一 token。
@@ -188,8 +225,8 @@ func saveTextAttachment(path string) (string, error) {
 	if err != nil || info.IsDir() {
 		return "", os.ErrNotExist
 	}
-	if info.Size() > maxTextRefBytes {
-		return "", os.ErrPermission // 超限视为不可注入
+	if info.Size() > textRefCapBytes {
+		return "", os.ErrPermission // 超出上下文容量预算：视为不可注入
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

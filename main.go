@@ -575,6 +575,8 @@ func main() {
 		contextWindow = defaultContextWindow
 	}
 	logger.Info("context window", "window", contextWindow)
+	// 文本引用注入上限随上下文容量换算（TUI 与 -input 共用；窗口未知保持默认 1 MiB）
+	tui.SetTextRefContextWindow(contextWindow)
 
 	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy/dsc
 	// （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_dsc_plugin
