@@ -3,6 +3,9 @@
 *.exe
 *.sh
 plugins/*/dsc-plugin-*
+!plugins/*/dsc-plugin-*.*
+plugins/*/dsc-plugin-*.exe
+plugins/*/dsc-plugin-*.exe~
 plugins/tool-harness-webui/tool-harness-webui
 
 # 放行仓库自带的构建/清理脚本（须位于 *.sh 之后才生效）
