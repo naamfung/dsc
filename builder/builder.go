@@ -292,6 +292,9 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 
 	binExt := func(name string) string { return name + p.Suffix }
 
+	// 先清空该平台发布目录，避免上次构建残留（如旧备份目录、旧二进制）混入
+	removeAll(releaseDir)
+
 	// 1. 准备发布目录骨架
 	mustMkdirs(releaseDir,
 		filepath.Join(releaseDir, "config", "presets"),
@@ -459,7 +462,13 @@ func copyFileStrict(src, dst string) {
 	}
 }
 
-// copyDir 递归拷贝目录（含空目录结构），源不存在则忽略。
+// isBackupDir 判为备份性质目录：目录名含 "backup"（如 config-backups、preset-backups
+// 等配置自愈产生的备份），发布时一律排除，不进入发布包。
+func isBackupDir(name string) bool {
+	return strings.Contains(strings.ToLower(name), "backup")
+}
+
+// copyDir 递归拷贝目录（含空目录结构），跳过任何备份性质目录；源不存在则忽略。
 func copyDir(src, dst string) {
 	info, err := os.Stat(src)
 	if err != nil || !info.IsDir() {
@@ -468,6 +477,10 @@ func copyDir(src, dst string) {
 	_ = filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return nil
+		}
+		// 跳过备份性质目录整棵，不复制其内容
+		if fi.IsDir() && path != src && isBackupDir(fi.Name()) {
+			return filepath.SkipDir
 		}
 		rel, _ := filepath.Rel(src, path)
 		target := filepath.Join(dst, rel)
