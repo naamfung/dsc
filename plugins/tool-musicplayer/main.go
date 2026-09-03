@@ -32,7 +32,40 @@ var (
 
 	pbMu     sync.Mutex
 	pbCancel context.CancelFunc // 当前播放任务取消句柄；新播放先取消旧任务
+
+	statusMu sync.Mutex
+	playStat playStatus // 当前播放状态（由 runLoop/music_play 维护、music_status 查询）
 )
+
+// playStatus 记录当前播放状态，供 music_status 工具查询。
+type playStatus struct {
+	playing bool
+	loop    string
+	volume  int
+	src     string        // 来源展示串（文件或「目录（N 首）」）
+	song    string        // 当前曲目完整路径
+	total   time.Duration // 当前曲目总时长
+	started time.Time     // 当前曲目开始播放时刻（计算已播时长）
+}
+
+// setPlayStat 在锁内更新播放状态。
+func setPlayStat(fn func(*playStatus)) {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	fn(&playStat)
+}
+
+// MusicStatusResult music_status 工具的返回结构。
+type MusicStatusResult struct {
+	Playing  bool   `json:"playing"`
+	Loop     string `json:"loop,omitempty"`
+	Volume   int    `json:"volume,omitempty"`
+	Song     string `json:"song,omitempty"` // 当前曲目文件名（不含路径）
+	Path     string `json:"path,omitempty"`
+	Src      string `json:"src,omitempty"`
+	Duration int64  `json:"duration_seconds,omitempty"` // 当前曲目总时长（秒）
+	Elapsed  int64  `json:"elapsed_seconds,omitempty"`  // 已播时长（秒）
+}
 
 // ---------- 默认播放目录 ----------
 
@@ -131,8 +164,10 @@ type decodedTrack struct {
 // runLoop 按循环策略顺序播放文件列表（files 已过滤并排序）。
 // 下一首在后台预解码（prefetch），消除曲间因解码造成的静默等待。
 // loop=off 播完一轮即止；loop=one/list 循环播放直到被停止。
-func runLoop(ctx context.Context, files []string, loop string, vol float64) {
+// 每曲播放前更新 playStat（供 music_status 查询）；被停止/结束时置 playing=false。
+func runLoop(ctx context.Context, files []string, loop string, volumePercent int) {
 	count := len(files)
+	vol := float64(volumePercent) / 100.0
 
 	// prefetchCh 容量 1：后台预解码下一首，播放当前期间即完成解码
 	prefetchCh := make(chan decodedTrack, 1)
@@ -163,21 +198,39 @@ func runLoop(ctx context.Context, files []string, loop string, vol float64) {
 
 		if cur.err != nil {
 			log.Printf("❌ 播放失败 %s: %v", files[idx], cur.err)
-		} else if err := playPCM(ctx, cur.pcm, vol); err == context.Canceled {
-			log.Printf("⏹ 已停止播放")
-			return
-		} else if err != nil {
-			log.Printf("❌ 播放失败 %s: %v", files[idx], err)
+		} else {
+			setPlayStat(func(s *playStatus) {
+				s.playing = true
+				s.loop = loop
+				s.volume = volumePercent
+				s.song = files[idx]
+				s.total = pcmDuration(cur.pcm)
+				s.started = time.Now()
+			})
+			if err := playPCM(ctx, cur.pcm, vol); err == context.Canceled {
+				setPlayStat(func(s *playStatus) { s.playing = false; s.song = "" })
+				log.Printf("⏹ 已停止播放")
+				return
+			} else if err != nil {
+				log.Printf("❌ 播放失败 %s: %v", files[idx], err)
+			}
 		}
 
 		// loop=off：一整轮（count 个文件）播完后自然结束
 		if loop == "off" && idx == count-1 {
+			setPlayStat(func(s *playStatus) { s.playing = false; s.song = "" })
 			log.Printf("✅ 播放队列结束（共 %d 首）", count)
 			return
 		}
 
-		// 取下首预解码结果
-		cur = <-prefetchCh
+		// 取下首预解码结果；被停止时立即返回，避免阻塞在 prefetchCh 上导致
+		// runLoop 泄漏（prefetch 协程遇 ctx 取消不会向 channel 发送）。
+		select {
+		case cur = <-prefetchCh:
+		case <-ctx.Done():
+			setPlayStat(func(s *playStatus) { s.playing = false; s.song = "" })
+			return
+		}
 	}
 }
 
@@ -417,12 +470,13 @@ func main() {
 			pbCancel = cancel
 			pbMu.Unlock()
 
-			go runLoop(ctx, files, p.Loop, float64(volume)/100.0)
-
 			src := p.Path
 			if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
 				src = fmt.Sprintf("%s（%d 首）", p.Path, len(files))
 			}
+			setPlayStat(func(s *playStatus) { s.src = src })
+			go runLoop(ctx, files, p.Loop, volume)
+
 			volDesc := fmt.Sprintf("%d%%", volume)
 			if p.Volume != nil && *p.Volume == -1 {
 				volDesc = "静音(-1)"
@@ -438,6 +492,35 @@ func main() {
 		Handler: func(_ context.Context, _ json.RawMessage) (string, error) {
 			stopCurrentPlayback()
 			return "⏹ 已停止音乐播放", nil
+		},
+	})
+
+	sdk.Tool(dsc.Tool{
+		Name:        "music_status",
+		Description: "查询当前音乐播放状态：playing 是否在播；loop 播放模式 off/one/list；song 当前曲目文件名、path 完整路径、duration_seconds 曲目总时长、elapsed_seconds 已播时长（未在播为 0）；volume 音量 1-100；src 播放来源。未在播放时 playing=false、song 为空。",
+		Schema:      json.RawMessage(`{"type":"object","properties":{}}`),
+		Handler: func(_ context.Context, _ json.RawMessage) (string, error) {
+			statusMu.Lock()
+			s := playStat
+			statusMu.Unlock()
+			res := MusicStatusResult{
+				Playing:  s.playing,
+				Loop:     s.loop,
+				Volume:   s.volume,
+				Song:     filepath.Base(s.song),
+				Path:     s.song,
+				Src:      s.src,
+				Duration: int64(s.total.Seconds()),
+			}
+			if s.playing && !s.started.IsZero() {
+				el := time.Since(s.started)
+				if el > s.total {
+					el = s.total
+				}
+				res.Elapsed = int64(el.Seconds())
+			}
+			b, _ := json.Marshal(res)
+			return string(b), nil
 		},
 	})
 
