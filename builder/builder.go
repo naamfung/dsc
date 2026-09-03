@@ -177,7 +177,8 @@ func printHelp(progName string) {
     其余平台这些插件目录不生成（发布包内不含其可执行文件）。
   - tool-harness-webui 插件需宿主平台有 bash + bun 先构建前端（go:embed），
     环境缺失时该插件被跳过。
-  - 内部专用插件默认不打包，需 --include-internal 才纳入。
+  - 本机内部专用插件默认不打包，需 --include-internal 才纳入。
+  - 本机存在 upx 时，对宿主与各插件二进制自动 UPX --best 压缩（未检测到则跳过）。
 
 示例:
   %s cross                         # 打包所有平台
@@ -308,12 +309,18 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 	copyFileStrict(filepath.Join(repoRoot, "README.md"), filepath.Join(releaseDir, "README.md"))
 
 	// 3. 编译宿主主程序 → 发布目录根
+	if !hasTool("upx") {
+		printInfo("（未检测到 upx，跳过 UPX 压缩）\n")
+	} else {
+		printInfo("检测到 upx，构建产物将 UPX 压缩（--best）\n")
+	}
 	hostOut := filepath.Join(releaseDir, binExt("dsc"))
 	if err := goBuild(repoRoot, hostOut, p); err != nil {
 		printError(fmt.Sprintf("  ✗ 宿主编译失败: %v\n", err))
 		return false
 	}
 	printSuccess(fmt.Sprintf("  ✓ 宿主: %s\n", relativeHost(repoRoot, hostOut)))
+	pack(hostOut)
 
 	// 4. 编译各插件 → plugins/<name>/<name>[.exe]
 	plugins := append([]string{}, publicPlugins...)
@@ -345,6 +352,7 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 			continue
 		}
 		printSuccess(fmt.Sprintf("  ✓ 插件: %s\n", name))
+		pack(out)
 		builtPlugins++
 	}
 	if len(skippedPlugins) > 0 {
@@ -366,6 +374,22 @@ func goBuild(dir, out string, p platform) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// pack UPX 压缩单个二进制到 --best；未检测到 upx 或文件不存在/压缩失败时均保留原文件。
+func pack(path string) {
+	if !hasTool("upx") {
+		return
+	}
+	if fi, err := os.Stat(path); err != nil || fi.IsDir() {
+		return
+	}
+	cmd := exec.Command("upx", "--best", path)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		printWarning(fmt.Sprintf("  (warn: UPX 压缩失败，保留原始二进制: %s)\n", path))
+	}
 }
 
 // buildWebUIAssets 在宿主平台用 bash+bun 构建 harness-webui 前端静态资源（go:embed 用）。
