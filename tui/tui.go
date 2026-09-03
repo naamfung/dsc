@@ -800,15 +800,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.completion = completion{}
 			m.wakeBudget = maxConsecutiveWakes // 用户消息恢复唤醒预算（对齐 DSH）
 			// 解析 @文件引用（图片→dsc-img 多模态；文本→dsc-txt 注入内容）；解析出
-			// 图片但当前 LLM 不支持图像时明确提示，避免静默丢图（纯文本引用不提示）
-			images := ResolveFileRefs(text)
-			warning := ""
+			// 图片但当前 LLM 不支持图像时明确提示，避免静默丢图（纯文本引用不提示）；
+			// @图片 解析失败（文件缺失/附件库写失败等）同样可见提示，供诊断
+			images, imgFailures := resolveRefsDetailed(text)
+			var warns []string
 			for _, ref := range images {
 				if strings.HasPrefix(ref, "dsc-img://") && !m.llmSupportsImages() {
-					warning = "⚠️ 图片未随消息发送：当前模型不支持图像输入"
+					warns = append(warns, "⚠️ 图片未随消息发送：当前模型不支持图像输入")
 					break
 				}
 			}
+			warning := strings.Join(append(warns, imgFailures...), "\n")
 			if inRunning {
 				// 正在工作：不作为新轮，而是把消息实时注入会话历史（不停止当前工作），
 				// 本地即刻渲染用户气泡；流式通道继续保持泵取。轮次编号由 agent 流帧
