@@ -104,17 +104,34 @@ func ResolveImageRefs(line string) []string {
 // → dsc-txt://<sha256>（内容注入为文本块）。仅当文件存在且可读、尺寸未超限；目录、
 // 二进制、缺失路径一律忽略，保持 @路径 以文字传给模型作为引用。
 func ResolveFileRefs(line string) []string {
-	var refs []string
+	refs, _ := resolveRefsDetailed(line)
+	return refs
+}
+
+// resolveRefsDetailed 解析输入行中的 @ 附底：一并返回成功引用与「图片扩展名但未能
+// 生成图像附件」的失败提示（供 TUI 提示用户，避免 @图片 被静默丢弃后无从诊断）。
+func resolveRefsDetailed(line string) (refs, failures []string) {
 	for _, p := range refPaths(line) {
 		if ref, err := saveImageAttachment(p); err == nil {
 			refs = append(refs, ref)
+			continue
+		} else if isImageExt(p) {
+			// 已知图片扩展名（png/jpg/jpeg/gif/webp）却未能生成图像附件
+			// → 记失败（如文件不存在/不可读、附件库写失败），供 TUI 提示
+			failures = append(failures, "⚠️ 图片未解析: @"+p+"（"+err.Error()+"）")
 			continue
 		}
 		if ref, err := saveTextAttachment(p); err == nil {
 			refs = append(refs, ref)
 		}
 	}
-	return refs
+	return
+}
+
+// isImageExt 路径是否为已知图片扩展名（对齐 imageExtMIME 支持的视觉范围）。
+func isImageExt(path string) bool {
+	_, ok := imageExtMIME[strings.ToLower(filepath.Ext(path))]
+	return ok
 }
 
 // splitRefTokens 按空白与句读标点把一行拆成 @ token：反斜杆转义的空白（@ 补全

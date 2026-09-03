@@ -174,3 +174,30 @@ func TestResolveFileRefsText(t *testing.T) {
 		t.Fatalf("缺失文件不应生成引用，got %v", refs)
 	}
 }
+
+// TestUnresolvedImageRefsFailure 校验 @图片 解析失败（已存在的图、缺失的图）会经
+// resolveRefsDetailed 如实返回失败提示，供 TUI 提示用户而不静默丢图。
+func TestUnresolvedImageRefsFailure(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
+	// 使图片文件不可读（目录）→ saveImageAttachment 失败，当作解析失败暴露
+	sub := filepath.Join(dir, "shot.png")
+	_ = os.MkdirAll(sub, 0o755)
+	t.Setenv("DSC_WORKSPACE_ROOT", dir)
+
+	refs, fails := resolveRefsDetailed("@shot.png 看图")
+	if len(refs) != 0 {
+		t.Fatalf("图片解析失败时不应返回图片引用，got %v", refs)
+	}
+	if len(fails) != 1 || !strings.Contains(fails[0], "图片未解析") {
+		t.Fatalf("应返回图片解析失败提示，got %v", fails)
+	}
+
+	// 缺失的图片 → 同样失败提示；缺失的非图片 → 不提示（普通 @ 文字引用不过度打扰）
+	if _, fails := resolveRefsDetailed("@no_such.png"); len(fails) != 1 {
+		t.Fatalf("缺失图片应失败提示，got %v", fails)
+	}
+	if _, fails := resolveRefsDetailed("@no_such.txt"); len(fails) != 0 {
+		t.Fatalf("缺失非图片不应提示，got %v", fails)
+	}
+}
