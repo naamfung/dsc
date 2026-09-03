@@ -52,38 +52,41 @@ func TestViewCursorTracksMultiLineInput(t *testing.T) {
 	}
 }
 
-// TestViewMouseModeFollowsToggle 验证 /settings mouse on|off 切换释放鼠标（MouseModeNone），
-// 恢复终端原生选中/复制（模型工作期间也可用）。
-func TestViewMouseModeFollowsToggle(t *testing.T) {
+// TestViewMouseModeAutoRelease 验证鼠标模式自动切换：空闲时应用内捕获
+// （CellMotion），模型工作期间（thinking/streaming）自动释放给终端
+// （MouseModeNone）以便原生拖选复制，工作结束自动恢复；DSC_DISABLE_MOUSE
+// （mouseCaptureOff）永久释放。
+func TestViewMouseModeAutoRelease(t *testing.T) {
 	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	// 默认：应用内鼠标捕获
+	// 空闲：应用内鼠标捕获
 	if v := m.View(); v.MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("默认 MouseMode = %v, want CellMotion", v.MouseMode)
+		t.Fatalf("空闲 MouseMode = %v, want CellMotion", v.MouseMode)
 	}
 
-	// /settings mouse off → 释放
-	handled, _ := m.runSlashCommand("/settings mouse off")
-	if !handled {
-		t.Fatal("/settings mouse off 应被 runSlashCommand 处理")
-	}
-	if !m.mouseCaptureOff {
-		t.Fatal("off 后 mouseCaptureOff 应为 true")
-	}
+	// 模型工作（thinking）：自动释放
+	m.thinking = true
 	if v := m.View(); v.MouseMode != tea.MouseModeNone {
-		t.Fatalf("/settings mouse off 后 MouseMode = %v, want None", v.MouseMode)
+		t.Fatalf("thinking 时 MouseMode = %v, want None", v.MouseMode)
+	}
+	m.thinking = false
+
+	// 模型工作（streaming）：自动释放
+	m.streaming = true
+	if v := m.View(); v.MouseMode != tea.MouseModeNone {
+		t.Fatalf("streaming 时 MouseMode = %v, want None", v.MouseMode)
+	}
+	m.streaming = false
+
+	// 工作结束：自动恢复应用内捕获
+	if v := m.View(); v.MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("空闲恢复后 MouseMode = %v, want CellMotion", v.MouseMode)
 	}
 
-	// /settings mouse on → 恢复捕获
-	handled, _ = m.runSlashCommand("/settings mouse on")
-	if !handled {
-		t.Fatal("/settings mouse on 应被处理")
-	}
-	if m.mouseCaptureOff {
-		t.Fatal("on 后 mouseCaptureOff 应为 false")
-	}
-	if v := m.View(); v.MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("恢复后 MouseMode = %v, want CellMotion", v.MouseMode)
+	// DSC_DISABLE_MOUSE 永久释放
+	m.mouseCaptureOff = true
+	if v := m.View(); v.MouseMode != tea.MouseModeNone {
+		t.Fatalf("mouseCaptureOff 时 MouseMode = %v, want None", v.MouseMode)
 	}
 }

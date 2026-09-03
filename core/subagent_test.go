@@ -58,6 +58,7 @@ func (p *scriptedLLM) ChatStream(_ context.Context, _ []Message, tools []Tool) (
 
 func (p *scriptedLLM) Name(context.Context) string    { return "scripted" }
 func (p *scriptedLLM) Version(context.Context) string { return "1.0.0" }
+func (p *scriptedLLM) VisionEnabled() bool            { return true }
 func (p *scriptedLLM) HealthCheck(context.Context) error {
 	return nil
 }
@@ -159,6 +160,7 @@ func (p *ctxAwareLLM) ChatStream(ctx context.Context, _ []Message, _ []Tool) (<-
 
 func (p *ctxAwareLLM) Name(context.Context) string    { return "ctx-aware" }
 func (p *ctxAwareLLM) Version(context.Context) string { return "1.0.0" }
+func (p *ctxAwareLLM) VisionEnabled() bool            { return true }
 func (p *ctxAwareLLM) HealthCheck(context.Context) error {
 	return nil
 }

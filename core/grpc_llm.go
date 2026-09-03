@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	"dsc/proto"
@@ -24,6 +25,9 @@ type LLMProvider interface {
 	Name(ctx context.Context) string
 	Version(ctx context.Context) string
 	HealthCheck(ctx context.Context) error
+	// VisionEnabled 报告该 LLM 是否启用图像输入（供宿主经 GetInfo 的 capabilities
+	// 暴露给 TUI 等上层，用于「图片已解析但模型不支持」时的用户提示）。
+	VisionEnabled() bool
 }
 
 // Message 消息结构体
@@ -91,6 +95,9 @@ func (s *llmMetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*me
 		Name:       s.impl.Name(ctx),
 		Version:    s.impl.Version(ctx),
 		ApiVersion: "1.0",
+		Capabilities: map[string]string{
+			"supports_images": strconv.FormatBool(s.impl.VisionEnabled()),
+		},
 	}, nil
 }
 

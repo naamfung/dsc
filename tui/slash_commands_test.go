@@ -15,7 +15,7 @@ func TestSlashCommandHelp(t *testing.T) {
 		t.Fatal("/help should be handled")
 	}
 	joined := strings.Join(m.lines, "\n")
-	for _, want := range []string{"/settings history", "/settings mouse", "/sandbox", "/jobs", "/session", "/export"} {
+	for _, want := range []string{"/settings history", "/sandbox", "/jobs", "/session", "/export"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("/help output missing %q:\n%s", want, joined)
 		}
@@ -44,7 +44,7 @@ func TestSlashCompletionGroupFolding(t *testing.T) {
 			t.Fatalf("一级菜单应包含 %s 分组入口", entry)
 		}
 	}
-	for _, sub := range []string{"/settings history", "/settings mouse on", "/crons", "/cron add", "/jobs output", "/jobs kill"} {
+	for _, sub := range []string{"/settings history", "/crons", "/cron add", "/jobs output", "/jobs kill"} {
 		for _, it := range m.completion.items {
 			if it.label == sub {
 				t.Fatalf("一级菜单不应直接包含 %s（应折叠在分组内）", sub)
@@ -55,10 +55,10 @@ func TestSlashCompletionGroupFolding(t *testing.T) {
 	// 进入 /settings 分组 → 展示全部子命令
 	m.input.SetValue("/settings ")
 	m.updateCompletion()
-	if !m.completion.active || len(m.completion.items) != 3 {
-		t.Fatalf("/settings 子菜单 = %+v, want 3 个子命令", m.completion.items)
+	if !m.completion.active || len(m.completion.items) != 1 {
+		t.Fatalf("/settings 子菜单 = %+v, want 1 个子命令", m.completion.items)
 	}
-	for _, want := range []string{"/settings history", "/settings mouse on", "/settings mouse off"} {
+	for _, want := range []string{"/settings history"} {
 		found := false
 		for _, it := range m.completion.items {
 			if it.label == want {
@@ -123,29 +123,8 @@ func TestSlashCompletionGroupAccept(t *testing.T) {
 	if got := m.input.Value(); got != "/settings " {
 		t.Fatalf("接受分组入口后输入应为 \"/settings \", got %q", got)
 	}
-	if !m.completion.active || len(m.completion.items) != 3 {
-		t.Fatalf("接受分组入口后应展开 3 个子命令: %+v", m.completion.items)
-	}
-}
-
-// TestSlashCommandSettingsMouse 校验 /settings mouse on|off：on 恢复应用内捕获，
-// off 释放鼠标给终端；非法参数给出用法提示。
-func TestSlashCommandSettingsMouse(t *testing.T) {
-	m := newRenderCacheModel(t)
-	// off → 释放
-	handled, _ := m.runSlashCommand("/settings mouse off")
-	if !handled || !m.mouseCaptureOff {
-		t.Fatal("/settings mouse off 应被处理且释放鼠标")
-	}
-	// on → 恢复
-	handled, _ = m.runSlashCommand("/settings mouse on")
-	if !handled || m.mouseCaptureOff {
-		t.Fatal("/settings mouse on 应被处理且恢复捕获")
-	}
-	// 非法参数 → 用法提示
-	handled, _ = m.runSlashCommand("/settings mouse foo")
-	if !handled || !strings.Contains(strings.Join(m.lines, "\n"), "用法: /settings mouse") {
-		t.Fatal("/settings mouse foo 应显示用法提示")
+	if !m.completion.active || len(m.completion.items) != 1 {
+		t.Fatalf("接受分组入口后应展开 1 个子命令: %+v", m.completion.items)
 	}
 }
 
@@ -263,7 +242,7 @@ func TestSlashCompletionEscReturnsToParent(t *testing.T) {
 	// 进入 /settings 分组子菜单
 	m.input.SetValue("/settings ")
 	m.updateCompletion()
-	if !m.completion.active || m.completion.kind != compSlash || len(m.completion.items) != 3 {
+	if !m.completion.active || m.completion.kind != compSlash || len(m.completion.items) != 1 {
 		t.Fatalf("前置：/settings 子菜单未就绪: %+v", m.completion.items)
 	}
 

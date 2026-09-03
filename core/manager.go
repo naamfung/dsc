@@ -1639,6 +1639,14 @@ func (m *Manager) GetPluginMetadata(name string) (*metadata.PluginInfo, bool) {
 	return info, exists
 }
 
+// ActiveLLMName 返回 agent 声明的 primary LLM 插件名（活跃 LLM）；供 TUI 查询其
+// 能力（如 supports_images）以决定是否提示「图片未随消息发送」。
+func (m *Manager) ActiveLLMName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.agentLLMName
+}
+
 // GetMainAgentName 獲取主 Agent 名稱
 func (m *Manager) GetMainAgentName() string {
 	m.mu.RLock()

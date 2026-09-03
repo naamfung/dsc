@@ -36,9 +36,13 @@ func noticeBubble(text string) string {
 }
 
 // startTurn 启动一轮 agent 运行（Enter 用户输入与完成通知唤醒共用）。
-// images 为本轮附带的图像 data URL（唤醒场景为 nil）。
-func (m *Model) startTurn(text string, images []string, rendered string) tea.Cmd {
+// images 为本轮附带的图像 data URL（唤醒场景为 nil）；warning 非空时在用户消息
+// 之后追加一条系统提示（如「图片未随消息发送」），唤醒场景为空。
+func (m *Model) startTurn(text string, images []string, rendered string, warning string) tea.Cmd {
 	m.appendMessage(rendered)
+	if warning != "" {
+		m.appendMessage(warnSty.Render(warning))
+	}
 	m.thinking = true
 	// 新一轮运行指标重置：耗时计时起点、下行数据、缓存命中
 	m.runStart = time.Now()
@@ -69,5 +73,5 @@ func (m *Model) tryWakeup() tea.Cmd {
 	m.wakeBudget--
 	text := strings.Join(m.pendingWakeups, "\n\n")
 	m.pendingWakeups = nil
-	return m.startTurn(text, nil, noticeBubble(text))
+	return m.startTurn(text, nil, noticeBubble(text), "")
 }

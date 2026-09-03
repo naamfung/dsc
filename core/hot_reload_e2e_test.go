@@ -121,6 +121,7 @@ type stubLLMProvider struct{}
 
 func (stubLLMProvider) Name(context.Context) string    { return "mock-llm" }
 func (stubLLMProvider) Version(context.Context) string { return "1.0.0" }
+func (stubLLMProvider) VisionEnabled() bool            { return true }
 func (stubLLMProvider) HealthCheck(context.Context) error {
 	return nil
 }

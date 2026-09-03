@@ -49,6 +49,7 @@ func (p *mockLLMProvider) ChatStream(ctx context.Context, _ []Message, _ []Tool)
 
 func (p *mockLLMProvider) Name(context.Context) string    { return "mock-llm" }
 func (p *mockLLMProvider) Version(context.Context) string { return "1.0.0" }
+func (p *mockLLMProvider) VisionEnabled() bool            { return true }
 func (p *mockLLMProvider) HealthCheck(context.Context) error {
 	return nil
 }
