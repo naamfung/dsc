@@ -850,8 +850,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case streamFrame:
-		// 已被 Ctrl+C 中断本轮的残留帧直接丢弃，停止泵取
-		if m.streamCancelled {
+		// 已被 Ctrl+C 中断本轮的残留帧直接丢弃，停止泵取。
+		// 注意：仅丢弃「非 first」残留帧——新轮的 first 帧必须放行，进入下方 first
+		// 分支复位 streamCancelled；否则 streamCancelled 永不复位，之后所有轮的
+		// 模型输出帧都会被一并丢弃（中断后「再见不到模型输出」的自锁缺陷）。
+		if m.streamCancelled && !msg.first {
 			return m, nil
 		}
 		// 跟踪 agent 发射的轮/步编号（对齐 DSH 定义），用于状态行实时显示。

@@ -88,3 +88,48 @@ func TestPumpLoopRealFlow(t *testing.T) {
 		t.Fatalf("正文未渲染: %q", full)
 	}
 }
+
+// TestInterruptThenNewTurnStreams 回归：Ctrl+C 中断本轮后，新开启一轮的 first 帧必须
+// 被放行并复位 streamCancelled，否则该标记永不复位、之后所有轮的模型输出帧都被丢弃
+// （用户「中断对话后就再见不到模型输出」的自锁缺陷）。
+func TestInterruptThenNewTurnStreams(t *testing.T) {
+	m := New(&stubAgent{frames: []*core.RunStreamResponse{
+		{Status: "reasoning", Reasoning: "思考"},
+		{Status: "streaming", Output: "第一轮正文"},
+		{Status: "success"},
+	}}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	var model tea.Model = m
+	// 第一轮：提交并处理 first 帧，进入流式状态
+	cmd := model.(*Model).submitCmd("第一轮", nil)
+	firstMsg := cmd()
+	var streamDecided tea.Cmd
+	model, streamDecided = model.Update(firstMsg)
+	if model.(*Model).streaming != true {
+		t.Fatalf("第一轮 first 帧后应进入流式: streaming=%v", model.(*Model).streaming)
+	}
+	_ = streamDecided
+
+	// 模拟流式中 Ctrl+C：中断本轮 → streamCancelled=true 并清流
+	model, _ = model.(*Model).interruptTurn()
+	if !model.(*Model).streamCancelled {
+		t.Fatalf("中断后 streamCancelled 应为 true")
+	}
+
+	// 新一轮：first 帧必须放行（走 first 分支复位 streamCancelled=false 并回到流式），
+	// 而非被 854 的 streamCancelled 检查丢弃
+	next := model.(*Model).submitCmd("第二轮", nil)
+	nextMsg := next()
+	model, nextCmd := model.Update(nextMsg)
+	m2 := model.(*Model)
+	if m2.streamCancelled {
+		t.Fatalf("新一轮 first 帧被误丢弃：streamCancelled 未复位，后续轮将无声")
+	}
+	if !m2.streaming {
+		t.Fatalf("新一轮 first 帧后应回到流式输出: streaming=%v", m2.streaming)
+	}
+	if nextCmd == nil {
+		t.Fatalf("新一轮 first 帧后应继续泵取流")
+	}
+}
