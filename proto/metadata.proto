@@ -16,4 +16,7 @@ message PluginInfo {
   string version = 3;
   // 可選擴展字段，如支持的API版本
   string api_version = 4;
+  // 插件能力集合：键为能力名，值为字符串形式（如 supports_images: "true"/"false"）。
+  // 宿主经 GetInfo 读取后用于向模型/TUI 暴露插件能力。
+  map<string, string> capabilities = 5;
 }

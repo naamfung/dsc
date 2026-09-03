@@ -89,6 +89,10 @@ var (
 			Foreground(lipgloss.Color("#FF5F87")).
 			Bold(true)
 
+	warnSty = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFD75F")).
+		Bold(true)
+
 	composerBoxSty = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true, false, true, false).
 			BorderForeground(accent).
@@ -319,8 +323,9 @@ type Model struct {
 	todoArgs string
 
 	// mouseCaptureOff 为 true 时释放鼠标给终端（MouseModeNone），恢复终端原生
-	// 文字选中/复制（模型工作期间也可用）；由 /settings mouse 命令或 DSC_DISABLE_MOUSE
-	// 切换，代价是应用内滚轮滚动与正文拖选复制暂时失效。
+	// 文字选中/复制；由 DSC_DISABLE_MOUSE=1 启用，代价是应用内滚轮滚动与正文拖选
+	// 复制暂时失效。此外模型工作期间（thinking/streaming）亦自动释放给终端以便
+	// 原生拖选复制，空闲时自动恢复应用内捕获。
 	mouseCaptureOff bool
 
 	// 当前会话 id（初始 default；/session 切换或新建时更新，供 /export 使用）
@@ -540,6 +545,20 @@ func (m *Model) displayModelName() string {
 		return m.modelName
 	}
 	return m.agent.Name(m.ctx)
+}
+
+// llmSupportsImages 报告当前活跃 LLM 是否启用图像输入：经 manager 缓存的活跃 LLM
+// 插件 capabilities（llmMetadataServer.GetInfo 上报 supports_images）判定。manager
+// 缺失、活跃 LLM 未注册或能力未知时返回 true（放行，避免误报）。
+func (m *Model) llmSupportsImages() bool {
+	if m.manager == nil {
+		return true
+	}
+	info, ok := m.manager.GetPluginMetadata(m.manager.ActiveLLMName())
+	if !ok || info == nil || info.Capabilities == nil {
+		return true
+	}
+	return info.Capabilities["supports_images"] != "false"
 }
 
 // Update 处理消息
@@ -780,18 +799,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.completion = completion{}
 			m.wakeBudget = maxConsecutiveWakes // 用户消息恢复唤醒预算（对齐 DSH）
+			// 解析 @图片引用；解析成功但当前 LLM 不支持图像时明确提示，避免静默丢图
+			images := ResolveImageRefs(text)
+			warning := ""
+			if len(images) > 0 && !m.llmSupportsImages() {
+				warning = "⚠️ 图片未随消息发送：当前模型不支持图像输入"
+			}
 			if inRunning {
 				// 正在工作：不作为新轮，而是把消息实时注入会话历史（不停止当前工作），
 				// 本地即刻渲染用户气泡；流式通道继续保持泵取。轮次编号由 agent 流帧
 				// 携带的 Turn 维护（注入不新开物理轮次，对齐 DSH turn 定义）。
 				m.appendMessage(renderUserBubble(text, m.width-4))
+				if warning != "" {
+					m.appendMessage(warnSty.Render(warning))
+				}
 				m.syncInputHeight()
 				m.render()
 				m.pinnedToBottom = true // 用户注入新消息 → 重新钉住，以便看到自己的气泡
 				m.virtualGotoBottom()
-				return m, tea.Batch(m.injectCmd(sendText, ResolveImageRefs(text)), m.pumpStreamIfOpen(), m.input.Focus())
+				return m, tea.Batch(m.injectCmd(sendText, images), m.pumpStreamIfOpen(), m.input.Focus())
 			}
-			return m, m.startTurn(sendText, ResolveImageRefs(text), renderUserBubble(text, m.width-4))
+			return m, m.startTurn(sendText, images, renderUserBubble(text, m.width-4), warning)
 		default:
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -2127,11 +2155,9 @@ var slashGroups = []slashGroup{
 		},
 	},
 	{
-		entry: compItem{label: "/settings", insert: "/settings ", hint: "设置子命令（history / mouse），选中进入后展开", descend: true},
+		entry: compItem{label: "/settings", insert: "/settings ", hint: "设置子命令（history），选中进入后展开", descend: true},
 		subs: []compItem{
 			{label: "/settings history", insert: "/settings history ", hint: "历史注入条数（如 10 / off / unlimited）：控制模型预填充长度"},
-			{label: "/settings mouse on", insert: "/settings mouse on", hint: "恢复应用内鼠标捕获（滚轮滚动与拖选复制生效）"},
-			{label: "/settings mouse off", insert: "/settings mouse off", hint: "释放鼠标给终端（终端原生选中/复制，模型工作时可用）"},
 		},
 	},
 }
@@ -2597,23 +2623,13 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 	}
 	// /settings history <N|off|unlimited>：控制历史注入条数（模型预填充长度）。
 	// off/0 不注入历史；N 注入最近 N 条；unlimited/on/-1 不限制（默认）。
-	// /settings mouse on|off：切换鼠标捕获（on 恢复应用内捕获；off 释放给终端原生选中/复制）。
+	// 鼠标捕获为自动行为：模型工作期间释放给终端原生选中、空闲恢复应用内捕获，
+	// 不再提供显式开关；需永久释放用环境变量 DSC_DISABLE_MOUSE=1。
 	if strings.HasPrefix(cmd, "/settings") {
 		rest := strings.TrimSpace(strings.TrimPrefix(cmd, "/settings"))
 		sub, arg, _ := strings.Cut(strings.TrimSpace(rest), " ")
 		arg = strings.TrimSpace(arg)
 		switch sub {
-		case "mouse":
-			switch arg {
-			case "on":
-				m.mouseCaptureOff = false
-				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已恢复应用内鼠标捕获：滚轮滚动与正文拖选复制生效。")
-			case "off":
-				m.mouseCaptureOff = true
-				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 鼠标") + "\n已释放鼠标给终端：终端原生文字选中/复制可用（模型工作期间也可用）；应用内滚轮滚动与拖选复制暂停。")
-			default:
-				m.appendMessage(errorSty.Render("用法: /settings mouse on | off"))
-			}
 		case "history":
 			count, err := parseHistoryInjection(arg)
 			if err != nil {
@@ -3176,7 +3192,9 @@ func (m *Model) statusBar() string {
 	}
 	left = "  " + left
 	if m.mouseCaptureOff {
-		left += " · " + dimSty.Render("鼠标已释放(/settings mouse on 恢复)")
+		left += " · " + dimSty.Render("鼠标已释放(DSC_DISABLE_MOUSE)")
+	} else if m.thinking || m.streaming {
+		left += " · " + dimSty.Render("鼠标已释放(可直接拖选复制)")
 	}
 	right := "Enter 发送 · 选中复制 · Ctrl+J 换行 · Ctrl+Q 退出"
 	pad := m.width - ansi.StringWidth(left) - ansi.StringWidth(right)
@@ -3246,15 +3264,16 @@ func (m *Model) View() tea.View {
 }
 
 // viewOf 把内容包装成视图并声明终端特性：进入备用屏幕并保持鼠标捕获。
-// 鼠标捕获开启（CellMotion）时滚轮滚动、正文拖拽选中自动复制内建工作；
-// /settings mouse off 或 DSC_DISABLE_MOUSE 可释放鼠标给终端（MouseModeNone），恢复终端
-// 原生文字选中/复制（模型工作期间同样可用）。
+// 鼠标策略：空闲时应用内捕获（CellMotion），滚轮滚动、正文拖拽选中自动复制
+// 内建工作；模型工作期间（thinking/streaming）自动释放给终端（MouseModeNone），
+// 终端原生文字选中/复制可用，工作结束空闲后自动恢复应用内捕获；DSC_DISABLE_MOUSE
+// 可永久释放给终端。
 // 真实光标由 View 显式锚定到输入插入点：SetVirtualCursor(false) 后 textarea
 // 不再渲染虚拟光标，若不在此给出位置，输入框光标会丢失。
 func (m *Model) viewOf(content string) tea.View {
 	v := tea.NewView(content)
 	v.AltScreen = true
-	if m.mouseCaptureOff {
+	if m.mouseCaptureOff || m.thinking || m.streaming {
 		v.MouseMode = tea.MouseModeNone
 	} else {
 		v.MouseMode = tea.MouseModeCellMotion

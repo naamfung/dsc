@@ -270,6 +270,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tool
 func (p *OpenAIProvider) Name(ctx context.Context) string       { return "openai" }
 func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.1.0" } // 支持图像输入（视觉）
 func (p *OpenAIProvider) HealthCheck(ctx context.Context) error { return nil }
+func (p *OpenAIProvider) VisionEnabled() bool                   { return p.vision }
 
 // ChatStream 實現 LLMProvider.ChatStream 接口
 func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {

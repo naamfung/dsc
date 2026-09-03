@@ -458,6 +458,8 @@ func (p *AnthropicProvider) Version(ctx context.Context) string {
 	return "1.2.0" // 版本升级：支持图像输入（视觉）
 }
 
+func (p *AnthropicProvider) VisionEnabled() bool { return p.vision }
+
 func (p *AnthropicProvider) HealthCheck(ctx context.Context) error {
 	return nil
 }

@@ -63,7 +63,10 @@ type PluginInfo struct {
 	Name    string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Version string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	// 可選擴展字段，如支持的API版本
-	ApiVersion    string `protobuf:"bytes,4,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	ApiVersion string `protobuf:"bytes,4,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	// 插件能力集合：键为能力名，值为字符串形式（如 supports_images: "true"/"false"）。
+	// 宿主经 GetInfo 读取后用于向模型/TUI 暴露插件能力。
+	Capabilities  map[string]string `protobuf:"bytes,5,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,19 +129,30 @@ func (x *PluginInfo) GetApiVersion() string {
 	return ""
 }
 
+func (x *PluginInfo) GetCapabilities() map[string]string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
 var File_metadata_proto protoreflect.FileDescriptor
 
 const file_metadata_proto_rawDesc = "" +
 	"\n" +
 	"\x0emetadata.proto\x12\bmetadata\"\a\n" +
-	"\x05Empty\"o\n" +
+	"\x05Empty\"\xfc\x01\n" +
 	"\n" +
 	"PluginInfo\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\tR\aversion\x12\x1f\n" +
 	"\vapi_version\x18\x04 \x01(\tR\n" +
-	"apiVersion2B\n" +
+	"apiVersion\x12J\n" +
+	"\fcapabilities\x18\x05 \x03(\v2&.metadata.PluginInfo.CapabilitiesEntryR\fcapabilities\x1a?\n" +
+	"\x11CapabilitiesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012B\n" +
 	"\x0ePluginMetadata\x120\n" +
 	"\aGetInfo\x12\x0f.metadata.Empty\x1a\x14.metadata.PluginInfoB\x14Z\x12dsc/proto/metadatab\x06proto3"
 
@@ -154,19 +168,21 @@ func file_metadata_proto_rawDescGZIP() []byte {
 	return file_metadata_proto_rawDescData
 }
 
-var file_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_metadata_proto_goTypes = []any{
 	(*Empty)(nil),      // 0: metadata.Empty
 	(*PluginInfo)(nil), // 1: metadata.PluginInfo
+	nil,                // 2: metadata.PluginInfo.CapabilitiesEntry
 }
 var file_metadata_proto_depIdxs = []int32{
-	0, // 0: metadata.PluginMetadata.GetInfo:input_type -> metadata.Empty
-	1, // 1: metadata.PluginMetadata.GetInfo:output_type -> metadata.PluginInfo
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	2, // 0: metadata.PluginInfo.capabilities:type_name -> metadata.PluginInfo.CapabilitiesEntry
+	0, // 1: metadata.PluginMetadata.GetInfo:input_type -> metadata.Empty
+	1, // 2: metadata.PluginMetadata.GetInfo:output_type -> metadata.PluginInfo
+	2, // [2:3] is the sub-list for method output_type
+	1, // [1:2] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_metadata_proto_init() }
@@ -180,7 +196,7 @@ func file_metadata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_metadata_proto_rawDesc), len(file_metadata_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
