@@ -34,6 +34,7 @@ attachments/
 session.jsonl
 sessions/
 spill/
+logs/
 
 # Node.js dependencies and build caches
 node_modules/
