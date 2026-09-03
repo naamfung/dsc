@@ -177,8 +177,8 @@ func printHelp(progName string) {
 注意：
   - dsc-notify / tool-musicplayer 依赖 oto 音频库，仅 darwin / windows 打包；
     其余平台这些插件目录不生成（发布包内不含其可执行文件）。
-  - tool-harness-webui 插件需宿主平台有 bash + bun 先构建前端（go:embed），
-    环境缺失时该插件被跳过。
+  - tool-harness-webui 插件需宿主平台有 bun 先构建前端（go:embed），
+    bun 缺失或前端目录缺失时该插件被跳过。
   - 本机内部专用插件默认不打包，需 --include-internal 才纳入。
   - 本机存在 upx 时，对宿主与各插件二进制自动 UPX --best 压缩（未检测到则跳过）。
 
@@ -349,7 +349,7 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 		out := filepath.Join(releaseDir, "plugins", name, binExt(name))
 		if name == "tool-harness-webui" {
 			if !buildWebUIAssets(repoRoot) {
-				printWarning(fmt.Sprintf("  - 跳过 tool-harness-webui：需宿主平台 bash+bun 构建前端\n"))
+				printWarning(fmt.Sprintf("  - 跳过 tool-harness-webui：需宿主平台 bun 构建前端\n"))
 				skippedPlugins = append(skippedPlugins, name)
 				continue
 			}
@@ -399,15 +399,16 @@ func pack(path string) {
 	}
 }
 
-// buildWebUIAssets 在宿主平台用 bash+bun 构建 harness-webui 前端静态资源（go:embed 用）。
-// 成功返回 true；bash/bun 缺失或构建失败返回 false（由调用方决定跳过该插件）。
+// buildWebUIAssets 用 bun 原生构建 harness-webui 前端静态资源（go:embed 用）。
+// 成功返回 true；bun 缺失、前端目录缺失或构建失败返回 false（由调用方决定跳过该插件）。
 var webuiBuilt bool
 
 func buildWebUIAssets(repoRoot string) bool {
 	if webuiBuilt {
 		return true
 	}
-	if !hasTool("bash") || !hasTool("bun") {
+	// 前端构建由 bun 原生可执行完成，不依赖 bash/shell（构建环境未必有 bash）
+	if !hasTool("bun") {
 		return false
 	}
 	webuiDir := filepath.Join(repoRoot, "plugins", "tool-harness-webui", "webui")
@@ -415,19 +416,41 @@ func buildWebUIAssets(repoRoot string) bool {
 		return false
 	}
 	printInfo("  构建 harness-webui 前端 (bun)...\n")
-	// 用绝对前端目录作为 cwd（bash -c，非 login shell），避免 -l 触发 profile 改写 cwd
-	// 导致相对 cd 失效
-	cmd := exec.Command("bash", "-c",
-		"bun install >/dev/null 2>&1 || bun install >/dev/null; bunx svelte-kit sync >/dev/null 2>&1; bun run build")
-	cmd.Dir = webuiDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	// 依赖安装（先尝试 frozen-lockfile，diff 时回退普通 install）；静默，失败仅告警
+	installCmd := exec.Command("bun", "install", "--frozen-lockfile")
+	installCmd.Dir = webuiDir
+	if err := runSilent(installCmd); err != nil {
+		fallback := exec.Command("bun", "install")
+		fallback.Dir = webuiDir
+		if retryErr := runSilent(fallback); retryErr != nil {
+			printWarning(fmt.Sprintf("  前端依赖安装失败: %v\n", retryErr))
+			return false
+		}
+	}
+	// 同步 SvelteKit 配置（生成 .svelte-kit/tsconfig.json 等）；失败仅告警，不中断
+	syncCmd := exec.Command("bun", "x", "svelte-kit", "sync")
+	syncCmd.Dir = webuiDir
+	if err := runSilent(syncCmd); err != nil {
+		printWarning(fmt.Sprintf("  svelte-kit sync 失败: %v，继续构建...\n", err))
+	}
+	// 构建前端静态资源（go:embed 用）；输出构建进度
+	buildCmd := exec.Command("bun", "run", "build")
+	buildCmd.Dir = webuiDir
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
 		printWarning(fmt.Sprintf("  前端构建失败: %v\n", err))
 		return false
 	}
 	webuiBuilt = true
 	return true
+}
+
+// runSilent 在命令已配好 cwd 的情况下静默执行（丢弃 stdout/stderr），仅返回错误。
+func runSilent(cmd *exec.Cmd) error {
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
 }
 
 // ========== 工具函数 ==========
