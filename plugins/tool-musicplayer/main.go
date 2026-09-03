@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,6 +42,7 @@ var (
 type playStatus struct {
 	playing bool
 	loop    string
+	shuffle bool
 	volume  int
 	src     string        // 来源展示串（文件或「目录（N 首）」）
 	song    string        // 当前曲目完整路径
@@ -59,6 +61,7 @@ func setPlayStat(fn func(*playStatus)) {
 type MusicStatusResult struct {
 	Playing  bool   `json:"playing"`
 	Loop     string `json:"loop,omitempty"`
+	Shuffle  bool   `json:"shuffle,omitempty"`
 	Volume   int    `json:"volume,omitempty"`
 	Song     string `json:"song,omitempty"` // 当前曲目文件名（不含路径）
 	Path     string `json:"path,omitempty"`
@@ -403,20 +406,22 @@ func main() {
 
 	sdk.Tool(dsc.Tool{
 		Name:        "music_play",
-		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；可省略以使用默认播放目录（用 music_setdir 预先设定）。loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；volume 为音量百分比 1-100（省略或 0 为默认 100，-1 为显式静音）。播放即返回，可随时用 music_stop 停止。",
+		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；可省略以使用默认播放目录（用 music_setdir 预先设定）。loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；shuffle 为 true 时随机打乱播放顺序（仅目录有意义）；volume 为音量百分比 1-100（省略或 0 为默认 100，-1 为显式静音）。播放即返回，可随时用 music_stop 停止。",
 		Schema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"path":   {"type": "string", "description": "音频文件路径或目录；省略则用默认播放目录（music_setdir 设定）"},
 				"loop":   {"type": "string", "enum": ["off", "one", "list"], "description": "off=播完即止; one=单曲循环(文件)/单曲重复; list=列表循环(目录整列表循环)", "default": "off"},
+				"shuffle":{"type": "boolean", "description": "随机播放：打乱列表顺序（对多个文件的目录有意义），默认 false 顺序播放", "default": false},
 				"volume": {"type": "integer", "minimum": -1, "maximum": 100, "description": "音量百分比 1-100；省略或 0 为默认 100；-1 为显式静音（仍播放但无声）", "default": 100}
 			}
 		}`),
 		Handler: func(_ context.Context, args json.RawMessage) (string, error) {
 			var p struct {
-				Path   string `json:"path"`
-				Loop   string `json:"loop"`
-				Volume *int   `json:"volume"`
+				Path    string `json:"path"`
+				Loop    string `json:"loop"`
+				Shuffle bool   `json:"shuffle"`
+				Volume  *int   `json:"volume"`
 			}
 			if err := json.Unmarshal(args, &p); err != nil {
 				return "", fmt.Errorf("参数解析失败: %w", err)
@@ -460,6 +465,13 @@ func main() {
 			if err != nil {
 				return "", err
 			}
+			// 随机播放：Fisher-Yates 打乱列表顺序（仅对多文件目录有意义；
+			// 单文件打乱无影响）。loop 沿用：shuffle+list 随机序循环、shuffle+off 随机一轮。
+			if p.Shuffle && len(files) > 1 {
+				rand.Shuffle(len(files), func(i, j int) { files[i], files[j] = files[j], files[i] })
+			} else {
+				p.Shuffle = false // 单文件或无列表时不视为随机，避免状态误报
+			}
 
 			// 替换正在播放的任务
 			pbMu.Lock()
@@ -474,14 +486,18 @@ func main() {
 			if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
 				src = fmt.Sprintf("%s（%d 首）", p.Path, len(files))
 			}
-			setPlayStat(func(s *playStatus) { s.src = src })
+			setPlayStat(func(s *playStatus) { s.src = src; s.shuffle = p.Shuffle })
 			go runLoop(ctx, files, p.Loop, volume)
 
 			volDesc := fmt.Sprintf("%d%%", volume)
 			if p.Volume != nil && *p.Volume == -1 {
 				volDesc = "静音(-1)"
 			}
-			return fmt.Sprintf("🎵 开始播放 %s（loop=%s, 音量=%s）", src, p.Loop, volDesc), nil
+			modeDesc := "顺序"
+			if p.Shuffle {
+				modeDesc = "随机"
+			}
+			return fmt.Sprintf("🎵 开始播放 %s（loop=%s, %s, 音量=%s）", src, p.Loop, modeDesc, volDesc), nil
 		},
 	})
 
@@ -497,7 +513,7 @@ func main() {
 
 	sdk.Tool(dsc.Tool{
 		Name:        "music_status",
-		Description: "查询当前音乐播放状态：playing 是否在播；loop 播放模式 off/one/list；song 当前曲目文件名、path 完整路径、duration_seconds 曲目总时长、elapsed_seconds 已播时长（未在播为 0）；volume 音量 1-100；src 播放来源。未在播放时 playing=false、song 为空。",
+		Description: "查询当前音乐播放状态：playing 是否在播；loop 播放模式 off/one/list；shuffle 是否随机播放；song 当前曲目文件名、path 完整路径、duration_seconds 曲目总时长、elapsed_seconds 已播时长（未在播为 0）；volume 音量 1-100；src 播放来源。未在播放时 playing=false、song 为空。",
 		Schema:      json.RawMessage(`{"type":"object","properties":{}}`),
 		Handler: func(_ context.Context, _ json.RawMessage) (string, error) {
 			statusMu.Lock()
@@ -506,6 +522,7 @@ func main() {
 			res := MusicStatusResult{
 				Playing:  s.playing,
 				Loop:     s.loop,
+				Shuffle:  s.shuffle,
 				Volume:   s.volume,
 				Song:     filepath.Base(s.song),
 				Path:     s.song,
