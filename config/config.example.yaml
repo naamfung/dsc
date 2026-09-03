@@ -65,7 +65,3 @@ plugins:
     depends_on:
       llm: llm-anthropic
       tools: [tool-filesystem, tool-lua-host, tool-str-replace-editor]
-  - name: tool-musicplayer
-    type: tool
-    binary_path: ./plugins/tool-musicplayer/tool-musicplayer.exe
-    enabled: true
