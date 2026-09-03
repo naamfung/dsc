@@ -26,28 +26,50 @@ type OllamaProvider struct {
 	thinking bool
 }
 
+// toOllamaMessage 把 core.Message 转为 ollama 消息：Content 直接映射；对 user 消息，
+// @文本附件引用（dsc-txt://）解析为文本串并以「引用内容\n\n」前缀拼入 Content——ollama
+// 不接收多模态块，纯文本注入供模型直接读取；图像引用 ollama 不支持，跳过。assistant
+// 回带工具调用。Chat 与 ChatStream 共用。
+func toOllamaMessage(m core.Message) api.Message {
+	content := m.Content
+	if m.Role == "user" {
+		var refs []string
+		for _, img := range m.Images {
+			if strings.HasPrefix(img, core.TextRefPrefix) {
+				if txt, err := core.ResolveTextRef(img); err == nil {
+					refs = append(refs, txt)
+				}
+			}
+		}
+		if len(refs) > 0 {
+			content = strings.Join(refs, "\n\n") + "\n\n" + content
+		}
+	}
+	msg := api.Message{Role: m.Role, Content: content}
+	// assistant 消息需回带工具调用，否则 ollama 无法关联后续 tool 结果
+	if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+		msg.ToolCalls = make([]api.ToolCall, len(m.ToolCalls))
+		for j, tc := range m.ToolCalls {
+			argsJSON, _ := json.Marshal(tc.Arguments)
+			var ollamaArgs api.ToolCallFunctionArguments
+			json.Unmarshal(argsJSON, &ollamaArgs)
+			msg.ToolCalls[j] = api.ToolCall{
+				ID: tc.ID,
+				Function: api.ToolCallFunction{
+					Name:      tc.Name,
+					Arguments: ollamaArgs,
+				},
+			}
+		}
+	}
+	return msg
+}
+
 func (p *OllamaProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
 	// 转换消息
 	ollamaMessages := make([]api.Message, len(messages))
 	for i, m := range messages {
-		msg := api.Message{Role: m.Role, Content: m.Content}
-		// assistant 消息需回带工具调用，否则 ollama 无法关联后续 tool 结果
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			msg.ToolCalls = make([]api.ToolCall, len(m.ToolCalls))
-			for j, tc := range m.ToolCalls {
-				argsJSON, _ := json.Marshal(tc.Arguments)
-				var ollamaArgs api.ToolCallFunctionArguments
-				json.Unmarshal(argsJSON, &ollamaArgs)
-				msg.ToolCalls[j] = api.ToolCall{
-					ID: tc.ID,
-					Function: api.ToolCallFunction{
-						Name:      tc.Name,
-						Arguments: ollamaArgs,
-					},
-				}
-			}
-		}
-		ollamaMessages[i] = msg
+		ollamaMessages[i] = toOllamaMessage(m)
 	}
 
 	// 转换工具（如果提供）
@@ -149,24 +171,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []core.Message
 	// 轉換消息
 	ollamaMessages := make([]api.Message, len(messages))
 	for i, m := range messages {
-		msg := api.Message{Role: m.Role, Content: m.Content}
-		// assistant 消息需回带工具调用
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			msg.ToolCalls = make([]api.ToolCall, len(m.ToolCalls))
-			for j, tc := range m.ToolCalls {
-				argsJSON, _ := json.Marshal(tc.Arguments)
-				var ollamaArgs api.ToolCallFunctionArguments
-				json.Unmarshal(argsJSON, &ollamaArgs)
-				msg.ToolCalls[j] = api.ToolCall{
-					ID: tc.ID,
-					Function: api.ToolCallFunction{
-						Name:      tc.Name,
-						Arguments: ollamaArgs,
-					},
-				}
-			}
-		}
-		ollamaMessages[i] = msg
+		ollamaMessages[i] = toOllamaMessage(m)
 	}
 
 	// 轉換工具（如果提供）

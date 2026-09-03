@@ -799,11 +799,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.SetValue("")
 			m.completion = completion{}
 			m.wakeBudget = maxConsecutiveWakes // 用户消息恢复唤醒预算（对齐 DSH）
-			// 解析 @图片引用；解析成功但当前 LLM 不支持图像时明确提示，避免静默丢图
-			images := ResolveImageRefs(text)
+			// 解析 @文件引用（图片→dsc-img 多模态；文本→dsc-txt 注入内容）；解析出
+			// 图片但当前 LLM 不支持图像时明确提示，避免静默丢图（纯文本引用不提示）
+			images := ResolveFileRefs(text)
 			warning := ""
-			if len(images) > 0 && !m.llmSupportsImages() {
-				warning = "⚠️ 图片未随消息发送：当前模型不支持图像输入"
+			for _, ref := range images {
+				if strings.HasPrefix(ref, "dsc-img://") && !m.llmSupportsImages() {
+					warning = "⚠️ 图片未随消息发送：当前模型不支持图像输入"
+					break
+				}
 			}
 			if inRunning {
 				// 正在工作：不作为新轮，而是把消息实时注入会话历史（不停止当前工作），

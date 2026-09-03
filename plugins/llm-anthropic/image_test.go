@@ -10,11 +10,11 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// TestImageBlocksBase64 视觉开启、非 DeepSeek 端点时：文本 + 每图一个 base64 image 块。
-func TestImageBlocksBase64(t *testing.T) {
+// TestFileContentBlocksBase64 视觉开启、非 DeepSeek 端点时：文本 + 每图一个 base64 image 块。
+func TestFileContentBlocksBase64(t *testing.T) {
 	p := &AnthropicProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
 	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("hello"))
-	blocks, usesFile := p.imageBlocks("描述一下", []string{url})
+	blocks, usesFile := p.fileContentBlocks("描述一下", []string{url})
 
 	if usesFile {
 		t.Fatal("非 files_api 端点不应使用 file 源")
@@ -34,9 +34,9 @@ func TestImageBlocksBase64(t *testing.T) {
 	}
 }
 
-// TestImageBlocksFileSource 大图 + DeepSeek 端点时上传失败会回退 base64；若上传
+// TestFileContentBlocksFileSource 大图 + DeepSeek 端点时上传失败会回退 base64；若上传
 // 成功则使用 file 源并标记 needs beta 头。这里以文件缓存预置 file_id 模拟上传成功。
-func TestImageBlocksFileSource(t *testing.T) {
+func TestFileContentBlocksFileSource(t *testing.T) {
 	// 构造 >20MiB 的 data URL
 	big := make([]byte, (maxInlineImageBytes+1)*2)
 	url := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(big)
@@ -46,7 +46,7 @@ func TestImageBlocksFileSource(t *testing.T) {
 		filesAPI:  true,
 		fileCache: map[string]string{url: "file-api-abc123"},
 	}
-	blocks, usesFile := p.imageBlocks("", []string{url})
+	blocks, usesFile := p.fileContentBlocks("", []string{url})
 	if !usesFile {
 		t.Fatal("大图应使用 file 源")
 	}
@@ -56,8 +56,8 @@ func TestImageBlocksFileSource(t *testing.T) {
 	}
 }
 
-// TestImageBlocksRef 内容寻址引用（dsc-img://）被解析为 base64 image 块。
-func TestImageBlocksRef(t *testing.T) {
+// TestFileContentBlocksRef 内容寻址引用（dsc-img://）被解析为 base64 image 块。
+func TestFileContentBlocksRef(t *testing.T) {
 	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
 	jpg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 7, 8, 9}
 	ref, err := core.SaveImageAttachment(jpg)
@@ -65,7 +65,7 @@ func TestImageBlocksRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &AnthropicProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
-	blocks, _ := p.imageBlocks("", []string{ref})
+	blocks, _ := p.fileContentBlocks("", []string{ref})
 	if len(blocks) != 1 || blocks[0].OfImage == nil || blocks[0].OfImage.Source.OfBase64 == nil {
 		t.Fatalf("ref should resolve to base64 image block, got %+v", blocks)
 	}

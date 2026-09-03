@@ -88,8 +88,10 @@ func (p *OpenAIProvider) toOpenAIMessages(messages []core.Message) []openai.Chat
 	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
 	for i, m := range messages {
 		msg := openai.ChatCompletionMessage{Role: m.Role}
-		if m.Role == "user" && p.vision && len(m.Images) > 0 {
-			msg.MultiContent = p.imageContentParts(m.Content, m.Images)
+		if m.Role == "user" && len(m.Images) > 0 {
+			// 多模态分支：文本块 + 每张图像的块（image 受 p.vision 门控；
+			// dsc-txt 文本引用不受视觉限制，始终注入）
+			msg.MultiContent = p.fileContentBlocks(m.Content, m.Images)
 		} else {
 			msg.Content = m.Content
 		}
@@ -113,17 +115,30 @@ func (p *OpenAIProvider) toOpenAIMessages(messages []core.Message) []openai.Chat
 	return openaiMessages
 }
 
-// imageContentParts 构造用户消息的多模态 content：文本块 + 每张图像的块。
-// 图像引用（dsc-img:// 或 data URL）先解析为 base64 data URL；单图解码后不超过
-// 内联上限时用 image_url，超限且 DeepSeek Files API 可用时自动上传并以 file 块
-// 引用 file_id（避免请求体超限）。
-func (p *OpenAIProvider) imageContentParts(text string, images []string) []openai.ChatMessagePart {
-	parts := make([]openai.ChatMessagePart, 0, len(images)+1)
+// fileContentBlocks 构造用户消息的多模态 content：文本块 + 文件附件块。
+// 图像引用（dsc-img:// 或 data URL）先解析为 base64 data URL，单图解码后不超过
+// 内联上限时用 image_url、超限且 DeepSeek Files API 可用时自动上传并以 file 块
+// 引用 file_id（避免请求体超限）；图像仅当视觉开启（p.vision）时嵌入。
+// 文本引用（dsc-txt://）读取内容作为纯文本块注入，不受视觉限制。
+func (p *OpenAIProvider) fileContentBlocks(text string, refs []string) []openai.ChatMessagePart {
+	parts := make([]openai.ChatMessagePart, 0, len(refs)+1)
 	if text != "" {
 		parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: text})
 	}
-	for _, img := range images {
-		url, err := core.ResolveImageRef(img)
+	for _, ref := range refs {
+		if strings.HasPrefix(ref, core.TextRefPrefix) {
+			content, err := core.ResolveTextRef(ref)
+			if err != nil {
+				log.Printf("⚠️ 忽略无法解析的文本引用: %v", err)
+				continue
+			}
+			parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: content})
+			continue
+		}
+		if !p.vision {
+			continue // 视觉关闭：跳过图像引用
+		}
+		url, err := core.ResolveImageRef(ref)
 		if err != nil {
 			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
 			continue

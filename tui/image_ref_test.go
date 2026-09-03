@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"dsc/core"
 )
 
 // TestResolveImageRefs 验证 @图片路径 被写入附件库并返回内容寻址引用；非图片、
@@ -108,5 +110,46 @@ func TestResolveImageRefsPixPinSentence(t *testing.T) {
 	refs2 := ResolveImageRefs(inputNoSpace)
 	if len(refs2) != 1 || !strings.HasPrefix(refs2[0], "dsc-img://") {
 		t.Fatalf("句中 PixPin 图片引用（png 后紧跟标点）= %v, want 1 dsc-img ref（token 未在标点截断，吞掉后续文字）", refs2)
+	}
+}
+
+// TestResolveFileRefsText 校验 @文本文件 与图像读取方式对齐，生成 dsc-txt:// 内容
+// 寻址引用；二进制（含 NUL）/目录/缺失路径忽略保留文字。
+func TestResolveFileRefsText(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
+	note := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(note, []byte("hello 世界"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "blob.bin")
+	if err := os.WriteFile(bin, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	png := filepath.Join(dir, "shot.png")
+	os.WriteFile(png, []byte("fake"), 0o644)
+	t.Setenv("DSC_WORKSPACE_ROOT", dir)
+
+	// 文本文件 → dsc-txt:// 引用
+	refs := ResolveFileRefs("看下 @note.txt 的内容")
+	if len(refs) != 1 || !strings.HasPrefix(refs[0], "dsc-txt://") {
+		t.Fatalf("ResolveFileRefs(text) = %v, want 1 dsc-txt ref", refs)
+	}
+	if got, err := core.ResolveTextRef(refs[0]); err != nil || got != "hello 世界" {
+		t.Fatalf("ResolveTextRef = %q, err %v", got, err)
+	}
+
+	// 图片仍走 dsc-img://
+	if refs := ResolveFileRefs("@shot.png"); len(refs) != 1 || !strings.HasPrefix(refs[0], "dsc-img://") {
+		t.Fatalf("ResolveFileRefs(image) = %v, want 1 dsc-img ref", refs)
+	}
+
+	// 二进制（含 NUL）→ 忽略
+	if refs := ResolveFileRefs("@blob.bin"); len(refs) != 0 {
+		t.Fatalf("二进制文件不应生成引用，got %v", refs)
+	}
+	// 缺失路径 → 忽略
+	if refs := ResolveFileRefs("@missing.txt"); len(refs) != 0 {
+		t.Fatalf("缺失文件不应生成引用，got %v", refs)
 	}
 }
