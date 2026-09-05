@@ -4,17 +4,7 @@
 
 ## 克隆指南
 
-### 推荐稳定版本（v1）
-
-体验稳定的运行时建议克隆 **v1** 稳定分支：
-
-```bash
-git clone -b v1 https://github.com/naamfung/dsc.git
-```
-
-### 体验开发版本（master）
-
-追求最新特性/在途开发请克隆 **master** 分支（非默认分支，需显式指定）：
+普通用户请直接下载正式版二进制程序，开发请克隆 **master** 分支（非默认分支，需显式指定）：
 
 ```bash
 git clone -b master https://github.com/naamfung/dsc.git
