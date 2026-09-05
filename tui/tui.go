@@ -762,8 +762,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "up", "down":
-			// 输入为单行时 ↑/↓ 翻阅历史命令；多行输入仍交给输入框移动光标。
-			if !strings.Contains(m.input.Value(), "\n") {
+			// 正在翻阅历史（histPos 未到末尾）时 ↑/↓ 都继续翻，直到回到草稿位置；
+			// 正常编辑位仅单行输入允许 ↑ 进入历史（多行输入仍交给输入框移动光标）。
+			// 不得以「当前输入是否含换行」判定——翻到多行历史后 ↓ 会被吞成移动光标，
+			// 永远回不到翻之前的状态。
+			browsing := m.histPos != len(m.history)
+			if browsing || (msg.String() == "up" && !strings.Contains(m.input.Value(), "\n")) {
 				m.navigateHistory(msg.String() == "up")
 				m.syncInputHeight()
 				m.updateCompletion()
@@ -827,6 +831,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.startTurn(sendText, images, renderUserBubble(text, m.width-4), warning)
 		default:
+			if m.histPos != len(m.history) {
+				// 直接编辑输入内容即退出历史浏览；否则编辑后按 ↓ 会把内容覆盖成下一条历史
+				m.histPos = len(m.history)
+			}
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			m.syncInputHeight() // 新增/删除换行后同步输入框高度
