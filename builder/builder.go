@@ -75,13 +75,6 @@ var internalPlugins = []string{
 	"tool-novelforge",
 }
 
-// audioPlugins 依赖音频库（oto）的核心插件，仅 darwin / windows 可 CGO_ENABLED=0 交叉到
-// 纯 Go driver，其余平台（linux ALSA / freebsd 无 driver）交叉编译不过，发布时不打包。
-var audioPlugins = map[string]bool{
-	"dsc-notify":       true,
-	"tool-musicplayer": true,
-}
-
 func main() {
 	progName := filepath.Base(os.Args[0])
 
@@ -174,8 +167,9 @@ func printHelp(progName string) {
   LICENSE, README.md      文档
 
 注意：
-  - dsc-notify / tool-musicplayer 依赖 oto 音频库，仅 darwin / windows 打包；
-    其余平台这些插件目录不生成（发布包内不含其可执行文件）。
+  - dsc-notify / tool-musicplayer 依赖 oto 音频库，七端均可纯 Go 交叉编译
+    （Linux/FreeBSD 运行时需 PulseAudio 或 libasound.so.2）；freebsd/amd64 由
+    构建器自动附加 purego fakecgo 的 -gcflags，无需手动处理。
   - tool-harness-webui 插件需宿主平台有 bun 先构建前端（go:embed），
     bun 缺失或前端目录缺失时该插件被跳过。
   - 本机内部专用插件默认不打包，需 --include-internal 才纳入。
@@ -344,11 +338,6 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 		if _, err := os.Stat(pdir); err != nil {
 			continue
 		}
-		// 音频插件仅对 darwin / windows 打包（其余平台 CGO/ALSA 无法交叉编译）
-		if p.GOOS != "darwin" && p.GOOS != "windows" && audioPlugins[name] {
-			skippedPlugins = append(skippedPlugins, name)
-			continue
-		}
 		out := filepath.Join(releaseDir, "plugins", name, binExt(name))
 		if name == "tool-harness-webui" {
 			if !buildWebUIAssets(repoRoot) {
@@ -373,8 +362,17 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 
 // goBuild 以目标平台环境在 dir 目录交叉编译到 out。跨平台一律 CGO_ENABLED=0；
 // 用 -ldflags="-s -w" 剥离符号表与 DWARF 调试信息，进一步减小二进制体积。
+// freebsd/amd64 需附加 purego fakecgo 的 -gcflags=-std：无 cgo 环境（CGO_ENABLED=0）
+// 交叉编译时，purego 的 //go:cgo_export_dynamic 指令只允许在 cgo 生成代码中出现，
+// 该 flag 以 -std 标记构建 freebsd 的 fakecgo 引导文件（oto README 同款要求）。
 func goBuild(dir, out string, p platform) error {
-	cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
+	// -gcflags 必须在 package 参数（.）之前，否则 go 把它当 import path 解析
+	args := []string{"build", "-ldflags=-s -w"}
+	if p.GOOS == "freebsd" {
+		args = append(args, "-gcflags=github.com/ebitengine/purego/internal/fakecgo=-std")
+	}
+	args = append(args, "-o", out, ".")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GOOS="+p.GOOS,
