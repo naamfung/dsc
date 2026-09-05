@@ -372,10 +372,15 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		//   上下文的硬边界，压缩会与截断重复且其 surface 索引基于全量历史，不再适用。
 		compacted := false
 		promptTokens := int(a.lastPromptTokens)
-		if a.contextWindow > 0 && a.historyInjection < 0 {
-			// 已用容量取服务端上报值与本地字符估算的较大者：启用提示缓存的接口（如
-			// llama.cpp）可能只上报未缓存的新增 token（prompt_tokens 远小于真实上下文），
-			// 本地估算作为下界兜底，避免压缩判定被低估的 usage 推迟甚至永不触发。
+		if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens <= 0 {
+			// 服务端未上报用量（首请求/重启恢复/不报 usage 的接口如 ollama）时，退回
+			// 字符启发式估算，确保重启后第一发请求不会把整段历史直接灌给模型。
+			// 服务端已上报时以上报值为准：LLM 插件层已把提示缓存命中一并计入
+			// （见 llm-anthropic usageFromAnthropic：cache_read > input 时按增量场景
+			// 求和，标准 Anthropic 的 input_tokens 本身即全量），故上报值即真实上下文。
+			// 不得再取本地估算的较大者——启发式估算（英文按 /4、中文每字 1 token）
+			// 会系统性高估，把精确值顶掉后出现「TUI 显示 30% 而压缩提示 81%」的
+			// 假压缩与数值不同步。
 			if est := estimatePromptTokens(msgs); est > promptTokens {
 				promptTokens = est
 			}

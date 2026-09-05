@@ -162,19 +162,21 @@ func TestPreDispatchCompactionOnRestore(t *testing.T) {
 	}
 }
 
-// TestCompactionTriggeredOnUnderReportedUsage 回归「服务端低估已用容量导致压缩永不触发」：
-// 本地 llama.cpp 启用提示缓存后，prompt_tokens 仅含未缓存新增 token（如 315），远小于真实
-// 上下文长度。修复前压缩判定只看该低估的 usage（315 < 80% 窗口）永不压缩，长程任务必崩；
-// 修复后以本地字符估算作为下界，历史估算达到阈值时仍触发压缩。
-func TestCompactionTriggeredOnUnderReportedUsage(t *testing.T) {
+// TestCompactionNotTriggeredOnAccurateUsage 回归「本地估算虚高导致假压缩」：
+// 服务端已上报精确已用容量（llm-anthropic 等插件层已把提示缓存命中一并计入，
+// 上报值即真实上下文）且未达 80% 阈值时，不得被字符启发式估算（中文每字 1 token、
+// 英文按 /4）顶到阈值而触发压缩——否则会出现「TUI 显示 30% 而压缩提示 81%」的
+// 数值不同步与假压缩，无谓地把早期对话折叠成摘要。
+// 估算兜底（服务端未上报、lastPromptTokens==0）由 TestPreDispatchCompactionOnRestore 覆盖。
+func TestCompactionNotTriggeredOnAccurateUsage(t *testing.T) {
 	a := newTestAgent(t)
 	a.llmServiceID = 1
 	a.toolServiceID = 1
 	a.contextWindow = 50000
-	a.lastPromptTokens = 315 // 模拟服务端仅上报未缓存新增 token（真实上下文远大于此）
+	a.lastPromptTokens = 12000 // 服务端上报精确值：24% 窗口，远低于 80% 阈值
 
-	// 预置足够大的历史：字符估算超过 80% 窗口（40k），确保必然触发压缩
-	big := strings.Repeat("历史对话内容撑大上下文占用。", 1000) // 14 字 ×1000 = 14k 字 → ~3.5k token
+	// 预置足够大的历史：字符估算超过 80% 窗口（40k），验证「估算虚高不再触发压缩」
+	big := strings.Repeat("历史对话内容撑大上下文占用。", 1000) // 14 字 ×1000 = 14k 字 → 估算约 14k token/条
 	for i := 0; i < 6; i++ {
 		a.sess.Append(session.UserMessage, &session.UserMessageData{Content: big, Source: "user"},
 			&session.SurfaceOp{Op: session.SurfaceAppend})
@@ -182,15 +184,23 @@ func TestCompactionTriggeredOnUnderReportedUsage(t *testing.T) {
 			&session.SurfaceOp{Op: session.SurfaceAppend})
 	}
 	if got := estimatePromptTokens(a.sess.DeriveMessages(a.sysPrompt)); got < a.contextWindow*8/10 {
-		t.Fatalf("预置历史估算 = %d token, 需 >= %d 才能触发压缩", got, a.contextWindow*8/10)
+		t.Fatalf("预置历史估算 = %d token, 需 >= %d 才能验证「估算虚高不触发压缩」", got, a.contextWindow*8/10)
 	}
 
-	// 主请求流每帧回报低估的 prompt_tokens=315，即使压缩后下一轮仍保持低估
-	llm := &compactMockLLM{done: make(chan struct{}), usagePrompt: 315}
+	// 主请求流每帧回报精确 prompt_tokens=12000（真实上下文，低于阈值）
+	llm := &compactMockLLM{done: make(chan struct{}), usagePrompt: 12000}
 	a.llmClient = llm
 	a.toolClient = &mockToolClient{}
 
-	res, err := a.runLoop(context.Background(), "继续", nil, nil)
+	var mu sync.Mutex
+	var frames []*core.RunStreamResponse
+	emit := func(f *core.RunStreamResponse) {
+		mu.Lock()
+		frames = append(frames, f)
+		mu.Unlock()
+	}
+
+	res, err := a.runLoop(context.Background(), "继续", nil, emit)
 	if err != nil {
 		t.Fatalf("runLoop: %v", err)
 	}
@@ -201,7 +211,14 @@ func TestCompactionTriggeredOnUnderReportedUsage(t *testing.T) {
 	llm.mu.Lock()
 	chatCalls := llm.chatCalls
 	llm.mu.Unlock()
-	if chatCalls < 1 {
-		t.Fatalf("压缩 Chat 调用次数 = %d, 期望 >= 1（服务端低估 usage 时仍应触发压缩）", chatCalls)
+	if chatCalls != 0 {
+		t.Fatalf("压缩 Chat 调用次数 = %d, 期望 0（服务端已上报精确用量且未达阈值，不应假压缩）", chatCalls)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, f := range frames {
+		if strings.Contains(f.Output, "上下文压缩") {
+			t.Fatalf("不应输出上下文压缩提示帧（估算虚高不应覆盖服务端精确值）")
+		}
 	}
 }
