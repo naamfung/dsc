@@ -43,7 +43,7 @@
 
 ## 用例
 
-内置 14 例，覆盖：计算/数论/精确分数推理、常识/文言史实/多语言书写、结构化输出、工具端态与多步文件链。
+内置 15 例，覆盖：计算/数论/精确分数推理、常识/文言史实/多语言书写、结构化输出、工具端态、多步文件链与 shell 管道。
 
 | id | 类型 | 验证点 |
 | -- | ---- | ------ |
@@ -61,6 +61,7 @@
 | `file_sum`      | file/num        | 计算并落盘（运行时集成） |
 | `file_multi`    | file/groups     | 多行/追加写入（hello + world） |
 | `file_wc_lines` | file/num        | shell wc 统计行数并落盘 |
+| `pipe_filter`   | file/num        | **shell 管道**（cat \| grep \| wc 一行工程并算落盘） |
 
 > 注：`json_health` 与 `file_multi` 是「格式合规」类——任务本身即要求的输出格式/内容，
 > 无可保密的预期值，故对防作弊扫描标记 `NoLeak` 豁免；其余用例的期望值一律不下发模型。
@@ -71,41 +72,42 @@
 ## 呈现样式示例（真实运行时输出）
 
 以本地模型 `Agentic-Turbo-Coder`（llama.cpp Q8_0）经 `-input`（stdin 重定向关单轮、
-`DSC_APPROVAL=never`、交卷预算 `DSC_BENCH_TIMEOUT=480`）无人值守跑一次完整 **14 用例**
-的真实结果为例：
+`DSC_APPROVAL=never`、交卷预算 `DSC_BENCH_TIMEOUT=1200`、每案例预算
+`DSC_BENCH_CASE_TIMEOUT=180`）无人值守跑一次完整 **15 用例**的真实结果为例：
 
 - `bench_report` 落盘的 `bench-out/report.json`（机器可读，原始输出；含**总耗时**
   `duration_ms` 与各用例**单项耗时** `duration_ms`）：
 
   ```json
   {
-    "bench_root": "…/dsc-bench-artifacts6",
-    "started_at": "2026-09-06T16:09:58.6415126+08:00",
-    "duration_ms": 132447,
+    "bench_root": "…/dsc-bench-artifacts9",
+    "started_at": "2026-09-06T19:26:06.8749954+08:00",
+    "duration_ms": 338892,
     "cases": [
-      {"id":"arith_power","title":"整数幂运算","status":"pass","weight":1,"earned":1,"duration_ms":7517,"artifact_content":""},
-      {"id":"sqrt_2","title":"开平方精度","status":"pass","weight":1,"earned":1,"duration_ms":5444,"artifact_content":""},
-      {"id":"capital_france","title":"常识问答（联合国官方语言）","status":"pass","weight":1,"earned":1,"duration_ms":3211,"artifact_content":""},
-      {"id":"ming_capital","title":"文言史实问答（明朝国都·洪武开国）","status":"pass","weight":1,"earned":1,"duration_ms":2459,"artifact_content":""},
-      {"id":"ming_capital_judgment","title":"判断力（明朝国都的歧义）","status":"pass","weight":1,"earned":1,"duration_ms":2897,"artifact_content":""},
-      {"id":"file_reverse","title":"文件工具写入（端态校验）","status":"pass","weight":1,"earned":1,"duration_ms":14153,"artifact_content":"fox brown quick the"},
-      {"id":"file_sum","title":"计算并落盘（运行时集成）","status":"pass","weight":1,"earned":1,"duration_ms":16371,"artifact_content":"5050"},
-      {"id":"odd_sum","title":"数列求和（奇数）","status":"pass","weight":1,"earned":1,"duration_ms":6269,"artifact_content":""},
-      {"id":"fib_10","title":"递归/递推数列","status":"pass","weight":1,"earned":1,"duration_ms":2178,"artifact_content":""},
-      {"id":"prime_below_20","title":"数论（质数）","status":"pass","weight":1,"earned":1,"duration_ms":1593,"artifact_content":""},
-      {"id":"json_health","title":"结构化 JSON 输出","status":"pass","weight":1,"earned":1,"duration_ms":5519,"artifact_content":""},
-      {"id":"fraction_sum","title":"精确分数运算（lisp_eval）","status":"fail","weight":1,"earned":0,"duration_ms":4914,"artifact_content":"","feedback":"数值不在容差范围内（偏差 0.0476095）"},
-      {"id":"file_multi","title":"多次写盘（追加）","status":"pass","weight":1,"earned":1,"duration_ms":14702,"artifact_content":"hello\nworld"},
-      {"id":"file_wc_lines","title":"命令统计并落盘（wc）","status":"fail","weight":1,"earned":0,"duration_ms":16293,"artifact_content":"3","feedback":"数值不在容差范围内（偏差 1）"}
+      {"id":"arith_power","title":"整数幂运算","status":"pass","weight":1,"earned":1,"duration_ms":6640,"artifact_content":""},
+      {"id":"sqrt_2","title":"开平方精度","status":"pass","weight":1,"earned":1,"duration_ms":3048,"artifact_content":""},
+      {"id":"capital_france","title":"常识问答（联合国官方语言）","status":"pass","weight":1,"earned":1,"duration_ms":3861,"artifact_content":""},
+      {"id":"ming_capital","title":"文言史实问答（明朝国都·洪武开国）","status":"fail","weight":1,"earned":0,"duration_ms":4786,"artifact_content":"","feedback":"不在可接受答案集合内"},
+      {"id":"ming_capital_judgment","title":"判断力（明朝国都的歧义）","status":"fail","weight":1,"earned":0,"duration_ms":5734,"artifact_content":"","feedback":"答案未覆盖全部应指出的项（漏识别了歧义的某一部分）"},
+      {"id":"file_reverse","title":"文件工具写入（端态校验）","status":"pass","weight":1,"earned":1,"duration_ms":27908,"artifact_content":"fox brown quick the"},
+      {"id":"file_sum","title":"计算并落盘（运行时集成）","status":"fail","weight":1,"earned":0,"duration_ms":4459,"artifact_content":"5050","feedback":"未找到产物文件 bench-out/file_sum/reply.txt"},
+      {"id":"odd_sum","title":"数列求和（奇数）","status":"pass","weight":1,"earned":1,"duration_ms":6877,"artifact_content":""},
+      {"id":"fib_10","title":"递归/递推数列","status":"pass","weight":1,"earned":1,"duration_ms":13081,"artifact_content":""},
+      {"id":"prime_below_20","title":"数论（质数）","status":"pass","weight":1,"earned":1,"duration_ms":29806,"artifact_content":""},
+      {"id":"json_health","title":"结构化 JSON 输出","status":"pass","weight":1,"earned":1,"duration_ms":3993,"artifact_content":""},
+      {"id":"fraction_sum","title":"精确分数运算（lisp_eval）","status":"pass","weight":1,"earned":1,"duration_ms":8921,"artifact_content":""},
+      {"id":"file_multi","title":"多次写盘（追加）","status":"pass","weight":1,"earned":1,"duration_ms":41537,"artifact_content":"hello\nworld"},
+      {"id":"file_wc_lines","title":"命令统计并落盘（wc）","status":"pass","weight":1,"earned":1,"duration_ms":17114,"artifact_content":"3"},
+      {"id":"pipe_filter","title":"Shell 管道（端态验证）","status":"pass","weight":1,"earned":1,"duration_ms":30440,"artifact_content":"3"}
     ],
     "harness": "dsc-tool-agentic-bench",
-    "passed": 12, "failed": 2, "total": 14,
-    "score": "85.71", "ratio": "12:2"
+    "passed": 12, "failed": 3, "total": 15,
+    "score": "80.00", "ratio": "12:3"
   }
   ```
 
 > 汇总口径（单点制）：`score`（总得分）= 成功数/总案例×100 的**两位小数数值**（如
-> `85.71`）；`ratio`（成败比）= **成功数:失败数**（如 `12:2`）。无冗余的 percent 字段
+> `80.00`）；`ratio`（成败比）= **成功数:失败数**（如 `12:3`）。无冗余的 percent 字段
 > ——得分本身就是那个数值。
 
 - TUI 中 `bench_report` 以**表格视图**渲染为对齐列（状态 PASS/FAIL/SKIP 着绿/红/灰，
@@ -113,31 +115,35 @@
 
   | Case                  | 任务                    | 状态 | 得分 | 耗时     |
   | --------------------- | ----------------------- | ---- | ---- | -------- |
-  | arith_power           | 整数幂运算              | PASS | 1/1  | 7.5s  |
-  | sqrt_2                | 开平方精度              | PASS | 1/1  | 5.4s  |
-  | capital_france        | 常识问答（联合国官方语言） | PASS | 1/1  | 3.2s  |
-  | ming_capital          | 文言史实问答（洪武开国）  | PASS | 1/1  | 2.5s  |
-  | ming_capital_judgment | 判断力（明朝国都的歧义）  | PASS | 1/1  | 2.9s  |
-  | file_reverse          | 文件工具写入（端态校验）  | PASS | 1/1  | 14.2s |
-  | file_sum              | 计算并落盘（运行时集成）  | PASS | 1/1  | 16.4s |
-  | odd_sum               | 数列求和（奇数）        | PASS | 1/1  | 6.3s  |
-  | fib_10                | 递归/递推数列           | PASS | 1/1  | 2.2s  |
-  | prime_below_20        | 数论（质数）            | PASS | 1/1  | 1.6s  |
-  | json_health           | 结构化 JSON 输出        | PASS | 1/1  | 5.5s  |
-  | fraction_sum          | 精确分数运算（lisp_eval）| FAIL | 0/1  | 4.9s  |
-  | file_multi            | 多次写盘（追加）        | PASS | 1/1  | 14.7s |
-  | file_wc_lines         | 命令统计并落盘（wc）    | FAIL | 0/1  | 16.3s |
-  | **— 汇总 —**          | 通过 12/14 · 成败 12:2 | — | 85.71 | 2分12秒 |
+  | arith_power           | 整数幂运算              | PASS | 1/1  | 6.6s  |
+  | sqrt_2                | 开平方精度              | PASS | 1/1  | 3.0s  |
+  | capital_france        | 常识问答（联合国官方语言） | PASS | 1/1  | 3.9s  |
+  | ming_capital          | 文言史实问答（洪武开国）  | FAIL | 0/1  | 4.8s  |
+  | ming_capital_judgment | 判断力（明朝国都的歧义）  | FAIL | 0/1  | 5.7s  |
+  | file_reverse          | 文件工具写入（端态校验）  | PASS | 1/1  | 27.9s |
+  | file_sum              | 计算并落盘（运行时集成）  | FAIL | 0/1  | 4.5s  |
+  | odd_sum               | 数列求和（奇数）        | PASS | 1/1  | 6.9s  |
+  | fib_10                | 递归/递推数列           | PASS | 1/1  | 13.1s |
+  | prime_below_20        | 数论（质数）            | PASS | 1/1  | 29.8s |
+  | json_health           | 结构化 JSON 输出        | PASS | 1/1  | 4.0s  |
+  | fraction_sum          | 精确分数运算（lisp_eval）| PASS | 1/1  | 8.9s  |
+  | file_multi            | 多次写盘（追加）        | PASS | 1/1  | 41.5s |
+  | file_wc_lines         | 命令统计并落盘（wc）    | PASS | 1/1  | 17.1s |
+  | pipe_filter           | Shell 管道（cat\|grep\|wc）| PASS | 1/1  | 30.4s |
+  | **— 汇总 —**          | 通过 12/15 · 成败 12:3 | — | 80.00 | 5分39秒 |
 
-  徽标：`12/14 PASS · 得分 85.71 · 2分12秒`（全过标绿，部分失败标红）
+  徽标：`12/15 PASS · 得分 80.00 · 5分39秒`（全过标绿，部分失败标红）
 
 > 计时口径：**总耗时**从 `bench_start` 起算到本次 `bench_report`；**单项耗时**从该用例
 > 首次 `bench_next` 下发到 `bench_submit`。均随报告写入 `report.json` 并展示于 `bench_report`
 > 表格与徽标。
 
-本示例同时演示了两种真实失败形态：`fraction_sum` 是模型把 1/3+1/7（=10/21≈0.4762）错算并
-提交 0.5238（差 1/21）；`file_wc_lines` 是 `wc -l` 按 POSIX 数换行符、末行无换行故计 2（差
-1）——说明评测既反映模型能力，也检验对工具语义（新行计数）的理解。
+本示例同时演示了两种真实失败形态：`ming_capital` / `ming_capital_judgment` 是模型未能以
+联合国官方语言标准作答「洪武开国国都＝應天府（南京）」、以及未能同时指出「明初南京 +
+迁都后北京」的歧义两期；`file_sum` 则是模型虽已把结果 5050 落盘、却在**写入完成前就提交**
+（判定读用时产物缺失，判 FAIL）——说明评测既反映模型能力，也检验对工具端态（先写后交）的
+理解。`pipe_filter` 一次通过，证明 shell 管道一行工程（cat \| grep \| wc）在运行时真实可靠：
+数据落盘 4 行、过滤含 `a` 得 3 行、回答 3 完全吻合。
 
 ## 运行
 

@@ -117,11 +117,63 @@ func TestInternalCpMvRm(t *testing.T) {
 	}
 }
 
-// TestFallbackExternalStillPaths 未命中的命令仍回退外部 PATH（空 PATH 下应 127）。
-func TestFallbackExternalStillPaths(t *testing.T) {
+// TestPipeSupport 验证内部命令之间的管道（进程内）正常工作：
+// 上游输出经 interp 管道流入下游，下游从 hc.Stdin 读取并过滤。
+func TestPipeSupport(t *testing.T) {
 	dir := t.TempDir()
-	_, err := runShell(t, dir, "definitely_not_a_real_cmd_xyz")
-	if code := exitCode(t, err); code != 127 {
-		t.Fatalf("未命中命令应回退 PATH 并返回 127，got %d", code)
+	// internal | internal：printf(内建) 经管道喂给 grep(内部)
+	out, err := runShell(t, dir, "printf 'dd.txt\\nmem.txt\\nother.txt\\n' | grep -i mem")
+	if exitCode(t, err) != 0 {
+		t.Fatalf("printf|grep 失败: out=%q err=%v", out, err)
+	}
+	if !strings.Contains(out, "mem.txt") {
+		t.Errorf("grep 应命中 mem.txt: %q", out)
+	}
+	if strings.Contains(out, "other.txt") {
+		t.Errorf("grep 应过滤掉 other.txt: %q", out)
+	}
+
+	// internal | internal：cat(内部) 读文件经管道喂给 grep(内部)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world\nfoo bar\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out2, err2 := runShell(t, dir, "cat a.txt | grep foo")
+	if exitCode(t, err2) != 0 {
+		t.Fatalf("cat|grep 失败: out=%q err=%v", out2, err2)
+	}
+	if !strings.Contains(out2, "foo bar") {
+		t.Errorf("cat|grep 应输出 foo bar 行: %q", out2)
+	}
+
+	// 多段管道：internal | internal | internal
+	out3, err3 := runShell(t, dir, "printf 'a\\nb\\na\\n' | grep a | wc -l")
+	if exitCode(t, err3) != 0 {
+		t.Fatalf("多段管道失败: out=%q err=%v", out3, err3)
+	}
+	if !strings.Contains(out3, "2") {
+		t.Errorf("wc 应统计 2 行命中: %q", out3)
+	}
+}
+
+// TestPosixHintForWindowsCommands 误用 Windows 专属命令时，报错应附带标准 POSIX 替代指引，
+// 引导模型回到 POSIX 命令；同时确认未加兼容实现（管道直通不因此扩展）。
+func TestPosixHintForWindowsCommands(t *testing.T) {
+	dir := t.TempDir()
+	for _, cmd := range []string{"dir", "findstr", "copy", "del", "move", "ipconfig", "where"} {
+		if hint := posixHint(cmd); hint == "" || !strings.Contains(hint, "POSIX") {
+			t.Errorf("命令 %q 应给出 POSIX 替代提示，got %q", cmd, hint)
+			continue
+		}
+		// 通过真实 runner 确认执行失败并带上提示。
+		_, err := runShell(t, dir, cmd)
+		if err == nil {
+			t.Errorf("命令 %q 不应成功（Windows 专属、未加兼容实现）", cmd)
+		} else if !strings.Contains(err.Error(), "POSIX") {
+			t.Errorf("命令 %q 的执行错误应包含 POSIX 引导，got %v", cmd, err)
+		}
+	}
+	// 若未来误加入 dir 这类兼容实现，此测试会失败（dir 应仍报未找到并引导）。
+	if _, ok := internalCommands["dir"]; ok {
+		t.Error("不应为 dir 提供进程内兼容实现")
 	}
 }

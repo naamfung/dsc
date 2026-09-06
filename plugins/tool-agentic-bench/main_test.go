@@ -269,11 +269,12 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 		"file_multi":            {Status: "pass"},
 		"file_wc_lines":         {Status: "pass"},
 		"fraction_sum":          {Status: "pass"},
+		"pipe_filter":           {Status: "pass"},
 	}
 	state.mu.Unlock()
 
 	summary, reportJSON, view := buildReport(root, state.results, 12345)
-	if !strings.Contains(summary, "通过 12/14") {
+	if !strings.Contains(summary, "通过 13/15") {
 		t.Errorf("摘要应含通过计数，got %q", summary)
 	}
 	if view == nil {
@@ -293,15 +294,15 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(reportJSON), &parsed); err != nil {
 		t.Fatalf("报告 JSON 解析失败: %v", err)
 	}
-	if parsed.Passed != 12 || parsed.Total != 14 || parsed.Failed != 1 {
+	if parsed.Passed != 13 || parsed.Total != 15 || parsed.Failed != 1 {
 		t.Errorf("计分不对: passed=%d failed=%d total=%d", parsed.Passed, parsed.Failed, parsed.Total)
 	}
 	// 得分=成功数/总案例×100 两位小数；成败比=成功:失败（无 percent 冗余字段）。
-	if parsed.Score != "85.71" {
-		t.Errorf("总得分应为 85.71，got %q", parsed.Score)
+	if parsed.Score != "86.67" {
+		t.Errorf("总得分应为 86.67，got %q", parsed.Score)
 	}
-	if parsed.Ratio != "12:1" {
-		t.Errorf("成败比应为 12:1，got %q", parsed.Ratio)
+	if parsed.Ratio != "13:1" {
+		t.Errorf("成败比应为 13:1，got %q", parsed.Ratio)
 	}
 	if parsed.DurationMs != 12345 {
 		t.Errorf("总耗时未保真: %d", parsed.DurationMs)
@@ -332,7 +333,7 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 		t.Fatalf("report.json 未落盘: %v", err)
 	}
 	var onDisk map[string]any
-	if err := json.Unmarshal(data, &onDisk); err != nil || onDisk["passed"] != float64(12) {
+	if err := json.Unmarshal(data, &onDisk); err != nil || onDisk["passed"] != float64(13) {
 		t.Fatalf("report.json 内容异常: %v err=%v", string(data), err)
 	}
 }

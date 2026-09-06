@@ -193,6 +193,17 @@ var benchCases = []CaseQuery{
 		Tol:      0,
 		Weight:   1,
 	},
+	{
+		ID:       "pipe_filter",
+		Title:    "Shell 管道（端态验证）",
+		Task:     "请用你的文件工具（而非直接回答）：用 shell 写入文件 bench-out/pipe_filter/data.txt（绝对路径：<caseOut>/data.txt），内容为以下 4 行（每行一个单词，各占一行）：`apple`、`banana`、`cherry`、`date`。然后用一条**含管道 `|`** 的 shell 命令统计该文件中包含字母 `a` 的行数（例如 `cat data.txt | grep a | wc -l`，grep 默认大小写敏感），把结果这个数字写到 bench-out/pipe_filter/reply.txt（绝对路径：<caseOut>/reply.txt），不要附加其它文字。",
+		Relative: "bench-out/pipe_filter/reply.txt",
+		Kind:     "file",
+		Matcher:  "num",
+		Expected: "3",
+		Tol:      0,
+		Weight:   1,
+	},
 }
 
 // matchCaseText 对给定的候选文本按用例规则判定，返回是否命中与失败原因（不回显期望值）。

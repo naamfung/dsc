@@ -32,14 +32,54 @@ import (
 // （mvdan/sh 默认 kill timeout 为 2s，对齐未设置 ExecHandler 前的库默认行为）。
 var defaultExecHandler = interp.DefaultExecHandler(2 * time.Second)
 
+// windowsToPosix 记录【确属 Windows 专属、POSIX 无效】的命令 → 标准 POSIX 替代，供模型
+// 误用 Windows 命令时给出可执行的修正提示。DSC 的 shell 是 POSIX（mvdan/sh）解释器，
+// 这些命令不是可执行文件也不在内部命令集，直接执行必然失败——与其让模型空转，不如在
+// 报错里明确把它引导回标准 POSIX 命令。mkdir/rmdir/date/ping 等本就是 POSIX 命令，不列入。
+var windowsToPosix = map[string]string{
+	"dir":      "ls 或 ls -la",
+	"findstr":  "grep",
+	"copy":     "cp",
+	"xcopy":    "cp -r",
+	"del":      "rm",
+	"erase":    "rm",
+	"move":     "mv",
+	"ren":      "mv",
+	"rename":   "mv",
+	"more":     "cat（可分页用 cat | less）",
+	"where":    "which",
+	"cls":      "无需（DSC 终端由 TUI 管理）",
+	"tasklist": "ps",
+	"taskkill": "kill",
+	"ipconfig": "ip addr 或 ifconfig",
+	"md":       "mkdir -p",
+	"rd":       "rm -r",
+	"attrib":   "chmod",
+}
+
+// posixHint 返回对已知 Windows 专属命令的 POSIX 替代指引；非 Windows 专属命令返回空。
+// 只在命令执行失败时追加，避免干扰真实外部命令的正常报错。
+func posixHint(cmd string) string {
+	if alt, ok := windowsToPosix[cmd]; ok {
+		return fmt.Sprintf("\n提示：%q 是 Windows 专属命令，DSC 的 shell 是 POSIX（mvdan/sh）解释器，不提供该命令。请改用标准 POSIX 命令：%s", cmd, alt)
+	}
+	return ""
+}
+
 // shellExecHandler 是 interp.ExecHandler 的入口：命中内部工具表走进程内实现，
-// 否则回退默认外部执行。
+// 否则回退默认外部执行；对 Windows 专属命令失败时附加 POSIX 替代指引。
 func shellExecHandler(ctx context.Context, args []string) error {
 	if fn, ok := internalCommands[args[0]]; ok {
 		hc := interp.HandlerCtx(ctx)
 		return fn(ctx, hc, args[1:])
 	}
-	return defaultExecHandler(ctx, args)
+	err := defaultExecHandler(ctx, args)
+	if err != nil {
+		if hint := posixHint(args[0]); hint != "" {
+			return fmt.Errorf("%v%s", err, hint)
+		}
+	}
+	return err
 }
 
 // internalCommand 进程内实现一个命令：Write 到 hc.Stdout/hc.Stderr，
