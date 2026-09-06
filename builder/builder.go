@@ -61,6 +61,7 @@ var publicPlugins = []string{
 	"tool-memory-service",
 	"dsc-notify",
 	"tool-lua-host",
+	"tool-agentic-bench",
 	"policy-fs-observation",
 	"tool-ssh",
 	"tool-musicplayer",

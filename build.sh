@@ -93,6 +93,7 @@ build_plugin tool-skill
 build_plugin tool-memory-service
 build_plugin dsc-notify
 build_plugin tool-lua-host
+build_plugin tool-agentic-bench
 
 # 构建 tool-harness-webui 插件（先 bun 构建前端再编译 Go；其 build.sh 同样按平台出后缀）
 echo "Building tool-harness-webui plugin..."

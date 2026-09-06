@@ -356,6 +356,9 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 		interp.Env(initialEnv),
 		interp.Dir(cwd),
 		interp.StdIO(nil, stdoutBuf, stderrBuf),
+		// 内建式常用 POSIX 工具（mkdir/ls/cat/touch/rm/cp/mv/grep/head/tail/wc）进程内
+		// 实现，不依赖外部 PATH；未命中的命令仍回退默认 PATH 外部执行（见 internalcmds.go）。
+		interp.ExecHandler(shellExecHandler),
 	}
 
 	runner, err := interp.New(runnerOpts...)

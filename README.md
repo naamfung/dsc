@@ -177,7 +177,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Tool 插件
 
-- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致）
+- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致。常用工具 `mkdir`/`ls`/`cat`/`touch`/`rm`/`cp`/`mv`/`grep`/`head`/`tail`/`wc` 已**进程内实现**（`interp.ExecHandler` 拦截，纯 Go 无外部依赖），因此即便在 Windows 且插件子进程 `PATH` 被宿主过滤时这些命令仍可用；未命中的命令仍回退默认 `PATH` 查找外部程序）
 
 - `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根）
 
@@ -196,6 +196,8 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 - `tool-ssh`（SSH 远程命令执行终端：`ssh_connect` / `ssh_exec` / `ssh_list` / `ssh_close` 四类持久会话，登录支持密码或私钥，会话按 id 缓存复用，方便模型在远程主机上连续执行命令）
 
 - `tool-musicplayer`（后台音乐播放器：`music_play` / `music_stop` / `music_status` / `music_setdir`，异步播放 MP3/WAV 文件或目录、单曲/列表循环、随机播放（shuffle）、音量百分比调节；`music_setdir` 持久化默认播放目录到 `~/.dsc/musicplayer_src.txt`，`music_play` 的 path 可省略以用默认目录，`music_status` 查询播放模式/当前曲目/时长/音量）
+
+- `tool-agentic-bench`（模型能力自动评分测试台：`bench_start` / `bench_next` / `bench_submit` / `bench_report`，内置一组运行时集成测试用例，模型经真实工具逐一完成、插件进程自动计分并输出汇总表与 `bench-out/report.json`；期望答案只存插件进程内、不外泄给模型，file 类用例由插件直接读产物文件判定，可作无人值守运行——把 `DSC_WORKSPACE_ROOT` 指向临时目录后可用 `-input` 单回合跑全集，详见 `plugins/tool-agentic-bench/README.md`；注意无人值守须把 stdin 重定向（如 `"" | .\dsc.exe -input …`）以关闭 `DSC_SINGLE_TURN` 单轮上限，否则模型跑 1 轮即退出、无法完成多用例循环）
 
 ### Policy 插件
 
