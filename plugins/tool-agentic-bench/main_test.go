@@ -187,6 +187,45 @@ func TestMingCapitalJudgmentGroups(t *testing.T) {
 	}
 }
 
+// TestEditorFlowRegex editor_flow 的 regex 应命中完整的「str_replace 替换 + insert 插入」
+// 端态（println("world") 已替换、// edited 已插入在收尾 } 之前），并拒绝只做一半
+// （漏替换 / 漏插入 / 插入位置不对）的结果——由此运行时验证 StrReplaceEditor 的正确性。
+func TestEditorFlowRegex(t *testing.T) {
+	var c CaseQuery
+	for i := range benchCases {
+		if benchCases[i].ID == "editor_flow" {
+			c = benchCases[i]
+			break
+		}
+	}
+	if c.Matcher != "regex" {
+		t.Fatalf("editor_flow 应用 regex 匹配，got %q", c.Matcher)
+	}
+	if !c.NoLeak {
+		t.Fatalf("editor_flow 的期望端态即任务规格，应标记 NoLeak 豁免防作弊扫描")
+	}
+	passCases := []string{
+		"package main\nfunc main() {\n\tprintln(\"world\")\n// edited\n}\n",
+		"package main\nfunc main() {\n    println(\"world\")\n    // edited\n}",
+	}
+	for _, a := range passCases {
+		if ok, _ := matchCaseText(c, a); !ok {
+			t.Errorf("完整编辑结果应命中: %q", a)
+		}
+	}
+	failCases := []string{
+		"package main\nfunc main() {\n\tprintln(\"hello\")\n// edited\n}\n", // 未 str_replace
+		"package main\nfunc main() {\n\tprintln(\"world\")\n}\n",            // 未 insert
+		"package main\nfunc main() {\n\tprintln(\"world\")\n}\n// edited",   // 插入位置在 } 之后
+		"",
+	}
+	for _, a := range failCases {
+		if ok, _ := matchCaseText(c, a); ok {
+			t.Errorf("不完整编辑结果不应命中: %q", a)
+		}
+	}
+}
+
 func TestFindNextCaseOrderAndAllDone(t *testing.T) {
 	state.mu.Lock()
 	state.root = t.TempDir()
@@ -270,11 +309,12 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 		"file_wc_lines":         {Status: "pass"},
 		"fraction_sum":          {Status: "pass"},
 		"pipe_filter":           {Status: "pass"},
+		"editor_flow":           {Status: "pass"},
 	}
 	state.mu.Unlock()
 
 	summary, reportJSON, view := buildReport(root, state.results, 12345)
-	if !strings.Contains(summary, "通过 13/15") {
+	if !strings.Contains(summary, "通过 14/16") {
 		t.Errorf("摘要应含通过计数，got %q", summary)
 	}
 	if view == nil {
@@ -294,15 +334,15 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(reportJSON), &parsed); err != nil {
 		t.Fatalf("报告 JSON 解析失败: %v", err)
 	}
-	if parsed.Passed != 13 || parsed.Total != 15 || parsed.Failed != 1 {
+	if parsed.Passed != 14 || parsed.Total != 16 || parsed.Failed != 1 {
 		t.Errorf("计分不对: passed=%d failed=%d total=%d", parsed.Passed, parsed.Failed, parsed.Total)
 	}
 	// 得分=成功数/总案例×100 两位小数；成败比=成功:失败（无 percent 冗余字段）。
-	if parsed.Score != "86.67" {
-		t.Errorf("总得分应为 86.67，got %q", parsed.Score)
+	if parsed.Score != "87.50" {
+		t.Errorf("总得分应为 87.50，got %q", parsed.Score)
 	}
-	if parsed.Ratio != "13:1" {
-		t.Errorf("成败比应为 13:1，got %q", parsed.Ratio)
+	if parsed.Ratio != "14:1" {
+		t.Errorf("成败比应为 14:1，got %q", parsed.Ratio)
 	}
 	if parsed.DurationMs != 12345 {
 		t.Errorf("总耗时未保真: %d", parsed.DurationMs)
@@ -333,7 +373,7 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 		t.Fatalf("report.json 未落盘: %v", err)
 	}
 	var onDisk map[string]any
-	if err := json.Unmarshal(data, &onDisk); err != nil || onDisk["passed"] != float64(13) {
+	if err := json.Unmarshal(data, &onDisk); err != nil || onDisk["passed"] != float64(14) {
 		t.Fatalf("report.json 内容异常: %v err=%v", string(data), err)
 	}
 }

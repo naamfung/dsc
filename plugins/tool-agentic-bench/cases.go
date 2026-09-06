@@ -204,6 +204,18 @@ var benchCases = []CaseQuery{
 		Tol:      0,
 		Weight:   1,
 	},
+	{
+		ID:       "editor_flow",
+		Title:    "StrReplaceEditor 编辑流程（view→str_replace→insert）",
+		Task:     "请用 str_replace_editor 工具（不要用 shell 或其它文件工具）在路径 bench-out/editor_flow/reply.txt（绝对路径：<caseOut>/reply.txt）上依次完成以下编辑流程：\n1. 用 create 命令创建该文件，内容恰为以下 4 行：\npackage main\nfunc main() {\n\tprintln(\"hello\")\n}\n2. 用 view 命令查看该文件（str_replace_editor 要求 str_replace/insert 之前必须先 view 建立观察状态，否则会报错）。\n3. 用 str_replace 命令把 println(\"hello\") 替换为 println(\"world\")。\n4. 用 insert 命令在末尾的 } 之前（第 4 行）插入一行 // edited。\n完成后提交本用例（file 类自动读取该文件判定）。",
+		Relative: "bench-out/editor_flow/reply.txt",
+		Kind:     "file",
+		Matcher:  "regex",
+		// 格式合规类：期望端态（替换 + 插入后的内容）即任务规格，无可保密的答案。
+		Expected: `(?s)package main\s*\nfunc main\(\) \{\s*\n\s*println\("world"\)\s*\n\s*// edited\s*\n\}`,
+		NoLeak:   true,
+		Weight:   1,
+	},
 }
 
 // matchCaseText 对给定的候选文本按用例规则判定，返回是否命中与失败原因（不回显期望值）。

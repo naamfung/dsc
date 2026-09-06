@@ -43,7 +43,7 @@
 
 ## 用例
 
-内置 15 例，覆盖：计算/数论/精确分数推理、常识/文言史实/多语言书写、结构化输出、工具端态、多步文件链与 shell 管道。
+内置 16 例，覆盖：计算/数论/精确分数推理、常识/文言史实/多语言书写、结构化输出、工具端态、多步文件链与 shell 管道、StrReplaceEditor 编辑流程。
 
 | id | 类型 | 验证点 |
 | -- | ---- | ------ |
@@ -62,8 +62,9 @@
 | `file_multi`    | file/groups     | 多行/追加写入（hello + world） |
 | `file_wc_lines` | file/num        | shell wc 统计行数并落盘 |
 | `pipe_filter`   | file/num        | **shell 管道**（cat \| grep \| wc 一行工程并算落盘） |
+| `editor_flow`   | file/regex      | **StrReplaceEditor 编辑流程**（create→view→str_replace→insert 全链路，端态须同时含替换后内容与插入行） |
 
-> 注：`json_health` 与 `file_multi` 是「格式合规」类——任务本身即要求的输出格式/内容，
+> 注：`json_health`、`file_multi` 与 `editor_flow` 是「格式合规」类——任务本身即要求的输出格式/内容，
 > 无可保密的预期值，故对防作弊扫描标记 `NoLeak` 豁免；其余用例的期望值一律不下发模型。
 
 产物按 `<benchRoot>/bench-out/<case_id>/reply.txt` 落盘；报告写
@@ -73,7 +74,8 @@
 
 以本地模型 `Agentic-Turbo-Coder`（llama.cpp Q8_0）经 `-input`（stdin 重定向关单轮、
 `DSC_APPROVAL=never`、交卷预算 `DSC_BENCH_TIMEOUT=1200`、每案例预算
-`DSC_BENCH_CASE_TIMEOUT=180`）无人值守跑一次完整 **15 用例**的真实结果为例：
+`DSC_BENCH_CASE_TIMEOUT=180`）无人值守跑一次完整 **15 用例**的真实结果为例
+（该次运行早于 `editor_flow` 用例加入，故为 15 例口径）：
 
 - `bench_report` 落盘的 `bench-out/report.json`（机器可读，原始输出；含**总耗时**
   `duration_ms` 与各用例**单项耗时** `duration_ms`）：
