@@ -2524,7 +2524,8 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
 			if err != nil {
 				m.appendMessage(errorSty.Render("导出会话失败: ") + err.Error())
 			} else {
-				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 导出") + fmt.Sprintf("\n已导出会话 %s 到 %s", m.currentSessionID, path))
+				// 输出路径统一用正斜杆（ToSlash），与模型所见路径风格一致
+				m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 导出") + fmt.Sprintf("\n已导出会话 %s 到 %s", m.currentSessionID, filepath.ToSlash(path)))
 			}
 		}
 		m.input.SetValue("")

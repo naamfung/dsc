@@ -4,14 +4,41 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/go-quicktest/qt"
+	"github.com/rogpeppe/go-internal/testscript"
+
 	"mvdan.cc/sh/v3/interp"
 )
+
+func TestMain(m *testing.M) {
+	if runtime.GOOS == "js" {
+		// Every test here needs subprocesses or OS pipes,
+		// neither of which js/wasm has.
+		return
+	}
+	testscript.Main(m, map[string]func(){
+		"gosh": main,
+	})
+}
+
+var update = flag.Bool("u", false, "update testscript output files")
+
+func TestScript(t *testing.T) {
+	t.Parallel()
+	testscript.Run(t, testscript.Params{
+		Dir:                 filepath.Join("testdata", "script"),
+		UpdateScripts:       *update,
+		RequireExplicitExec: true,
+	})
+}
 
 // Each test has an even number of strings, which form input-output pairs for
 // the interactive shell. The input string is fed to the interactive shell, and
@@ -144,11 +171,12 @@ var interactiveTests = []struct {
 	{
 		pairs: []string{
 			"echo *; :\n",
-			"main.go main_test.go\n$ ",
+			"main.go main_test.go testdata\n$ ",
 			"echo *\n",
-			"main.go main_test.go\n$ ",
+			"main.go main_test.go testdata\n$ ",
 			"shopt -s globstar; echo **\n",
-			"main.go main_test.go\n$ ",
+			// Globs expand with the OS path separator.
+			filepath.FromSlash("main.go main_test.go testdata testdata/script testdata/script/flags.txtar") + "\n$ ",
 		},
 	},
 	{

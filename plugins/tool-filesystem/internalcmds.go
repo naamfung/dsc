@@ -66,6 +66,15 @@ func posixHint(cmd string) string {
 	return ""
 }
 
+// slashErr 把错误字符串里的路径归一为正斜杆（Windows 上 os.* 错误内嵌反斜杆
+// 路径，直接回显给模型/用户时与其余正斜杆路径风格不一致）。
+func slashErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return filepath.ToSlash(err.Error())
+}
+
 // shellExecHandler 是 interp.ExecHandler 的入口：命中内部工具表走进程内实现，
 // 否则回退默认外部执行；对 Windows 专属命令失败时附加 POSIX 替代指引。
 func shellExecHandler(ctx context.Context, args []string) error {
@@ -212,7 +221,7 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 		p := res(hc, p0)
 		fi, err := os.Lstat(p)
 		if err != nil {
-			fmt.Fprintf(hc.Stderr, "ls: cannot access '%s': %v\n", p0, err)
+			fmt.Fprintf(hc.Stderr, "ls: cannot access '%s': %s\n", p0, slashErr(err))
 			exit = 2
 			continue
 		}
@@ -390,7 +399,7 @@ func cmdRm(ctx context.Context, hc interp.HandlerContext, args []string) error {
 			if force {
 				continue
 			}
-			fmt.Fprintf(hc.Stderr, "rm: cannot remove '%s': %v\n", f, statErr)
+			fmt.Fprintf(hc.Stderr, "rm: cannot remove '%s': %s\n", f, slashErr(statErr))
 			failed = true
 			continue
 		}
@@ -488,7 +497,7 @@ func copyOrMove(ctx context.Context, hc interp.HandlerContext, ops []string, rec
 			errOp = copyEntry(src, dstPath, fi)
 		}
 		if errOp != nil {
-			fmt.Fprintf(hc.Stderr, "%s: %s -> %s: %v\n", verb, s, dst, errOp)
+			fmt.Fprintf(hc.Stderr, "%s: %s -> %s: %s\n", verb, s, dst, slashErr(errOp))
 			failed = true
 		}
 	}
@@ -828,7 +837,7 @@ func cmdWc(ctx context.Context, hc interp.HandlerContext, args []string) error {
 		}
 		r, close, err := openReader(hc, f)
 		if err != nil {
-			fmt.Fprintf(hc.Stderr, "wc: %s: %v\n", f, err)
+			fmt.Fprintf(hc.Stderr, "wc: %s: %s\n", f, slashErr(err))
 			return interp.NewExitStatus(1)
 		}
 		l, w, c := countWc(r)

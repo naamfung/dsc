@@ -500,6 +500,10 @@ var errorCases = []errorCase{
 		langErr("1:1: reached EOF without matching `${` with `}`", LangMirBSDKorn),
 	),
 	errCase(
+		`${ { foo; }bar; }`,
+		langErr("1:12: statements must be separated by &, ; or a newline", LangBash|LangMirBSDKorn),
+	),
+	errCase(
 		"((foo\x80bar",
 		langErr("1:6: invalid UTF-8 encoding"),
 	),
@@ -1914,6 +1918,12 @@ var errorCases = []errorCase{
 		langErr("1:6: reached EOF without matching `${` with `}`", LangBash|LangMirBSDKorn),
 	),
 	errCase(
+		// A slice is always arithmetic, unlike a subscript such as ${foo[1,#]}.
+		"echo ${foo:1:#2}",
+		langErr("1:13: `:` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		flipConfirmAll, // the shells only fail at expansion time
+	),
+	errCase(
 		"echo ${foo:h",
 		langErr("1:6: reached EOF without matching `${` with `}`", LangZsh),
 	),
@@ -1969,7 +1979,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo {var}>foo",
-		langErr("1:6: `{varname}` redirects are a bash feature; tried parsing as LANG", LangPOSIX|LangMirBSDKorn),
+		langErr("1:6: `{varname}` redirects are a bash/zsh feature; tried parsing as LANG", LangPOSIX|LangMirBSDKorn),
 		// shells treat {var} as an argument, but we are a bit stricter
 		// so that users won't think this will work like they expect in POSIX shell.
 		flipConfirmAll,
@@ -1986,6 +1996,7 @@ var errorCases = []errorCase{
 	errCase(
 		"echo ;|",
 		langErr("1:7: `|` can only immediately follow a statement", LangPOSIX|LangBash),
+		langErr("1:6: `;|` can only be used in a case clause", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"for i in 1 2 3; { echo; }",
@@ -2460,6 +2471,12 @@ var stopAtTests = []struct {
 		"echo '$$'", "$$",
 		call(litWord("echo"), word(sglQuoted("$$"))),
 	},
+	{
+		// A trailing backslash empties the read buffer as we peek at what
+		// follows it, so the stop word cannot be matched against it.
+		"\\", "0",
+		litCall("\\"),
+	},
 }
 
 func TestParseStopAt(t *testing.T) {
@@ -2576,6 +2593,99 @@ func TestPosEdgeCases(t *testing.T) {
 	qt.Check(t, qt.Equals(f.Stmts[1].End().String(), "2:9"))
 }
 
+func TestPosAddCol(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		pos        Pos
+		n          int
+		want       string // as printed by [Pos.String]
+		wantOffset uint
+	}{
+		{"Add", NewPos(10, 5, 3), 2, "5:5", 12},
+		{"Subtract", NewPos(10, 5, 3), -2, "5:1", 8},
+		{"UnknownCol", NewPos(10, 5, 0), 2, "5:?", 12},
+		{"ColOverflow", NewPos(10, 5, colMax), 2, "5:?", 12},
+		{"ColUnderflow", NewPos(10, 5, 1), -2, "5:?", 8},
+		{"OffsetOverflow", NewPos(offsetMax, 5, 3), 2, "5:5", offsetMax},
+		{"OffsetUnderflow", NewPos(0, 1, 1), -2, "1:?", 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := posAddCol(test.pos, test.n)
+			qt.Check(t, qt.IsTrue(got.IsValid()))
+			qt.Check(t, qt.Equals(got.String(), test.want))
+			qt.Check(t, qt.Equals(got.Offset(), test.wantOffset))
+		})
+	}
+}
+
+func TestParseHighControlRunes(t *testing.T) {
+	t.Parallel()
+	// U+0080 and U+0081 must parse as regular characters even though the
+	// lexer uses rune sentinels for "reached EOF" and "escaped newline".
+	tests := []struct {
+		in, want string // want is an error string when wantErr
+		wantErr  bool
+	}{
+		{in: "echo a\u0080b", want: "echo a\u0080b\n"},
+		{in: "echo 'a\u0080b'", want: "echo 'a\u0080b'\n"},
+		{in: "echo \"a\u0080b\"", want: "echo \"a\u0080b\"\n"},
+		{in: "echo a\u0081b", want: "echo a\u0081b\n"},
+		{in: "echo 'a\u0081b'", want: "echo 'a\u0081b'\n"},
+		{in: "echo \"a\u0081b\"", want: "echo \"a\u0081b\"\n"},
+	}
+	p := NewParser()
+	printer := NewPrinter()
+	for _, tc := range tests {
+		f, err := p.Parse(strings.NewReader(tc.in), "")
+		if tc.wantErr {
+			qt.Assert(t, qt.ErrorMatches(err, regexp.QuoteMeta(tc.want)), qt.Commentf("input: %q", tc.in))
+			continue
+		}
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("input: %q", tc.in))
+		var sb strings.Builder
+		qt.Assert(t, qt.IsNil(printer.Print(&sb, f)))
+		qt.Check(t, qt.Equals(sb.String(), tc.want), qt.Commentf("input: %q", tc.in))
+	}
+}
+
+func TestNodeEndPos(t *testing.T) {
+	t.Parallel()
+
+	// An array element with an index but no value ends after the "]=".
+	p := NewParser()
+	f, err := p.Parse(strings.NewReader("declare -A x=([index]=)"), "")
+	qt.Assert(t, qt.IsNil(err))
+	elem := f.Stmts[0].Cmd.(*DeclClause).Args[1].Array.Elems[0]
+	qt.Check(t, qt.Equals(elem.End().Offset(), uint(22)))
+
+	// A trailing comment ends the file even when a leading comment exists.
+	p = NewParser(KeepComments(true))
+	f, err = p.Parse(strings.NewReader("# lead\nfoo # trail\n"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.Equals(f.End().Offset(), uint(18)))
+
+	// A naked indexed assignment ends after the "]"; there is no "=".
+	f, err = p.Parse(strings.NewReader("declare a[1]"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.Equals(f.Stmts[0].Cmd.(*DeclClause).Args[0].End().Offset(), uint(12)))
+
+	// The mksh brace forms of for and case clauses end after the "}",
+	// not four bytes as if it were "done" or "esac".
+	p = NewParser(Variant(LangMirBSDKorn))
+	f, err = p.Parse(strings.NewReader("for i in a; { b; }"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.Equals(f.Stmts[0].Cmd.(*ForClause).End().Offset(), uint(18)))
+
+	f, err = p.Parse(strings.NewReader("case x { a) b ;; }"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.Equals(f.Stmts[0].Cmd.(*CaseClause).End().Offset(), uint(18)))
+}
+
 func TestParseRecoverErrors(t *testing.T) {
 	t.Parallel()
 
@@ -2617,6 +2727,10 @@ func TestParseRecoverErrors(t *testing.T) {
 		},
 		{
 			src:         "$((incomp",
+			wantMissing: 1,
+		},
+		{
+			src:         "$[incomp",
 			wantMissing: 1,
 		},
 		{
@@ -2733,15 +2847,15 @@ func countRecoveredPositions(x reflect.Value) int {
 		}
 		return n
 	case reflect.Struct:
-		if pos, ok := x.Interface().(Pos); ok {
+		if pos, ok := reflect.TypeAssert[Pos](x); ok {
 			if pos.IsRecovered() {
 				return 1
 			}
 			return 0
 		}
 		n := 0
-		for i := range x.NumField() {
-			n += countRecoveredPositions(x.Field(i))
+		for _, field := range x.Fields() {
+			n += countRecoveredPositions(field)
 		}
 		return n
 	}

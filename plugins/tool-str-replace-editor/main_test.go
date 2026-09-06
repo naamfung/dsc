@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,5 +202,41 @@ func TestNormalizeWorkspacePath(t *testing.T) {
 		if got := normalizeWorkspacePath(in); got != want {
 			t.Errorf("normalizeWorkspacePath(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestViewDirectoryRejected 回归：模型误把目录当文件 view（如把仓库目录整条传给 view）
+// 时，必须给出明确「是目录而非文件」的提示，且路径用正斜杆展示——Windows 上
+// os.ReadFile 读目录只报 "Incorrect function."（ERROR_INVALID_FUNCTION），模型无从
+// 判断是路径填错还是文件损坏，曾致真实运行中模型反复用目录路径重试。
+func TestViewDirectoryRejected(t *testing.T) {
+	state, dir := newTestState(t)
+	ws := filepath.Join(dir, "workspace")
+
+	res, err := exec(t, state, map[string]interface{}{
+		"command": "view",
+		"path":    ws,
+	})
+	if err == nil {
+		t.Fatalf("view on directory should fail, got result %q", res)
+	}
+	if !strings.Contains(err.Error(), "is a directory, not a file") {
+		t.Fatalf("expected clear directory hint, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "\\") {
+		t.Fatalf("error path should use forward slashes, got: %v", err)
+	}
+}
+
+// TestSlashErr 断言文件系统错误的路径字段被归一为正斜杆（Windows 上 os.* 错误
+// 内嵌反斜杆路径，透传前须统一展示风格）。
+func TestSlashErr(t *testing.T) {
+	err := &os.PathError{Op: "read", Path: `D:\a\b.txt`, Err: errors.New("Incorrect function.")}
+	got := slashErr(err).Error()
+	if got != "read D:/a/b.txt: Incorrect function." {
+		t.Fatalf("slashErr = %q, want %q", got, "read D:/a/b.txt: Incorrect function.")
+	}
+	if slashErr(nil) != nil {
+		t.Fatal("slashErr(nil) should be nil")
 	}
 }

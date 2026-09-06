@@ -5,6 +5,7 @@ package syntax
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"os"
 	"regexp"
@@ -31,7 +32,7 @@ func TestPrintFiles(t *testing.T) {
 				}
 				t.Run("", func(t *testing.T) {
 					in := c.inputs[0]
-					printTest(t, parser, printer, in, in)
+					printTest(t, parser, printer, in, cmp.Or(c.printedAs, in))
 				})
 			}
 		})
@@ -97,6 +98,8 @@ var printTests = []printCase{
 	samePrint(">&2 foo"),
 	samePrint(">&2 foo 2>&1 bar <f"),
 	{"foo >&2>/dev/null", "foo >&2 >/dev/null"},
+	samePrint("exec {foo[1]}>&-"),
+	samePrint("exec {foo}>&-"),
 	{"foo <<EOF bar\nl1\nEOF", "foo bar <<EOF\nl1\nEOF"},
 	samePrint("foo <<\\\\\\\\EOF\nbar\n\\\\EOF"),
 	samePrint("foo <<\"\\EOF\"\nbar\n\\EOF"),
@@ -113,6 +116,9 @@ var printTests = []printCase{
 	samePrint("<<EOF\nEOF"),
 	samePrint("foo <<EOF\nEOF\n\nbar"),
 	samePrint("foo <<'EOF'\nEOF\n\nbar"),
+	samePrint("if cmd <<EOF\nbody\nEOF\nthen\n\tfoo\nfi"),
+	samePrint("while cmd <<EOF\nbody\nEOF\ndo\n\tfoo\ndone"),
+	samePrint("if true; then\n\tcat <<-EOF # comment\n\t\tcontent\n\tEOF\nfi"),
 	{
 		"{ foo; bar; }",
 		"{\n\tfoo\n\tbar\n}",
@@ -458,7 +464,7 @@ var printTests = []printCase{
 	},
 	{
 		"( (foo) )\n$( (foo) )\n<( (foo) )",
-		"( (foo))\n$( (foo))\n<((foo))",
+		"( (foo) )\n$( (foo) )\n<((foo))",
 	},
 	{
 		"if ( ((foo)) || bar ); then baz; fi",
@@ -469,6 +475,10 @@ var printTests = []printCase{
 	samePrint("\"foo\\\n$(bar)\""),
 	samePrint("\"foo\\\nbar\""),
 	samePrint("((foo++)) || bar"),
+	{
+		"(( ! 0 )) && echo true",
+		"((! 0)) && echo true",
+	},
 	{
 		"a=b \\\nc=d \\\nfoo",
 		"a=b \\\n\tc=d \\\n\tfoo",
@@ -534,6 +544,13 @@ var printTests = []printCase{
 		"f <<-EOF\n\t{\n\t\ttoo little indented\n\t}\nEOF",
 	},
 	samePrint("<<-EOF\n\t$foo\nEOF\n\n{\n\tbar\n}"),
+	samePrint("f <<-A\n\ta $(\n\t\tg <<-B\n\t\t\tb1\n\t\t\tb2\n\t\tB\n\t)\nA"),
+	samePrint("f <<-A\n\ta $(\n\t\tg <<-B\n\t\t\tb $(\n\t\t\t\th <<-C\n\t\t\t\t\tc1\n\t\t\t\tC\n\t\t\t)\n\t\tB\n\t)\nA"),
+	samePrint("f <<-EOF\n\tfoo\tbar\nEOF"),
+	samePrint("f <<-EOF\n\ta $(\n\t\techo \"x\ty\"\n\t)\nEOF"),
+	samePrint("f <<-A\n\ta $(\n\t\tg <<B\nb1\nB\n\t)\nA"),
+	samePrint("f <<-A\n\ta $(\n\t\tg <<B\nb1\tx\n\t\tkeep\nB\n\t)\nA"),
+	samePrint("f <<-A\n\ta $(\n\t\tg <<-B\n\t\t\tb $(\n\t\t\t\th <<C\nc1\nC\n\t\t\t)\n\t\tB\n\t)\nA"),
 	samePrint("f <<EOF\nEOF\n# comment"),
 	samePrint("f <<EOF\nEOF\n# comment\nbar"),
 	samePrint("f <<EOF # inline\n$(\n\t# inside\n)\nEOF\n# outside\nbar"),
@@ -633,22 +650,24 @@ var printTests = []printCase{
 		"(\n(foo >redir))",
 		"(\n\t(foo >redir)\n)",
 	},
+	samePrint("( (foo) )"),
+	samePrint("$( (foo) )"),
+	samePrint("$( ((foo++)) )"),
 	{
-		"( (foo) )",
-		"( (foo))",
+		"$( (foo); bar )",
+		"$(\n\t(foo)\n\tbar\n)",
 	},
 	{
 		"( (foo); bar )",
 		"(\n\t(foo)\n\tbar\n)",
 	},
-	{
-		"( ((foo++)) )",
-		"( ((foo++)))",
-	},
+	samePrint("( ((foo++)) )"),
 	{
 		"( ((foo++)); bar )",
 		"(\n\t((foo++))\n\tbar\n)",
 	},
+	samePrint("(foo && (bar) )"),
+	samePrint("( (foo) >redir)"),
 	samePrint("(\n\t((foo++))\n)"),
 	samePrint("(foo && bar)"),
 	samePrint(`$foo#bar ${foo}#bar 'foo'#bar "foo"#bar`),
@@ -1248,7 +1267,6 @@ func printTest(t *testing.T, parser *Parser, printer *Printer, in, want string) 
 	if err != nil {
 		t.Fatalf("parsing got an error: %s:\n%s", err, in)
 	}
-	origWant := want
 	want += "\n"
 	got, err := strPrint(printer, prog)
 	if err != nil {
@@ -1258,11 +1276,9 @@ func printTest(t *testing.T, parser *Parser, printer *Printer, in, want string) 
 		t.Fatalf("Print mismatch:\nwant:\n%q\ngot:\n%q", want, got)
 	}
 
-	// With the original "want" output string,
+	// With the "want" output string, including the added trailing newline,
 	// make sure that it's idempotent when formatted again.
-	// Note that we don't want the added newline,
-	// as that can change the meaning of trailing backslashes.
-	progAgain, err := parser.Parse(strings.NewReader(origWant), "")
+	progAgain, err := parser.Parse(strings.NewReader(want), "")
 	if err != nil {
 		t.Fatalf("Result is not valid shell:\n%s", want)
 	}

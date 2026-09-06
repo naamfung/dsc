@@ -51,6 +51,22 @@ func exitCode(t *testing.T, err error) int {
 	return -1
 }
 
+// TestSlashErr 断言错误字符串里的 Windows 反斜杆路径被归一为正斜杆，
+// 使 shell 报错与模型/用户见到的其余路径展示风格一致。
+func TestSlashErr(t *testing.T) {
+	got := slashErr(os.ErrNotExist) // 非路径错误原样输出
+	if !strings.Contains(got, "file does not exist") {
+		t.Fatalf("slashErr on plain error should keep text, got %q", got)
+	}
+	got = slashErr(&os.PathError{Op: "stat", Path: `D:\a\b.txt`, Err: os.ErrNotExist})
+	if strings.Contains(got, `\`) {
+		t.Fatalf("slashErr should normalize backslashes, got %q", got)
+	}
+	if !strings.Contains(got, "stat D:/a/b.txt") {
+		t.Fatalf("slashErr should keep error text with slashed path, got %q", got)
+	}
+}
+
 // TestInternalMkdirLsSetup 空 PATH 下 mkdir/ls 建目录与列出。
 func TestInternalMkdirLsSetup(t *testing.T) {
 	dir := t.TempDir()

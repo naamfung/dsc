@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -186,6 +187,37 @@ func computeHash(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// slashErr 把文件系统错误里的原生路径归一为正斜杆（Windows 上 os.* 错误内嵌
+// 反斜杆路径，直接透传给模型/用户时与其余正斜杆路径风格不一致）。
+func slashErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return &os.PathError{Op: pe.Op, Path: filepath.ToSlash(pe.Path), Err: pe.Err}
+	}
+	return err
+}
+
+// readFileForEdit 读取待编辑文件内容。路径指向目录时给出明确提示：Windows 上
+// os.ReadFile 读目录只报 "Incorrect function."（ERROR_INVALID_FUNCTION），模型
+// 无从判断是路径填错还是文件损坏；提前判定并说明是目录，便于模型自行纠正。
+func readFileForEdit(reqPath string) (string, error) {
+	fi, err := os.Stat(reqPath)
+	if err != nil {
+		return "", slashErr(err)
+	}
+	if fi.IsDir() {
+		return "", fmt.Errorf("path is a directory, not a file: %s", filepath.ToSlash(reqPath))
+	}
+	content, err := os.ReadFile(reqPath)
+	if err != nil {
+		return "", slashErr(err)
+	}
+	return string(content), nil
+}
+
 func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON json.RawMessage) (string, error) {
 	var args strReplaceEditorArgs
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
@@ -208,11 +240,10 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 
 	switch args.Command {
 	case "view":
-		content, err := os.ReadFile(reqPath)
+		contentStr, err := readFileForEdit(reqPath)
 		if err != nil {
 			return "", err
 		}
-		contentStr := string(content)
 		version := computeHash(contentStr)
 		// 更新觀測狀態
 		state.updateObservation(reqPath, "present", version, contentStr)
@@ -224,10 +255,10 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		}
 		dir := filepath.Dir(reqPath)
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return "", err
+			return "", slashErr(err)
 		}
 		if err := os.WriteFile(reqPath, []byte(args.FileText), 0644); err != nil {
-			return "", err
+			return "", slashErr(err)
 		}
 		version := computeHash(args.FileText)
 		// 更新觀測狀態
@@ -248,11 +279,10 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("str_replace failed: file has not been observed (viewed). Please use 'view' command first.")
 		}
 
-		content, err := os.ReadFile(reqPath)
+		contentStr, err := readFileForEdit(reqPath)
 		if err != nil {
 			return "", err
 		}
-		contentStr := string(content)
 
 		// 驗證版本/內容是否匹配
 		if obs.LastContent != "" && obs.LastContent != contentStr {
@@ -266,7 +296,7 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		}
 		newContentStr := strings.Replace(contentStr, args.OldStr, args.NewStr, 1)
 		if err := os.WriteFile(reqPath, []byte(newContentStr), 0644); err != nil {
-			return "", err
+			return "", slashErr(err)
 		}
 
 		// 更新觀測狀態
@@ -289,11 +319,10 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("insert failed: file has not been observed (viewed). Please use 'view' command first.")
 		}
 
-		content, err := os.ReadFile(reqPath)
+		contentStr, err := readFileForEdit(reqPath)
 		if err != nil {
 			return "", err
 		}
-		contentStr := string(content)
 
 		// 驗證版本/內容是否匹配
 		if obs.LastContent != "" && obs.LastContent != contentStr {
@@ -314,7 +343,7 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		}
 		newContent := strings.Join(newLines, "\n")
 		if err := os.WriteFile(reqPath, []byte(newContent), 0644); err != nil {
-			return "", err
+			return "", slashErr(err)
 		}
 
 		// 更新觀測狀態

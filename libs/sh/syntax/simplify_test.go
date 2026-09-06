@@ -30,6 +30,9 @@ var simplifyTests = [...]simplifyTest{
 	noSimple("$((${!a} + ${#b}))"),
 	noSimple("a[$b]=2"),
 	noSimple("${a[$b]}"),
+	noSimple("${a[x,$b]}"),
+	noSimple("${a[$b + 1]}"),
+	noSimple("a=([x,$b]=v)"),
 	noSimple("${a[@]}"),
 	noSimple("((${a[@]}))"),
 	noSimple("((${a[*]}))"),
@@ -47,6 +50,8 @@ var simplifyTests = [...]simplifyTest{
 	noSimple(`[[ ! -e foo ]]`),
 	noSimple(`[[ foo == bar ]]`),
 	{`[[ foo = bar ]]`, `[[ foo == bar ]]`},
+	noSimple(`[[ foo =~ "$bar" ]]`),
+	{`[[ "$foo" =~ bar ]]`, `[[ $foo =~ bar ]]`},
 
 	// stmts
 	{"$( (sts))", "$(sts)"},
