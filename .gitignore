@@ -36,6 +36,8 @@ sessions/
 spill/
 logs/
 
+builder/builder
+
 # Node.js dependencies and build caches
 node_modules/
 .svelte-kit/
