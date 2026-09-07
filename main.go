@@ -81,12 +81,17 @@ func loadConfig(path string) (*core.Config, error) {
 // getExecutableDir 獲取可執行文件所在目錄的絕對路徑
 // resolveWorkspaceRoot 解析統一 workspace 根：
 // 僅當配置提供絕對路徑時以其覆蓋（用戶顯式指定工作區）；
-// 否則默認以啟動目錄 cwd 為根——在哪个目录启动 dsc，就以哪个目录为工作区
+// 否則以显式设置的 DSC_WORKSPACE_ROOT 环境变量为根（插件侧 builtin_tools 的
+// 回退读取同一变量，宿主与插件对「统一根」来源一致）；
+// 再否則默認以啟動目錄 cwd 為根——在哪个目录启动 dsc，就以哪个目录为工作区
 // （对齐 REX/Claude Code 的「以启动目录为工作区」直觉）。相對路徑配置不再
 // 参与決定根（避免 ./workspace 把根推到子目錄）。
 func resolveWorkspaceRoot(cwd, cfgRoot string) string {
 	if filepath.IsAbs(cfgRoot) {
 		return filepath.Clean(cfgRoot)
+	}
+	if env := os.Getenv("DSC_WORKSPACE_ROOT"); env != "" {
+		return filepath.Clean(env)
 	}
 	if cwd == "" {
 		if wd, err := os.Getwd(); err == nil {

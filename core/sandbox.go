@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -142,8 +143,21 @@ func canonicalWorkspaceRoot() string {
 // GetFinalPathNameByHandle 穿透 junction/symlink，Unix 用 EvalSymlinks），
 // 再做包含判定——从而避免 workspace 内指向外部的 junction/symlink 令词法前缀
 // 比较误判为「在根内」而写穿沙箱（P0-3）。
+//
+// 相对路径一律以 WorkspaceRoot 为基解析（对齐工具插件语义：str_replace_editor 的
+// safePath 与 tool-filesystem 的 shell 均把相对路径落在工作区根下）——若按宿主进程
+// cwd 解析，cwd 与工作区根不一致时会把本在工作区内的相对写误判为越界而误拒。
+// 例外：Windows 上盘符无关的根路径（/xxx 或 \xxx，filepath.IsAbs 判为假）不是
+// 工作区相对路径，若并入 WorkspaceRoot 会把 /etc/hosts 之类误判为工作区内而放行
+// 越界写，故维持既有语义（按当前盘根解析，本就落于工作区外）。
 func inWorkspace(path string) bool {
-	abs, err := filepath.Abs(workspacePathToRoot(path))
+	p := workspacePathToRoot(path)
+	driveLessRoot := runtime.GOOS == "windows" && !filepath.IsAbs(p) &&
+		(strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`))
+	if !filepath.IsAbs(p) && !driveLessRoot {
+		p = filepath.Join(WorkspaceRoot, p)
+	}
+	abs, err := filepath.Abs(p)
 	if err != nil {
 		return false
 	}

@@ -163,6 +163,25 @@ func TestSandboxWorkspaceAllowsRealPathCaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestSandboxWorkspaceAllowsRelativePath 回归「相对路径写被误拒」：任务给模型的相对路径
+// （如 bench-out/editor_flow/reply.txt）会被工具以工作区根为基解析（对齐 str_replace_editor
+// 的 safePath 与 tool-filesystem 的 shell cwd），沙箱判定亦须以 WorkspaceRoot 为基——若按
+// 宿主进程 cwd 解析，cwd 与工作区根不一致时会把本在工作区内的相对写误判为越界而误拒，
+// 模型被迫改用 shell 绕过（曾致 StrReplaceEditor 无法在 workspace-write 下写文件）。
+func TestSandboxWorkspaceAllowsRelativePath(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir() + "/ws"
+	defer func() { WorkspaceRoot = orig }()
+	m := newRouterManager()
+	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxWorkspaceWrite)))
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+
+	if _, err := m.ExecuteTool(context.Background(), "str_replace_editor",
+		json.RawMessage(`{"command":"str_replace","path":"bench-out/editor_flow/reply.txt","old_str":"a","new_str":"b"}`)); err != nil {
+		t.Fatalf("relative-path write should be resolved against WorkspaceRoot and pass: %v", err)
+	}
+}
+
 func TestSandboxFullAllowsWrite(t *testing.T) {
 	m := newRouterManager()
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(fixedPolicy(SandboxFullAccess)))
