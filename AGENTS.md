@@ -118,6 +118,15 @@ LLM 请求的前缀（system prompt、工具目录、上下文片段等）参与
 
 - **验证红线**：涉及上述能力的改动，提交前除本平台 `go build ./...` 外，必须对**定义的目标平台集**逐对 (GOOS, GOARCH) 各交叉编译一次，确认平台文件都能编过——PowerShell：`$env:GOOS='<goos>'; $env:GOARCH='<goarch>'; go build ./...`；Unix shell：`GOOS=<goos> GOARCH=<goarch> go build ./...`。平台 API/签名用错应在交叉编译期暴露，勿拖到真机。
 
+## 真机测试验证流程
+
+真机（真实模型服务 + 真实工具进程的运行态）验证时，须按下述固定流程产出可运行产物并跑完测评后清理，避免把测得的运行时配置/临时产物带进仓库：
+
+1. **产出 dist**：先在 `builder` 目录内编译构建器（`go build -o builder.exe builder.go`），再直接在该目录内执行 `./builder` 产出 `dist/dsc-for-<platform>/`。勿用 `go run builder/builder.go`——它经临时缓存目录运行，会把仓库根错位到缓存路径，导致构建失败。
+2. **写运行时配置**：切换进 dist 平台目录，从 `config/config.example.yaml` 复制出 `config/config.yaml`，按目标模型服务改写（LLM base_url / model / api_key 等）。
+3. **跑 agentic-bench 真机测评**：用随 dsc 主程序同级复制进 dist 的 `bench` 程序（或等价命令）启动，加载 `tool-agentic-bench` 插件逐项完成并汇总报告；若本次改动点未被已有用例覆盖，则先在该插件补用例、再重走 agentic-bench 验证。
+4. **清理**：测评完成后删除整个 `dist` 目录，临时配置与实际产物不得随本次提交带入仓库。
+
 ## 提交约定
 
 - 遵循一步一提交（一个特性/修复一次提交），便于回滚。
