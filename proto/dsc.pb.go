@@ -933,8 +933,10 @@ type Tool struct {
 	Name           string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Description    string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
 	ParametersJson string                 `protobuf:"bytes,3,opt,name=parameters_json,json=parametersJson,proto3" json:"parameters_json,omitempty"` // JSON Schema 字符串
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// 声明式能力标签；'requires-never-approval' 表示本工具要求前置审批策略为 never
+	Capabilities  []string `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Tool) Reset() {
@@ -986,6 +988,13 @@ func (x *Tool) GetParametersJson() string {
 		return x.ParametersJson
 	}
 	return ""
+}
+
+func (x *Tool) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
 }
 
 type ChatResponse struct {
@@ -3528,11 +3537,12 @@ const file_dsc_proto_rawDesc = "" +
 	"toolCallId\x12,\n" +
 	"\n" +
 	"tool_calls\x18\x04 \x03(\v2\r.dsc.ToolCallR\ttoolCalls\x12\x16\n" +
-	"\x06images\x18\x05 \x03(\tR\x06images\"e\n" +
+	"\x06images\x18\x05 \x03(\tR\x06images\"\x89\x01\n" +
 	"\x04Tool\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12'\n" +
-	"\x0fparameters_json\x18\x03 \x01(\tR\x0eparametersJson\"{\n" +
+	"\x0fparameters_json\x18\x03 \x01(\tR\x0eparametersJson\x12\"\n" +
+	"\fcapabilities\x18\x04 \x03(\tR\fcapabilities\"{\n" +
 	"\fChatResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12#\n" +
 	"\rfinish_reason\x18\x02 \x01(\tR\ffinishReason\x12,\n" +

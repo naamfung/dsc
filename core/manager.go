@@ -285,6 +285,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	m.approvalGlobalExplicit.Store(os.Getenv("DSC_APPROVAL") != "")
 	m.events.OnWaterfall(EventToolPreExecute, m.approvalEscalation())
 	m.events.OnWaterfall(EventToolPreExecute, m.toolApprovalGate())
+	m.events.OnWaterfall(EventToolPreExecute, m.neverApprovalGate())
 	m.events.OnWaterfall(EventToolPreExecute, sandboxPolicy(m.GetSandboxPolicy))
 	// LLM 请求默认带退避重试（最多 2 次，300ms 起指数退避）；流中途失败不重试
 	m.events.OnWaterfall(EventLLMRequest, LLMRetryListener(2, 300*time.Millisecond))
@@ -2361,10 +2362,11 @@ func listStagedTools(toolClient proto.ToolServiceClient) ([]ToolDefinition, []st
 	var names []string
 	for _, t := range listResp.Tools {
 		defs = append(defs, &RemoteTool{
-			name:        t.Name,
-			description: t.Description,
-			schema:      json.RawMessage(t.ParametersJson),
-			client:      toolClient,
+			name:         t.Name,
+			description:  t.Description,
+			schema:       json.RawMessage(t.ParametersJson),
+			client:       toolClient,
+			capabilities: t.Capabilities,
 		})
 		names = append(names, t.Name)
 	}

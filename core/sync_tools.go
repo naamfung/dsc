@@ -42,10 +42,11 @@ func (m *Manager) syncPluginTools() {
 		names := make([]string, 0, len(resp.Tools))
 		for _, t := range resp.Tools {
 			defs = append(defs, &RemoteTool{
-				name:        t.Name,
-				description: t.Description,
-				schema:      json.RawMessage(t.ParametersJson),
-				client:      client,
+				name:         t.Name,
+				description:  t.Description,
+				schema:       json.RawMessage(t.ParametersJson),
+				client:       client,
+				capabilities: t.Capabilities,
 			})
 			names = append(names, t.Name)
 		}

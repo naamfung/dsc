@@ -35,7 +35,15 @@ type Tool struct {
 	// 用于索引等随运行状态变化的内容（如技能索引安装后需立即反映）。
 	Context   string
 	ContextFn func() string
+	// Capabilities 可选：声明式能力标签列表（wire token，见 proto.Tool.capabilities）。
+	// 宿主据此按能力而非插件名做前置门控：声明 CapabilityRequiresNeverApproval 的工具
+	// 在审批策略非 never 时会于执行前被拒绝（避免逐工具弹窗授权）。
+	Capabilities []string
 }
+
+// CapabilityRequiresNeverApproval 声明式能力标签：本工具要求前置审批策略为 never。
+// 与宿主 core 侧同名常量同值（对齐同一 wire token，见 proto.Tool.capabilities 注释）。
+const CapabilityRequiresNeverApproval = "requires-never-approval"
 
 // toolGRPCPlugin 是 go-core 适配器：注册 ToolService + PluginMetadata +
 // PluginHookService（钩子为可选注册，未设置时为空实现，宿主调用无副作用）。
@@ -93,6 +101,7 @@ func (s *toolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsR
 			Name:           t.Name,
 			Description:    t.Description,
 			ParametersJson: string(t.Schema),
+			Capabilities:   t.Capabilities,
 		})
 	}
 	return &proto.ListToolsResponse{Tools: tools}, nil

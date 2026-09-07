@@ -457,30 +457,36 @@ func main() {
 		Schema:      emptySchema,
 		Handler:     hBenchStart,
 		ViewFn:      viewBenchStart,
+		// 声明式能力：本族工具要求审批策略为 never（宿主据此在非 never 时于执行前
+		// 拒绝，避免无人值守评测中途反复弹窗授权）。
+		Capabilities: []string{dsc.CapabilityRequiresNeverApproval},
 		// Context 进入 ListContext / system prompt：引导模型真实完成任务、不得向
 		// bench 工具索要答案，否则评分失真。
 		Context: "bench_* 工具是一套模型能力评分测试台（bench），评分对象是模型自身。请真实使用你的工具（文件系统、shell、lisp_eval 等）逐一完成任务：对 file 类用例必须用文件工具把产物写到规定的 reply.txt，对 answer 类用例把答案经 bench_submit 提交。bench 只负责评分，不会也不会告诉你期望答案——不要向 bench 工具索要标准答案，这会判 FAIL。全部用例完成后调用 bench_report 查看自动计分汇总。",
 	})
 	sdk.Tool(dsc.Tool{
-		Name:        "bench_next",
-		Description: "取下一个未评分的测试用例（含用例 id、标题与要完成的任务陈述）。返回 done:true 表示全部完成。首个用例可用它获取，其后经 bench_submit 会自动推进到下一用例，无需反复调用。",
-		Schema:      emptySchema,
-		Handler:     hBenchNext,
-		ViewFn:      viewBenchNext,
+		Name:         "bench_next",
+		Description:  "取下一个未评分的测试用例（含用例 id、标题与要完成的任务陈述）。返回 done:true 表示全部完成。首个用例可用它获取，其后经 bench_submit 会自动推进到下一用例，无需反复调用。",
+		Schema:       emptySchema,
+		Handler:      hBenchNext,
+		ViewFn:       viewBenchNext,
+		Capabilities: []string{dsc.CapabilityRequiresNeverApproval},
 	})
 	sdk.Tool(dsc.Tool{
-		Name:        "bench_submit",
-		Description: "提交某用例的完成结果并自动评分。answer 类需带 answer 文本；file 类只传 case_id，插件直接读取规定产物文件判定。返回 PASS/FAIL（幂等，不会重复评分），并**自动推进到下一用例**：响应里的 next 字段直接给出下一题（case_id+task），照做即可——已评分用例无法重试，逐题前进直至 next 消失（done:true）。",
-		Schema:      submitSchema,
-		Handler:     hBenchSubmit,
-		ViewFn:      viewBenchSubmit,
+		Name:         "bench_submit",
+		Description:  "提交某用例的完成结果并自动评分。answer 类需带 answer 文本；file 类只传 case_id，插件直接读取规定产物文件判定。返回 PASS/FAIL（幂等，不会重复评分），并**自动推进到下一用例**：响应里的 next 字段直接给出下一题（case_id+task），照做即可——已评分用例无法重试，逐题前进直至 next 消失（done:true）。",
+		Schema:       submitSchema,
+		Handler:      hBenchSubmit,
+		ViewFn:       viewBenchSubmit,
+		Capabilities: []string{dsc.CapabilityRequiresNeverApproval},
 	})
 	sdk.Tool(dsc.Tool{
-		Name:        "bench_report",
-		Description: "自动汇总并输出本次测试的计分报告（通过/总数/得分百分比，逐用例状态），并把 JSON 报告写到 bench-out/report.json。",
-		Schema:      emptySchema,
-		Handler:     hBenchReport,
-		ViewFn:      viewBenchReport,
+		Name:         "bench_report",
+		Description:  "自动汇总并输出本次测试的计分报告（通过/总数/得分百分比，逐用例状态），并把 JSON 报告写到 bench-out/report.json。",
+		Schema:       emptySchema,
+		Handler:      hBenchReport,
+		ViewFn:       viewBenchReport,
+		Capabilities: []string{dsc.CapabilityRequiresNeverApproval},
 	})
 	sdk.Serve()
 }

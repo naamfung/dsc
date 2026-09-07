@@ -75,6 +75,14 @@ sdk.ToolProvider(func() []dsc.Tool {
 })
 ```
 
+### 工具能力声明（capability）
+
+`dsc.Tool.Capabilities []string` 可选字段声明能力标签（wire token 见 `proto.Tool.capabilities`）。
+声明了 `dsc.CapabilityRequiresNeverApproval`（值 `"requires-never-approval"`）的工具要求宿主
+会话审批策略为 `never` 才允许调用：否则宿主在执行前拒绝并提示先设 `approval=never`
+（`DSC_APPROVAL=never` 或 TUI `/approval never`），避免无人值守评测在 ask 下逐工具弹窗授权。
+新增同类需要前置审批门控的工具，只需在工具声明里加该能力标签，宿主无需改动（按能力而非插件名识别）。
+
 ## 钩子（参与宿主流水线，无需任何插件配合）
 
 ```go

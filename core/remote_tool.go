@@ -8,12 +8,31 @@ import (
 	"dsc/proto"
 )
 
+// CapabilityTool 可选接口：宿主内部工具可报告自身声明的能力标签，供宿主按
+// 「能力」而非「插件名」做前置门控（对齐 ApprovalRequester 可选接口风格）。
+type CapabilityTool interface {
+	// HasCapability 返回该工具是否声明了指定能力标签。
+	HasCapability(cap string) bool
+}
+
 // RemoteTool 實現了 ToolDefinition，通過 gRPC 調用遠程工具
 type RemoteTool struct {
-	name        string
-	description string
-	schema      json.RawMessage
-	client      proto.ToolServiceClient
+	name         string
+	description  string
+	schema       json.RawMessage
+	client       proto.ToolServiceClient
+	capabilities []string
+}
+
+// HasCapability 报告该工具是否声明了指定能力标签（源自插件工具声明的 proto.Tool.capabilities。
+// 空集合对任意能力返回 false，向后兼容无能力声明的旧工具）。
+func (r *RemoteTool) HasCapability(cap string) bool {
+	for _, c := range r.capabilities {
+		if c == cap {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RemoteTool) Name() string {
