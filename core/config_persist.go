@@ -77,7 +77,7 @@ func pluginsSequenceNode(root *yaml.Node) *yaml.Node {
 }
 
 // entryToNode 将 PluginEntry 序列化为 yaml 映射节点，剔除空值键
-// （depends_on 为 null、env 为空映射时不写入，保持写回内容干净）。
+// （env 为空映射时不写入，保持写回内容干净）。
 func entryToNode(e PluginEntry) (*yaml.Node, error) {
 	data, err := yaml.Marshal(e)
 	if err != nil {
