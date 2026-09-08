@@ -438,17 +438,25 @@ func viewBenchReport(ctx context.Context, args json.RawMessage, result string) (
 }
 
 func main() {
-	sdk := dsc.New(dsc.Config{Name: "agentic-bench", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "agentic-bench",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "agentic-bench" 能力：含 bench_start/next/submit/report 评测工具
+			"agentic-bench": "true",
+		},
+	})
 
 	emptySchema := json.RawMessage(`{"type":"object","properties":{}}`)
 	submitSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"case_id": {"type": "string", "description": "bench_next 返回的用例 id"},
-			"answer": {"type": "string", "description": "仅对 answer 类用例提交；file 类由插件直接读取产物文件判定，无需传入"}
-		},
-		"required": ["case_id"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "case_id": {"type": "string", "description": "bench_next 返回的用例 id"},
+                        "answer": {"type": "string", "description": "仅对 answer 类用例提交；file 类由插件直接读取产物文件判定，无需传入"}
+                },
+                "required": ["case_id"]
+        }`)
 
 	// bench 工具是纯 Go + dsc-sdk，可交叉编译全部目标平台（七端均零 CGO）。
 	sdk.Tool(dsc.Tool{

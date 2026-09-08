@@ -216,6 +216,34 @@ var benchCases = []CaseQuery{
 		NoLeak:   true,
 		Weight:   1,
 	},
+	{
+		ID:       "cron_add_id",
+		Title:    "DSC CRON 机制（cron_add 真实调用）",
+		Task:     "请用 cron_add 工具真实调用 DSC 的 CRON 机制添加一个定时任务（不要绕过此步骤、也不要凭空捏造一个 id）：参数为 name=\"bench-cron-test\"、cron=\"0 8 * * *\"（每天 08:00）、prompt=\"good morning\"。该工具返回一个 JSON，其中含 id 字段（形如 cron-<digits>，由宿主在调用成功后分配，无法预先猜到）。请用你的文件工具把该 id 字符串单独写入路径 bench-out/cron_add_id/reply.txt（绝对路径：<caseOut>/reply.txt），不附加其它文字或换行。完成后本用例由插件直接读取该文件端态判定。",
+		Relative: "bench-out/cron_add_id/reply.txt",
+		Kind:     "file",
+		Matcher:  "regex",
+		// 格式合规类：id 由宿主 cron 调度器在真实创建任务后分配（形如 cron-<digits>），
+		// 模型无法凭空捏造——只有真实调用 cron_add 才能拿到；期望格式即任务规格，
+		// 无可保密的答案。
+		Expected: `^cron-\d+$`,
+		NoLeak:   true,
+		Weight:   1,
+	},
+	{
+		ID:       "cron_list_roundtrip",
+		Title:    "DSC CRON 机制（cron_add → cron_list → cron_set_enabled）",
+		Task:     "请按顺序真实调用 DSC 的 CRON 机制完成下列操作（不可跳过任一步骤）：\n1. 用 cron_add 工具添加一个定时任务：name=\"bench-cron-rt\"、cron=\"*/15 * * * *\"（每 15 分钟）、prompt=\"recurring check\"。该工具返回的 JSON 中含 id 字段（形如 cron-<digits>）。\n2. 用 cron_list 工具列出当前所有定时任务，确认上一步添加的任务存在（其 id 应与 cron_add 返回的一致、enabled=true）。\n3. 用 cron_set_enabled 工具把该任务的 enabled 设为 false（参数：id=<上一步的 id>、enabled=false）。\n4. 再次用 cron_list 工具确认该任务此时 enabled=false。\n5. 用你的文件工具把上述任务的 id 字符串单独写入路径 bench-out/cron_list_roundtrip/reply.txt（绝对路径：<caseOut>/reply.txt），不附加其它文字或换行。\n完成后本用例由插件直接读取该文件端态判定。",
+		Relative: "bench-out/cron_list_roundtrip/reply.txt",
+		Kind:     "file",
+		Matcher:  "regex",
+		// 格式合规类：id 由宿主 cron 调度器在真实创建任务后分配（形如 cron-<digits>），
+		// 模型无法凭空捏造——只有真实完成 cron_add → cron_list → cron_set_enabled → cron_list
+		// 完整往返才能拿到合法 id；期望格式即任务规格，无可保密的答案。
+		Expected: `^cron-\d+$`,
+		NoLeak:   true,
+		Weight:   2, // 多步骤、真实调用 CRON 机制全链路，权重略高
+	},
 }
 
 // matchCaseText 对给定的候选文本按用例规则判定，返回是否命中与失败原因（不回显期望值）。

@@ -43,7 +43,7 @@
 
 ## 用例
 
-内置 16 例，覆盖：计算/数论/精确分数推理、常识/文言史实/多语言书写、结构化输出、工具端态、多步文件链与 shell 管道、StrReplaceEditor 编辑流程。
+内置 18 例，覆盖：计算/数论/精确分数推理、常识/文言史实/多语言书写、结构化输出、工具端态、多步文件链与 shell 管道、StrReplaceEditor 编辑流程、**DSC CRON 机制真实调用**。
 
 | id | 类型 | 验证点 |
 | -- | ---- | ------ |
@@ -63,9 +63,13 @@
 | `file_wc_lines` | file/num        | shell wc 统计行数并落盘 |
 | `pipe_filter`   | file/num        | **shell 管道**（cat \| grep \| wc 一行工程并算落盘） |
 | `editor_flow`   | file/regex      | **StrReplaceEditor 编辑流程**（create→view→str_replace→insert 全链路，端态须同时含替换后内容与插入行） |
+| `cron_add_id`   | file/regex      | **DSC CRON 机制真实调用**（cron_add 拿到宿主分配的 `cron-<digits>` id 并落盘） |
+| `cron_list_roundtrip` | file/regex | **DSC CRON 机制全链路**（cron_add → cron_list → cron_set_enabled(false) → cron_list 验证 disabled → 落盘 id；权重 2） |
 
-> 注：`json_health`、`file_multi` 与 `editor_flow` 是「格式合规」类——任务本身即要求的输出格式/内容，
-> 无可保密的预期值，故对防作弊扫描标记 `NoLeak` 豁免；其余用例的期望值一律不下发模型。
+> 注：`json_health`、`file_multi`、`editor_flow` 与两个 `cron_*` 是「格式合规」类——
+> 任务本身即要求的输出格式/内容，无可保密的预期值，故对防作弊扫描标记 `NoLeak` 豁免；
+> 其余用例的期望值一律不下发模型。CRON 用例的「期望」是宿主动态分配的 `cron-<digits>` id 格式，
+> 模型无法凭空捏造——只有真实调用 `cron_add` 等工具拿到合法 id 才能通过端态判定。
 
 产物按 `<benchRoot>/bench-out/<case_id>/reply.txt` 落盘；报告写
 `<benchRoot>/bench-out/report.json`。

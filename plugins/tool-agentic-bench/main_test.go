@@ -310,11 +310,15 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 		"fraction_sum":          {Status: "pass"},
 		"pipe_filter":           {Status: "pass"},
 		"editor_flow":           {Status: "pass"},
+		// 新增 CRON 评测用例：cron_add_id 与 cron_list_roundtrip
+		// （真实调用 DSC CRON 机制的端态验证；这里均标 pass 以测试报告汇总）
+		"cron_add_id":         {Status: "pass"},
+		"cron_list_roundtrip": {Status: "pass"},
 	}
 	state.mu.Unlock()
 
 	summary, reportJSON, view := buildReport(root, state.results, 12345)
-	if !strings.Contains(summary, "通过 14/16") {
+	if !strings.Contains(summary, "通过 16/18") {
 		t.Errorf("摘要应含通过计数，got %q", summary)
 	}
 	if view == nil {
@@ -334,15 +338,16 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(reportJSON), &parsed); err != nil {
 		t.Fatalf("报告 JSON 解析失败: %v", err)
 	}
-	if parsed.Passed != 14 || parsed.Total != 16 || parsed.Failed != 1 {
+	if parsed.Passed != 16 || parsed.Total != 18 || parsed.Failed != 1 {
 		t.Errorf("计分不对: passed=%d failed=%d total=%d", parsed.Passed, parsed.Failed, parsed.Total)
 	}
 	// 得分=成功数/总案例×100 两位小数；成败比=成功:失败（无 percent 冗余字段）。
-	if parsed.Score != "87.50" {
-		t.Errorf("总得分应为 87.50，got %q", parsed.Score)
+	// 16/18 = 88.888… → 88.89
+	if parsed.Score != "88.89" {
+		t.Errorf("总得分应为 88.89，got %q", parsed.Score)
 	}
-	if parsed.Ratio != "14:1" {
-		t.Errorf("成败比应为 14:1，got %q", parsed.Ratio)
+	if parsed.Ratio != "16:1" {
+		t.Errorf("成败比应为 16:1，got %q", parsed.Ratio)
 	}
 	if parsed.DurationMs != 12345 {
 		t.Errorf("总耗时未保真: %d", parsed.DurationMs)
@@ -373,7 +378,7 @@ func TestBuildReportRoundTripPreservesFields(t *testing.T) {
 		t.Fatalf("report.json 未落盘: %v", err)
 	}
 	var onDisk map[string]any
-	if err := json.Unmarshal(data, &onDisk); err != nil || onDisk["passed"] != float64(14) {
+	if err := json.Unmarshal(data, &onDisk); err != nil || onDisk["passed"] != float64(16) {
 		t.Fatalf("report.json 内容异常: %v err=%v", string(data), err)
 	}
 }
@@ -452,5 +457,110 @@ func TestRenderTaskPlaceholders(t *testing.T) {
 	}
 	if strings.Contains(out, "<caseOut>") || strings.Contains(out, "<benchRoot>") {
 		t.Errorf("占位符残留: %q", out)
+	}
+}
+
+// TestCronCasesDeclared 校验新增的两个 CRON 评测用例存在、均属 file 类、regex 判定，
+// 且任务陈述明确要求模型真实调用 cron_add / cron_list / cron_set_enabled 工具。
+func TestCronCasesDeclared(t *testing.T) {
+	byID := map[string]CaseQuery{}
+	for _, c := range benchCases {
+		byID[c.ID] = c
+	}
+	cronAdd, ok1 := byID["cron_add_id"]
+	if !ok1 {
+		t.Fatal("benchCases 应含 cron_add_id 用例")
+	}
+	cronRT, ok2 := byID["cron_list_roundtrip"]
+	if !ok2 {
+		t.Fatal("benchCases 应含 cron_list_roundtrip 用例")
+	}
+	for _, c := range []CaseQuery{cronAdd, cronRT} {
+		if c.Kind != "file" {
+			t.Errorf("%s: Kind 应为 file，got %q", c.ID, c.Kind)
+		}
+		if c.Matcher != "regex" {
+			t.Errorf("%s: Matcher 应为 regex，got %q", c.ID, c.Matcher)
+		}
+		if !c.NoLeak {
+			t.Errorf("%s: 应标记 NoLeak（id 由宿主分配，期望格式即任务规格）", c.ID)
+		}
+		if c.Relative == "" {
+			t.Errorf("%s: Relative 路径不能为空", c.ID)
+		}
+		// 任务陈述必须明确指引模型调用 cron_add 工具
+		if !strings.Contains(c.Task, "cron_add") {
+			t.Errorf("%s: 任务陈述应明确提及 cron_add 工具", c.ID)
+		}
+	}
+	// cron_list_roundtrip 还应要求 cron_list 与 cron_set_enabled
+	if !strings.Contains(cronRT.Task, "cron_list") {
+		t.Error("cron_list_roundtrip: 任务陈述应含 cron_list 步骤")
+	}
+	if !strings.Contains(cronRT.Task, "cron_set_enabled") {
+		t.Error("cron_list_roundtrip: 任务陈述应含 cron_set_enabled 步骤")
+	}
+	// 权重：cron_list_roundtrip 多步骤权重为 2
+	if cronAdd.Weight != 1 {
+		t.Errorf("cron_add_id: Weight 应为 1，got %d", cronAdd.Weight)
+	}
+	if cronRT.Weight != 2 {
+		t.Errorf("cron_list_roundtrip: Weight 应为 2，got %d", cronRT.Weight)
+	}
+}
+
+// TestCronCasesRegexAcceptsValidID 新增的 CRON 用例的 regex 应接受形如 cron-<digits>
+// 的合法任务 ID（由宿主在 cron_add 成功后分配），并拒绝任何不含此形式的字符串——
+// 防止模型绕过真实调用凭空捏造 ID。
+func TestCronCasesRegexAcceptsValidID(t *testing.T) {
+	byID := map[string]CaseQuery{}
+	for _, c := range benchCases {
+		byID[c.ID] = c
+	}
+	for _, id := range []string{"cron_add_id", "cron_list_roundtrip"} {
+		c, ok := byID[id]
+		if !ok {
+			t.Fatalf("缺少用例 %s", id)
+		}
+		// 合法 ID 形如 cron-1234567890（cron-<digits>）
+		valid := []string{
+			"cron-1",
+			"cron-1234567890",
+			"cron-9999999999999",
+		}
+		for _, v := range valid {
+			if ok, _ := matchCaseText(c, v); !ok {
+				t.Errorf("%s: 合法 id %q 应命中 regex %q", c.ID, v, c.Expected)
+			}
+		}
+		// 非法：模型凭空捏造（非 cron- 前缀或无数字）
+		invalid := []string{
+			"",
+			"cron-",
+			"cron-abc",
+			"1234567890",
+			"bench-cron-test",
+			"cron-1-2",
+			" Cron-123 ",
+		}
+		for _, v := range invalid {
+			if ok, _ := matchCaseText(c, v); ok {
+				t.Errorf("%s: 非法输入 %q 不应命中 regex %q", c.ID, v, c.Expected)
+			}
+		}
+	}
+}
+
+// TestNoAnswerLeakCronCases 防作弊守卫：CRON 用例的期望 regex（cron-\d+）
+// 不会因出现在任务陈述中而被判泄漏——这些用例的 NoLeak=true（期望格式即任务规格）。
+func TestNoAnswerLeakCronCases(t *testing.T) {
+	for _, c := range benchCases {
+		if c.ID != "cron_add_id" && c.ID != "cron_list_roundtrip" {
+			continue
+		}
+		if !c.NoLeak {
+			t.Errorf("%s: CRON 用例应 NoLeak=true", c.ID)
+		}
+		// NoLeak=true 的用例不参与防作弊扫描，故此处仅校验 NoLeak 标记正确即可。
 	}
 }
