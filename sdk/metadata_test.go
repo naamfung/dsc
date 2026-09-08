@@ -185,3 +185,33 @@ func TestMetadataServerProvidesRejectsRequiresPrefix(t *testing.T) {
 		t.Error("空键应被跳过")
 	}
 }
+
+// TestAgentMetadataServerEncodesRequires 校验 SDK agentMetadataServer 把
+// Config.Requires 与 Config.Provides 正确编码为 PluginInfo.Capabilities。
+func TestAgentMetadataServerEncodesRequires(t *testing.T) {
+	s := &SDK{cfg: Config{
+		Name:    "agent-react-loop",
+		Version: "1.1.0",
+		Type:    TypeAgent,
+		Requires: []CapabilityRequirement{
+			{Type: "llm", Capability: "llm"},
+		},
+	}}
+	srv := &agentMetadataServer{sdk: s}
+	info, err := srv.GetInfo(context.Background(), &metadata.Empty{})
+	if err != nil {
+		t.Fatalf("GetInfo: %v", err)
+	}
+	if info.Type != "agent" {
+		t.Errorf("Type = %q, want agent", info.Type)
+	}
+	if info.Name != "agent-react-loop" {
+		t.Errorf("Name = %q, want agent-react-loop", info.Name)
+	}
+	if got := info.Capabilities["requires/llm/llm"]; got != "true" {
+		t.Errorf("requires/llm/llm 应为 \"true\"，got %q", got)
+	}
+	if info.ApiVersion != "1.0" {
+		t.Errorf("ApiVersion = %q, want 1.0", info.ApiVersion)
+	}
+}
