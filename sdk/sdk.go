@@ -42,6 +42,49 @@ type Config struct {
 	Version    string
 	Type       Type
 	APIVersion string // 默认 "1.0"；宿主校验必须在 [1.0, 2.0)
+	// Requires 声明式能力依赖：本插件依赖其他插件提供的「能力」（capability），
+	// 而非依赖具体插件名——对齐 DSH/Cordis 的 inject 模型（见
+	// vendor/cordis/src/registry.ts Plugin.Base.inject）。
+	//
+	// 宿主在加载本插件时会扫描已加载插件的 PluginInfo.Capabilities 普通能力键
+	// （如 "supports_images": "true"、"cron": "true"），找到首个声明该能力的插件
+	// 并建立依赖关系——避免用户在 config.yaml 手工指定 depends_on 按插件名引用
+	// 易出错（按名依赖的旧有机制已删除，见 AGENTS.md 第4条「禁止保留 Deprecated 代码」）。
+	//
+	// 解析得到的依赖关系存于宿主运行时态 m.resolvedDeps，供运行时态查询与反应式
+	// 重算使用（对齐 DSH/Cordis 的 _refresh + notify）；config.yaml 不再含
+	// depends_on 字段——能力依赖由插件二进制内的 sdk.Config.Requires 自描述，
+	// 无需落盘。
+	//
+	// 例如：tool-agentic-bench 声明 Requires: [{Type: "tool", Capability:
+	// "agentic-bench-runner"}] —— 这里它本身是 bench runner，自己依赖另一
+	// 个具 cron 能力的插件时，可改声明 [{Type: "tool", Capability: "cron"}]，
+	// 宿主据此自动绑定到首个声明了 cron 能力的 tool 插件。
+	Requires []CapabilityRequirement
+	// Provides 声明本插件**提供**的能力（capability）——对齐 DSH/Cordis 的 provide
+	// 模型（见 vendor/cordis/src/registry.ts Plugin.Base.provide）。
+	//
+	// 键为能力名（如 "filesystem"、"skill"、"cron"），值为字符串形式的能力属性
+	// （如 "true" 表示能力启用）。其他插件经 Requires 声明对此能力的依赖时，
+	// 宿主扫描 PluginInfo.Capabilities 找到首个声明该能力的插件并建立依赖关系。
+	//
+	// LLM 插件自动提供 CapabilityLLM="llm" 能力（由 llmSdkMetadataServer 硬编码），
+	// 无需在 Provides 中重复声明。tool/agent/policy/dsc 类型插件若需声明自定义能力，
+	// 在此字段填入即可。
+	//
+	// 例如：tool-filesystem 可声明 Provides: map[string]string{"filesystem": "true"}，
+	// 其他依赖文件系统能力的插件声明 Requires: [{Type:"tool", Capability:"filesystem"}]，
+	// 宿主据此自动绑定。
+	Provides map[string]string
+}
+
+// CapabilityRequirement 一条声明式能力依赖：本插件依赖由 Type 类型插件提供的
+// Capability 能力。Type 取 "llm" 或 "tool"。Capability 是任意字符串能力标签，
+// 与目标插件在 PluginInfo.capabilities 中声明的键名一致（如 "supports_images"、
+// "agentic-bench-runner"）。
+type CapabilityRequirement struct {
+	Type       string
+	Capability string
 }
 
 // SDK 声明式插件构建器：注册完成后调用 Serve 启动 gRPC 插件进程。

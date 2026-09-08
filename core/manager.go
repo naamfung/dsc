@@ -69,11 +69,19 @@ type Manager struct {
 
 	// 动态注入插件相关字段：
 	// configPath 动态注入/卸载写回的 config.yaml 路径（config 始终为运行态唯一事实来源）。
-	// agentEntries  记录已声明的 agent 条目（含 DependsOn），供 PENDING agent 再激活时解析依赖。
+	// agentEntries  记录已声明的 agent 条目，供 PENDING agent 再激活时按能力依赖解析 LLM provider。
 	// pendingEntries 记录依赖未满足、等待后续注入的插件条目（provider 未拉起，agent 已拉起）。
+	// resolvedDeps  记录所有类型插件在运行期经「能力依赖自动解析」得到的 ResolvedDep 列表，
+	//               供运行时态查询与反应式重算（对齐 DSH/Cordis 的 _refresh + notify 模型）。
+	//               不区分插件是否经 config.yaml 持久化——孤儿插件（load_dsc_plugin persist=false
+	//               载入）的解析结果也存于此，可在运行时态查询使用。
 	configPath     string
 	agentEntries   map[string]PluginEntry
 	pendingEntries map[string]PluginEntry
+	resolvedDeps   map[string][]ResolvedDep
+	// backupSeq 进程内自增计数器，配合毫秒时间戳生成唯一 .bak 文件名，
+	// 避免同毫秒内多次 backupConfig 产生同名文件互相覆盖。
+	backupSeq atomic.Int64
 
 	// 事件总线：插件生命周期状态迁移事件的订阅者表。
 	// eventsMu 独立于 m.mu，避免状态机持锁发布事件时与订阅操作死锁。
@@ -206,6 +214,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		agentEntries:        make(map[string]PluginEntry),
 		loadedBinaries:      make(map[string]string),
 		pendingEntries:      make(map[string]PluginEntry),
+		resolvedDeps:        make(map[string][]ResolvedDep),
 		events:              NewEventBus(),
 		policyClients:       make(map[string]proto.FsObservationPolicyServiceClient),
 		policyOff:           make(map[string][]func()),
@@ -228,6 +237,9 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	_ = m.toolRegistry.Register(&jobTool{m: m, name: "job_kill"})
 	for _, t := range m.dscPluginTools() {
 		_ = m.toolRegistry.Register(t) // 宿主内置 DSC 插件管理工具（模型可调用）
+	}
+	for _, t := range m.cronTools() {
+		_ = m.toolRegistry.Register(t) // 宿主内置 CRON 管理工具（让模型在评测中可真实调用 DSC 的 CRON 机制）
 	}
 	// 后台任务完成 → 宿主事件总线（通用送达：TUI 唤醒、web/novelforge 等插件订阅）
 	m.jobs.OnJobDone(func(s jobs.JobSnapshot) {
@@ -1366,6 +1378,7 @@ func (m *Manager) Shutdown() {
 	m.stopHooks = make(map[string][]func() error)
 	m.agentEntries = make(map[string]PluginEntry)
 	m.pendingEntries = make(map[string]PluginEntry)
+	m.resolvedDeps = make(map[string][]ResolvedDep)
 }
 
 // ListAgents 列出所有已加載的 Agent 插件
@@ -1539,6 +1552,7 @@ func (m *Manager) UnloadPlugin(name string) error {
 	delete(m.coreMetadata, name)
 	delete(m.pendingEntries, name)
 	delete(m.agentEntries, name)
+	delete(m.resolvedDeps, name)
 	// 撤销 policy 桥接的流水线监听器
 	for _, off := range m.policyOff[name] {
 		off()
@@ -1830,108 +1844,21 @@ func validatePluginDirectoryName(coreType, dirName string) error {
 	return nil
 }
 
-// CheckCircularDependencies 檢查插件配置中是否存在環形依賴關係
-func CheckCircularDependencies(entries []PluginEntry) error {
-	// 構建插件地圖和依賴圖
-	coreNodes := make(map[string]bool)
-	dependencies := make(map[string][]string)
-
-	for _, entry := range entries {
-		if !entry.Enabled {
-			continue
-		}
-		coreNodes[entry.Name] = true
-		dependencies[entry.Name] = []string{}
-
-		if entry.DependsOn != nil {
-			if entry.DependsOn.LLM != "" {
-				dependencies[entry.Name] = append(dependencies[entry.Name], entry.DependsOn.LLM)
-			}
-			for _, tool := range entry.DependsOn.Tools {
-				dependencies[entry.Name] = append(dependencies[entry.Name], tool)
-			}
-		}
-	}
-
-	// DFS 狀態：0 = unvisited, 1 = visiting, 2 = visited
-	state := make(map[string]int)
-	var cyclePlugins []string
-
-	var dfs func(node string, path []string) bool
-	dfs = func(node string, path []string) bool {
-		if state[node] == 1 {
-			// 發現環形依賴，找出環中的插件
-			cycleStart := -1
-			for i := len(path) - 1; i >= 0; i-- {
-				if path[i] == node {
-					cycleStart = i
-					break
-				}
-			}
-			if cycleStart != -1 {
-				cyclePlugins = path[cycleStart:]
-			}
-			return true
-		}
-		if state[node] == 2 {
-			return false
-		}
-		state[node] = 1
-		path = append(path, node)
-
-		for _, dep := range dependencies[node] {
-			// 只檢查存在的插件節點
-			if coreNodes[dep] {
-				if dfs(dep, path) {
-					return true
-				}
-			}
-		}
-
-		state[node] = 2
-		path = path[:len(path)-1]
-		return false
-	}
-
-	for coreName := range coreNodes {
-		if state[coreName] == 0 {
-			if dfs(coreName, nil) {
-				if len(cyclePlugins) > 0 {
-					return fmt.Errorf("circular dependency detected among plugins: %v", cyclePlugins)
-				}
-				return fmt.Errorf("circular dependency detected among plugins")
-			}
-		}
-	}
-
-	return nil
-}
-
 // LoadFromConfig 声明式加载所有插件：
-// 复用配置中的 DependsOn/Type，在 Manager 内做依赖拓扑排序，取代原先由 Main 宿主手工编排加载序、
+// 按插件配置（无 depends_on 字段，依赖关系由插件二进制内的 sdk.Config.Requires 自描述）
+// 在 Manager 内做能力依赖解析与拓扑加载，取代原先由 Main 宿主手工编排加载序、
 // 手工两段式注入依赖的做法。流程：
 //  1. Agent 作为 broker 提供者优先拉起进程（获取 broker），但先不激活（状态 Ready/PENDING）；
-//  2. 其余 LLM/Tool/Policy 按 DependsOn 拓扑排序加载（LLM 经 loadLLMEntryLocked 原生加载后，
+//  2. 其余 LLM/Tool/Policy 按 PluginInfo.Capabilities 的 requires/<type>/<cap> 编码
+//     经 resolveRequiredDeps 解析能力依赖；能力依赖未满足的 provider 置为 PENDING 并跳过，
+//     而非硬失败；能力依赖满足的按加载顺序加载（LLM 经 loadLLMEntryLocked 原生加载后，
 //     再由 serveLLMProviderLocked 挂载为 broker 上的 gRPC 服务；Tool/Policy 走 loadPluginWithBroker）；
-//     依赖未满足的 provider 置为 PENDING 并跳过，而非硬失败；
-//  3. 依 agent 的 DependsOn 解析 LLM serviceID 与「聚合 Tool 服务」ID，一次性 RegisterServices 注入并置为 ACTIVE；
-//     若 agent 声明的 LLM 依赖缺失，则退回 PENDING 等待后续注入。
+//  3. 依 agent 的能力依赖解析 LLM provider 名（pickPrimaryLLM），据此挂载聚合 LLM 服务并
+//     RegisterServices 注入并置为 ACTIVE；若 agent 的 LLM 能力依赖未解析到 provider，
+//     则退回 PENDING 等待后续注入。
 func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// 檢查環形依賴關係
-	if err := CheckCircularDependencies(cfg.Plugins); err != nil {
-		return fmt.Errorf("circular dependency detected in core configuration: %w", err)
-	}
-
-	// 整体已声明（启用）的插件名，用于判定依赖指向的是否为本配置声明的插件
-	declared := make(map[string]bool)
-	for _, e := range cfg.Plugins {
-		if e.Enabled {
-			declared[e.Name] = true
-		}
-	}
 
 	// 版本感知解析：各插件目录内若存在「<目录基名>-v<版本><ext>」的更高版本二进制，
 	// 启动即直接加载最高版本，避免先起基线进程再由 watcher 换新（Windows 下运行中的
@@ -1973,26 +1900,25 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.broker = broker
 	m.mainAgentName = agentEntry.Name
 
-	// 预置 agent 聚合 LLM 的 primary 名称（tool 插件互通经 serveAggregateLLMOnBroker
-	// 路由 primary 时需要），但暂不挂载服务。服务挂载统一推迟到 provider 全部就绪后
-	// （见下）：go-core broker 的 ConnInfo 是一次性发送且 5 秒后即被 timeoutWait
-	// 丢弃，若在 provider（尤其本地超大模型）加载前就挂载并发 ConnInfo，agent 要等
-	// 模型加载完才在 RegisterServices 中 Dial，远超 5 秒窗口即连不上 RPC。
-	if agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
-		m.agentLLMName = agentEntry.DependsOn.LLM
-	}
-
-	// 按 DependsOn 对 provider 做拓扑排序；未能满足依赖的进入 PENDING
-	sorted, pending := topoSortPlugins(providerEntries, declared)
-	for _, e := range pending {
-		m.markPendingLocked(e.Name, e.Type, "dependency not satisfied")
-		m.pendingEntries[e.Name] = e // 记录待办条目，供动态注入补足依赖后提升
-	}
-	for _, entry := range sorted {
+	// 按「能力依赖」加载 provider：所有 provider 直接尝试加载（插件进程本身不检查
+	// 依赖，宿主只在加载后解析其 Requires 能力依赖，未满足的由 repairPendingLocked
+	// 反应式重算提升——对齐 DSH/Cordis 的 _refresh + notify 模型）。
+	// 加载失败的（如二进制缺失、类型不匹配）标记为 Failed；这类是真实故障，
+	// 不是依赖未满足——后者由 reactivateAgentLocked / repairPendingLocked 经
+	// resolvedDeps 跟踪。
+	for _, entry := range providerEntries {
 		if err := m.loadProviderDeclarativeLocked(entry); err != nil {
 			m.transitionLocked(entry.Name, StateFailed, err.Error())
-			return fmt.Errorf("failed to load core %s: %w", entry.Name, err)
+			m.logger.Warn("failed to load provider from config", "name", entry.Name, "error", err)
+			continue
 		}
+		// 启动期也做能力解析：插件加载成功后 m.coreMetadata[entry.Name] 持有
+		// PluginInfo，解析其中的 requires/<type>/<cap> 编码并匹配已加载插件的能力键，
+		// 把结果存入 m.resolvedDeps（运行时态，无论是否持久化）。
+		// 此处 persist=false：启动期从 config.yaml 读入，写回是 no-op（数据本就在
+		// 配置里）；用户若想让能力解析结果跨重启生效，应让插件经 install_dsc_plugin
+		// 或 load_dsc_plugin persist=true 载入（那条路径会落盘）。
+		m.autoResolveAndPersistDepsLocked(entry, false)
 	}
 
 	// provider 就绪后：确认 LLM、挂载聚合服务并一次性注入 agent。
@@ -2004,14 +1930,17 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	// 避开超时窗口——与 PENDING 的「依赖就绪才激活」语义一致：agent 在 LLM 就绪前保持等待。
 	hasLLM := false
 	primaryLLM := ""
-	if agentEntry.DependsOn != nil {
-		primaryLLM = agentEntry.DependsOn.LLM
-		if _, ok := m.llms[primaryLLM]; ok {
-			hasLLM = true
+	// 从 agent 的能力依赖解析结果中选 primary LLM
+	if deps, ok := m.resolvedDeps[agentEntry.Name]; ok {
+		primaryLLM = pickPrimaryLLM(deps)
+		if primaryLLM != "" {
+			if _, ok := m.llms[primaryLLM]; ok {
+				hasLLM = true
+			}
 		}
 	}
-	// 有工具插件加载或 agent 声明了工具依赖时，才提供聚合 Tool 服务
-	attachTool := len(m.toolServiceIDs) > 0 || (agentEntry.DependsOn != nil && len(agentEntry.DependsOn.Tools) > 0)
+	// 有工具插件加载时，才提供聚合 Tool 服务（能力依赖中 tool 类已反映在 m.toolServiceIDs）
+	attachTool := len(m.toolServiceIDs) > 0
 
 	// 统一挂载：聚合 LLM / 聚合 Tool / 用户评审全部挂到主 agent 的 broker 上，并以本次
 	// 返回的新 id 登记（broker 连接信息 per-connection，绝不能沿用其他连接上的旧 id）。
@@ -2050,8 +1979,11 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	} else {
 		m.markPendingLocked(agentEntry.Name, "agent", "dependent LLM not loaded")
 		m.pendingEntries[agentEntry.Name] = *agentEntry // 记录待再激活的 agent 条目
-		m.logger.Warn("agent deferred to pending (missing LLM dependency)", "name", agentEntry.Name)
+		m.logger.Warn("agent deferred to pending (missing LLM capability provider)", "name", agentEntry.Name)
 	}
+
+	// 反应式重算：本轮加载可能补足先前 PENDING 提供者的能力依赖，触发其提升
+	_ = m.repairPendingLocked()
 
 	m.logger.Info("all plugins loaded from config", "agent", agentEntry.Name)
 	return nil
@@ -2110,89 +2042,6 @@ func (m *Manager) serveAggregateToolOnBroker(broker *plugin.GRPCBroker) (uint32,
 		return s
 	})
 	return serviceID, nil
-}
-
-// declaredPluginDeps 返回 entry 声明的、指向「整体已声明（启用）插件集」内插件的依赖名（去重）。
-// 只有这些才参与拓扑排序；指向非插件名（如具体工具名 read_file）的引用由运行时解析，不算拓扑依赖。
-func declaredPluginDeps(entry PluginEntry, declared map[string]bool) []string {
-	var deps []string
-	seen := make(map[string]bool)
-	add := func(n string) {
-		if n != "" && declared[n] && !seen[n] {
-			seen[n] = true
-			deps = append(deps, n)
-		}
-	}
-	if entry.DependsOn != nil {
-		add(entry.DependsOn.LLM)
-		for _, t := range entry.DependsOn.Tools {
-			add(t)
-		}
-	}
-	return deps
-}
-
-// topoSortPlugins 依 DependsOn 对启用条目做稳定拓扑排序（Kahn），返回两个集合：
-//   - sorted：依赖已满足、可立即加载的条目（依赖先于依赖者）；
-//   - pending：依赖指向本批声明插件但未满足（如指向禁用/缺失的插件）的条目。
-//
-// 环形依赖已在调用前置的 CheckCircularDependencies 拦截，故此处的 pending 均为「缺依赖」。
-func topoSortPlugins(entries []PluginEntry, declared map[string]bool) (sorted, pending []PluginEntry) {
-	byName := make(map[string]PluginEntry, len(entries))
-	for _, e := range entries {
-		byName[e.Name] = e
-	}
-
-	// 每个节点的拓扑依赖（去重）
-	depOf := make(map[string][]string, len(entries))
-	for _, e := range entries {
-		depOf[e.Name] = declaredPluginDeps(e, declared)
-	}
-
-	indeg := make(map[string]int, len(entries))
-	dependents := make(map[string][]string)
-	for n, ds := range depOf {
-		indeg[n] = len(ds)
-		for _, d := range ds {
-			dependents[d] = append(dependents[d], n)
-		}
-	}
-
-	// 就绪队列：入度为 0 的节点
-	ready := make([]string, 0, len(entries))
-	for n, d := range indeg {
-		if d == 0 {
-			ready = append(ready, n)
-		}
-	}
-
-	head := 0
-	for head < len(ready) {
-		n := ready[head]
-		head++
-		// 依赖中途被判定未满足的节点不会入队；此处仅处理已入队节点
-		if _, ok := byName[n]; !ok {
-			continue
-		}
-		sorted = append(sorted, byName[n])
-		for _, dep := range dependents[n] {
-			indeg[dep]--
-			if indeg[dep] == 0 {
-				ready = append(ready, dep)
-			}
-		}
-	}
-
-	placed := make(map[string]bool, len(sorted))
-	for _, e := range sorted {
-		placed[e.Name] = true
-	}
-	for _, e := range entries {
-		if !placed[e.Name] {
-			pending = append(pending, e)
-		}
-	}
-	return sorted, pending
 }
 
 // loadAgentAndGetBroker 加載 Agent 插件，返回 broker 和 Agent 實例（尚未設置依賴）
@@ -2266,7 +2115,22 @@ func (m *Manager) loadAgentAndGetBroker(entry PluginEntry) (*plugin.GRPCBroker, 
 	m.agents[entry.Name] = agent
 	m.typeMap[entry.Name] = "agent"
 	m.agentServiceIDs[entry.Name] = 0  // 占位
-	m.agentEntries[entry.Name] = entry // 记录声明条目（含 DependsOn），供 PENDING 再激活时解析依赖
+	m.agentEntries[entry.Name] = entry // 记录声明条目，供 PENDING agent 再激活时按能力依赖解析 LLM provider
+	// 获取 agent 的 PluginInfo 并存入 coreMetadata，供能力依赖解析（agent 的
+	// sdk.Config.Requires 经 PluginInfo.Capabilities 编码为 requires/<type>/<cap> 键）。
+	// 此前 agent 不需要 PluginInfo（用 config.yaml 的 depends_on 按名依赖），现按能力
+	// 依赖模型必须读取 agent 的 PluginInfo 才能解析其 Requires。
+	if info, err := GetPluginInfo(grpcClient.Conn); err == nil {
+		m.coreMetadata[entry.Name] = info
+		// 立即解析 agent 的能力依赖并存入 m.resolvedDeps，供后续 primary LLM 选择与
+		// reactivateAgentLocked 使用。此时 LLM provider 可能尚未加载，ProviderName
+		// 可能为空——后续 provider 加载后 repairPendingLocked 会重算补齐。
+		if deps := m.resolveRequiredDeps(info, entry.Name); deps != nil {
+			m.resolvedDeps[entry.Name] = deps
+		}
+	} else {
+		m.logger.Warn("failed to get agent PluginInfo (capability dependency resolution skipped)", "name", entry.Name, "error", err)
+	}
 	// 注册对称清理 hook：卸载/热重载时先优雅关闭 agent（进程内清理），再终止进程
 	a := agent
 	m.addStopHookLocked(entry.Name, func() error {

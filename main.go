@@ -486,7 +486,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ===== 声明式加载：合并 config.yaml + preset，交给 Manager 按 DependsOn 拓扑加载 =====
+	// ===== 声明式加载：合并 config.yaml + preset，交给 Manager 按能力依赖拓扑加载 =====
 	ext := ""
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
@@ -529,19 +529,15 @@ func main() {
 		})
 	}
 
-	// 确定“活跃 LLM”用于探测上下文窗口与展示模型名：agent.depends_on.llm → LLM_PROVIDER → DefaultLLM → 首个启用条目
+	// 确定“活跃 LLM”用于探测上下文窗口与展示模型名：LLM_PROVIDER → DefaultLLM → 首个启用条目
+	// （agent 的 primary LLM 由宿主按能力依赖解析，main 不再直接读 agent.depends_on.llm）
 	activeLLMName := ""
-	if agentEntry != nil && agentEntry.DependsOn != nil && agentEntry.DependsOn.LLM != "" {
-		activeLLMName = agentEntry.DependsOn.LLM
+	if v := os.Getenv("LLM_PROVIDER"); v != "" {
+		activeLLMName = v
+	} else if mainCfg != nil && mainCfg.DefaultLLM != "" {
+		activeLLMName = mainCfg.DefaultLLM
 	}
-	if activeLLMName == "" {
-		if v := os.Getenv("LLM_PROVIDER"); v != "" {
-			activeLLMName = v
-		} else if mainCfg != nil && mainCfg.DefaultLLM != "" {
-			activeLLMName = mainCfg.DefaultLLM
-		}
-	}
-	if activeLLMName == "" {
+	if activeLLMName == "" && len(llmEntries) > 0 {
 		activeLLMName = llmEntries[0].Name
 	}
 

@@ -17,7 +17,7 @@ import (
 type PluginState string
 
 const (
-	// StatePending 配置已声明但依赖未满足（如 DependsOn 的 LLM/Tool 尚未就绪），
+	// StatePending 配置已声明但能力依赖未满足（如所需的 LLM/Tool 能力 provider 尚未就绪），
 	// 尚不拉起子进程（对应 DSH PENDING）。
 	StatePending PluginState = "PENDING"
 	// StateSpawned 进程已创建，尚未握手（无 DSH 直译）。

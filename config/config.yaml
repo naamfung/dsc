@@ -62,9 +62,6 @@ plugins:
     type: agent
     binary_path: ./plugins/agent-react-loop/agent-react-loop.exe
     enabled: true
-    depends_on:
-      llm: llm-anthropic
-      tools: [tool-filesystem, tool-lua-host, tool-str-replace-editor]
   - name: tool-musicplayer
     type: tool
     binary_path: ./plugins/tool-musicplayer/tool-musicplayer.exe

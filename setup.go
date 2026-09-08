@@ -285,20 +285,11 @@ func runSetup(in *bufio.Scanner, w io.Writer, configPath, pluginsDir string) int
 		}
 	}
 
-	// 默认提供商：优先取 config 的 default_llm；未配置时参考 agent 的
-	// depends_on.llm（依赖拓扑），再回退到首个提供商。
+	// 默认提供商：优先取 config 的 default_llm；未配置时回退到首个启用的 LLM 提供商
+	// （agent 的 primary LLM 现由宿主按能力依赖解析，setup 不再读 agent.depends_on.llm）
 	currentDefault := ""
 	if cfg, err := core.LoadConfig(configPath); err == nil {
 		currentDefault = cfg.DefaultLLM
-		if currentDefault == "" {
-			for i := range cfg.Plugins {
-				p := &cfg.Plugins[i]
-				if p.Type == "agent" && p.DependsOn != nil && p.DependsOn.LLM != "" {
-					currentDefault = p.DependsOn.LLM
-					break
-				}
-			}
-		}
 	}
 
 	fmt.Fprintln(w, "\nDSC 快速配置向导")

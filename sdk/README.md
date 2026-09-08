@@ -9,28 +9,28 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"dsc-sdk"
+        "context"
+        "encoding/json"
+        "dsc-sdk"
 )
 
 func main() {
-	sdk := dsc.New(dsc.Config{
-		Name:    "my-tool",   // 与目录名一致：plugins/tool-my-tool/
-		Version: "1.0.0",
-		Type:    dsc.TypeTool,
-	})
+        sdk := dsc.New(dsc.Config{
+                Name:    "my-tool",   // 与目录名一致：plugins/tool-my-tool/
+                Version: "1.0.0",
+                Type:    dsc.TypeTool,
+        })
 
-	sdk.Tool(dsc.Tool{
-		Name:        "my_tool",
-		Description: "Do something useful.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
-		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			return "result", nil
-		},
-	})
+        sdk.Tool(dsc.Tool{
+                Name:        "my_tool",
+                Description: "Do something useful.",
+                Schema:      json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
+                Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+                        return "result", nil
+                },
+        })
 
-	sdk.Serve() // 启动 gRPC 插件服务（正常永不返回）
+        sdk.Serve() // 启动 gRPC 插件服务（正常永不返回）
 }
 ```
 
@@ -65,13 +65,13 @@ cd examples/tool-simple && go build -o my-tool.exe .
 
 ```go
 sdk.ToolProvider(func() []dsc.Tool {
-	// 返回当前工具列表；空集合法（空壳工具插件）
-	return []dsc.Tool{{
-		Name: "dyn", Description: "dynamic", Schema: json.RawMessage(`{}`),
-		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			return "ok", nil
-		},
-	}}
+        // 返回当前工具列表；空集合法（空壳工具插件）
+        return []dsc.Tool{{
+                Name: "dyn", Description: "dynamic", Schema: json.RawMessage(`{}`),
+                Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+                        return "ok", nil
+                },
+        }}
 })
 ```
 
@@ -83,20 +83,84 @@ sdk.ToolProvider(func() []dsc.Tool {
 （`DSC_APPROVAL=never` 或 TUI `/approval never`），避免无人值守评测在 ask 下逐工具弹窗授权。
 新增同类需要前置审批门控的工具，只需在工具声明里加该能力标签，宿主无需改动（按能力而非插件名识别）。
 
+### 声明式依赖（Config.Requires）——对齐 DSH/Cordis 的 provide + inject 模型
+
+DSC 的能力依赖模型对齐 DSH/Cordis 的 `provide` + `inject` 双向声明机制：
+
+- **`Config.Provides map[string]string`** ——声明本插件**提供**哪些能力（对齐 Cordis `provide`）。
+  键为能力名（如 `"filesystem"`、`"skill"`、`"cron"`），值为能力属性字符串（`"true"` 表示启用）。
+  其他插件经 `Requires` 声明对此能力的依赖时，宿主扫描 `PluginInfo.Capabilities` 找到首个
+  声明该能力的插件并建立依赖关系。
+  - LLM 插件自动提供 `CapabilityLLM="llm"` 能力（由 `llmSdkMetadataServer` 硬编码），无需重复声明。
+  - tool/agent/policy/dsc 类型插件若需声明自定义能力，在 `Provides` 中填入即可。
+
+- **`Config.Requires []CapabilityRequirement`** ——声明本插件**依赖**哪些能力（对齐 Cordis `inject`）。
+  宿主据此在加载时扫描已加载插件的能力键自动匹配依赖来源，**不落盘**——能力依赖由插件二进制
+  内的 `sdk.Config.Requires` 自描述，`config.yaml` 不含 `depends_on` 字段。
+
+```go
+// tool-filesystem 声明提供 "filesystem" 能力
+sdk := dsc.New(dsc.Config{
+    Name:    "filesystem",
+    Type:    dsc.TypeTool,
+    Version: "1.0.0",
+    Provides: map[string]string{
+        "filesystem": "true",
+    },
+})
+
+// 另一个插件声明依赖 "filesystem" 能力
+sdk := dsc.New(dsc.Config{
+    Name:    "my-tool",
+    Type:    dsc.TypeTool,
+    Version: "1.0.0",
+    Requires: []dsc.CapabilityRequirement{
+        // 依赖一个提供 "filesystem" 能力的 tool 插件（即上面的 tool-filesystem）
+        {Type: "tool", Capability: "filesystem"},
+        // 依赖一个提供 "llm" 能力的 LLM 插件（所有 LLM 插件自动提供）
+        {Type: "llm", Capability: "llm"},
+    },
+})
+```
+
+**机制约定**：
+- 插件在 `PluginInfo.Capabilities` 中以两种键编码能力信息：
+  - 普通能力键（如 `"filesystem": "true"`）——表示本插件**提供**了该能力（来自 `Config.Provides`）；
+  - `requires/<type>/<capability>` 前缀键（如 `"requires/llm/llm": "true"`）——表示本插件**依赖**
+    某类型插件的某能力（来自 `Config.Requires`）。
+- 宿主在 `install_dsc_plugin` / `load_dsc_plugin` / `injectionEntryLocked` / `LoadFromConfig`
+  调用流程中读取新加载插件的 `PluginInfo`，调用 `resolveRequiredDeps`：
+  - 扫描已加载的 `Type` 类型插件的 capabilities（普通能力键），找到首个声明该能力且
+    值非 `"false"` 的插件（按名升序，稳定输出）；
+  - 把匹配结果（`ResolvedDep` 列表）存入运行时态 `m.resolvedDeps`；
+  - 避免自引用：插件自身声明的 capability 不被解析为自身的依赖来源；
+  - `persist=true` 时把插件条目本身写回 `config.yaml`（**不含 `depends_on` 字段**）。
+- 反应式重算：provider 加载/卸载时，`repairPendingLocked` 重算所有 PENDING 插件的能力
+  依赖（对齐 DSH/Cordis 的 `_refresh + notify`），自动提升依赖已就绪的 PENDING 插件。
+- agent 的 primary LLM 选择：从 `m.resolvedDeps[agentName]` 中取首个 `Type=="llm"` 且
+  `ProviderName` 非空的项，以其 `ProviderName` 作为 primary LLM（多条 llm 依赖时按
+  Capability 名升序取首个，稳定选择）。
+
+**`SetInterconnect` ≠ `Requires`（重要区分）**：
+`SetInterconnect`（`ic.LLM()` / `ic.Tool()` / `ic.Agent()`）是**运行时可选**访问宿主聚合服务的
+模式——插件容忍 `nil` 并优雅降级。这与 `Config.Requires`（加载时硬依赖）是**不同**的概念：
+`Requires` 会在依赖未满足时阻止插件激活（PENDING），而 `SetInterconnect` 仅在调用时检查
+服务是否可用。不要把运行时可选访问误写成 `Requires`，否则会破坏最小配置场景。
+
 ## 钩子（参与宿主流水线，无需任何插件配合）
 
 ```go
 sdk.Hook(dsc.Hook{
-	// 工具执行前：返回改写后的参数 JSON；err 非 nil 表示否决（阻止执行）
-	BeforeTool: func(ctx context.Context, toolName, argumentsJSON string) (string, error) {
-		return argumentsJSON, nil
-	},
-	// 工具执行后：按本次调用的原始参数改写结果/错误
-	AfterTool: func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (string, string) {
-		return result, toolErr
-	},
-	// 宿主事件订阅（异步广播：turn/start、tool/result 等）
-	OnEvent: func(ctx context.Context, eventType, dataJSON string) {},
+        // 工具执行前：返回改写后的参数 JSON；err 非 nil 表示否决（阻止执行）
+        BeforeTool: func(ctx context.Context, toolName, argumentsJSON string) (string, error) {
+                return argumentsJSON, nil
+        },
+        // 工具执行后：按本次调用的原始参数改写结果/错误
+        AfterTool: func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (string, string) {
+                return result, toolErr
+        },
+        // 宿主事件订阅（异步广播：turn/start、tool/result 等）
+        OnEvent: func(ctx context.Context, eventType, dataJSON string) {},
 })
 ```
 
@@ -107,12 +171,12 @@ sdk.Hook(dsc.Hook{
 
 ```go
 sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
-	// ic.LLM()      —— 宿主聚合 LLM（含多 provider 路由，Thinking/工具调用）
-	// ic.Tool()     —— 宿主聚合 Tool（经宿主流水线调用任意工具插件）
-	// ic.Notifier() —— 宿主插件通知客户端（把实例传给第三方场景用）
-	// ic.Notify(name, dataJSON) —— 发布事件到宿主总线（TUI 唤醒/其他插件订阅）
-	// 在此缓存 ic 供工具 Handler 使用
-	return nil
+        // ic.LLM()      —— 宿主聚合 LLM（含多 provider 路由，Thinking/工具调用）
+        // ic.Tool()     —— 宿主聚合 Tool（经宿主流水线调用任意工具插件）
+        // ic.Notifier() —— 宿主插件通知客户端（把实例传给第三方场景用）
+        // ic.Notify(name, dataJSON) —— 发布事件到宿主总线（TUI 唤醒/其他插件订阅）
+        // 在此缓存 ic 供工具 Handler 使用
+        return nil
 })
 ```
 
@@ -127,8 +191,8 @@ sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
 ```go
 var ab *dsc.AgentBroker
 sdk.AgentBroker(func(b *dsc.AgentBroker) error {
-	ab = b // 缓存；宿主经 RegisterServices/SetUserQuestionsService 下发服务 ID 后使用
-	return nil
+        ab = b // 缓存；宿主经 RegisterServices/SetUserQuestionsService 下发服务 ID 后使用
+        return nil
 })
 ```
 
@@ -137,10 +201,10 @@ sdk.AgentBroker(func(b *dsc.AgentBroker) error {
 
 ```go
 func (a *MyAgent) RegisterServices(ctx context.Context, llmID, toolID uint32) error {
-	llm, err := ab.DialLLM(llmID)          // 宿主聚合 LLM 客户端
-	tool, err := ab.DialTool(toolID)       // 宿主聚合 Tool 客户端
-	// 需要自建 proto client 时：conn, err := ab.Dial(id)
-	return nil
+        llm, err := ab.DialLLM(llmID)          // 宿主聚合 LLM 客户端
+        tool, err := ab.DialTool(toolID)       // 宿主聚合 Tool 客户端
+        // 需要自建 proto client 时：conn, err := ab.Dial(id)
+        return nil
 }
 ```
 
@@ -194,8 +258,8 @@ core 包依赖定制版 `GRPCClient.Broker()` 扩展（宿主挂载聚合服务�
 
 ```go
 require (
-	dsc v0.0.0
-	dsc-sdk v0.0.0
+        dsc v0.0.0
+        dsc-sdk v0.0.0
 )
 
 replace dsc => <dsc 仓库路径>           // 宿主契约（core/proto）

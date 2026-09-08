@@ -45,4 +45,12 @@ func TestLLMMetadataCapabilities(t *testing.T) {
 	if infoOff.Capabilities["supports_images"] != "false" {
 		t.Fatalf("vision=false 时应上报 supports_images=false, got %q", infoOff.Capabilities["supports_images"])
 	}
+
+	// 所有 LLM 插件默认提供 "llm" 能力，供 agent 经 Requires 声明依赖
+	if info.Capabilities[CapabilityLLM] != "true" {
+		t.Fatalf("LLM 插件应上报 %s=true, got %q", CapabilityLLM, info.Capabilities[CapabilityLLM])
+	}
+	if infoOff.Capabilities[CapabilityLLM] != "true" {
+		t.Fatalf("LLM 插件（vision=false）也应上报 %s=true, got %q", CapabilityLLM, infoOff.Capabilities[CapabilityLLM])
+	}
 }

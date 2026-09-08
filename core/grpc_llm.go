@@ -89,6 +89,12 @@ type llmMetadataServer struct {
 	impl LLMProvider
 }
 
+// CapabilityLLM 是所有 LLM 插件默认提供的能力键。agent 经 sdk.Config.Requires
+// 声明 Requires: [{Type: "llm", Capability: CapabilityLLM}] 即可表达「依赖一个 LLM
+// 插件」——宿主据此按能力（而非插件名）解析 primary LLM provider。对齐 DSH/Cordis
+// 的 provide + inject 模型：所有 LLM 插件 provide "llm" 能力，agent inject "llm"。
+const CapabilityLLM = "llm"
+
 func (s *llmMetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metadata.PluginInfo, error) {
 	return &metadata.PluginInfo{
 		Type:       "llm",
@@ -96,6 +102,8 @@ func (s *llmMetadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*me
 		Version:    s.impl.Version(ctx),
 		ApiVersion: "1.0",
 		Capabilities: map[string]string{
+			// 所有 LLM 插件默认提供 "llm" 能力，供 agent 经 Requires 声明依赖
+			CapabilityLLM:     "true",
 			"supports_images": strconv.FormatBool(s.impl.VisionEnabled()),
 		},
 	}, nil
@@ -109,6 +117,13 @@ func (p *LLMGRPCPlugin) GRPCClient(ctx context.Context, broker *core.GRPCBroker,
 type llmGRPCServer struct {
 	proto.UnimplementedLLMServiceServer
 	impl LLMProvider
+}
+
+// NewLLMServiceServer 构造一个 LLMService gRPC 服务端，供 SDK 等外部包绕过
+// LLMGRPCPlugin.GRPCServer 自行注册服务（避免双重注册 metadata server）。
+// impl 由插件实现 core.LLMProvider 接口提供。
+func NewLLMServiceServer(impl LLMProvider) proto.LLMServiceServer {
+	return &llmGRPCServer{impl: impl}
 }
 
 // convertLLMChatRequest 将 proto 请求转换为内部消息与工具列表

@@ -51,15 +51,9 @@ type PluginEntry struct {
 	Type       string `json:"type" yaml:"type"` // "llm", "agent", "tool", "dsc"
 	BinaryPath string `json:"binary_path" yaml:"binary_path"`
 	// 可選：是否啟用、參數等
-	Enabled   bool           `json:"enabled" yaml:"enabled" default:"true"`
-	DependsOn *PluginDepends `json:"depends_on" yaml:"depends_on"`
+	Enabled bool `json:"enabled" yaml:"enabled" default:"true"`
 	// 可選：傳遞給插件子進程的額外環境變量（合併宿主環境，插件值優先）
 	Env map[string]string `json:"env" yaml:"env"`
-}
-
-type PluginDepends struct {
-	LLM   string   `json:"llm" yaml:"llm"`
-	Tools []string `json:"tools" yaml:"tools"`
 }
 
 // LoadConfig 從指定路徑加載配置

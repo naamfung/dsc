@@ -201,13 +201,13 @@ func TestPersistInjectionPreservesFile(t *testing.T) {
 }
 
 // TestDeferPendingRecordsAndPersists 校验依赖未满足的注入条目进入 PENDING、
-// 记录待办并写回配置。
+// 记录待办并写回配置（条目本身，不再有 depends_on 字段——能力依赖由插件二进制自描述）。
 func TestDeferPendingRecordsAndPersists(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	m := NewManager(&ManagerConfig{})
 	m.SetConfigPath(cfgPath)
 
-	entry := PluginEntry{Name: "llm-late", Type: "llm", DependsOn: &PluginDepends{LLM: "no-such-llm"}}
+	entry := PluginEntry{Name: "llm-late", Type: "llm"}
 	m.mu.Lock()
 	if err := m.deferPendingLocked(entry); err != nil {
 		t.Fatalf("defer pending: %v", err)
@@ -230,40 +230,50 @@ func TestDeferPendingRecordsAndPersists(t *testing.T) {
 	}
 }
 
-// TestEntryDepsSatisfied 校验声明式依赖判定：
-// 指向已加载插件的依赖视为满足，指向非插件名（具体工具名）的引用不构成拓扑依赖。
-func TestEntryDepsSatisfied(t *testing.T) {
+// TestAgentDepsSatisfiedByCapability 校验能力依赖判定：
+// agent 的 ResolvedDep 中 ProviderName 指向已加载插件时视为满足；
+// ProviderName 为空（未解析到 provider）或 provider 未加载时视为不满足。
+func TestAgentDepsSatisfiedByCapability(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	m.mu.Lock()
 	m.llmServiceIDs["llm-p"] = 41
 	m.toolServiceIDs["tool-p"] = 42
-	// 这两者「已登记但未加载」，构成阻塞性依赖引用；待其就绪后解除
-	m.pendingEntries["llm-ghost"] = PluginEntry{Name: "llm-ghost", Type: "llm"}
-	m.pendingEntries["tool-ghost"] = PluginEntry{Name: "tool-ghost", Type: "tool"}
 	m.mu.Unlock()
 
 	cases := []struct {
-		name  string
-		entry PluginEntry
-		want  bool
+		name string
+		deps []ResolvedDep
+		want bool
 	}{
-		{"dep-llm-satisfied", PluginEntry{Type: "agent", DependsOn: &PluginDepends{LLM: "llm-p"}}, true},
-		{"dep-tool-satisfied", PluginEntry{Type: "agent", DependsOn: &PluginDepends{Tools: []string{"tool-p"}}}, true},
-		{"dep-llm-known-unloaded-unsatisfied", PluginEntry{Type: "agent", DependsOn: &PluginDepends{LLM: "llm-ghost"}}, false},
-		{"dep-tool-known-unloaded-unsatisfied", PluginEntry{Type: "agent", DependsOn: &PluginDepends{Tools: []string{"tool-ghost"}}}, false},
-		{"dep-none-satisfied", PluginEntry{Type: "tool"}, true},
-		// 指向具体工具名（非插件名）不构成拓扑阻塞
-		{"dep-non-core-tool-satisfied", PluginEntry{Type: "tool", DependsOn: &PluginDepends{Tools: []string{"read_file"}}}, true},
+		{"dep-llm-satisfied", []ResolvedDep{
+			{Type: "llm", Capability: "supports_images", ProviderName: "llm-p"},
+		}, true},
+		{"dep-tool-satisfied", []ResolvedDep{
+			{Type: "tool", Capability: "cron", ProviderName: "tool-p"},
+		}, true},
+		{"dep-llm-empty-provider-unsatisfied", []ResolvedDep{
+			{Type: "llm", Capability: "supports_images", ProviderName: ""},
+		}, false},
+		{"dep-llm-provider-not-loaded-unsatisfied", []ResolvedDep{
+			{Type: "llm", Capability: "supports_images", ProviderName: "llm-ghost"},
+		}, false},
+		{"no-deps-satisfied", nil, true},
 	}
 	for _, tc := range cases {
-		if got := m.entryDepsSatisfiedLocked(tc.entry); got != tc.want {
-			t.Errorf("%s: depsSatisfied = %v, want %v", tc.name, got, tc.want)
+		m.mu.Lock()
+		// 模拟 resolvedDeps 已填充
+		m.resolvedDeps["test-agent"] = tc.deps
+		got := m.agentDepsSatisfiedLocked("test-agent")
+		delete(m.resolvedDeps, "test-agent")
+		m.mu.Unlock()
+		if got != tc.want {
+			t.Errorf("%s: agentDepsSatisfiedLocked = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
 
-// TestAgentReactivate 校验 PENDING agent 在依赖 LLM 就绪后被重新注入 RegisterServices 并激活；
-// 依赖未就绪时保持 PENDING 且不误激活。
+// TestAgentReactivate 校验 PENDING agent 在能力依赖解析到的 LLM provider 就绪后
+// 被重新注入 RegisterServices 并激活；依赖未就绪时保持 PENDING 且不误激活。
 func TestAgentReactivate(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	ag := &mockAgent{}
@@ -272,7 +282,10 @@ func TestAgentReactivate(t *testing.T) {
 	m.agents["agent-x"] = ag
 	m.agentEntries["agent-x"] = PluginEntry{
 		Name: "agent-x", Type: "agent",
-		DependsOn: &PluginDepends{LLM: "llm-p"},
+	}
+	// agent 的能力依赖：requires/llm/supports_images，但 provider 尚未解析
+	m.resolvedDeps["agent-x"] = []ResolvedDep{
+		{Type: "llm", Capability: "supports_images", ProviderName: ""}, // 尚未解析到 provider
 	}
 	m.states["agent-x"] = &RuntimeState{Type: "agent", State: StatePending}
 	m.mu.Unlock()
@@ -291,11 +304,15 @@ func TestAgentReactivate(t *testing.T) {
 		t.Fatalf("agentServiceID should stay 0 before reactivation")
 	}
 
-	// LLM 就绪 → 注入 RegisterServices(41, 0) 并激活。
+	// LLM provider 就绪 → 注入 RegisterServices(41, 0) 并激活。
 	// 聚合 LLM 服务已预挂载（agentLLMServiceID=41），primary provider 就绪（llms["llm-p"]）
 	m.mu.Lock()
 	m.llms["llm-p"] = &mockLLMProvider{}
 	m.agentLLMServiceID = 41
+	// 更新 resolvedDeps：provider 已解析为 llm-p
+	m.resolvedDeps["agent-x"] = []ResolvedDep{
+		{Type: "llm", Capability: "supports_images", ProviderName: "llm-p"},
+	}
 	m.reactivateAgentLocked("agent-x")
 	m.mu.Unlock()
 
@@ -324,7 +341,10 @@ func TestReactivateNoopWhenNotPending(t *testing.T) {
 	m.agents["agent-y"] = ag
 	m.llmServiceIDs["llm-p"] = 41
 	m.agentEntries["agent-y"] = PluginEntry{
-		Name: "agent-y", Type: "agent", DependsOn: &PluginDepends{LLM: "llm-p"},
+		Name: "agent-y", Type: "agent",
+	}
+	m.resolvedDeps["agent-y"] = []ResolvedDep{
+		{Type: "llm", Capability: "supports_images", ProviderName: "llm-p"},
 	}
 	m.states["agent-y"] = &RuntimeState{Type: "agent", State: StateActive}
 	m.reactivateAgentLocked("agent-y")
@@ -336,23 +356,26 @@ func TestReactivateNoopWhenNotPending(t *testing.T) {
 }
 
 // TestRepairPendingReactivateLoadedAgent 复现端到端验证发现的缺陷：
-// PENDING agent 已随 LoadFromConfig 拉起（存在于 m.agents），但其 LLM 依赖缺失被记入
-// pendingEntries。随后注入 LLM 触发 repairPendingLocked 时，必须对这类“已加载但未激活”
-// 的 agent 执行 reactivateAgentLocked，而非仅因已加载就简单清除待办；且在 LLM 未就绪前
-// 必须保留待办（reactivate 是幂等空操作），不能误移出导致永久丢失再激活机会。
+// PENDING agent 已随 LoadFromConfig 拉起（存在于 m.agents），但其 LLM 能力依赖未解析到
+// provider 被记入 pendingEntries。随后注入 LLM 触发 repairPendingLocked 时，必须对这类
+// “已加载但未激活”的 agent 执行 reactivateAgentLocked，而非仅因已加载就简单清除待办；
+// 且在 LLM 未就绪前必须保留待办（reactivate 是幂等空操作），不能误移出导致永久丢失再激活机会。
 func TestRepairPendingReactivateLoadedAgent(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	ag := &mockAgent{}
 	agentEntry := PluginEntry{
 		Name: "agent-x", Type: "agent", BinaryPath: "./agent",
-		DependsOn: &PluginDepends{LLM: "anthropic"},
 	}
 
 	m.mu.Lock()
-	m.agents["agent-x"] = ag               // 已拉起（与真实启动一致）
-	m.agentEntries["agent-x"] = agentEntry // 记录含 DependsOn 的声明
+	m.agents["agent-x"] = ag // 已拉起（与真实启动一致）
+	m.agentEntries["agent-x"] = agentEntry
 	m.states["agent-x"] = &RuntimeState{Type: "agent", State: StatePending}
 	m.pendingEntries["agent-x"] = agentEntry // 依赖缺失，待再激活
+	// agent 的能力依赖：requires/llm/supports_images，但 provider 尚未解析
+	m.resolvedDeps["agent-x"] = []ResolvedDep{
+		{Type: "llm", Capability: "supports_images", ProviderName: ""},
+	}
 	m.mu.Unlock()
 
 	// LLM 尚未就绪：repair 不应误激活（reactivate 幂等空操作），也不应清除待办
@@ -369,11 +392,16 @@ func TestRepairPendingReactivateLoadedAgent(t *testing.T) {
 		t.Fatalf("agent pending entry should remain while LLM dep is missing")
 	}
 
-	// 注入 LLM（primary provider 就绪、聚合服务已挂载）后再次 repair：
+	// 注入 LLM provider（同时更新 resolvedDeps 反映已解析）后再次 repair：
 	// agent 必须被注入 RegisterServices 并置为 Active，且移出待办
 	m.mu.Lock()
-	m.llms["anthropic"] = &mockLLMProvider{}
+	m.llms["llm-anthropic"] = &mockLLMProvider{}
+	m.llmServiceIDs["llm-anthropic"] = 55
 	m.agentLLMServiceID = 55
+	// 更新 resolvedDeps：provider 已解析为 llm-anthropic
+	m.resolvedDeps["agent-x"] = []ResolvedDep{
+		{Type: "llm", Capability: "supports_images", ProviderName: "llm-anthropic"},
+	}
 	m.mu.Unlock()
 	if err := m.repairPendingLocked(); err != nil {
 		t.Fatalf("repairPendingLocked errored: %v", err)

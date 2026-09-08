@@ -24,7 +24,7 @@ func TestPublicConfigNoNovelforge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	var hasNotify, noNovelforge bool
+	var hasNotify bool
 	for i := range cfg.Plugins {
 		p := &cfg.Plugins[i]
 		if p.Name == "tool-novelforge" {
@@ -33,18 +33,8 @@ func TestPublicConfigNoNovelforge(t *testing.T) {
 		if p.Name == "dsc-notify" && p.Enabled {
 			hasNotify = true
 		}
-		if p.Type == "agent" && p.DependsOn != nil {
-			for _, tool := range p.DependsOn.Tools {
-				if tool == "tool-novelforge" {
-					noNovelforge = true
-				}
-			}
-		}
 	}
 	if !hasNotify {
-		t.Fatal("config 应声明 dsc-notify 并启用（通用 dsc 类型，不在 agent 工具依赖中）")
-	}
-	if noNovelforge {
-		t.Fatal("agent 依赖不应含 tool-novelforge")
+		t.Fatal("config 应声明 dsc-notify 并启用（通用 dsc 类型）")
 	}
 }

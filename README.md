@@ -42,6 +42,10 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **插件安裝/管理（模型可自助）**：宿主內置六個模型工具，讓模型動態管理插件——安裝 / 升級 / 卸載 / 列出 / 運行期載入 / 運行期卸載，詳見「[模型自助動態插件管理](#模型自助動態插件管理)」一節。
 
+- **CRON 工具（模型可調用）**：宿主內置 `cron_add` / `cron_list` / `cron_remove` / `cron_set_enabled` 四個模型工具，把宿主側的 cron 定時任務調度器以工具形式暴露給 agent，讓模型在評測（如 `tool-agentic-bench` 的 CRON 案例用例）或日常會話中能真實調用 DSC 的 CRON 機制（增 / 刪 / 列 / 啟停），而非僅經 TUI 斜杆命令或管理 API。變更類工具（`cron_add` / `cron_remove` / `cron_set_enabled`）聲明 `ApprovalRequester`，在審批策略非 `never` 時會被前置門控攔截；`cron_list` 是只讀工具、無需審批。
+
+- **聲明式插件依賴（按能力匹配，對齊 DSH/Cordis 的 provide + inject 模型）**：插件作者可經 `dsc.Config.Requires` 顯式聲明本插件依賴「某項能力」（capability）——而非依賴具體插件名。宿主在安裝 / 加載插件時掃描已加載插件的 `PluginInfo.Capabilities` 普通能力鍵（如 `supports_images: "true"`、`cron: "true"`），找到首個聲明該能力的插件並建立依賴關係——避免用戶在 config.yaml 手工指定 `depends_on` 按插件名引用易出錯。解析得到的依賴關係存於宿主運行時態 `m.resolvedDeps`，供運行時態查詢與反應式重算使用；`config.yaml` 不再含 `depends_on` 字段——能力依賴由插件二進制內的 `sdk.Config.Requires` 自描述，無需落盤。詳見 SDK README「聲明式依賴（Config.Requires）」一節。
+
 - **配置自癒**：每個成功啟動後，把已生效的 `config.yaml` 與當前 mode 的 preset（如 `standard.yaml`）**各自獨立備份**到源文件同目錄的備份子目錄（`config.yaml` → `config-backups/`、preset → `preset-backups/`；旋轉保留最近 10 份、按各自前綴區分、互不串擾）。當某份配置因改壞或壞插件導致啟動報錯時，宿主會先把壞版各自留檔，再**分別還原各自最近正常備份**、重建插件集重試一次並以降級模式繼續啟動——而非直接退出，避免「模型搞壞配置就再也起不來」。同時 config.yaml 中啟用的 tool/policy/dsc 插件正式併入啟動合併集（與 preset 按名去重、**preset 優先**——preset 屬具體的預設，同名衝突取 preset，config 僅補 preset 沒有的，使模型安裝的插件仍能跨重啟生效）。
 
 - **插件目錄自癒**：維持 `plugins/` 的「上次正常」快照（兄弟目錄 `plugins-backup/`，二進制大故僅當有新內容才刷新）。當插件目錄與配置無法對齊（如插件二進制缺失/損壞）導致啟動加載失敗時，從快照回拷合併恢復（**容錯拷貝**：運行中的插件 `.exe` 被進程鎖住會跳過——本就正常；真正缺失/損壞、未運行的二進制會被回拷）後再續啟。恢復後還會盤點「未被當前配置引用的孤立插件目錄」並**僅告警、不刪除**——此類插件從未啟用，無法判斷其可用性、亦不能替用戶保證將來不用，故先保留；日後若用戶啟用其卻導致啟動加載失敗，再由本機制兜底處理。
@@ -352,7 +356,7 @@ hot_reload: true
 
 | 狀態           | 含義                                               | 對應 DSH      |
 | ------------ | ------------------------------------------------ | ----------- |
-| `PENDING`    | 配置已聲明但依賴未滿足（如 DependsOn 的 LLM/Tool 尚未就緒），尚不拉起子進程 | PENDING     |
+| `PENDING`    | 配置已聲明但能力依賴未滿足（如所需的 LLM/Tool 能力 provider 尚未就緒），尚不拉起子進程 | PENDING     |
 | `SPAWNED`    | 子進程已創建，尚未握手                                      | （DSH 無直譯）   |
 | `CONNECTING` | go-plugin/gRPC 握手、建鏈中                            | LOADING 前半段 |
 | `READY`      | 業務對象已 Dispense 並註冊到 Manager，依賴/健康檢查尚未就緒          | （DSH 無直譯）   |
@@ -377,14 +381,14 @@ DISPOSED / FAILED（終態，不再遷移）
 
 ### 啟動到結束的完整流程
 
-1. **聲明與環檢**：`LoadFromConfig` 先以 `CheckCircularDependencies` 攔截環形依賴，再統計「已啟用插件集」供依賴判定（見 [core/manager.go](core/manager.go)）。
+1. **聲明與收集**：`LoadFromConfig` 收集啟用的插件條目（agent / llm / tool / policy / dsc），按 `binary_path` 解析版本化二進制（見 [core/manager.go](core/manager.go)）。依賴關係由插件二進制內的 `sdk.Config.Requires` 自描述，`config.yaml` 不含 `depends_on` 字段。
 2. **Agent 先行**：agent 作為 broker 提供者**最先**拉起子進程以取得 broker（狀態 `SPAWNED → CONNECTING → READY`），但暫不激活——它依賴的 LLM/聚合 Tool 服務要等 provider 就緒後才掛載，避免 broker ConnInfo 超時窗口（宿主已把庫默認 5 秒放大為 5 分鐘，見 `PLUGIN_BROKER_CONN_TIMEOUT`）。
-3. **Provider 依賴拓撲排序**：其餘 llm/tool/policy 依 `DependsOn` 做穩定拓撲排序（Kahn，`topoSortPlugins`）；依賴滿足的按序加載（LLM 原生加載後掛載為 broker 上的 gRPC 服務；Tool/Policy 走 `loadPluginWithBroker`），依賴未滿足的進入 `PENDING` 並記錄待辦。
+3. **Provider 加載與能力依賴解析**：其餘 llm/tool/policy 按順序加載，每個加載成功後解析其 `PluginInfo.Capabilities` 中的 `requires/<type>/<cap>` 編碼（`resolveRequiredDeps`），匹配已加載插件的能力鍵得到 `ResolvedDep` 列表存入運行時態 `m.resolvedDeps`；能力依賴未滿足的進入 `PENDING` 並記錄待辦。
 4. **握手與校驗**：provider 加載時 `SPAWNED → CONNECTING`（建鏈）→ `READY`（元數據校驗：API 版本 `>=1.0, <2.0` + 類型一致；Tool 再經「暫存 + 提交」兩階段完成 broker 掛載、互通注入與工具列清單）。
-5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的 `DependsOn` 一次性 `RegisterServices` 注入並置 `ACTIVE`；若 agent 聲明的 LLM 缺失則退回 `PENDING` 等待。
+5. **聚合服務與 Agent 激活**：provider 全部就緒後統一掛載聚合 LLM、聚合 Tool、插件通知與用戶評審服務，再依 agent 的能力依賴解析得到的 primary LLM（`pickPrimaryLLM`）一次性 `RegisterServices` 注入並置 `ACTIVE`；若 agent 的 LLM 能力依賴未解析到 provider 則退回 `PENDING` 等待。
 6. **運行期**：插件以 `ACTIVE` 對外服務；故障進入 `FAILED`（可被熱重載重新走流程）；熱重載採用「暫存 + 提交」兩階段，先拉起並驗證新進程，成功後才交換並卸載舊進程，預備/驗證任一環節失敗即中止並 Kill 新進程，**舊實例及其註冊原封不動**（見「Golang 插件熱更新實操」）。
 7. **卸載/關機**：`Shutdown` 先停熱重載 watch 與 cron，再逐個插件 `ACTIVE → UNLOADING`（先執行對稱清理 stop hooks，如 agent 的 `Shutdown`）→ Kill 子進程 → `DISPOSED`（終態）。正常退出走此路徑；終止訊號（Ctrl+C / 直接關終端 / SIGTERM 等）同樣先 `Shutdown` 收齊插件子進程再退出，避免 defers 不執行時殘留孤兒進程（Unix 經 `signal.Notify` 捕 SIGINT/SIGTERM/SIGHUP/SIGQUIT；Windows 以 `SetConsoleCtrlHandler` 兜底點視窗關閉事件，見 [graceful\_exit.go](graceful_exit.go) / [signal\_unix.go](signal_unix.go) / [signal\_windows.go](signal_windows.go)）。
-8. **動態注入與 PENDING 修復**：運行期經 ADMIN `/plugins/load` 注入的條目若依賴未滿足同樣進入 `PENDING`；後續注入補足缺口後，`repairPendingLocked` 會提升等待中的 provider、並把因缺 LLM 而 `PENDING` 的 agent 重新注入 `RegisterServices` 並激活（見 [core/inject.go](core/inject.go)）。
+8. **動態注入與反應式重算**：運行期經 ADMIN `/plugins/load` 注入的條目若能力依賴未滿足同樣進入 `PENDING`；後續注入補足能力缺口後，`repairPendingLocked` 反應式重算所有 PENDING 插件的能力依賴（對齊 DSH/Cordis 的 `_refresh + notify`），提升等待中的 provider、並把因缺 LLM 而 `PENDING` 的 agent 重新注入 `RegisterServices` 並激活（見 [core/inject.go](core/inject.go)）。
 
 ## 許可證
 
