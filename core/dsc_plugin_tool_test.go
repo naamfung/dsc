@@ -48,7 +48,7 @@ func TestBackupConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup: %v", err)
 	}
-	if !regexp.MustCompile(`config\.yaml\.\d+\.bak$`).MatchString(bak) {
+	if !regexp.MustCompile(`config\.yaml\.\d+\.\d+\.bak$`).MatchString(bak) {
 		t.Fatalf("备份路径格式异常: %s", bak)
 	}
 	orig, _ := os.ReadFile(cfgPath)

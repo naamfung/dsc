@@ -42,13 +42,18 @@ func (m *Manager) execName(dirBase string) string { return dirBase + binExt() }
 func (m *Manager) pluginsRoot() string { return filepath.Join(m.config.ExecDir, "plugins") }
 
 // backupConfig 在改动前把 config.yaml 备份到 config.yaml.<毫秒时间戳>.bak，返回备份路径。
+//
+// 文件名包含毫秒时间戳 + 进程内自增计数器，避免同毫秒内多次备份产生同名文件互相
+// 覆盖（曾致 TestLoadUnloadDscPluginE2E 在快速连发 load+unload 时偶发失败）。
 func (m *Manager) backupConfig() (string, error) {
 	path := m.persistConfigPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("backup config: read %s: %w", path, err)
 	}
-	bak := fmt.Sprintf("%s.%d.bak", path, time.Now().UnixMilli())
+	ms := time.Now().UnixMilli()
+	seq := m.backupSeq.Add(1)
+	bak := fmt.Sprintf("%s.%d.%d.bak", path, ms, seq)
 	if err := os.WriteFile(bak, data, 0644); err != nil {
 		return "", fmt.Errorf("backup config: write %s: %w", bak, err)
 	}

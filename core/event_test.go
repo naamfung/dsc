@@ -1,21 +1,48 @@
 package core
 
 import (
+	"runtime"
 	"testing"
 	"time"
+
+	"dsc/session"
 )
 
 // TestDefaultSessionIDFollowsWorkspaceRoot 校验默认会话 id 与工作区根一致性：
 // DefaultSessionID 应等于 SessionKeyForProject(WorkspaceRoot)，使 TUI 当前会话标识
 // 与 agent 存档文件名（项目隔离）吻合，不再出现映射不到存档的假 "default"。
+//
+// 平台注意：SessionKeyForProject 在不同平台对反斜杠的处理不同——Linux/macOS 上
+// `\` 是有效文件名字符（filepath.ToSlash 不转换），Windows 上才是分隔符。故
+// Windows 路径样例（如 C:\Users\...）只在 Windows 上断言其转换结果；Linux/macOS
+// 上用平台本地的样例（/home/user/DeepClean、/mnt/c/...），避免跨平台误失败。
 func TestDefaultSessionIDFollowsWorkspaceRoot(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	orig := WorkspaceRoot
 	defer func() { WorkspaceRoot = orig }()
 
-	WorkspaceRoot = `C:\Users\Administrator\Desktop\DeepClean`
-	if got := m.DefaultSessionID(); got != "C--Users-Administrator-Desktop-DeepClean" {
-		t.Errorf("DefaultSessionID() = %q, want project key", got)
+	// 平台样例：选一个含分隔符的典型路径，断言其经 SessionKeyForProject 转换后的结果。
+	// SessionKeyForProject 是平台无关的纯字符串变换，但 filepath.ToSlash 在不同平台
+	// 对 `\` 的处理不同——Windows 上 `\` → `/`，Linux/macOS 上 `\` 不变（是合法文件名字符）。
+	// 故 Windows 路径样例只在 Windows 上断言，其余平台用 Unix 样例。
+	var samplePath, wantKey string
+	if runtime.GOOS == "windows" {
+		samplePath = `C:\Users\Administrator\Desktop\DeepClean`
+		wantKey = "C--Users-Administrator-Desktop-DeepClean"
+	} else {
+		samplePath = "/home/jor/DeepClean"
+		wantKey = "home-jor-DeepClean"
+	}
+	WorkspaceRoot = samplePath
+	if got := m.DefaultSessionID(); got != wantKey {
+		t.Errorf("DefaultSessionID() = %q, want %q (root=%q, platform=%s)",
+			got, wantKey, samplePath, runtime.GOOS)
+	}
+	// 同时校验 DefaultSessionID 与 SessionKeyForProject(WorkspaceRoot) 等价——
+	// 这是该测试的核心断言（不再有假 "default"），跨平台都应成立。
+	WorkspaceRoot = samplePath
+	if got, want := m.DefaultSessionID(), session.SessionKeyForProject(WorkspaceRoot); got != want {
+		t.Errorf("DefaultSessionID() = %q, want SessionKeyForProject(WorkspaceRoot) = %q", got, want)
 	}
 
 	// 空根回退为 "default"（与 SessionKeyForProject 语义一致）

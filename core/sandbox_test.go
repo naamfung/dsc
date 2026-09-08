@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,42 @@ import (
 // fixedPolicy 返回固定策略的读取函数（测试简化用）。
 func fixedPolicy(p SandboxPolicy) func() SandboxPolicy {
 	return func() SandboxPolicy { return p }
+}
+
+// isFileSystemCaseInsensitive 探测 path 所在文件系统是否大小写不敏感：
+// 在 path 同目录下创建一个含大写字母的临时子目录（如 CaseProbe-NNN），再尝试以全小写
+// 形式 stat 它。能 stat 到 → FS 大小写不敏感；找不到（或创建失败）→ 视为大小写敏感。
+//
+// 这是文件系统的真实属性，而非「路径字符串是否含大写字母」。用于跳过仅在大小写
+// 不敏感 FS 上才有意义的回归测试（如 Windows / macOS 默认 FS），避免在 Linux ext4
+// 等大小写敏感 FS 上误失败。返回值仅供测试跳过判定，不进入生产路径。
+func isFileSystemCaseInsensitive(path string) bool {
+	dir := filepath.Dir(path)
+	// 在 dir 下创建临时子目录；dir 可能不存在，迭代到最深的已存在祖先
+	for {
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+	probe, err := os.MkdirTemp(dir, "CaseProbe-*")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(probe)
+	lower := strings.ToLower(probe)
+	// 全小写形式与原路径不同（即原路径含大写字母）且能 stat 到 → FS 大小写不敏感
+	if lower == probe {
+		return false // 原路径不含大写字母：探测无意义
+	}
+	if _, err := os.Stat(lower); err == nil {
+		return true
+	}
+	return false
 }
 
 // TestWorkspacePathToRootBoundary 验证 /workspace 别名前缀须跟分隔符或结尾，
@@ -139,17 +176,29 @@ func TestSandboxWorkspaceAcceptsVirtualPrefix(t *testing.T) {
 // WorkspaceRoot 不一致（如小写盘符 d:\agents\dsc\...）。修复前 inWorkspace 的词法前缀
 // 比较区分大小写，导致真实路径在 workspace 内却被误拦，模型只好退回 /workspace 虚拟
 // 前缀（该前缀在 shell 中又不存在），陷入死循环，最终被迫切换 full-access。
+//
+// 跳过策略：通过「同一目录名大小写变体是否解析到同一 inode」探测当前 FS 是否大小写
+// 不敏感——是 FS 实际属性，而非路径是否恰好全小写（旧实现用 alt == root+suffix 跳过，
+// 在 Linux 大小写敏感 FS 上对带大写字母的 /tmp/TestSandboxNNN 路径会误判为「有大小写
+// 差异」继续跑，结果 EvalSymlinks 找不到小写目录而误失败）。
 func TestSandboxWorkspaceAllowsRealPathCaseInsensitive(t *testing.T) {
 	orig := WorkspaceRoot
 	WorkspaceRoot = t.TempDir() + "/ws"
 	defer func() { WorkspaceRoot = orig }()
+	_ = os.MkdirAll(WorkspaceRoot, 0o755)
+
+	// canonical root（解析符号链接后）
+	root := canonicalWorkspaceRoot()
+
+	// 探测当前文件系统是否大小写不敏感：在 WorkspaceRoot 同层创建一个含大写字母的
+	// 子目录，再尝试以小写形式 stat。能 stat 到 → FS 大小写不敏感；否则敏感。
+	// 用 root 作为探测基点（root 必存在）。
+	if !isFileSystemCaseInsensitive(root) {
+		t.Skip("当前文件系统大小写敏感，跳过 case-insensitive 回归测试")
+	}
 
 	// 以与 canonical 根大小写不同的真实路径写 workspace 内文件（模拟模型回传路径）
-	root := canonicalWorkspaceRoot()
 	alt := strings.ToLower(root) + "/inside.txt"
-	if alt == root+"/inside.txt" {
-		t.Skip("当前系统大小写不敏感或路径无大小写差异，跳过")
-	}
 	// JSON 中反斜杆需转义（真实请求由模型产出合法 JSON，这里等价构造）
 	escaped := strings.ReplaceAll(alt, `\`, `\\`)
 
