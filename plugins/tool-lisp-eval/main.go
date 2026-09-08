@@ -352,15 +352,15 @@ func main() {
 	name := "lisp_eval"
 	description := "Evaluate a Lisp/Scheme expression with exact rational arithmetic (Clojure-dialect interpreter). + - * / are exact and variadic: (/ 10 3) = 10/3, 3/4 literals (no spaces) are exact fractions, integral results print as ints, arbitrary-precision integers supported. Supported: exact + - * /, comparisons < <= > >= =, mod/quot/rem, list helpers filter range sum product reverse last; float escape hatch f+ f- f* f/ and math functions sqrt sin cos tan exp log pow min max (floats are NOT accepted by the exact + - * /). Do NOT quote the expression: pass (+ 1 2), not '(+ 1 2)."
 	schema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"expression": {
-				"type": "string",
-				"description": "Lisp/Scheme expression to evaluate, e.g. (+ 1 2), (* 3 4), (/ 10 3), (sqrt 2), (sum (range 100))"
-			}
-		},
-		"required": ["expression"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "expression": {
+                                "type": "string",
+                                "description": "Lisp/Scheme expression to evaluate, e.g. (+ 1 2), (* 3 4), (/ 10 3), (sqrt 2), (sum (range 100))"
+                        }
+                },
+                "required": ["expression"]
+        }`)
 	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			Expression string `json:"expression"`
@@ -378,7 +378,15 @@ func main() {
 		return result, nil
 	}
 
-	sdk := dsc.New(dsc.Config{Name: "lisp-eval", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "lisp-eval",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "lisp-eval" 能力：含 lisp_eval 精确有理数求值工具
+			"lisp-eval": "true",
+		},
+	})
 	sdk.Tool(dsc.Tool{
 		Name: name, Description: description, Schema: schema, Handler: handler,
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {

@@ -523,39 +523,39 @@ var searchEngines = map[string]searchEngine{
 		urlFmt:  "https://html.duckduckgo.com/html/?q=%s",
 		waitSel: ".result, .results",
 		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('.result')).map(r => {
-			const a = r.querySelector('a.result__a');
-			const s = r.querySelector('.result__snippet, .result__snippet_no_offset');
-			return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
-		}).filter(r => r.url && r.url.startsWith('http')))`,
+                        const a = r.querySelector('a.result__a');
+                        const s = r.querySelector('.result__snippet, .result__snippet_no_offset');
+                        return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
+                }).filter(r => r.url && r.url.startsWith('http')))`,
 	},
 	"google": {
 		name:    "google",
 		urlFmt:  "https://www.google.com/search?q=%s",
 		waitSel: "a[href]",
 		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('a[href^="http"]')).map(r => {
-			const a = r.querySelector('h3') || r;
-			return { title: a ? a.innerText.trim() : '', url: r.href || '', description: '' };
-		}).filter(r => r.url && r.url.startsWith('http')))`,
+                        const a = r.querySelector('h3') || r;
+                        return { title: a ? a.innerText.trim() : '', url: r.href || '', description: '' };
+                }).filter(r => r.url && r.url.startsWith('http')))`,
 	},
 	"baidu": {
 		name:    "baidu",
 		urlFmt:  "https://www.baidu.com/s?wd=%s",
 		waitSel: "#content_left",
 		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('#content_left .result, #content_left .c-container')).map(r => {
-			const a = r.querySelector('h3 a');
-			const s = r.querySelector('.c-abstract, .content-right');
-			return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
-		}).filter(r => r.url && r.url.startsWith('http')))`,
+                        const a = r.querySelector('h3 a');
+                        const s = r.querySelector('.c-abstract, .content-right');
+                        return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
+                }).filter(r => r.url && r.url.startsWith('http')))`,
 	},
 	"so360": {
 		name:    "so360",
 		urlFmt:  "https://www.so.com/s?q=%s",
 		waitSel: ".res-list",
 		extractJS: `() => JSON.stringify(Array.from(document.querySelectorAll('.res-list')).map(r => {
-			const a = r.querySelector('h3 a');
-			const s = r.querySelector('.res-desc');
-			return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
-		}).filter(r => r.url && r.url.startsWith('http')))`,
+                        const a = r.querySelector('h3 a');
+                        const s = r.querySelector('.res-desc');
+                        return { title: a ? a.innerText.trim() : '', url: a ? a.href : '', description: s ? s.innerText.trim() : '' };
+                }).filter(r => r.url && r.url.startsWith('http')))`,
 	},
 }
 
@@ -893,27 +893,27 @@ func browserScreenshotView(result string) (json.RawMessage, error) {
 func main() {
 	// 定義 web_fetch 工具
 	webFetchSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {
-				"type": "string",
-				"description": "Browser session ID for persistent state"
-			},
-			"url": {
-				"type": "string",
-				"description": "URL to fetch"
-			},
-			"return_html": {
-				"type": "boolean",
-				"description": "Whether to return raw HTML instead of plain text. Defaults to false (plain text)."
-			},
-			"user_mode": {
-				"type": "boolean",
-				"description": "Whether to reuse the default Chrome profile (logged-in state) when creating the session. Defaults to true."
-			}
-		},
-		"required": ["url"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {
+                                "type": "string",
+                                "description": "Browser session ID for persistent state"
+                        },
+                        "url": {
+                                "type": "string",
+                                "description": "URL to fetch"
+                        },
+                        "return_html": {
+                                "type": "boolean",
+                                "description": "Whether to return raw HTML instead of plain text. Defaults to false (plain text)."
+                        },
+                        "user_mode": {
+                                "type": "boolean",
+                                "description": "Whether to reuse the default Chrome profile (logged-in state) when creating the session. Defaults to true."
+                        }
+                },
+                "required": ["url"]
+        }`)
 	webFetchHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			SessionID  string `json:"session_id"`
@@ -940,27 +940,27 @@ func main() {
 
 	// 定義 web_search 工具
 	webSearchSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {
-				"type": "string",
-				"description": "Browser session ID for persistent state"
-			},
-			"query": {
-				"type": "string",
-				"description": "Search query"
-			},
-			"engines": {
-				"type": "string",
-				"description": "Comma-separated search engines to aggregate, e.g. \"google,baidu,so360\". Supported: google, duckduckgo, baidu, so360. Defaults to all."
-			},
-			"user_mode": {
-				"type": "boolean",
-				"description": "Whether to reuse the default Chrome profile (logged-in state) when creating the session. Defaults to true."
-			}
-		},
-		"required": ["query"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {
+                                "type": "string",
+                                "description": "Browser session ID for persistent state"
+                        },
+                        "query": {
+                                "type": "string",
+                                "description": "Search query"
+                        },
+                        "engines": {
+                                "type": "string",
+                                "description": "Comma-separated search engines to aggregate, e.g. \"google,baidu,so360\". Supported: google, duckduckgo, baidu, so360. Defaults to all."
+                        },
+                        "user_mode": {
+                                "type": "boolean",
+                                "description": "Whether to reuse the default Chrome profile (logged-in state) when creating the session. Defaults to true."
+                        }
+                },
+                "required": ["query"]
+        }`)
 	webSearchHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			SessionID string `json:"session_id"`
@@ -987,23 +987,23 @@ func main() {
 
 	// 定義 browser_click 工具
 	browserClickSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {
-				"type": "string",
-				"description": "Browser session ID for persistent state"
-			},
-			"url": {
-				"type": "string",
-				"description": "Current page URL"
-			},
-			"selector": {
-				"type": "string",
-				"description": "CSS selector of the element to click"
-			}
-		},
-		"required": ["url", "selector"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {
+                                "type": "string",
+                                "description": "Browser session ID for persistent state"
+                        },
+                        "url": {
+                                "type": "string",
+                                "description": "Current page URL"
+                        },
+                        "selector": {
+                                "type": "string",
+                                "description": "CSS selector of the element to click"
+                        }
+                },
+                "required": ["url", "selector"]
+        }`)
 	browserClickHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			SessionID string `json:"session_id"`
@@ -1025,31 +1025,31 @@ func main() {
 
 	// 定義 browser_type 工具
 	browserTypeSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {
-				"type": "string",
-				"description": "Browser session ID for persistent state"
-			},
-			"url": {
-				"type": "string",
-				"description": "Current page URL"
-			},
-			"selector": {
-				"type": "string",
-				"description": "CSS selector of the input field"
-			},
-			"text": {
-				"type": "string",
-				"description": "Text to type"
-			},
-			"submit": {
-				"type": "boolean",
-				"description": "Whether to submit the form after typing"
-			}
-		},
-		"required": ["url", "selector", "text"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {
+                                "type": "string",
+                                "description": "Browser session ID for persistent state"
+                        },
+                        "url": {
+                                "type": "string",
+                                "description": "Current page URL"
+                        },
+                        "selector": {
+                                "type": "string",
+                                "description": "CSS selector of the input field"
+                        },
+                        "text": {
+                                "type": "string",
+                                "description": "Text to type"
+                        },
+                        "submit": {
+                                "type": "boolean",
+                                "description": "Whether to submit the form after typing"
+                        }
+                },
+                "required": ["url", "selector", "text"]
+        }`)
 	browserTypeHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			SessionID string `json:"session_id"`
@@ -1073,23 +1073,23 @@ func main() {
 
 	// 定義 browser_screenshot 工具
 	browserScreenshotSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {
-				"type": "string",
-				"description": "Browser session ID for persistent state"
-			},
-			"url": {
-				"type": "string",
-				"description": "Current page URL"
-			},
-			"full_page": {
-				"type": "boolean",
-				"description": "Whether to take a full page screenshot"
-			}
-		},
-		"required": ["url"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {
+                                "type": "string",
+                                "description": "Browser session ID for persistent state"
+                        },
+                        "url": {
+                                "type": "string",
+                                "description": "Current page URL"
+                        },
+                        "full_page": {
+                                "type": "boolean",
+                                "description": "Whether to take a full page screenshot"
+                        }
+                },
+                "required": ["url"]
+        }`)
 	browserScreenshotHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			SessionID string `json:"session_id"`
@@ -1109,7 +1109,15 @@ func main() {
 		return browserScreenshotImpl(sessionID, params.URL, params.FullPage)
 	}
 
-	sdk := dsc.New(dsc.Config{Name: "browser-use", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "browser-use",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "browser" 能力：含 web_fetch/web_search/browser_* 无头浏览器工具
+			"browser": "true",
+		},
+	})
 	sdk.Tool(dsc.Tool{Name: "web_fetch", Description: "Fetch the content of a URL using a headless browser, supporting JavaScript rendering", Schema: webFetchSchema, Handler: webFetchHandler,
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
 			return webFetchView(result)

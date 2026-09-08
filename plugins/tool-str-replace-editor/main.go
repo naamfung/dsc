@@ -384,52 +384,60 @@ func main() {
 		`. "/workspace" is also accepted as an alias for the workspace root (` +
 		filepath.ToSlash(workspaceRoot) + `), but prefer the real path above for shell commands.`
 	schema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"command": {
-				"type": "string",
-				"enum": ["view", "create", "str_replace", "insert"],
-				"description": "The commands to run. Allowed options are: view, create, str_replace, insert."
-			},
-			"path": {
-				"type": "string",
-				"description": ` + strconv.Quote(pathDesc) + `
-			},
-			"file_text": {
-				"type": "string",
-				"description": "Required for 'create' command. The content of the file to be created."
-			},
-			"old_str": {
-				"type": "string",
-				"description": "Required for 'str_replace' command. The string in the file to replace."
-			},
-			"new_str": {
-				"type": "string",
-				"description": "Required for 'str_replace' and 'insert' commands. The new string to replace with or insert."
-			},
-			"insert_line": {
-				"type": "integer",
-				"description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
-			},
-			"sandbox_permissions": {
-				"type": "string",
-				"enum": ["workspace-write", "danger-full-access"],
-				"description": "Optional sandbox escalation: if a prior write was denied under the current sandbox mode, retry this exact operation once with a strictly wider mode (read-only → workspace-write/danger-full-access; workspace-write → danger-full-access) to request user approval for this one call. Omit for a normal call."
-			},
-			"justification": {
-				"type": "string",
-				"description": "Required together with 'sandbox_permissions': a one-sentence reason shown to the user in the approval prompt."
-			}
-		},
-		"required": ["command", "path"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "command": {
+                                "type": "string",
+                                "enum": ["view", "create", "str_replace", "insert"],
+                                "description": "The commands to run. Allowed options are: view, create, str_replace, insert."
+                        },
+                        "path": {
+                                "type": "string",
+                                "description": ` + strconv.Quote(pathDesc) + `
+                        },
+                        "file_text": {
+                                "type": "string",
+                                "description": "Required for 'create' command. The content of the file to be created."
+                        },
+                        "old_str": {
+                                "type": "string",
+                                "description": "Required for 'str_replace' command. The string in the file to replace."
+                        },
+                        "new_str": {
+                                "type": "string",
+                                "description": "Required for 'str_replace' and 'insert' commands. The new string to replace with or insert."
+                        },
+                        "insert_line": {
+                                "type": "integer",
+                                "description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
+                        },
+                        "sandbox_permissions": {
+                                "type": "string",
+                                "enum": ["workspace-write", "danger-full-access"],
+                                "description": "Optional sandbox escalation: if a prior write was denied under the current sandbox mode, retry this exact operation once with a strictly wider mode (read-only → workspace-write/danger-full-access; workspace-write → danger-full-access) to request user approval for this one call. Omit for a normal call."
+                        },
+                        "justification": {
+                                "type": "string",
+                                "description": "Required together with 'sandbox_permissions': a one-sentence reason shown to the user in the approval prompt."
+                        }
+                },
+                "required": ["command", "path"]
+        }`)
 	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		return strReplaceEditorHandler(ctx, state, args)
 	}
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
 	// PluginMetadata / PluginHookService 与 go-core 组装。
-	sdk := dsc.New(dsc.Config{Name: "str_replace_editor", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "str_replace_editor",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "editor" 能力：含 str_replace_editor 文件编辑工具
+			"editor": "true",
+		},
+	})
 	sdk.Tool(dsc.Tool{Name: "str_replace_editor", Description: "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert.", Schema: schema, Handler: handler})
 	sdk.Serve()
 }

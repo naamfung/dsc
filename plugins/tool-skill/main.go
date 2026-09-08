@@ -523,7 +523,15 @@ func main() {
 	installTool := &InstallSkillTool{store: store, installedDir: installedDir}
 	uninstallTool := &UninstallSkillTool{store: store}
 
-	sdk := dsc.New(dsc.Config{Name: "skill", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "skill",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "skill" 能力：含 read_skill/install_skill/uninstall_skill 工具
+			"skill": "true",
+		},
+	})
 	sdk.Tool(dsc.Tool{
 		Name:        readTool.Name(),
 		Description: readTool.Description(),

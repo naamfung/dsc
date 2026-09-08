@@ -1407,7 +1407,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	sdk := dsc.New(dsc.Config{Name: "agent-react-loop", Version: "1.1.0", Type: dsc.TypeAgent})
+	// agent 声明能力依赖：requires/llm/llm —— 依赖一个提供 "llm" 能力的 LLM 插件
+	// （所有 LLM 插件经 PluginInfo.Capabilities 默认提供 "llm" 能力）。宿主据此按
+	// 能力（而非插件名）解析 primary LLM provider，对齐 DSH/Cordis 的 provide + inject 模型。
+	sdk := dsc.New(dsc.Config{
+		Name:    "agent-react-loop",
+		Version: "1.1.0",
+		Type:    dsc.TypeAgent,
+		Requires: []dsc.CapabilityRequirement{
+			{Type: "llm", Capability: "llm"},
+		},
+	})
 	sdk.Agent(agent)
 	// 订阅宿主事件：把沙箱升级审批审计（approval/asked + approval/decided）写进当前会话日志。
 	sdk.Hook(dsc.Hook{OnEvent: agent.handleHostEvent})

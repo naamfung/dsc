@@ -217,16 +217,16 @@ func sshCloseView(args json.RawMessage, result string) (json.RawMessage, error) 
 func main() {
 	// ssh_connect
 	connectSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"host": {"type": "string", "description": "SSH host (IP or hostname)"},
-			"port": {"type": "integer", "description": "SSH port, default 22"},
-			"username": {"type": "string", "description": "SSH username"},
-			"password": {"type": "string", "description": "Password for password auth (optional)"},
-			"private_key_path": {"type": "string", "description": "Path to a PEM private key for key auth (optional)"}
-		},
-		"required": ["host", "username"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "host": {"type": "string", "description": "SSH host (IP or hostname)"},
+                        "port": {"type": "integer", "description": "SSH port, default 22"},
+                        "username": {"type": "string", "description": "SSH username"},
+                        "password": {"type": "string", "description": "Password for password auth (optional)"},
+                        "private_key_path": {"type": "string", "description": "Path to a PEM private key for key auth (optional)"}
+                },
+                "required": ["host", "username"]
+        }`)
 	connectHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var p struct {
 			Host           string `json:"host"`
@@ -253,13 +253,13 @@ func main() {
 
 	// ssh_exec
 	execSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {"type": "string", "description": "SSH session ID from ssh_connect"},
-			"command": {"type": "string", "description": "Command to run on the remote host"}
-		},
-		"required": ["session_id", "command"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {"type": "string", "description": "SSH session ID from ssh_connect"},
+                        "command": {"type": "string", "description": "Command to run on the remote host"}
+                },
+                "required": ["session_id", "command"]
+        }`)
 	execHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var p struct {
 			SessionID string `json:"session_id"`
@@ -282,9 +282,9 @@ func main() {
 
 	// ssh_list
 	listSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {}
-	}`)
+                "type": "object",
+                "properties": {}
+        }`)
 	listHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		b, _ := json.Marshal(SSHListResult{Success: true, Sessions: globalSSH.list()})
 		return string(b), nil
@@ -292,12 +292,12 @@ func main() {
 
 	// ssh_close
 	closeSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"session_id": {"type": "string", "description": "SSH session ID to close"}
-		},
-		"required": ["session_id"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "session_id": {"type": "string", "description": "SSH session ID to close"}
+                },
+                "required": ["session_id"]
+        }`)
 	closeHandler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var p struct {
 			SessionID string `json:"session_id"`
@@ -310,7 +310,15 @@ func main() {
 		return string(b), nil
 	}
 
-	sdk := dsc.New(dsc.Config{Name: "ssh", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "ssh",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "ssh" 能力：含 ssh_connect/ssh_exec/ssh_list/ssh_close 远程会话工具
+			"ssh": "true",
+		},
+	})
 	sdk.Tool(dsc.Tool{Name: "ssh_connect", Description: "Connect to a remote host over SSH and return a persistent session ID for subsequent commands", Schema: connectSchema, Handler: connectHandler,
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
 			return sshConnectView(result)

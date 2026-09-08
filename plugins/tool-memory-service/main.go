@@ -414,23 +414,31 @@ func main() {
 	}
 
 	searchSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"query": {"type": "string", "description": "自然语言查询语句"},
-			"keywords": {"type": "string", "description": "空格分隔的搜索关键词，优先于 query；缺省时取 query"}
-		},
-		"description": "query 与 keywords 至少提供一个"
-	}`)
+                "type": "object",
+                "properties": {
+                        "query": {"type": "string", "description": "自然语言查询语句"},
+                        "keywords": {"type": "string", "description": "空格分隔的搜索关键词，优先于 query；缺省时取 query"}
+                },
+                "description": "query 与 keywords 至少提供一个"
+        }`)
 	addSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"content": {"type": "string", "description": "要保存的记忆内容"},
-			"source": {"type": "string", "description": "记忆来源标记，缺省 user"}
-		},
-		"required": ["content"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "content": {"type": "string", "description": "要保存的记忆内容"},
+                        "source": {"type": "string", "description": "记忆来源标记，缺省 user"}
+                },
+                "required": ["content"]
+        }`)
 
-	sdk := dsc.New(dsc.Config{Name: "memory-service", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "memory-service",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			// 提供 "memory" 能力：含 memory_search/memory_add 工具与 AfterTool 自动记忆钩子
+			"memory": "true",
+		},
+	})
 	sdk.Tool(dsc.Tool{
 		Name:        "memory_search",
 		Description: "搜索记忆库：按关键词检索历史记忆（用户偏好、项目约定、工具执行结果等），返回按相关度与时间衰减排序的结果。参数 query 或 keywords 至少提供一个。",
