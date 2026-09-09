@@ -267,8 +267,14 @@ message NotifyRequest {
 message NotifyResponse {}
 
 // PluginHookService 插件侧钩子/事件订阅服务（互通机制 3）：插件在自身 gRPC
-// server 上注册，宿主在工具流水线与事件广播时回调。使插件 A 能在不通知
+// server 上注册，宿主在工具流水线与事件分发时回调。使插件 A 能在不通知
 // 主程序和其他插件的情况下，钩子式改变插件 B 的工具行为（拦截/改写）。
+//
+// 事件分发对齐 DSH Cordis ctx.on() 设计：
+//   - 模式由事件名决定（宿主侧事件分发模式映射表），listener 不感知模式
+//   - emit 模式：宿主忽略返回值；listener 可不实现 next
+//   - waterfall 模式：listener 调 next() 委托下游，不调即 veto
+//   - 同步语义：宿主等待所有 listener 返回后才继续
 service PluginHookService {
   // 工具执行前（宿主 pre-execute 流水线内，按插件加载顺序调用）：可 veto
   // 或改写参数；veto 阻止执行。
@@ -276,6 +282,8 @@ service PluginHookService {
   // 工具执行后：可改写结果/错误。
   rpc AfterTool(AfterToolRequest) returns (AfterToolResponse);
   // 宿主事件订阅：含其他插件经 PluginNotifyService 发布的事件。
+  // 同步分发：宿主按事件名决定的分发模式（emit/serial/bail/waterfall）
+  // 调用所有插件并等待返回。
   rpc OnEvent(OnEventRequest) returns (OnEventResponse);
 }
 
@@ -309,7 +317,15 @@ message OnEventRequest {
   string data_json = 2;
 }
 
-message OnEventResponse {}
+// OnEventResponse 事件分发响应。分发模式由事件名决定（宿主侧映射表）：
+//   - emit 模式：所有字段被忽略（仅副作用型 listener）
+//   - waterfall 模式：result_json 非 nil 表示改写后的载荷透传给下游；
+//     error 非空表示 veto（短路链，停止后续 listener 与兜底 next）
+//   - serial/bail 模式：error 非空使链停止
+message OnEventResponse {
+  string result_json = 1; // 改写后的载荷（waterfall 模式生效；emit 忽略）
+  string error = 2;        // 非 nil 视为 veto（waterfall/serial/bail 生效；emit 忽略）
+}
 
 message AskRequest {
   repeated AskQuestion questions = 1;

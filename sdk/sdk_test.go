@@ -1,438 +1,441 @@
 package dsc
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"strings"
-	"testing"
+        "context"
+        "encoding/json"
+        "errors"
+        "strings"
+        "testing"
 
-	"dsc/core"
-	"dsc/proto"
-	"dsc/proto/metadata"
+        "dsc/core"
+        "dsc/proto"
+        "dsc/proto/metadata"
 )
 
 func testSDK() *SDK {
-	return New(Config{Name: "test", Version: "1.0.0", Type: TypeTool})
+        return New(Config{Name: "test", Version: "1.0.0", Type: TypeTool})
 }
 
 func TestValidate(t *testing.T) {
-	cases := []struct {
-		name    string
-		cfg     Config
-		build   func() *SDK
-		wantErr string
-	}{
-		{"tool 无工具报错", Config{Name: "x", Type: TypeTool}, func() *SDK { return New(Config{Name: "x", Type: TypeTool}) }, "至少注册一个工具"},
-		{"tool 无 Handler 报错", Config{Name: "x", Type: TypeTool}, func() *SDK {
-			s := New(Config{Name: "x", Type: TypeTool})
-			s.Tool(Tool{Name: "t"})
-			return s
-		}, "未设置 Handler"},
-		{"tool 空名字报错", Config{Name: "x", Type: TypeTool}, func() *SDK {
-			s := New(Config{Name: "x", Type: TypeTool})
-			s.Tool(Tool{Name: "", Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil }})
-			return s
-		}, "Name 不能为空"},
-		{"llm 无实现报错", Config{Name: "x", Type: TypeLLM}, func() *SDK { return New(Config{Name: "x", Type: TypeLLM}) }, "必须注册 LLMProvider"},
-		{"agent 无实现报错", Config{Name: "x", Type: TypeAgent}, func() *SDK { return New(Config{Name: "x", Type: TypeAgent}) }, "必须注册 Agent"},
-		{"空名字报错", Config{Name: "", Type: TypeTool}, func() *SDK { return New(Config{Name: "", Type: TypeTool}) }, "Name 必填"},
-		{"未知类型报错", Config{Name: "x", Type: "weird"}, func() *SDK { return New(Config{Name: "x", Type: "weird"}) }, "不支持的插件类型"},
-		{"tool 正常", Config{Name: "x", Type: TypeTool}, func() *SDK {
-			s := New(Config{Name: "x", Type: TypeTool})
-			s.Tool(Tool{Name: "t", Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "ok", nil }})
-			return s
-		}, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := c.build().validate()
-			if c.wantErr == "" {
-				if err != nil {
-					t.Fatalf("validate = %v, want nil", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("validate = %v, want contains %q", err, c.wantErr)
-			}
-		})
-	}
+        cases := []struct {
+                name    string
+                cfg     Config
+                build   func() *SDK
+                wantErr string
+        }{
+                {"tool 无工具报错", Config{Name: "x", Type: TypeTool}, func() *SDK { return New(Config{Name: "x", Type: TypeTool}) }, "至少注册一个工具"},
+                {"tool 无 Handler 报错", Config{Name: "x", Type: TypeTool}, func() *SDK {
+                        s := New(Config{Name: "x", Type: TypeTool})
+                        s.Tool(Tool{Name: "t"})
+                        return s
+                }, "未设置 Handler"},
+                {"tool 空名字报错", Config{Name: "x", Type: TypeTool}, func() *SDK {
+                        s := New(Config{Name: "x", Type: TypeTool})
+                        s.Tool(Tool{Name: "", Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil }})
+                        return s
+                }, "Name 不能为空"},
+                {"llm 无实现报错", Config{Name: "x", Type: TypeLLM}, func() *SDK { return New(Config{Name: "x", Type: TypeLLM}) }, "必须注册 LLMProvider"},
+                {"agent 无实现报错", Config{Name: "x", Type: TypeAgent}, func() *SDK { return New(Config{Name: "x", Type: TypeAgent}) }, "必须注册 Agent"},
+                {"空名字报错", Config{Name: "", Type: TypeTool}, func() *SDK { return New(Config{Name: "", Type: TypeTool}) }, "Name 必填"},
+                {"未知类型报错", Config{Name: "x", Type: "weird"}, func() *SDK { return New(Config{Name: "x", Type: "weird"}) }, "不支持的插件类型"},
+                {"tool 正常", Config{Name: "x", Type: TypeTool}, func() *SDK {
+                        s := New(Config{Name: "x", Type: TypeTool})
+                        s.Tool(Tool{Name: "t", Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "ok", nil }})
+                        return s
+                }, ""},
+        }
+        for _, c := range cases {
+                t.Run(c.name, func(t *testing.T) {
+                        err := c.build().validate()
+                        if c.wantErr == "" {
+                                if err != nil {
+                                        t.Fatalf("validate = %v, want nil", err)
+                                }
+                                return
+                        }
+                        if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+                                t.Fatalf("validate = %v, want contains %q", err, c.wantErr)
+                        }
+                })
+        }
 }
 
 func TestToolServiceServer(t *testing.T) {
-	s := testSDK()
-	s.Tool(Tool{
-		Name: "echo", Description: "echo text",
-		Schema:  json.RawMessage(`{"type":"object"}`),
-		Context: "echo 工具约定说明",
-		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var v struct {
-				Text string `json:"text"`
-			}
-			if err := json.Unmarshal(args, &v); err != nil {
-				return "", err
-			}
-			if v.Text == "boom" {
-				return "", errors.New("boom")
-			}
-			return "echo: " + v.Text, nil
-		},
-	})
-	srv := &toolServiceServer{sdk: s}
+        s := testSDK()
+        s.Tool(Tool{
+                Name: "echo", Description: "echo text",
+                Schema:  json.RawMessage(`{"type":"object"}`),
+                Context: "echo 工具约定说明",
+                Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
+                        var v struct {
+                                Text string `json:"text"`
+                        }
+                        if err := json.Unmarshal(args, &v); err != nil {
+                                return "", err
+                        }
+                        if v.Text == "boom" {
+                                return "", errors.New("boom")
+                        }
+                        return "echo: " + v.Text, nil
+                },
+        })
+        srv := &toolServiceServer{sdk: s}
 
-	// ExecuteTool
-	resp, err := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "echo", ArgumentsJson: `{"text":"hi"}`})
-	if err != nil || resp.Error != "" || resp.Content != "echo: hi" {
-		t.Fatalf("ExecuteTool = (%+v, %v), want echo: hi", resp, err)
-	}
-	// 错误路径：error 进 Error 字段而非 gRPC error
-	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "echo", ArgumentsJson: `{"text":"boom"}`})
-	if resp.Error != "boom" {
-		t.Fatalf("ExecuteTool error = %q, want boom", resp.Error)
-	}
-	// 未知工具
-	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "nope", ArgumentsJson: `{}`})
-	if resp.Error == "" {
-		t.Fatal("未知工具应返回错误")
-	}
+        // ExecuteTool
+        resp, err := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "echo", ArgumentsJson: `{"text":"hi"}`})
+        if err != nil || resp.Error != "" || resp.Content != "echo: hi" {
+                t.Fatalf("ExecuteTool = (%+v, %v), want echo: hi", resp, err)
+        }
+        // 错误路径：error 进 Error 字段而非 gRPC error
+        resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "echo", ArgumentsJson: `{"text":"boom"}`})
+        if resp.Error != "boom" {
+                t.Fatalf("ExecuteTool error = %q, want boom", resp.Error)
+        }
+        // 未知工具
+        resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "nope", ArgumentsJson: `{}`})
+        if resp.Error == "" {
+                t.Fatal("未知工具应返回错误")
+        }
 
-	// ListTools
-	list, err := srv.ListTools(context.Background(), &proto.ListToolsRequest{})
-	if err != nil || len(list.Tools) != 1 || list.Tools[0].Name != "echo" || list.Tools[0].Description != "echo text" {
-		t.Fatalf("ListTools = %+v, %v", list, err)
-	}
+        // ListTools
+        list, err := srv.ListTools(context.Background(), &proto.ListToolsRequest{})
+        if err != nil || len(list.Tools) != 1 || list.Tools[0].Name != "echo" || list.Tools[0].Description != "echo text" {
+                t.Fatalf("ListTools = %+v, %v", list, err)
+        }
 
-	// ListContext
-	lc, err := srv.ListContext(context.Background(), &proto.ListContextRequest{})
-	if err != nil || !strings.Contains(lc.Content, "echo 工具约定说明") {
-		t.Fatalf("ListContext = %+v, %v", lc, err)
-	}
+        // ListContext
+        lc, err := srv.ListContext(context.Background(), &proto.ListContextRequest{})
+        if err != nil || !strings.Contains(lc.Content, "echo 工具约定说明") {
+                t.Fatalf("ListContext = %+v, %v", lc, err)
+        }
 }
 
 // TestToolServiceServerViewFn 校验 ViewFn：插件声明的结构化视图 spec 进入 ViewJson，
 // 供 TUI 统一渲染；未设置 ViewFn 时 ViewJson 为空。
 func TestToolServiceServerViewFn(t *testing.T) {
-	s := testSDK()
-	s.Tool(Tool{
-		Name:    "goal",
-		Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return `{"goal":{}}`, nil },
-		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
-			if result != `{"goal":{}}` {
-				t.Fatalf("ViewFn 应收到 Handler 结果, got %q", result)
-			}
-			return CardView("Goal", &ViewBadge{Text: "active", Tone: "green"}, []ViewField{{Key: "id", Value: "goal"}}), nil
-		},
-	})
-	s.Tool(Tool{
-		Name:    "plain",
-		Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "plain", nil },
-	})
-	srv := &toolServiceServer{sdk: s}
+        s := testSDK()
+        s.Tool(Tool{
+                Name:    "goal",
+                Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return `{"goal":{}}`, nil },
+                ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+                        if result != `{"goal":{}}` {
+                                t.Fatalf("ViewFn 应收到 Handler 结果, got %q", result)
+                        }
+                        return CardView("Goal", &ViewBadge{Text: "active", Tone: "green"}, []ViewField{{Key: "id", Value: "goal"}}), nil
+                },
+        })
+        s.Tool(Tool{
+                Name:    "plain",
+                Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "plain", nil },
+        })
+        srv := &toolServiceServer{sdk: s}
 
-	resp, err := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "goal", ArgumentsJson: `{}`})
-	if err != nil || resp.ViewJson == "" {
-		t.Fatalf("goal ExecuteTool = (%+v, %v), ViewJson 应为非空", resp, err)
-	}
-	var view core.ToolView
-	if err := json.Unmarshal([]byte(resp.ViewJson), &view); err != nil {
-		t.Fatalf("ViewJson 非法: %v", err)
-	}
-	if view.Kind != "card" || view.Title != "Goal" || view.Badge == nil || view.Badge.Text != "active" || len(view.Fields) != 1 {
-		t.Fatalf("view = %+v", view)
-	}
-	// 未设置 ViewFn → ViewJson 为空
-	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "plain", ArgumentsJson: `{}`})
-	if resp.ViewJson != "" {
-		t.Fatalf("无 ViewFn 时 ViewJson 应为空, got %q", resp.ViewJson)
-	}
+        resp, err := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "goal", ArgumentsJson: `{}`})
+        if err != nil || resp.ViewJson == "" {
+                t.Fatalf("goal ExecuteTool = (%+v, %v), ViewJson 应为非空", resp, err)
+        }
+        var view core.ToolView
+        if err := json.Unmarshal([]byte(resp.ViewJson), &view); err != nil {
+                t.Fatalf("ViewJson 非法: %v", err)
+        }
+        if view.Kind != "card" || view.Title != "Goal" || view.Badge == nil || view.Badge.Text != "active" || len(view.Fields) != 1 {
+                t.Fatalf("view = %+v", view)
+        }
+        // 未设置 ViewFn → ViewJson 为空
+        resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "plain", ArgumentsJson: `{}`})
+        if resp.ViewJson != "" {
+                t.Fatalf("无 ViewFn 时 ViewJson 应为空, got %q", resp.ViewJson)
+        }
 }
 
 // TestToolServiceServerContextFn 动态上下文优先于静态 Context（每次求值）。
 func TestToolServiceServerContextFn(t *testing.T) {
-	calls := 0
-	s := testSDK()
-	s.Tool(Tool{
-		Name: "t", Context: "static", ContextFn: func() string {
-			calls++
-			return "dynamic"
-		},
-		Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil },
-	})
-	srv := &toolServiceServer{sdk: s}
-	lc, err := srv.ListContext(context.Background(), &proto.ListContextRequest{})
-	if err != nil || !strings.Contains(lc.Content, "dynamic") || strings.Contains(lc.Content, "static") || calls != 1 {
-		t.Fatalf("ContextFn ListContext = %+v, calls=%d, err %v", lc, calls, err)
-	}
-	// 第二次调用重新求值
-	_, _ = srv.ListContext(context.Background(), &proto.ListContextRequest{})
-	if calls != 2 {
-		t.Fatalf("ContextFn 应每调用求值, calls=%d", calls)
-	}
+        calls := 0
+        s := testSDK()
+        s.Tool(Tool{
+                Name: "t", Context: "static", ContextFn: func() string {
+                        calls++
+                        return "dynamic"
+                },
+                Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil },
+        })
+        srv := &toolServiceServer{sdk: s}
+        lc, err := srv.ListContext(context.Background(), &proto.ListContextRequest{})
+        if err != nil || !strings.Contains(lc.Content, "dynamic") || strings.Contains(lc.Content, "static") || calls != 1 {
+                t.Fatalf("ContextFn ListContext = %+v, calls=%d, err %v", lc, calls, err)
+        }
+        // 第二次调用重新求值
+        _, _ = srv.ListContext(context.Background(), &proto.ListContextRequest{})
+        if calls != 2 {
+                t.Fatalf("ContextFn 应每调用求值, calls=%d", calls)
+        }
 }
 
 func TestHookServiceServer(t *testing.T) {
-	t.Run("BeforeTool veto", func(t *testing.T) {
-		srv := &hookServiceServer{hook: &Hook{
-			BeforeTool: func(ctx context.Context, name, args string) (string, error) {
-				return "", errors.New("blocked: " + name)
-			},
-		}}
-		resp, err := srv.BeforeTool(context.Background(), &proto.BeforeToolRequest{ToolName: "t", ArgumentsJson: `{}`})
-		if err != nil || !resp.Veto || !strings.Contains(resp.Error, "blocked") {
-			t.Fatalf("veto = %+v, %v", resp, err)
-		}
-	})
-	t.Run("BeforeTool rewrite", func(t *testing.T) {
-		srv := &hookServiceServer{hook: &Hook{
-			BeforeTool: func(ctx context.Context, name, args string) (string, error) {
-				return `{"x":2}`, nil
-			},
-		}}
-		resp, err := srv.BeforeTool(context.Background(), &proto.BeforeToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`})
-		if err != nil || resp.Veto || resp.ArgumentsJson != `{"x":2}` {
-			t.Fatalf("rewrite = %+v, %v", resp, err)
-		}
-	})
-	t.Run("BeforeTool keep as-is", func(t *testing.T) {
-		// 未设置 BeforeTool：空实现保持原样
-		srv := &hookServiceServer{}
-		resp, err := srv.BeforeTool(context.Background(), &proto.BeforeToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`})
-		if err != nil || resp.Veto || resp.ArgumentsJson != `{"x":1}` {
-			t.Fatalf("keep = %+v, %v", resp, err)
-		}
-	})
-	t.Run("AfterTool rewrite", func(t *testing.T) {
-		srv := &hookServiceServer{hook: &Hook{
-			AfterTool: func(ctx context.Context, name, args, result, toolErr string) (string, string) {
-				if args != `{"x":1}` {
-					t.Fatalf("AfterTool argumentsJSON = %q, want original args", args)
-				}
-				return result + "!", toolErr
-			},
-		}}
-		resp, err := srv.AfterTool(context.Background(), &proto.AfterToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`, Result: "r", Error: ""})
-		if err != nil || resp.Result != "r!" {
-			t.Fatalf("AfterTool = %+v, %v", resp, err)
-		}
-	})
-	t.Run("OnEvent delivered", func(t *testing.T) {
-		got := ""
-		srv := &hookServiceServer{hook: &Hook{
-			OnEvent: func(ctx context.Context, eventType, dataJSON string) { got = eventType + ":" + dataJSON },
-		}}
-		_, err := srv.OnEvent(context.Background(), &proto.OnEventRequest{Name: "turn/start", DataJson: `{}`})
-		if err != nil || got != "turn/start:{}" {
-			t.Fatalf("OnEvent got %q, err %v", got, err)
-		}
-	})
+        t.Run("BeforeTool veto", func(t *testing.T) {
+                srv := &hookServiceServer{hook: &Hook{
+                        BeforeTool: func(ctx context.Context, name, args string) (string, error) {
+                                return "", errors.New("blocked: " + name)
+                        },
+                }}
+                resp, err := srv.BeforeTool(context.Background(), &proto.BeforeToolRequest{ToolName: "t", ArgumentsJson: `{}`})
+                if err != nil || !resp.Veto || !strings.Contains(resp.Error, "blocked") {
+                        t.Fatalf("veto = %+v, %v", resp, err)
+                }
+        })
+        t.Run("BeforeTool rewrite", func(t *testing.T) {
+                srv := &hookServiceServer{hook: &Hook{
+                        BeforeTool: func(ctx context.Context, name, args string) (string, error) {
+                                return `{"x":2}`, nil
+                        },
+                }}
+                resp, err := srv.BeforeTool(context.Background(), &proto.BeforeToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`})
+                if err != nil || resp.Veto || resp.ArgumentsJson != `{"x":2}` {
+                        t.Fatalf("rewrite = %+v, %v", resp, err)
+                }
+        })
+        t.Run("BeforeTool keep as-is", func(t *testing.T) {
+                // 未设置 BeforeTool：空实现保持原样
+                srv := &hookServiceServer{}
+                resp, err := srv.BeforeTool(context.Background(), &proto.BeforeToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`})
+                if err != nil || resp.Veto || resp.ArgumentsJson != `{"x":1}` {
+                        t.Fatalf("keep = %+v, %v", resp, err)
+                }
+        })
+        t.Run("AfterTool rewrite", func(t *testing.T) {
+                srv := &hookServiceServer{hook: &Hook{
+                        AfterTool: func(ctx context.Context, name, args, result, toolErr string) (string, string) {
+                                if args != `{"x":1}` {
+                                        t.Fatalf("AfterTool argumentsJSON = %q, want original args", args)
+                                }
+                                return result + "!", toolErr
+                        },
+                }}
+                resp, err := srv.AfterTool(context.Background(), &proto.AfterToolRequest{ToolName: "t", ArgumentsJson: `{"x":1}`, Result: "r", Error: ""})
+                if err != nil || resp.Result != "r!" {
+                        t.Fatalf("AfterTool = %+v, %v", resp, err)
+                }
+        })
+        t.Run("OnEvent delivered", func(t *testing.T) {
+                got := ""
+                srv := &hookServiceServer{hook: &Hook{
+                        OnEvent: func(ctx context.Context, eventType, dataJSON string) (string, error) {
+                                got = eventType + ":" + dataJSON
+                                return "", nil
+                        },
+                }}
+                _, err := srv.OnEvent(context.Background(), &proto.OnEventRequest{Name: "turn/start", DataJson: `{}`})
+                if err != nil || got != "turn/start:{}" {
+                        t.Fatalf("OnEvent got %q, err %v", got, err)
+                }
+        })
 }
 
 func TestMetadataServer(t *testing.T) {
-	srv := &metadataServer{cfg: Config{Name: "n", Version: "2.0.0", Type: TypeTool, APIVersion: "1.0"}}
-	info, err := srv.GetInfo(context.Background(), &metadata.Empty{})
-	if err != nil || info.Type != "tool" || info.Name != "n" || info.Version != "2.0.0" || info.ApiVersion != "1.0" {
-		t.Fatalf("GetInfo = %+v, %v", info, err)
-	}
-	// New 会默认 APIVersion=1.0
-	srv2 := &metadataServer{cfg: New(Config{Name: "n", Type: TypeTool}).cfg}
-	info2, _ := srv2.GetInfo(context.Background(), &metadata.Empty{})
-	if info2.ApiVersion != "1.0" {
-		t.Fatalf("New 默认 APIVersion = %q, want 1.0", info2.ApiVersion)
-	}
+        srv := &metadataServer{cfg: Config{Name: "n", Version: "2.0.0", Type: TypeTool, APIVersion: "1.0"}}
+        info, err := srv.GetInfo(context.Background(), &metadata.Empty{})
+        if err != nil || info.Type != "tool" || info.Name != "n" || info.Version != "2.0.0" || info.ApiVersion != "1.0" {
+                t.Fatalf("GetInfo = %+v, %v", info, err)
+        }
+        // New 会默认 APIVersion=1.0
+        srv2 := &metadataServer{cfg: New(Config{Name: "n", Type: TypeTool}).cfg}
+        info2, _ := srv2.GetInfo(context.Background(), &metadata.Empty{})
+        if info2.ApiVersion != "1.0" {
+                t.Fatalf("New 默认 APIVersion = %q, want 1.0", info2.ApiVersion)
+        }
 }
 
 func TestReadEnv(t *testing.T) {
-	t.Setenv("DSC_MODE", "creation")
-	t.Setenv("DSC_WORKSPACE_ROOT", `D:\ws`)
-	t.Setenv("DSC_CONTEXT_WINDOW", "131072")
-	t.Setenv("DSC_SINGLE_TURN", "1")
-	t.Setenv("DSC_TODO_ALLOW_PARALLEL", "0")
-	env := ReadEnv()
-	if env.Mode != "creation" || env.WorkspaceRoot != `D:\ws` || env.ContextWindow != 131072 || !env.SingleTurn || env.AllowParallelTodo {
-		t.Fatalf("ReadEnv = %+v", env)
-	}
+        t.Setenv("DSC_MODE", "creation")
+        t.Setenv("DSC_WORKSPACE_ROOT", `D:\ws`)
+        t.Setenv("DSC_CONTEXT_WINDOW", "131072")
+        t.Setenv("DSC_SINGLE_TURN", "1")
+        t.Setenv("DSC_TODO_ALLOW_PARALLEL", "0")
+        env := ReadEnv()
+        if env.Mode != "creation" || env.WorkspaceRoot != `D:\ws` || env.ContextWindow != 131072 || !env.SingleTurn || env.AllowParallelTodo {
+                t.Fatalf("ReadEnv = %+v", env)
+        }
 }
 
 // TestMetaWrapperCfgPrecedence 验证 LLM/Agent 元数据以 sdk.Config.Name/Version 为准
 // （wrapper 覆盖实现内部 Name()/Version()，避免两处维护不一致）。
 func TestMetaWrapperCfgPrecedence(t *testing.T) {
-	ctx := context.Background()
+        ctx := context.Background()
 
-	// TypeLLM：cfg 非空 → 以 cfg 为准
-	llmImpl := &stubLLM{name: "impl-name", version: "0.0.1"}
-	w := &llmMetaWrapper{LLMProvider: llmImpl, name: "cfg-name", version: "9.9.9"}
-	if got := w.Name(ctx); got != "cfg-name" {
-		t.Fatalf("LLM wrapper Name = %q, want cfg-name", got)
-	}
-	if got := w.Version(ctx); got != "9.9.9" {
-		t.Fatalf("LLM wrapper Version = %q, want 9.9.9", got)
-	}
-	// cfg 为空 → 回落实现
-	w2 := &llmMetaWrapper{LLMProvider: llmImpl}
-	if got := w2.Name(ctx); got != "impl-name" {
-		t.Fatalf("LLM wrapper fallback Name = %q, want impl-name", got)
-	}
+        // TypeLLM：cfg 非空 → 以 cfg 为准
+        llmImpl := &stubLLM{name: "impl-name", version: "0.0.1"}
+        w := &llmMetaWrapper{LLMProvider: llmImpl, name: "cfg-name", version: "9.9.9"}
+        if got := w.Name(ctx); got != "cfg-name" {
+                t.Fatalf("LLM wrapper Name = %q, want cfg-name", got)
+        }
+        if got := w.Version(ctx); got != "9.9.9" {
+                t.Fatalf("LLM wrapper Version = %q, want 9.9.9", got)
+        }
+        // cfg 为空 → 回落实现
+        w2 := &llmMetaWrapper{LLMProvider: llmImpl}
+        if got := w2.Name(ctx); got != "impl-name" {
+                t.Fatalf("LLM wrapper fallback Name = %q, want impl-name", got)
+        }
 
-	// TypeAgent：同样规则
-	agentImpl := &stubAgent{name: "a-impl", version: "0.1.0"}
-	aw := &agentMetaWrapper{Agent: agentImpl, name: "a-cfg", version: "1.2.3"}
-	if got := aw.Name(ctx); got != "a-cfg" {
-		t.Fatalf("Agent wrapper Name = %q, want a-cfg", got)
-	}
-	aw2 := &agentMetaWrapper{Agent: agentImpl}
-	if got := aw2.Version(ctx); got != "0.1.0" {
-		t.Fatalf("Agent wrapper fallback Version = %q, want 0.1.0", got)
-	}
+        // TypeAgent：同样规则
+        agentImpl := &stubAgent{name: "a-impl", version: "0.1.0"}
+        aw := &agentMetaWrapper{Agent: agentImpl, name: "a-cfg", version: "1.2.3"}
+        if got := aw.Name(ctx); got != "a-cfg" {
+                t.Fatalf("Agent wrapper Name = %q, want a-cfg", got)
+        }
+        aw2 := &agentMetaWrapper{Agent: agentImpl}
+        if got := aw2.Version(ctx); got != "0.1.0" {
+                t.Fatalf("Agent wrapper fallback Version = %q, want 0.1.0", got)
+        }
 }
 
 type stubLLM struct {
-	core.LLMProvider
-	name, version string
+        core.LLMProvider
+        name, version string
 }
 
 func (s *stubLLM) Name(context.Context) string    { return s.name }
 func (s *stubLLM) Version(context.Context) string { return s.version }
 
 type stubAgent struct {
-	core.Agent
-	name, version string
+        core.Agent
+        name, version string
 }
 
 func (s *stubAgent) Name(context.Context) string    { return s.name }
 func (s *stubAgent) Version(context.Context) string { return s.version }
 
 func TestSetInterconnectCallsHandler(t *testing.T) {
-	called := false
-	s := New(Config{Name: "x", Type: TypeTool})
-	s.Tool(Tool{Name: "t", Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil }})
-	s.SetInterconnect(func(ctx context.Context, ic *Interconnect) error {
-		called = true
-		if ic.LLM() != nil || ic.Tool() != nil {
-			t.Fatalf("未互联时客户端应为 nil")
-		}
-		return nil
-	})
-	srv := &toolServiceServer{sdk: s} // broker nil：无聚合服务可 Dial
-	resp, err := srv.SetInterconnect(context.Background(), &proto.InterconnectRequest{})
-	if err != nil || !called {
-		t.Fatalf("SetInterconnect = (%v, %v), called=%v", resp, err, called)
-	}
+        called := false
+        s := New(Config{Name: "x", Type: TypeTool})
+        s.Tool(Tool{Name: "t", Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "", nil }})
+        s.SetInterconnect(func(ctx context.Context, ic *Interconnect) error {
+                called = true
+                if ic.LLM() != nil || ic.Tool() != nil {
+                        t.Fatalf("未互联时客户端应为 nil")
+                }
+                return nil
+        })
+        srv := &toolServiceServer{sdk: s} // broker nil：无聚合服务可 Dial
+        resp, err := srv.SetInterconnect(context.Background(), &proto.InterconnectRequest{})
+        if err != nil || !called {
+                t.Fatalf("SetInterconnect = (%v, %v), called=%v", resp, err, called)
+        }
 
-	// handler 错误透传（宿主仅 Warn，不影响加载）
-	s.SetInterconnect(func(ctx context.Context, ic *Interconnect) error {
-		return errors.New("interconnect handler failed")
-	})
-	_, err = srv.SetInterconnect(context.Background(), &proto.InterconnectRequest{})
-	if err == nil || err.Error() != "interconnect handler failed" {
-		t.Fatalf("handler 错误应透传: %v", err)
-	}
+        // handler 错误透传（宿主仅 Warn，不影响加载）
+        s.SetInterconnect(func(ctx context.Context, ic *Interconnect) error {
+                return errors.New("interconnect handler failed")
+        })
+        _, err = srv.SetInterconnect(context.Background(), &proto.InterconnectRequest{})
+        if err == nil || err.Error() != "interconnect handler failed" {
+                t.Fatalf("handler 错误应透传: %v", err)
+        }
 }
 
 // TestAgentBrokerNilSafe 校验 AgentBroker 封装：nil 接收者/未注入 broker 时
 // 各方法不 panic；serviceID 为 0 时便捷方法返回 (nil, nil)。
 func TestAgentBrokerNilSafe(t *testing.T) {
-	var b *AgentBroker
-	// nil 接收者：Dial 报错，便捷方法安全返回 nil
-	if c, err := b.Dial(1); c != nil || err == nil {
-		t.Fatalf("nil AgentBroker.Dial = (%v, %v), want error", c, err)
-	}
-	if c, err := b.DialLLM(1); c != nil || err != nil {
-		t.Fatalf("nil AgentBroker.DialLLM = (%v, %v)", c, err)
-	}
-	if c, err := b.DialTool(1); c != nil || err != nil {
-		t.Fatalf("nil AgentBroker.DialTool = (%v, %v)", c, err)
-	}
-	if n, err := b.DialNotify(1); n != nil || err != nil {
-		t.Fatalf("nil AgentBroker.DialNotify = (%v, %v)", n, err)
-	}
-	if c, err := b.DialUserQuestions(1); c != nil || err != nil {
-		t.Fatalf("nil AgentBroker.DialUserQuestions = (%v, %v)", c, err)
-	}
+        var b *AgentBroker
+        // nil 接收者：Dial 报错，便捷方法安全返回 nil
+        if c, err := b.Dial(1); c != nil || err == nil {
+                t.Fatalf("nil AgentBroker.Dial = (%v, %v), want error", c, err)
+        }
+        if c, err := b.DialLLM(1); c != nil || err != nil {
+                t.Fatalf("nil AgentBroker.DialLLM = (%v, %v)", c, err)
+        }
+        if c, err := b.DialTool(1); c != nil || err != nil {
+                t.Fatalf("nil AgentBroker.DialTool = (%v, %v)", c, err)
+        }
+        if n, err := b.DialNotify(1); n != nil || err != nil {
+                t.Fatalf("nil AgentBroker.DialNotify = (%v, %v)", n, err)
+        }
+        if c, err := b.DialUserQuestions(1); c != nil || err != nil {
+                t.Fatalf("nil AgentBroker.DialUserQuestions = (%v, %v)", c, err)
+        }
 
-	// 非 nil 但 broker 未注入：serviceID=0 时便捷方法返回 nil（llmDial 语义）
-	empty := &AgentBroker{}
-	if c, err := empty.DialLLM(0); c != nil || err != nil {
-		t.Fatalf("empty.DialLLM(0) = (%v, %v)", c, err)
-	}
-	if c, err := empty.DialTool(0); c != nil || err != nil {
-		t.Fatalf("empty.DialTool(0) = (%v, %v)", c, err)
-	}
-	if n, err := empty.DialNotify(0); n != nil || err != nil {
-		t.Fatalf("empty.DialNotify(0) = (%v, %v)", n, err)
-	}
-	if c, err := empty.DialUserQuestions(0); c != nil || err != nil {
-		t.Fatalf("empty.DialUserQuestions(0) = (%v, %v)", c, err)
-	}
-	if _, err := empty.Dial(0); err == nil {
-		t.Fatal("empty.Dial(0) should error (no broker injected)")
-	}
+        // 非 nil 但 broker 未注入：serviceID=0 时便捷方法返回 nil（llmDial 语义）
+        empty := &AgentBroker{}
+        if c, err := empty.DialLLM(0); c != nil || err != nil {
+                t.Fatalf("empty.DialLLM(0) = (%v, %v)", c, err)
+        }
+        if c, err := empty.DialTool(0); c != nil || err != nil {
+                t.Fatalf("empty.DialTool(0) = (%v, %v)", c, err)
+        }
+        if n, err := empty.DialNotify(0); n != nil || err != nil {
+                t.Fatalf("empty.DialNotify(0) = (%v, %v)", n, err)
+        }
+        if c, err := empty.DialUserQuestions(0); c != nil || err != nil {
+                t.Fatalf("empty.DialUserQuestions(0) = (%v, %v)", c, err)
+        }
+        if _, err := empty.Dial(0); err == nil {
+                t.Fatal("empty.Dial(0) should error (no broker injected)")
+        }
 }
 
 func TestInterconnectNotifyNoopWhenDisconnected(t *testing.T) {
-	ic := &Interconnect{}
-	if err := ic.Notify("x", `{}`); err != nil {
-		t.Fatalf("未互联时 Notify 应静默忽略: %v", err)
-	}
-	if err := ic.Close(); err != nil {
-		t.Fatalf("Close = %v", err)
-	}
-	// nil 接收者安全
-	var nilIC *Interconnect
-	if err := nilIC.Notify("x", "{}"); err != nil {
-		t.Fatalf("nil Interconnect Notify = %v", err)
-	}
+        ic := &Interconnect{}
+        if err := ic.Notify("x", `{}`); err != nil {
+                t.Fatalf("未互联时 Notify 应静默忽略: %v", err)
+        }
+        if err := ic.Close(); err != nil {
+                t.Fatalf("Close = %v", err)
+        }
+        // nil 接收者安全
+        var nilIC *Interconnect
+        if err := nilIC.Notify("x", "{}"); err != nil {
+                t.Fatalf("nil Interconnect Notify = %v", err)
+        }
 }
 
 // TestToolProviderDynamic 校验动态工具提供者：空壳（空集）通过校验，
 // 运行时增删工具在 ListTools/ExecuteTool 中即时反映。
 func TestToolProviderDynamic(t *testing.T) {
-	// 空壳工具插件（无业务工具，仅承载钩子/HTTP 服务）应通过 validate
-	s := New(Config{Name: "x", Type: TypeTool})
-	if err := s.ToolProvider(func() []Tool { return nil }).validate(); err != nil {
-		t.Fatalf("empty ToolProvider validate = %v, want nil", err)
-	}
+        // 空壳工具插件（无业务工具，仅承载钩子/HTTP 服务）应通过 validate
+        s := New(Config{Name: "x", Type: TypeTool})
+        if err := s.ToolProvider(func() []Tool { return nil }).validate(); err != nil {
+                t.Fatalf("empty ToolProvider validate = %v, want nil", err)
+        }
 
-	// 动态工具：每次 ListTools/ExecuteTool 求值当前工具集
-	state := []string{"a"}
-	s2 := New(Config{Name: "x", Type: TypeTool})
-	s2.ToolProvider(func() []Tool {
-		var out []Tool
-		for _, n := range state {
-			nn := n
-			out = append(out, Tool{
-				Name: nn, Description: "dyn-" + nn, Schema: json.RawMessage(`{}`),
-				Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "handled:" + nn, nil },
-			})
-		}
-		return out
-	})
-	srv := &toolServiceServer{sdk: s2}
+        // 动态工具：每次 ListTools/ExecuteTool 求值当前工具集
+        state := []string{"a"}
+        s2 := New(Config{Name: "x", Type: TypeTool})
+        s2.ToolProvider(func() []Tool {
+                var out []Tool
+                for _, n := range state {
+                        nn := n
+                        out = append(out, Tool{
+                                Name: nn, Description: "dyn-" + nn, Schema: json.RawMessage(`{}`),
+                                Handler: func(ctx context.Context, args json.RawMessage) (string, error) { return "handled:" + nn, nil },
+                        })
+                }
+                return out
+        })
+        srv := &toolServiceServer{sdk: s2}
 
-	list, err := srv.ListTools(context.Background(), &proto.ListToolsRequest{})
-	if err != nil || len(list.Tools) != 1 || list.Tools[0].Name != "a" || list.Tools[0].Description != "dyn-a" {
-		t.Fatalf("ListTools = %+v, %v", list.Tools, err)
-	}
-	resp, _ := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "a", ArgumentsJson: `{}`})
-	if resp.Content != "handled:a" {
-		t.Fatalf("ExecuteTool = %+v", resp)
-	}
+        list, err := srv.ListTools(context.Background(), &proto.ListToolsRequest{})
+        if err != nil || len(list.Tools) != 1 || list.Tools[0].Name != "a" || list.Tools[0].Description != "dyn-a" {
+                t.Fatalf("ListTools = %+v, %v", list.Tools, err)
+        }
+        resp, _ := srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "a", ArgumentsJson: `{}`})
+        if resp.Content != "handled:a" {
+                t.Fatalf("ExecuteTool = %+v", resp)
+        }
 
-	// 运行时新增工具 → 下次求值即时反映
-	state = append(state, "b")
-	list, _ = srv.ListTools(context.Background(), &proto.ListToolsRequest{})
-	if len(list.Tools) != 2 {
-		t.Fatalf("ListTools after add = %d, want 2", len(list.Tools))
-	}
-	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "b", ArgumentsJson: `{}`})
-	if resp.Content != "handled:b" {
-		t.Fatalf("ExecuteTool(b) = %+v", resp)
-	}
+        // 运行时新增工具 → 下次求值即时反映
+        state = append(state, "b")
+        list, _ = srv.ListTools(context.Background(), &proto.ListToolsRequest{})
+        if len(list.Tools) != 2 {
+                t.Fatalf("ListTools after add = %d, want 2", len(list.Tools))
+        }
+        resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "b", ArgumentsJson: `{}`})
+        if resp.Content != "handled:b" {
+                t.Fatalf("ExecuteTool(b) = %+v", resp)
+        }
 
-	// 运行时移除 → 立即消失
-	state = state[:1]
-	resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "b", ArgumentsJson: `{}`})
-	if resp.Error == "" {
-		t.Fatal("removed tool should not be executable")
-	}
+        // 运行时移除 → 立即消失
+        state = state[:1]
+        resp, _ = srv.ExecuteTool(context.Background(), &proto.ExecuteToolRequest{ToolName: "b", ArgumentsJson: `{}`})
+        if resp.Error == "" {
+                t.Fatal("removed tool should not be executable")
+        }
 }
