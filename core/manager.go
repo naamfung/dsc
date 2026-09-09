@@ -2392,13 +2392,15 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
         m.clients[name] = client
         m.typeMap[name] = "dsc"
         m.coreMetadata[name] = info
-        // billion-context 插件加载时设 DSC_ACP_ACTIVE=1：通知 agent-react-loop 跳过内联
-        // compactHistory，由 ACP 插件经 agent/pre-step 事件接管压缩。对齐 DSH preset
-        // 不挂 compaction-basic 改挂 billion-context 的后端替换模式。
-        // buildEnv 继承宿主环境，agent 子进程在下一轮 runLoop 检测到此变量。
-        if name == "tool-billion-context" {
-                os.Setenv("DSC_ACP_ACTIVE", "1")
-                m.logger.Info("ACP compaction backend detected, agent inline compaction disabled")
+        // 检测插件是否声明提供 compaction 能力——若是，设 DSC_ACP_ACTIVE=1
+        // 通知 agent-react-loop 跳过内联 compactHistory，由插件经 agent/pre-step
+        // 事件接管压缩。对齐 DSH：preset 不挂 compaction-basic 改挂 billion-context
+        // 的后端替换模式。任何声明 Provides compaction 的插件都自动接管，不硬编码插件名。
+        if info != nil && len(info.Capabilities) > 0 {
+                if v, ok := info.Capabilities["compaction"]; ok && v != "false" {
+                        os.Setenv("DSC_ACP_ACTIVE", "1")
+                        m.logger.Info("compaction capability provider detected, agent inline compaction disabled", "plugin", name)
+                }
         }
         m.transitionLocked(name, StateActive, "")
         go m.monitorExit(name, client)

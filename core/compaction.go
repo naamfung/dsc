@@ -3,7 +3,6 @@ package core
 import (
         "context"
         "fmt"
-        "os"
         "sync"
         "time"
 )
@@ -276,17 +275,12 @@ func (e *BasicCompactionEngine) truncateCompact(messages []*Message, start, end 
 // 供 billion-context 等插件在加载时调用，替换默认的内联 compactHistory 路径。
 // 传 nil 恢复默认（无后端，agent 走内联压缩）。
 //
-// 注入后同时设 DSC_ACP_ACTIVE=1 环境变量，让 agent-react-loop 子进程检测到后端接管
-// 跳过内联 compactHistory。buildEnv 继承宿主环境，agent 子进程会看到此变量。
+// 注意：DSC_ACP_ACTIVE 环境变量的设置由 registerDscCoreLocked 经能力检测自动处理
+// （插件声明 Provides: {"compaction": "true"}），不在此方法重复设置。
 func (m *Manager) SetCompactionEngine(engine CompactionEngine) {
         m.mu.Lock()
+        defer m.mu.Unlock()
         m.compaction = engine
-        m.mu.Unlock()
-        if engine != nil {
-                os.Setenv("DSC_ACP_ACTIVE", "1")
-        } else {
-                os.Unsetenv("DSC_ACP_ACTIVE")
-        }
 }
 
 // HasCompactionEngine 报告是否有压缩引擎后端已注入。
