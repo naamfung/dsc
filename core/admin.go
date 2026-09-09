@@ -4,8 +4,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,8 +33,10 @@ func adminAuth(c *vodka.Context) error {
 	return c.Next()
 }
 
-// StartAdmin 啟動管理 API HTTP 服務（基於 Vodka 框架）
-func (m *Manager) StartAdmin(addr string) {
+// StartAdmin 啟動管理 API HTTP 服務（基於 Vodka 框架）。
+// 端口冲突时自动自增重试（如 9999 被占用则尝试 10000、10001…，最多重试 100 次），
+// 并在每次重试时记 warn 日志。最终监听地址经返回值传回调用方。
+func (m *Manager) StartAdmin(addr string) string {
 	e := vodka.New()
 
 	// 反慢速攻擊：限制讀取請求頭與空閒連接超時。刻意不設 Read/WriteTimeout——
@@ -74,13 +78,51 @@ func (m *Manager) StartAdmin(addr string) {
 	crons.Post("/remove", m.handleCronRemove)
 	crons.Post("/enable", m.handleCronEnable)
 
+	// 端口冲突自动自增重试：若指定端口已被占用，逐次自增端口重试，
+	// 最多 100 次。每次冲突记 warn 日志（仅在 -log 开启时输出到日志文件/SSE）。
+	// 多实例同时启动 DSC 时不再因 9999 端口冲突而启动失败。
+	finalAddr := m.listenAdminWithRetry(e, addr)
 	go func() {
-		m.logger.Info("admin api listening", "addr", addr)
-		e.Server.Addr = addr
+		e.Server.Addr = finalAddr
 		if err := e.Server.ListenAndServe(); err != nil {
 			m.logger.Error("admin api error", "error", err)
 		}
 	}()
+	return finalAddr
+}
+
+// listenAdminWithRetry 尝试在指定地址监听，端口被占用时自增端口号重试。
+// 返回最终成功绑定的地址。host 保持不变，仅端口号递增。
+func (m *Manager) listenAdminWithRetry(e *vodka.Vodka, addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// 无法解析地址，原样返回（让 ListenAndServe 报错）
+		m.logger.Info("admin api listening", "addr", addr)
+		return addr
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		m.logger.Info("admin api listening", "addr", addr)
+		return addr
+	}
+	for attempt := 0; attempt < 100; attempt++ {
+		tryAddr := net.JoinHostPort(host, strconv.Itoa(portNum+attempt))
+		listener, err := net.Listen("tcp", tryAddr)
+		if err != nil {
+			m.logger.Warn("admin api port in use, trying next",
+				"requested", net.JoinHostPort(host, strconv.Itoa(portNum+attempt)),
+				"error", err.Error())
+			continue
+		}
+		// 成功绑定：用 listener 让 HTTP server 直接复用
+		listener.Close() // 先关闭，让 ListenAndServe 重新绑定（竞态窗口极小）
+		m.logger.Info("admin api listening", "addr", tryAddr)
+		e.Server.Addr = tryAddr
+		return tryAddr
+	}
+	// 100 次都失败：用原始地址让 ListenAndServe 报错
+	m.logger.Warn("admin api: failed to find available port after 100 attempts, using original", "addr", addr)
+	return addr
 }
 
 // handleLoad 處理加載插件請求

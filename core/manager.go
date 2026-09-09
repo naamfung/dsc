@@ -1358,14 +1358,22 @@ func (m *Manager) ListLLMs() []string {
 	return names
 }
 
-// Shutdown 關閉所有插件
+// Shutdown 關閉所有插件并确保子进程全部退出。
+// 在逐个 Kill 插件子进程后，额外等待所有进程确实退出（最多 10 秒超时），
+// 避免主进程过早退出导致孤儿插件进程残留。
 func (m *Manager) Shutdown() {
 	// 先停版本化二进制热重载 watch：它持有 m.mu（读锁扫描 / HotReload 写锁）。
 	// 若先加了下面的写锁再等 watcher 退出，会因 watcher 阻塞在读锁而互等死锁。
 	m.StopHotReloadWatcher()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.stopCronLocked() // 先停调度，避免新任务触发时插件已退出
+
+	// 收集所有插件 client 用于后续等待退出
+	type clientInfo struct {
+		name   string
+		client *plugin.Client
+	}
+	var clients []clientInfo
 	for name, client := range m.clients {
 		m.transitionLocked(name, StateUnloading, "")
 		delete(m.clients, name)    // 先摘除，令退出监控忽略
@@ -1373,7 +1381,9 @@ func (m *Manager) Shutdown() {
 		client.Kill()
 		m.markDisposedLocked(name)
 		m.logger.Info("core killed", "name", name)
+		clients = append(clients, clientInfo{name: name, client: client})
 	}
+
 	m.clients = make(map[string]*plugin.Client)
 	m.plugins = make(map[string]DSCPlugin)
 	m.agents = make(map[string]Agent)
@@ -1387,6 +1397,21 @@ func (m *Manager) Shutdown() {
 	m.agentEntries = make(map[string]PluginEntry)
 	m.pendingEntries = make(map[string]PluginEntry)
 	m.resolvedDeps = make(map[string][]ResolvedDep)
+	m.mu.Unlock()
+
+	// 等待所有插件子进程确实退出：go-plugin 的 client.Kill() 会阻塞等待进程退出，
+	// 但某些插件可能有自己的清理逻辑导致 Kill 在退出后进程未完全终止。
+	// 额外用 Exited() 轮询确认（最多 10 秒超时，避免永久阻塞）。
+	for _, ci := range clients {
+		deadline := time.Now().Add(10 * time.Second)
+		for !ci.client.Exited() {
+			if time.Now().After(deadline) {
+				m.logger.Warn("plugin process did not exit within 10s after Kill", "name", ci.name)
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 }
 
 // ListAgents 列出所有已加載的 Agent 插件

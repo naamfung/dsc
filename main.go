@@ -679,14 +679,24 @@ func main() {
 		// 再默认绑定回环地址 127.0.0.1:9999（避免局域网内任意主机在未配置
 		// DSC_ADMIN_TOKEN 时经 /plugins/load 加载任意二进制触发 RCE；需要远程
 		// 管理时显式用 -admin :9999 并配置 token）。
-		if adminAddr == "" {
-			adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+		// 设 DSC_NO_ADMIN=1 可完全关闭管理 API（多实例无需 admin 时节省端口）。
+		if os.Getenv("DSC_NO_ADMIN") == "1" || os.Getenv("DSC_NO_ADMIN") == "true" {
+			logger.Info("admin api disabled (DSC_NO_ADMIN=1)")
+		} else {
+			if adminAddr == "" {
+				adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+			}
+			if adminAddr == "" {
+				adminAddr = "127.0.0.1:9999"
+			}
+			finalAddr := mgr.StartAdmin(adminAddr)
+			if finalAddr != adminAddr {
+				logger.Warn("admin api port auto-incremented due to conflict",
+					"requested", adminAddr, "actual", finalAddr)
+			}
+			adminAddr = finalAddr
+			logger.Info("admin api started", "addr", adminAddr)
 		}
-		if adminAddr == "" {
-			adminAddr = "127.0.0.1:9999"
-		}
-		mgr.StartAdmin(adminAddr)
-		logger.Info("admin api started", "addr", adminAddr)
 	}
 
 	// 获取 Agent 并运行（经事件包装：RunStream 回合完成时广播 agent/status，
