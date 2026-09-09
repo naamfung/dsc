@@ -410,7 +410,7 @@ func TestRenderMessagesWithOrphanCleanup(t *testing.T) {
         }
         AssignRefs(msgs, state)
 
-        // 压缩 a..d（切在 b 与 c 之间：b 被压缩，c 留下成孤儿 tool-result；
+        // 压缩 a..b（切在 b 与 c 之间：b 被压缩，c 留下成孤儿 tool-result；
         // e..f 完整保留；d 也被压缩）
         // 实际压缩 a..d 会同时压 b（tool-call）和 c（tool-result），不会产生孤儿——
         // 这里改为压缩 a..b（只压 user 和 tool-call，留下孤儿 tool-result c）
@@ -438,6 +438,259 @@ func TestRenderMessagesWithOrphanCleanup(t *testing.T) {
         }
         if !foundE || !foundF {
                 t.Errorf("complete tool pair e..f should be retained (got e=%v f=%v)", foundE, foundF)
+        }
+}
+
+// TestParseBoundary 验证边界引用解析（mNNNNN 与 bN）。
+func TestParseBoundary(t *testing.T) {
+        cases := []struct {
+                input string
+                kind  BoundaryKind
+                num   int
+                ok    bool
+        }{
+                {"m00000", BoundaryMessage, 0, true},
+                {"m00005", BoundaryMessage, 5, true},
+                {"m5", BoundaryMessage, 5, true},
+                {"b0", BoundaryBlock, 0, true},
+                {"b3", BoundaryBlock, 3, true},
+                {"B3", BoundaryBlock, 3, true}, // 大写也接受
+                {" b3 ", BoundaryBlock, 3, true}, // 带空格也接受
+                {"x3", BoundaryKind(""), 0, false},
+                {"", BoundaryKind(""), 0, false},
+        }
+        for _, c := range cases {
+                b := ParseBoundary(c.input)
+                if !c.ok {
+                        if b != nil {
+                                t.Errorf("ParseBoundary(%q) = %+v, want nil", c.input, b)
+                        }
+                        continue
+                }
+                if b == nil {
+                        t.Errorf("ParseBoundary(%q) = nil, want kind=%s num=%d", c.input, c.kind, c.num)
+                        continue
+                }
+                if b.Kind != c.kind || b.NumericID != c.num {
+                        t.Errorf("ParseBoundary(%q) = kind=%s num=%d, want kind=%s num=%d",
+                                c.input, b.Kind, b.NumericID, c.kind, c.num)
+                }
+        }
+}
+
+// TestApplyDistillationT2 验证 T2 蒸馏：多个 T1 块合并为 T2。
+// 模型用 bN 形式作为 startId/endId 触发蒸馏。
+func TestApplyDistillationT2(t *testing.T) {
+        state := CreateInitialState()
+        config := DefaultConfig(100000)
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, Text: "first message"},
+                {ID: "b", Role: RoleAssistant, Text: "second message"},
+                {ID: "c", Role: RoleUser, Text: "third message"},
+                {ID: "d", Role: RoleAssistant, Text: "fourth message"},
+                {ID: "e", Role: RoleUser, Text: "fifth message"},
+                {ID: "f", Role: RoleAssistant, Text: "sixth message"},
+        }
+        AssignRefs(msgs, state)
+
+        // 先创建两个 T1 块：b0 (a..b) 和 b1 (c..d)
+        ranges1 := []PruneRange{
+                {StartRef: "m00000", EndRef: "m00001", Summary: "summary of a+b"},
+                {StartRef: "m00002", EndRef: "m00003", Summary: "summary of c+d"},
+        }
+        _, _ = ApplyCompression(ranges1, msgs, state, config)
+        if len(state.Blocks) != 2 {
+                t.Fatalf("after T1: blocks = %d, want 2", len(state.Blocks))
+        }
+
+        // 验证两个块都是 T1、active
+        for _, b := range state.Blocks {
+                if b.Tier != Tier1 {
+                        t.Errorf("block %s tier = %d, want 1", b.BlockID, b.Tier)
+                }
+                if !b.Active {
+                        t.Errorf("block %s should be active", b.BlockID)
+                }
+        }
+
+        // 蒸馏 b0..b1 为 T2
+        ranges2 := []PruneRange{
+                {StartRef: "b0", EndRef: "b1", Summary: "distilled T2 summary of b0+b1", Topic: "early conversation"},
+        }
+        _, result := ApplyCompression(ranges2, msgs, state, config)
+        if result.BlocksCreated != 1 {
+                t.Fatalf("distillation: blocksCreated = %d, want 1", result.BlocksCreated)
+        }
+        if len(state.Blocks) != 3 {
+                t.Fatalf("after T2: blocks = %d, want 3 (2 inactive + 1 T2)", len(state.Blocks))
+        }
+
+        // 验证 T2 块
+        t2Block := state.Blocks[2]
+        if t2Block.Tier != Tier2 {
+                t.Errorf("T2 block tier = %d, want 2", t2Block.Tier)
+        }
+        if !t2Block.Active {
+                t.Errorf("T2 block should be active")
+        }
+        if len(t2Block.DirectBlockIDs) != 2 {
+                t.Errorf("T2 block directBlockIDs = %d, want 2 (consumed b0, b1)", len(t2Block.DirectBlockIDs))
+        }
+        if t2Block.DirectBlockIDs[0] != "b0" || t2Block.DirectBlockIDs[1] != "b1" {
+                t.Errorf("T2 block directBlockIDs = %v, want [b0, b1]", t2Block.DirectBlockIDs)
+        }
+
+        // 验证旧块被标记为 inactive
+        if state.Blocks[0].Active {
+                t.Errorf("b0 should be inactive after distillation")
+        }
+        if state.Blocks[1].Active {
+                t.Errorf("b1 should be inactive after distillation")
+        }
+
+        // 验证 effectiveMessageIDs 是两个 T1 块的并集
+        if len(t2Block.EffectiveMessageIDs) != 4 {
+                t.Errorf("T2 effectiveMessageIDs = %d, want 4 (union of b0+b1)", len(t2Block.EffectiveMessageIDs))
+        }
+}
+
+// TestApplyDistillationT3 验证 T3 凝结：多个 T2 块合并为 T3。
+func TestApplyDistillationT3(t *testing.T) {
+        state := CreateInitialState()
+        config := DefaultConfig(100000)
+        // 直接构造两个 active T2 块（模拟已蒸馏状态）
+        state.Blocks = []CompressionBlock{
+                {BlockID: "b0", Active: true, Tier: Tier2, Summary: "T2 summary 1", EffectiveMessageIDs: []string{"a", "b"}, CompressedTokens: 1000},
+                {BlockID: "b1", Active: true, Tier: Tier2, Summary: "T2 summary 2", EffectiveMessageIDs: []string{"c", "d"}, CompressedTokens: 2000},
+        }
+        state.NextBlockID = 2
+
+        // 凝结 b0..b1 为 T3
+        ranges := []PruneRange{
+                {StartRef: "b0", EndRef: "b1", Summary: "condensed T3 summary", Topic: "long-term memory"},
+        }
+        _, result := ApplyCompression(ranges, nil, state, config)
+        if result.BlocksCreated != 1 {
+                t.Fatalf("T3 condense: blocksCreated = %d, want 1", result.BlocksCreated)
+        }
+
+        t3Block := state.Blocks[2]
+        if t3Block.Tier != Tier3 {
+                t.Errorf("T3 block tier = %d, want 3", t3Block.Tier)
+        }
+        if len(t3Block.DirectBlockIDs) != 2 {
+                t.Errorf("T3 directBlockIDs = %d, want 2", len(t3Block.DirectBlockIDs))
+        }
+        if len(t3Block.EffectiveMessageIDs) != 4 {
+                t.Errorf("T3 effectiveMessageIDs = %d, want 4 (union)", len(t3Block.EffectiveMessageIDs))
+        }
+        // 旧块 inactive
+        if state.Blocks[0].Active || state.Blocks[1].Active {
+                t.Errorf("T2 blocks should be inactive after T3 condense")
+        }
+}
+
+// TestDecideNudgeT2Trigger 验证 T2 蒸馏 nudge 触发。
+func TestDecideNudgeT2Trigger(t *testing.T) {
+        state := CreateInitialState()
+        config := DefaultConfig(10000)
+        config.NudgeThresholdPct = 0.30 // 降低阈值便于触发
+        config.Tiers.Tier2Trigger = 3   // 3 个 T1 块就触发 T2
+
+        // 构造 3 个 active T1 块
+        state.Blocks = []CompressionBlock{
+                {BlockID: "b0", Active: true, Tier: Tier1, Summary: "s0", CompressedTokens: 1000},
+                {BlockID: "b1", Active: true, Tier: Tier1, Summary: "s1", CompressedTokens: 1000},
+                {BlockID: "b2", Active: true, Tier: Tier1, Summary: "s2", CompressedTokens: 1000},
+        }
+        state.NextBlockID = 3
+
+        // 构造足够长的消息
+        longText := string(make([]byte, 2500))
+        for i := range longText {
+                longText = longText[:i] + "x" + longText[i+1:]
+        }
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, Text: longText},
+                {ID: "b", Role: RoleAssistant, Text: "tail"},
+                {ID: "c", Role: RoleUser, Text: "tail 2"},
+                {ID: "d", Role: RoleAssistant, Text: "tail 3"},
+                {ID: "e", Role: RoleUser, Text: "tail 4"},
+        }
+        AssignRefs(msgs, state)
+
+        decision := DecideNudge(msgs, state, config, 5000) // 50% > 30%
+        if !decision.ShouldInject {
+                t.Fatalf("shouldInject = false, want true. reason: %s", decision.Reason)
+        }
+        if decision.Tier == nil || *decision.Tier != Tier2 {
+                t.Errorf("tier = %v, want 2", decision.Tier)
+        }
+        if len(decision.TierTargetBlocks) != 3 {
+                t.Errorf("tierTargetBlocks = %d, want 3", len(decision.TierTargetBlocks))
+        }
+}
+
+// TestDecideNudgeT3Trigger 验证 T3 凝结 nudge 触发。
+func TestDecideNudgeT3Trigger(t *testing.T) {
+        state := CreateInitialState()
+        config := DefaultConfig(10000)
+        config.NudgeThresholdPct = 0.30
+        config.Tiers.Tier3Trigger = 2 // 2 个 T2 块就触发 T3
+
+        // 构造 2 个 active T2 块
+        state.Blocks = []CompressionBlock{
+                {BlockID: "b0", Active: true, Tier: Tier2, Summary: "t2-0", CompressedTokens: 1000},
+                {BlockID: "b1", Active: true, Tier: Tier2, Summary: "t2-1", CompressedTokens: 1000},
+        }
+        state.NextBlockID = 2
+
+        longText := string(make([]byte, 2500))
+        for i := range longText {
+                longText = longText[:i] + "x" + longText[i+1:]
+        }
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, Text: longText},
+                {ID: "b", Role: RoleAssistant, Text: "tail"},
+                {ID: "c", Role: RoleUser, Text: "tail 2"},
+                {ID: "d", Role: RoleAssistant, Text: "tail 3"},
+                {ID: "e", Role: RoleUser, Text: "tail 4"},
+        }
+        AssignRefs(msgs, state)
+
+        decision := DecideNudge(msgs, state, config, 5000)
+        if !decision.ShouldInject {
+                t.Fatalf("shouldInject = false, want true. reason: %s", decision.Reason)
+        }
+        if decision.Tier == nil || *decision.Tier != Tier3 {
+                t.Errorf("tier = %v, want 3", decision.Tier)
+        }
+        if len(decision.TierTargetBlocks) != 2 {
+                t.Errorf("tierTargetBlocks = %d, want 2", len(decision.TierTargetBlocks))
+        }
+}
+
+// TestFormatNudgeTextT2 验证 T2 蒸馏提示文本格式。
+func TestFormatNudgeTextT2(t *testing.T) {
+        tier := Tier2
+        d := NudgeDecision{
+                ShouldInject: true,
+                Reason:       "T2 distill: 5 tier-1 blocks >= tier2Trigger 5",
+                Tier:         &tier,
+                TierTargetBlocks: []CompressionBlock{
+                        {BlockID: "b0", Tier: Tier1, Topic: "intro", CompressedTokens: 2000},
+                        {BlockID: "b1", Tier: Tier1, Topic: "auth", CompressedTokens: 1500},
+                },
+        }
+        text := FormatNudgeText(d)
+        if !containsStr(text, "tier-1") {
+                t.Errorf("T2 nudge text should mention tier-1, got: %s", text)
+        }
+        if !containsStr(text, "b0") || !containsStr(text, "b1") {
+                t.Errorf("T2 nudge text should list target blocks b0, b1, got: %s", text)
+        }
+        if !containsStr(text, "startId") {
+                t.Errorf("T2 nudge text should show compress example with startId, got: %s", text)
         }
 }
 

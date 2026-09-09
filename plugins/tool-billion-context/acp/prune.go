@@ -13,81 +13,243 @@ type PruneRange struct {
 // ApplyCompression 应用一次压缩：分配块、遮蔽被压缩范围、更新统计。
 // 对齐 acp-kernel applyCompression。
 //
-// 输入：ranges（模型调用 compress 工具时提供）+ messages + state + config
-// 输出：更新后的 state + result（blocksCreated / tokensCompressed / errors）
+// 支持两种边界类型：
+//   - 消息边界（mNNNNN）：标准 T1 压缩，把消息范围替换为 summary
+//   - 块边界（bN）：多层蒸馏，把已存在的 T1/T2 块合并为更高层级的摘要
+//     （T1→T2 或 T2→T3）。模型在 compress 调用中用 bN 作为 startId/endId。
 //
-// 压缩协议：
-//  1. 解析每个 range 的 startRef/endRef 为消息索引
-//  2. 收集范围内的消息 ID（directMessageIDs）+ 受保护消息排除
-//  3. 分配 block ID，记录 summary、topic、tier=1、active=true
-//  4. 更新统计（tokensCompressed += 被压缩消息的估算 token 数）
-//  5. 不修改 messages 列表本身——prune 的实际替换由 pipeline 的 prune 节点完成
-//     （state 只记录"哪些消息被覆盖"，渲染时由 RenderMessages 应用遮蔽）
+// 蒸馏协议：
+//   1. 解析 startRef/endRef：若任一为块引用（bN），触发蒸馏路径
+//   2. 找出范围内的所有 active 块（nestedBlockIds）
+//   3. 这些块的 effectiveMessageIDs 合并到新块的 effectiveMessageIDs
+//   4. 旧块标记为 inactive（被新块消费）
+//   5. 新块 tier = min(3, 嵌套块最低 tier + 1)
 func ApplyCompression(ranges []PruneRange, messages []CoreMessage, state *CompressionState, config Config) (*CompressionState, CompressionResult) {
         result := CompressionResult{}
         runID := state.AllocateRunID()
         covered := state.CoveredMessageIDs()
 
         for _, r := range ranges {
-                startIdx, endIdx, ok := resolveRange(r.StartRef, r.EndRef, messages, state)
-                if !ok {
+                startBoundary := ParseBoundary(r.StartRef)
+                endBoundary := ParseBoundary(r.EndRef)
+                if startBoundary == nil || endBoundary == nil {
                         result.Errors = append(result.Errors,
-                                fmt.Sprintf("range %s..%s: cannot resolve boundaries", r.StartRef, r.EndRef))
+                                fmt.Sprintf("range %s..%s: cannot parse boundaries", r.StartRef, r.EndRef))
                         continue
                 }
-                if startIdx > endIdx {
-                        result.Errors = append(result.Errors,
-                                fmt.Sprintf("range %s..%s: start after end", r.StartRef, r.EndRef))
+
+                // 判断是否为块边界蒸馏
+                isBlockBoundary := startBoundary.Kind == BoundaryBlock || endBoundary.Kind == BoundaryBlock
+
+                if isBlockBoundary {
+                        // 蒸馏路径：合并嵌套块为更高层级摘要
+                        applyDistillation(r, state, &result, runID, &covered)
                         continue
                 }
-                // 收集范围内的消息 ID（排除已覆盖的——避免重复压缩）
-                var directIDs []string
-                var effectiveIDs []string
-                var compressedTokens int
-                for i := startIdx; i <= endIdx; i++ {
-                        msg := messages[i]
-                        if msg.ID == "" {
-                                continue
-                        }
-                        if covered[msg.ID] {
-                                continue // 已被其他块覆盖
-                        }
-                        directIDs = append(directIDs, msg.ID)
-                        effectiveIDs = append(effectiveIDs, msg.ID)
-                        compressedTokens += estimateTokensForText(msg.Text)
-                }
-                if len(directIDs) == 0 {
-                        result.Errors = append(result.Errors,
-                                fmt.Sprintf("range %s..%s: no compressible messages (all already covered or empty)", r.StartRef, r.EndRef))
-                        continue
-                }
-                // 分配块
-                block := CompressionBlock{
-                        BlockID:            state.AllocateBlockID(),
-                        RunID:             runID,
-                        Tier:              Tier1,
-                        Topic:             r.Topic,
-                        Summary:           r.Summary,
-                        DirectMessageIDs:  directIDs,
-                        EffectiveMessageIDs: effectiveIDs,
-                        CompressedTokens:   compressedTokens,
-                        CreatedAt:          nowMillis(),
-                        SurvivedCount:      0,
-                        Generation:         GenYoung,
-                        Active:             true,
-                        StartRef:           r.StartRef,
-                        EndRef:             r.EndRef,
-                }
-                state.Blocks = append(state.Blocks, block)
-                result.BlocksCreated++
-                result.TokensCompressed += compressedTokens
-                state.Stats.TokensCompressed += compressedTokens
-                state.Stats.CompressionCount++
+
+                // 标准 T1 压缩路径
+                applyStandardCompression(r, messages, state, &result, runID, covered)
         }
 
         // 压缩成功后重置 nudge baseline（防反馈循环：避免压缩后立即重新 nudge）
-        state.Nudge.BaselineTokens = 0
+        if result.BlocksCreated > 0 {
+                state.Nudge.BaselineTokens = 0
+        }
         return state, result
+}
+
+// applyStandardCompression 标准 T1 压缩：把消息范围替换为 summary。
+func applyStandardCompression(r PruneRange, messages []CoreMessage, state *CompressionState, result *CompressionResult, runID string, covered map[string]bool) {
+        startIdx, endIdx, ok := resolveRange(r.StartRef, r.EndRef, messages, state)
+        if !ok {
+                result.Errors = append(result.Errors,
+                        fmt.Sprintf("range %s..%s: cannot resolve message boundaries", r.StartRef, r.EndRef))
+                return
+        }
+        if startIdx > endIdx {
+                result.Errors = append(result.Errors,
+                        fmt.Sprintf("range %s..%s: start after end", r.StartRef, r.EndRef))
+                return
+        }
+        var directIDs []string
+        var effectiveIDs []string
+        var compressedTokens int
+        for i := startIdx; i <= endIdx; i++ {
+                msg := messages[i]
+                if msg.ID == "" {
+                        continue
+                }
+                // 跳过已渲染的 summary 消息（不应被压缩进新块）
+                if isRenderedSummary(msg) {
+                        continue
+                }
+                if covered[msg.ID] {
+                        continue
+                }
+                directIDs = append(directIDs, msg.ID)
+                effectiveIDs = append(effectiveIDs, msg.ID)
+                compressedTokens += estimateTokensForText(msg.Text)
+        }
+        if len(directIDs) == 0 {
+                result.Errors = append(result.Errors,
+                        fmt.Sprintf("range %s..%s: no compressible messages (all already covered or empty)", r.StartRef, r.EndRef))
+                return
+        }
+        block := CompressionBlock{
+                BlockID:            state.AllocateBlockID(),
+                RunID:             runID,
+                Tier:              Tier1,
+                Topic:             r.Topic,
+                Summary:           r.Summary,
+                DirectMessageIDs:  directIDs,
+                EffectiveMessageIDs: effectiveIDs,
+                CompressedTokens:   compressedTokens,
+                CreatedAt:          nowMillis(),
+                SurvivedCount:      0,
+                Generation:         GenYoung,
+                Active:             true,
+                StartRef:           r.StartRef,
+                EndRef:             r.EndRef,
+        }
+        state.Blocks = append(state.Blocks, block)
+        result.BlocksCreated++
+        result.TokensCompressed += compressedTokens
+        state.Stats.TokensCompressed += compressedTokens
+        state.Stats.CompressionCount++
+}
+
+// applyDistillation 多层蒸馏：把已存在的 active 块合并为更高层级摘要。
+//
+// 协议：
+//   - startRef/endRef 用块引用 bN 形式（如 b0..b4 表示蒸馏块 0 到块 4）
+//   - 找出范围内的所有 active 块
+//   - 这些块的 tier 决定输出 tier：outputTier = min(3, minTierOfNested + 1)
+//   - 旧块标记为 inactive（被新块消费），其 effectiveMessageIDs 合并到新块
+//   - 新块的 DirectBlockIDs 记录被消费的块 ID
+func applyDistillation(r PruneRange, state *CompressionState, result *CompressionResult, runID string, covered *map[string]bool) {
+        // 解析块引用为块 ID（b0 → "b0"）
+        startBlockID := blockNumericToID(r.StartRef)
+        endBlockID := blockNumericToID(r.EndRef)
+        if startBlockID == "" || endBlockID == "" {
+                result.Errors = append(result.Errors,
+                        fmt.Sprintf("distillation %s..%s: cannot parse block refs", r.StartRef, r.EndRef))
+                return
+        }
+
+        // 找出范围内的所有 active 块（按 BlockID 数字顺序）
+        var nestedBlocks []*CompressionBlock
+        minTier := Tier3
+        for i := range state.Blocks {
+                b := &state.Blocks[i]
+                if !b.Active {
+                        continue
+                }
+                if isBlockInRange(b.BlockID, startBlockID, endBlockID) {
+                        nestedBlocks = append(nestedBlocks, b)
+                        if b.Tier < minTier {
+                                minTier = b.Tier
+                        }
+                }
+        }
+        if len(nestedBlocks) == 0 {
+                result.Errors = append(result.Errors,
+                        fmt.Sprintf("distillation %s..%s: no active blocks in range", r.StartRef, r.EndRef))
+                return
+        }
+
+        // 输出 tier = min(3, minTier + 1)
+        outputTier := minTier + 1
+        if outputTier > Tier3 {
+                outputTier = Tier3
+        }
+
+        // 合并嵌套块的 effectiveMessageIDs 到新块
+        effectiveIDs := map[string]bool{}
+        var directBlockIDs []string
+        totalCompressedTokens := 0
+        for _, b := range nestedBlocks {
+                directBlockIDs = append(directBlockIDs, b.BlockID)
+                for _, id := range b.EffectiveMessageIDs {
+                        effectiveIDs[id] = true
+                }
+                totalCompressedTokens += b.CompressedTokens
+                // 标记旧块为 inactive（被新块消费）
+                b.Active = false
+        }
+
+        // 新块的 effectiveMessageIDs 是所有嵌套块的并集
+        var effectiveIDList []string
+        for id := range effectiveIDs {
+                effectiveIDList = append(effectiveIDList, id)
+        }
+
+        // 新块无 directMessageIDs（蒸馏不直接压缩消息，只压缩块）
+        block := CompressionBlock{
+                BlockID:            state.AllocateBlockID(),
+                RunID:             runID,
+                Tier:              outputTier,
+                Topic:             r.Topic,
+                Summary:           r.Summary,
+                DirectMessageIDs:  []string{}, // 蒸馏块不直接覆盖消息
+                EffectiveMessageIDs: effectiveIDList,
+                DirectBlockIDs:     directBlockIDs,
+                CompressedTokens:   totalCompressedTokens,
+                CreatedAt:          nowMillis(),
+                SurvivedCount:      0,
+                Generation:         GenYoung,
+                Active:             true,
+                StartRef:           r.StartRef,
+                EndRef:             r.EndRef,
+        }
+        state.Blocks = append(state.Blocks, block)
+        result.BlocksCreated++
+        result.TokensCompressed += totalCompressedTokens
+        state.Stats.TokensCompressed += totalCompressedTokens
+        state.Stats.CompressionCount++
+
+        // 更新 covered 集合（被蒸馏的块的消息仍算被覆盖）
+        *covered = state.CoveredMessageIDs()
+}
+
+// blockNumericToID 把块引用（如 "b3"）转为块 ID 字符串（"b3"）。
+// 输入已是 ParseBoundary 验证过的 bN 格式，直接返回原值即可。
+func blockNumericToID(ref string) string {
+        b := ParseBoundary(ref)
+        if b == nil || b.Kind != BoundaryBlock {
+                return ""
+        }
+        return "b" + itoa(b.NumericID)
+}
+
+// isBlockInRange 报告块 ID 是否在 [startID, endID] 范围内（按数字顺序）。
+func isBlockInRange(blockID, startID, endID string) bool {
+        blockN := parseBlockNum(blockID)
+        startN := parseBlockNum(startID)
+        endN := parseBlockNum(endID)
+        if blockN < 0 || startN < 0 || endN < 0 {
+                return false
+        }
+        lo, hi := startN, endN
+        if lo > hi {
+                lo, hi = hi, lo
+        }
+        return blockN >= lo && blockN <= hi
+}
+
+// parseBlockNum 从块 ID（如 "b3"）提取数字部分（3）。失败返回 -1。
+func parseBlockNum(blockID string) int {
+        if len(blockID) < 2 || blockID[0] != 'b' {
+                return -1
+        }
+        n := 0
+        for i := 1; i < len(blockID); i++ {
+                c := blockID[i]
+                if c < '0' || c > '9' {
+                        return -1
+                }
+                n = n*10 + int(c-'0')
+        }
+        return n
 }
 
 // CompressionResult 一次压缩操作的结果。
