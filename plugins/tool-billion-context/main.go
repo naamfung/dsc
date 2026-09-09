@@ -151,18 +151,30 @@ func (bc *BillionContext) handlePreStep(ctx context.Context, dataJSON string) (s
                 fmt.Fprintf(os.Stderr, "[billion-context] save state failed: %v\n", err)
         }
 
-        // 如果有 nudge 决策，注入提示作为额外的 system 消息
-        renderedMsgs := result.Messages
+        // 注入 ACP system prompt 作为消息列表头部（对齐 DSH systemPrompt.section 机制）
+        // 这段文本每轮都注入，包含压缩哲学、何时压缩、工具使用说明、蒸馏规则等。
+        // 经 agent/pre-step hook 在消息列表头部插入等价于 DSH 的 systemPrompt.section。
+        leadingMsgs := []bcacp.CoreMessage{{
+                ID:          "acp_system_prompt",
+                Role:        bcacp.RoleSystem,
+                ContentType: bcacp.ContentTypeText,
+                Text:        bcacp.ACPSystemPrompt,
+        }}
+
+        // 如果有 nudge 决策，注入提示作为额外的 system 消息（在 ACP system prompt 之后）
         if result.Nudge != nil && result.Nudge.ShouldInject {
                 nudgeText := bcacp.FormatNudgeText(*result.Nudge)
                 if nudgeText != "" {
-                        renderedMsgs = append([]bcacp.CoreMessage{{
+                        leadingMsgs = append(leadingMsgs, bcacp.CoreMessage{
+                                ID:          "acp_nudge",
                                 Role:        bcacp.RoleSystem,
                                 ContentType: bcacp.ContentTypeText,
                                 Text:        nudgeText,
-                        }}, renderedMsgs...)
+                        })
                 }
         }
+
+        renderedMsgs := append(leadingMsgs, result.Messages...)
 
         // 转回 proto.Message
         rewrittenProto := bcadapter.FromCoreMessages(renderedMsgs)
