@@ -445,3 +445,92 @@ func TestCapabilityLLMResolvedFromAgentRequires(t *testing.T) {
 		t.Errorf("pickPrimaryLLM = %q, want llm-p", primary)
 	}
 }
+
+// TestFindProviderFailLoudOnMultipleNonLLM 校验非 LLM 类型的能力在多 provider 时 fail-loud：
+// 两个 tool 插件都 Provides: "filesystem" → findProviderByCapabilityLocked 返回 error。
+// 对齐 DSH/Cordis「同域唯一 provider」语义——reflect.ts provide() 第二个注册会 throw。
+func TestFindProviderFailLoudOnMultipleNonLLM(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	m.mu.Lock()
+	m.coreMetadata["tool-fs-a"] = &metadata.PluginInfo{
+		Type: "tool", Name: "tool-fs-a",
+		Capabilities: map[string]string{"filesystem": "true"},
+	}
+	m.coreMetadata["tool-fs-b"] = &metadata.PluginInfo{
+		Type: "tool", Name: "tool-fs-b",
+		Capabilities: map[string]string{"filesystem": "true"},
+	}
+	m.mu.Unlock()
+
+	m.mu.Lock()
+	provider, err := m.findProviderByCapabilityLocked("tool", "filesystem", "agent-x")
+	m.mu.Unlock()
+
+	if err == nil {
+		t.Fatalf("多个非 LLM provider 应 fail-loud 返回 error，got provider=%q err=nil", provider)
+	}
+	if provider != "" {
+		t.Errorf("fail-loud 时应返回空 provider，got %q", provider)
+	}
+	if !strings.Contains(err.Error(), "multiple providers") {
+		t.Errorf("error 信息应含 'multiple providers'，got %q", err.Error())
+	}
+}
+
+// TestFindProviderLLMMultiAllowsPreferred 校验 LLM 类型允许多 provider 并存：
+// 两个 LLM 插件都 Provides: "llm" → 不报错，优先选择 m.agentLLMName（显式选择）。
+// 对齐 DSH 的 adapter registry 模型——多 LLM adapter 可注册不同 provider route，
+// 由 agentDefaultModel 显式选择（DSC 对应为 config.yaml 的 default_llm）。
+func TestFindProviderLLMMultiAllowsPreferred(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	m.mu.Lock()
+	m.coreMetadata["llm-openai"] = &metadata.PluginInfo{
+		Type: "llm", Name: "llm-openai",
+		Capabilities: map[string]string{"llm": "true"},
+	}
+	m.coreMetadata["llm-anthropic"] = &metadata.PluginInfo{
+		Type: "llm", Name: "llm-anthropic",
+		Capabilities: map[string]string{"llm": "true"},
+	}
+	m.agentLLMName = "llm-anthropic" // 显式选择
+	m.mu.Unlock()
+
+	m.mu.Lock()
+	provider, err := m.findProviderByCapabilityLocked("llm", "llm", "agent-x")
+	m.mu.Unlock()
+
+	if err != nil {
+		t.Fatalf("LLM 多 provider 不应报错，got err=%v", err)
+	}
+	if provider != "llm-anthropic" {
+		t.Errorf("应优先选择 agentLLMName=llm-anthropic，got %q", provider)
+	}
+}
+
+// TestFindProviderLLMMultiFallbackWarns 校验 LLM 多 provider 且未设 default_llm 时
+// 按名升序取首个并记 warn（不报错）。这提示用户应设 default_llm 消除歧义。
+func TestFindProviderLLMMultiFallbackWarns(t *testing.T) {
+	m := NewManager(&ManagerConfig{})
+	m.mu.Lock()
+	m.coreMetadata["llm-openai"] = &metadata.PluginInfo{
+		Type: "llm", Name: "llm-openai",
+		Capabilities: map[string]string{"llm": "true"},
+	}
+	m.coreMetadata["llm-anthropic"] = &metadata.PluginInfo{
+		Type: "llm", Name: "llm-anthropic",
+		Capabilities: map[string]string{"llm": "true"},
+	}
+	// m.agentLLMName 未设——无显式选择
+	m.mu.Unlock()
+
+	m.mu.Lock()
+	provider, err := m.findProviderByCapabilityLocked("llm", "llm", "agent-x")
+	m.mu.Unlock()
+
+	if err != nil {
+		t.Fatalf("LLM 多 provider 不应报错（即使无 default_llm），got err=%v", err)
+	}
+	if provider != "llm-anthropic" {
+		t.Errorf("未设 default_llm 时应按名升序取首个（llm-anthropic），got %q", provider)
+	}
+}

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 //
 // 普通能力键（不带前缀，如 "supports_images": "true"、"cron": "true"）表示本插件
 // **提供**了该能力——其他插件经 Requires 声明对此能力的依赖时，宿主扫描
-// capabilities 找到首个声明该能力的插件并建立依赖关系。
+// capabilities 找到声明该能力的插件并建立依赖关系。
 //
 // 此编码对齐 DSH/Cordis 的 provide + inject 模型——插件按能力边界声明依赖，
 // 不按插件名引用（参见 vendor/cordis/src/registry.ts Plugin.Base.provide / inject）。
@@ -82,8 +83,19 @@ type ResolvedDep struct {
 }
 
 // resolveRequiredDeps 把本插件的声明式依赖（Requires）解析为 ResolvedDep 列表：
-// 扫描已加载插件的 PluginInfo.Capabilities（不带前缀的普通能力键），找到首个
-// 声明了所需能力的插件并记入 ProviderName；尚未找到 provider 的项 ProviderName 为空。
+// 扫描已加载插件的 PluginInfo.Capabilities（不带前缀的普通能力键），找到声明了
+// 所需能力的插件并记入 ProviderName；尚未找到 provider 的项 ProviderName 为空。
+//
+// 对齐 DSH/Cordis「同域唯一 provider」语义：同一 (Type, Capability) 在同一 scope
+// 内只允许一个 provider。若找到多个 provider，报错（fail-loud）而非静默取首个——
+// DSH 的 reflect.ts provide() 在同 scope 内第二个注册会 throw
+// `service "X" has been registered at <fiber>`。DSC 通过 fail-loud 在解析阶段
+// 即暴露配置歧义，要求用户在 config.yaml 中只启用一个或经显式选择消除歧义。
+//
+// LLM 类型的特殊处理：LLM 能力允许多 provider 并存（对齐 DSH 的 adapter registry
+// 模型——多个 LLM adapter 可注册不同 provider route，由 agentDefaultModel 显式选择）。
+// 此时 preferredLLM 参数（来自 config.yaml 的 default_llm）作为显式选择器：
+// 若 preferredLLM 非空且它提供了所需的 LLM 能力，直接选中它；否则 fail-loud。
 //
 // 此函数需调用方已持有 m.mu（读访问 m.coreMetadata）。
 func (m *Manager) resolveRequiredDeps(info *metadata.PluginInfo, selfName string) []ResolvedDep {
@@ -94,15 +106,26 @@ func (m *Manager) resolveRequiredDeps(info *metadata.PluginInfo, selfName string
 	out := make([]ResolvedDep, 0, len(requires))
 	for _, r := range requires {
 		dep := ResolvedDep{Type: r.Type, Capability: r.Capability}
-		dep.ProviderName = m.findProviderByCapabilityLocked(r.Type, r.Capability, selfName)
-		if dep.ProviderName != "" {
-			m.logger.Info("resolved capability dependency",
+		provider, err := m.findProviderByCapabilityLocked(r.Type, r.Capability, selfName)
+		if err != nil {
+			// fail-loud：多个 provider 冲突，记录错误但仍返回空 provider——
+			// 调用方（repairPendingLocked / LoadFromConfig）据此保持 PENDING，
+			// 并在日志中暴露配置歧义供用户修正。
+			dep.ProviderName = ""
+			m.logger.Error("capability provider conflict (fail-loud)",
 				"plugin", selfName, "dep_type", r.Type,
-				"capability", r.Capability, "provider", dep.ProviderName)
+				"capability", r.Capability, "error", err.Error())
 		} else {
-			m.logger.Warn("capability requirement has no provider loaded yet",
-				"plugin", selfName, "dep_type", r.Type,
-				"capability", r.Capability)
+			dep.ProviderName = provider
+			if provider != "" {
+				m.logger.Info("resolved capability dependency",
+					"plugin", selfName, "dep_type", r.Type,
+					"capability", r.Capability, "provider", provider)
+			} else {
+				m.logger.Warn("capability requirement has no provider loaded yet",
+					"plugin", selfName, "dep_type", r.Type,
+					"capability", r.Capability)
+			}
 		}
 		out = append(out, dep)
 	}
@@ -141,16 +164,23 @@ func (m *Manager) providerAvailableLocked(name string) bool {
 	return false
 }
 
-// findProviderByCapabilityLocked 在已加载的插件元数据中查找首个声明了指定 capability
-// 的插件（按名升序，稳定输出）。排除本插件自身，避免自引用。
+// findProviderByCapabilityLocked 在已加载的插件元数据中查找声明了指定 capability
+// 的插件。排除本插件自身，避免自引用。
 //
-// capability 是不带前缀的普通能力键（如 "supports_images"、"cron"），与目标插件
-// PluginInfo.Capabilities 中的键名直接比对。
+// 对齐 DSH/Cordis「同域唯一 provider」语义：
+//   - 找到 0 个：返回空串，无错误
+//   - 找到 1 个：返回该插件名，无错误
+//   - 找到 >1 个：返回空串 + error（fail-loud）
+//
+// LLM 类型的特殊处理：允许多个 LLM 插件并存（对齐 DSH adapter registry 模型）。
+// 此时不报错，而是优先选择 m.agentLLMName（若已由 config.yaml 的 default_llm
+// 或 LoadFromConfig 设置）作为显式选择。若 preferred 未设置或未提供该能力，
+// fall back 到按名升序的首个——但这会记 warn，提示用户应设 default_llm 消除歧义。
 //
 // 此函数需调用方已持有 m.mu（读访问 m.coreMetadata）。
-func (m *Manager) findProviderByCapabilityLocked(providerType, capability, selfName string) string {
+func (m *Manager) findProviderByCapabilityLocked(providerType, capability, selfName string) (string, error) {
 	if capability == "" {
-		return ""
+		return "", nil
 	}
 	var names []string
 	for name, info := range m.coreMetadata {
@@ -161,17 +191,35 @@ func (m *Manager) findProviderByCapabilityLocked(providerType, capability, selfN
 			continue
 		}
 		// 期望 capabilities 中存在一个不带 requires/ 前缀的普通能力键
-		// （如 "supports_images": "true"）。requires/ 前缀的键表示该插件
-		// 自身的依赖声明，不是它提供的能力。
 		if v, ok := info.Capabilities[capability]; ok && v != "false" {
 			names = append(names, name)
 		}
 	}
 	sort.Strings(names)
-	if len(names) == 0 {
-		return ""
+	switch len(names) {
+	case 0:
+		return "", nil
+	case 1:
+		return names[0], nil
+	default:
+		// 多 provider 冲突
+		if providerType == "llm" {
+			// LLM 类型：对齐 DSH adapter registry 模型——多 LLM provider
+			// 可并存，由 default_llm 显式选择。若 preferred 已设置且提供了
+			// 该能力，直接选中；否则按名升序取首个并记 warn。
+			if m.agentLLMName != "" && containsString(names, m.agentLLMName) {
+				return m.agentLLMName, nil
+			}
+			m.logger.Warn("multiple LLM providers found for capability, using first by name (set default_llm in config.yaml to disambiguate)",
+				"capability", capability,
+				"providers", strings.Join(names, ", "),
+				"selected", names[0])
+			return names[0], nil
+		}
+		// 非 LLM 类型：fail-loud，对齐 DSH 的同域唯一 provider 约束
+		return "", fmt.Errorf("multiple providers found for capability %q (type=%s): %s — enable only one in config.yaml or use isolate scopes",
+			capability, providerType, strings.Join(names, ", "))
 	}
-	return names[0]
 }
 
 // containsString 报告 slice 中是否含 s。

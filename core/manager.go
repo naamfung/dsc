@@ -1908,6 +1908,15 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	m.broker = broker
 	m.mainAgentName = agentEntry.Name
 
+	// 预置 agentLLMName（来自 config.yaml 的 default_llm），供 findProviderByCapabilityLocked
+	// 在 LLM 多 provider 并存时作为显式选择器（对齐 DSH 的 agentDefaultModel 显式选择机制）。
+	// agent 的 primary LLM 最终在 reactivateAgentLocked 中经 pickPrimaryLLM 确定，
+	// 此处只是给能力解析阶段提供一个偏好。若 default_llm 未配置，LLM 多 provider 时
+	// 会按名升序取首个并记 warn 提示用户设 default_llm 消除歧义。
+	if cfg.DefaultLLM != "" {
+		m.agentLLMName = cfg.DefaultLLM
+	}
+
 	// 按「能力依赖」加载 provider：所有 provider 直接尝试加载（插件进程本身不检查
 	// 依赖，宿主只在加载后解析其 Requires 能力依赖，未满足的由 repairPendingLocked
 	// 反应式重算提升——对齐 DSH/Cordis 的 _refresh + notify 模型）。
