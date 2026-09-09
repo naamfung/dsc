@@ -154,7 +154,7 @@ type Manager struct {
         compaction CompactionEngine
         // compactionBackend config.yaml 中显式声明的压缩后端插件名（对齐 DSH preset
         // 的 compaction group）。registerDscCoreLocked 检测插件名匹配时设
-        // DSC_ACP_ACTIVE=1。空串 = 默认（agent 走内联压缩）。
+        // DSC_COMPACTION_BACKEND=<插件名>。空串 = 默认（agent 走内联压缩）。
         compactionBackend string
 }
 
@@ -2402,12 +2402,15 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
         // 显式压缩后端接管 + 能力验证（对齐 DSH preset compaction group + Cordis Service 单例）：
         // 1. 用户在 config.yaml 中 compaction: "tool-billion-context" 显式选择后端
         // 2. 宿主验证该插件确实声明了 Provides: {"compaction": "true"} 能力
-        // 3. 验证通过后设 DSC_ACP_ACTIVE=1，通知 agent 跳过内联压缩
+        // 3. 验证通过后设 DSC_COMPACTION_BACKEND=<插件名>，agent 检测到此变量非空时
+        //    跳过内联 compactHistory。
+        // 通用环境变量名 DSC_COMPACTION_BACKEND：不绑定任何特定插件品牌名。
+        // agent 检查 os.Getenv("DSC_COMPACTION_BACKEND") != "" 即知有后端接管。
         // 若用户指定的插件未声明 compaction 能力，fail-loud 报错（不静默接管）。
         if m.compactionBackend != "" && m.compactionBackend == name {
                 if info != nil && len(info.Capabilities) > 0 {
                         if v, ok := info.Capabilities["compaction"]; ok && v != "false" {
-                                os.Setenv("DSC_ACP_ACTIVE", "1")
+                                os.Setenv("DSC_COMPACTION_BACKEND", name)
                                 m.logger.Info("compaction backend selected, agent inline compaction disabled", "backend", name)
                         } else {
                                 m.logger.Error("compaction backend does not declare compaction capability (Provides compaction)",

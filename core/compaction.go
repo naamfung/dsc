@@ -275,7 +275,7 @@ func (e *BasicCompactionEngine) truncateCompact(messages []*Message, start, end 
 // 供 billion-context 等插件在加载时调用，替换默认的内联 compactHistory 路径。
 // 传 nil 恢复默认（无后端，agent 走内联压缩）。
 //
-// 注意：DSC_ACP_ACTIVE 环境变量的设置由 registerDscCoreLocked 经能力检测自动处理
+// 注意：DSC_COMPACTION_BACKEND 环境变量的设置由 registerDscCoreLocked 经能力检测自动处理
 // （插件声明 Provides: {"compaction": "true"}），不在此方法重复设置。
 func (m *Manager) SetCompactionEngine(engine CompactionEngine) {
         m.mu.Lock()
