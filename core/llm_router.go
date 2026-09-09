@@ -102,9 +102,18 @@ func (s *llmAggregateServer) applyPreStepHook(ctx context.Context, req *proto.Ch
                 return req // 无插件监听：直接返回，零开销
         }
         msgsJSON, _ := json.Marshal(req.Messages)
+        // 估算当前 token 数（字节/CJK 启发式，供插件 nudge 决策）
+        tokenCount := 0
+        for _, m := range req.Messages {
+                tokenCount += len(m.Content) / 4
+                if len(m.ToolCalls) > 0 {
+                        tokenCount += 8
+                }
+        }
         result, err := s.m.dispatchEventToPlugins(EventAgentPreStep, AgentPreStepEvent{
                 Agent:        s.m.GetMainAgentName(),
                 MessagesJSON: string(msgsJSON),
+                TokenCount:   tokenCount,
         })
         if err != nil {
                 s.m.logger.Warn("agent/pre-step hook vetoed request", "error", err.Error())

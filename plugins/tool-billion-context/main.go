@@ -40,6 +40,11 @@ type BillionContext struct {
         store     *bcadapter.StateStore
         config    bcacp.Config
         sessionID string // 当前会话 ID（经环境变量 DSC_SESSION_ID 注入）
+
+        // lastMessages 缓存最近一次 pre-step 收到的 CoreMessage 列表，供 handleCompress
+        // 解析 mNNNNN 边界引用（解决"compress 工具调用时无消息列表"的致命 bug）。
+        // 每次 handlePreStep 更新此缓存；handleCompress 从中读取。
+        lastMessages []bcacp.CoreMessage
 }
 
 func main() {
@@ -139,8 +144,16 @@ func (bc *BillionContext) handlePreStep(ctx context.Context, dataJSON string) (s
         // 转换为 acp 核心消息格式
         coreMsgs := bcadapter.ToCoreMessages(protoMsgs, bc.msgIDProvider())
 
-        // 估算当前 token 数（粗略：消息文本字节/4）
-        tokenCount := estimateTokens(protoMsgs)
+        // 缓存消息列表供 handleCompress 使用（解决"compress 工具调用时无消息列表"的致命 bug）
+        bc.mu.Lock()
+        bc.lastMessages = coreMsgs
+        bc.mu.Unlock()
+
+        // token 计数：优先用事件携带的宿主估算值（含工具结构开销），回退本地估算
+        tokenCount := ev.TokenCount
+        if tokenCount <= 0 {
+                tokenCount = estimateTokens(protoMsgs)
+        }
 
         // 跑 pipeline（renderTags=false：不注入 <acp> 标签到消息文本——标签的 tokens
         // 属性每轮估算会变化，破坏前缀缓存。改为仅用 mNNNNN ref 映射，标签信息经
@@ -243,10 +256,15 @@ func (bc *BillionContext) handleCompress(ctx context.Context, args json.RawMessa
                 return "", fmt.Errorf("no valid ranges (each requires startId, endId, summary)")
         }
 
-        // 消息列表不可用时（compress 工具不携带消息），用 state 中的 messageRefs
-        // 重建空消息列表——ApplyCompression 只需要 ref 映射
-        var emptyMsgs []bcacp.CoreMessage
-        _, result := bcacp.ApplyCompression(ranges, emptyMsgs, state, bc.config)
+        // 从缓存获取最近一次 pre-step 的消息列表（解决"compress 工具调用时无消息列表"的致命 bug）
+        bc.mu.Lock()
+        cachedMsgs := bc.lastMessages
+        bc.mu.Unlock()
+        if len(cachedMsgs) == 0 {
+                return "", fmt.Errorf("no cached messages: compress must be called after at least one LLM request (pre-step event)")
+        }
+
+        _, result := bcacp.ApplyCompression(ranges, cachedMsgs, state, bc.config)
 
         // 持久化
         if err := bc.store.Save(sessionID, state); err != nil {

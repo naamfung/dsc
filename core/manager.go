@@ -146,6 +146,12 @@ type Manager struct {
 
         // logFanout 宿主/插件日志扇出，供 ADMIN /logs SSE 消费；由 ManagerConfig 注入。
         logFanout *LogFanout
+
+        // compaction 上下文压缩引擎（对齐 DSH ctx.compaction Service）。
+        // 默认 nil：agent-react-loop 走内联 compactHistory 路径（向后兼容）。
+        // 非 nil 时（如 billion-context 插件注入），agent 经 HasCompactionEngine
+        // 检测到后端存在，跳过内联压缩改由插件接管——对齐 DSH 的 CompactionEngine 后端替换模式。
+        compaction CompactionEngine
 }
 
 type ManagerConfig struct {
@@ -2386,6 +2392,14 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
         m.clients[name] = client
         m.typeMap[name] = "dsc"
         m.coreMetadata[name] = info
+        // billion-context 插件加载时设 DSC_ACP_ACTIVE=1：通知 agent-react-loop 跳过内联
+        // compactHistory，由 ACP 插件经 agent/pre-step 事件接管压缩。对齐 DSH preset
+        // 不挂 compaction-basic 改挂 billion-context 的后端替换模式。
+        // buildEnv 继承宿主环境，agent 子进程在下一轮 runLoop 检测到此变量。
+        if name == "tool-billion-context" {
+                os.Setenv("DSC_ACP_ACTIVE", "1")
+                m.logger.Info("ACP compaction backend detected, agent inline compaction disabled")
+        }
         m.transitionLocked(name, StateActive, "")
         go m.monitorExit(name, client)
         m.logger.Info("dsc core registered", "name", name)

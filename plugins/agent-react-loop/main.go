@@ -374,6 +374,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                 //   而非把全部历史折叠成单一摘要。
                 // - 历史注入设置了条数上限（historyInjection >= 0）时跳过压缩：注入条数本身就是
                 //   上下文的硬边界，压缩会与截断重复且其 surface 索引基于全量历史，不再适用。
+                // - 若宿主注入了 CompactionEngine 后端（如 billion-context 插件经 agent/pre-step
+                //   事件接管），跳过内联压缩——后端已在更低的阈值（如 45%）主动压缩，80% 永不触发。
+                //   对齐 DSH：CompactionEngine 作为 Service 后端替换，preset 不挂 compaction-basic
+                //   改挂 billion-context 即可，agent-loop 经 ctx.compaction 调用不关心具体后端。
                 compacted := false
                 promptTokens := int(a.lastPromptTokens)
                 if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens <= 0 {
@@ -389,7 +393,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                 promptTokens = est
                         }
                 }
-                if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 {
+                if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 && os.Getenv("DSC_ACP_ACTIVE") != "1" {
                         if emit != nil {
                                 emit(&core.RunStreamResponse{
                                         Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",

@@ -69,6 +69,7 @@ type AgentPreStepEvent struct {
         Turn         int    `json:"turn"`          // 当前回合号（1-based）
         Step         int    `json:"step"`          // 当前步号（1-based，回合内递增）
         MessagesJSON string `json:"messages_json"` // 本步消息列表 JSON（proto.Message 数组序列化）
+        TokenCount   int    `json:"token_count"`   // 估算的当前上下文 token 数（供 nudge 决策）
 }
 
 // AgentRequestErrorEvent agent/request-error 事件的载荷（对齐 DSH agent/request-error）。
