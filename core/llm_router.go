@@ -30,65 +30,94 @@ type llmAggregateServer struct {
 // 模式）：插件（如 billion-context）可改写消息列表——注入 <acp> 标签、应用 prune、
 // 注入 nudge 等。改写后的消息列表透传给实际 provider。无插件监听时事件直接通过，
 // 行为与原先一致（零开销）。
+//
+// 失败时经 agent/request-error 事件让插件决定是否重试：插件返回 {"retry": true}
+// 时重新走一轮 applyPreStepHook + provider 调用（如 billion-context 触发溢出压缩后重试）。
+// 最多重试 maxRetries 次防止无限循环。
 func (s *llmAggregateServer) Chat(ctx context.Context, req *proto.ChatRequest) (*proto.ChatResponse, error) {
-        req = s.applyPreStepHook(ctx, req)
-        var lastErr error
-        for _, np := range s.m.llmRouteSnapshot() {
-                call := &LLMCall{Provider: np.name, Request: req}
-                err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
-                        resp, err := chatWithProvider(np.p, ctx, req)
-                        call.Response, call.Err = resp, err
-                        return err
-                })
-                if err == nil {
-                        return call.Response, nil
+        const maxRetries = 3
+        for attempt := 0; attempt <= maxRetries; attempt++ {
+                req = s.applyPreStepHook(ctx, req)
+                var lastErr error
+                for _, np := range s.m.llmRouteSnapshot() {
+                        call := &LLMCall{Provider: np.name, Request: req}
+                        err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
+                                resp, err := chatWithProvider(np.p, ctx, req)
+                                call.Response, call.Err = resp, err
+                                return err
+                        })
+                        if err == nil {
+                                return call.Response, nil
+                        }
+                        if call.Err != nil {
+                                lastErr = call.Err
+                        } else {
+                                lastErr = err
+                        }
                 }
-                if call.Err != nil {
-                        lastErr = call.Err
-                } else {
-                        lastErr = err
+                // 所有 provider 失败：检查插件是否要求重试
+                if attempt < maxRetries {
+                        if shouldRetry := s.emitRequestError(ctx, req, lastErr); shouldRetry {
+                                s.m.logger.Info("agent/request-error: plugin requested retry",
+                                        "attempt", attempt+1, "error", lastErr.Error())
+                                continue
+                        }
                 }
-                s.emitRequestError(ctx, req, err)
+                if lastErr == nil {
+                        lastErr = fmt.Errorf("no LLM provider available")
+                }
+                return nil, lastErr
         }
-        if lastErr == nil {
-                lastErr = fmt.Errorf("no LLM provider available")
-        }
-        return nil, lastErr
+        return nil, fmt.Errorf("all providers failed after %d retries", maxRetries)
 }
 
 // ChatStream 依次尝试 provider：前一个 provider 在未产生任何帧时失败才切下一个
 // （已发帧后失败不切换，避免重复输出）。
 //
 // 同 Chat：调 provider 前先经 agent/pre-step 事件让插件改写消息列表。
+// 失败时经 agent/request-error 事件让插件决定是否重试（最多 maxRetries 次）。
 func (s *llmAggregateServer) ChatStream(req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer) error {
-        req = s.applyPreStepHook(stream.Context(), req)
-        var lastErr error
-        for _, np := range s.m.llmRouteSnapshot() {
-                call := &LLMCall{Provider: np.name, Request: req}
-                err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
-                        return chatStreamWithProvider(np.p, req, stream, call)
-                })
-                if err == nil {
-                        return nil
-                }
-                if call.StreamStarted {
-                        // 已产生输出：不切换 provider，直接返回
-                        if call.Err != nil {
-                                return call.Err
+        const maxRetries = 3
+        for attempt := 0; attempt <= maxRetries; attempt++ {
+                req = s.applyPreStepHook(stream.Context(), req)
+                var lastErr error
+                providerTried := false
+                for _, np := range s.m.llmRouteSnapshot() {
+                        call := &LLMCall{Provider: np.name, Request: req}
+                        err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
+                                return chatStreamWithProvider(np.p, req, stream, call)
+                        })
+                        if err == nil {
+                                return nil
                         }
-                        return err
+                        providerTried = true
+                        if call.StreamStarted {
+                                // 已产生输出：不切换 provider，不重试，直接返回
+                                if call.Err != nil {
+                                        return call.Err
+                                }
+                                return err
+                        }
+                        if call.Err != nil {
+                                lastErr = call.Err
+                        } else {
+                                lastErr = err
+                        }
                 }
-                if call.Err != nil {
-                        lastErr = call.Err
-                } else {
-                        lastErr = err
+                // 所有 provider 失败（或无 provider）：检查插件是否要求重试
+                if providerTried && attempt < maxRetries {
+                        if shouldRetry := s.emitRequestError(stream.Context(), req, lastErr); shouldRetry {
+                                s.m.logger.Info("agent/request-error: plugin requested retry",
+                                        "attempt", attempt+1, "error", lastErr.Error())
+                                continue
+                        }
                 }
-                s.emitRequestError(stream.Context(), req, err)
+                if lastErr == nil {
+                        lastErr = fmt.Errorf("no LLM provider available")
+                }
+                return lastErr
         }
-        if lastErr == nil {
-                lastErr = fmt.Errorf("no LLM provider available")
-        }
-        return lastErr
+        return fmt.Errorf("all providers failed after %d retries", maxRetries)
 }
 
 // applyPreStepHook 在 LLM 请求前分发 agent/pre-step 事件（waterfall 模式），
@@ -146,22 +175,36 @@ func (s *llmAggregateServer) applyPreStepHook(ctx context.Context, req *proto.Ch
 }
 
 // emitRequestError 在 LLM 请求失败后分发 agent/request-error 事件（waterfall 模式），
-// 让插件（如 billion-context）有机会决定是否重试（如触发上下文溢出压缩后重试）。
-// 插件返回 {"retry": true} 时由调用方决定是否重试——当前实现仅记录事件，不自动重试
-// （自动重试需 agent-loop 配合，留待后续集成）。
-func (s *llmAggregateServer) emitRequestError(ctx context.Context, req *proto.ChatRequest, err error) {
+// 让插件（如 billion-context）有机会决定是否重试。返回 true 表示插件要求重试——
+// 调用方（Chat/ChatStream）据此重新走一轮 applyPreStepHook + provider 调用。
+//
+// 插件经 result_json 返回 {"retry": true} 时视为重试请求。
+// 典型场景：上下文溢出时 billion-context 触发紧急压缩后要求重试。
+func (s *llmAggregateServer) emitRequestError(ctx context.Context, req *proto.ChatRequest, err error) bool {
         if err == nil {
-                return
+                return false
         }
         code := "unknown"
         if isContextWindowExceeded(err) {
                 code = "context_window_exceeded"
         }
-        _, _ = s.m.dispatchEventToPlugins(EventAgentRequestError, AgentRequestErrorEvent{
+        result, _ := s.m.dispatchEventToPlugins(EventAgentRequestError, AgentRequestErrorEvent{
                 Agent: s.m.GetMainAgentName(),
                 Error: err.Error(),
                 Code:  code,
         })
+        // 检查插件是否返回 {"retry": true}
+        if result == nil {
+                return false
+        }
+        if m, ok := result.(map[string]any); ok {
+                if retry, ok := m["retry"]; ok {
+                        if b, ok := retry.(bool); ok && b {
+                                return true
+                        }
+                }
+        }
+        return false
 }
 
 // isContextWindowExceeded 报告错误是否为上下文窗口溢出（粗略匹配常见 provider 错误文本）。

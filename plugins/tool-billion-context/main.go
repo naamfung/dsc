@@ -21,6 +21,7 @@ import (
         "context"
         "encoding/json"
         "fmt"
+        "hash/fnv"
         "os"
         "path/filepath"
         "strings"
@@ -382,12 +383,24 @@ func (bc *BillionContext) getSessionID() string {
 }
 
 // msgIDProvider 提供消息 ID 生成器。
-// 用 role + index 生成稳定 ID（同一次请求内消息顺序固定）。
+// 用 role + 内容 hash 生成稳定 ID：同一条消息（相同 role + content）在任何视图
+// 位置都得到相同 ID，即使 agent 内联压缩改写 surface、historyInjection 截断、
+// 多轮派生导致索引平移，ref 映射仍正确。对齐 DSH 的 session event seq 稳定性。
+//
+// hash 算法：FNV-1a（无外部依赖，Go 标准库 hash/fnv）
+// 冲突处理：role 前缀 + hash 前 12 位 + index 后缀（相同内容但不同位置的消息
+// 如两个连续的 assistant 消息仍可区分）
 func (bc *BillionContext) msgIDProvider() func(idx int, msg *proto.Message) string {
         return func(idx int, msg *proto.Message) string {
-                // 用消息内容 hash 的前 8 位 + index 作为稳定 ID
-                // 避免完全相同内容的消息 ID 冲突
-                return fmt.Sprintf("msg-%d", idx)
+                h := fnv.New64a()
+                h.Write([]byte(msg.Role))
+                h.Write([]byte{0}) // 分隔符
+                h.Write([]byte(msg.Content))
+                if msg.ToolCallId != "" {
+                        h.Write([]byte{0})
+                        h.Write([]byte(msg.ToolCallId))
+                }
+                return fmt.Sprintf("msg-%s-%012x-%d", msg.Role, h.Sum64(), idx)
         }
 }
 
