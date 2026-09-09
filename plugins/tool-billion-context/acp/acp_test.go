@@ -86,19 +86,100 @@ func TestRenderMessages(t *testing.T) {
         }
         _, _ = ApplyCompression(ranges, msgs, state, config)
 
-        // 渲染：a, b 应被替换为 summary，c 保留
+        // 渲染：a, b 应被替换为 summary（放在 a 的原位置），c 保留
         rendered := RenderMessages(msgs, state, config, true)
         if len(rendered) < 2 {
                 t.Fatalf("rendered messages = %d, want ≥2 (summary + c)", len(rendered))
         }
-        // 第一条应是块 summary（ID 形如 block:b0）
-        if rendered[0].ID != "block:b0" {
-                t.Errorf("first rendered msg ID = %q, want block:b0", rendered[0].ID)
+        // 第一条应是块 summary（ID 形如 acp_summary_b0，role=system）
+        if rendered[0].ID != "acp_summary_b0" {
+                t.Errorf("first rendered msg ID = %q, want acp_summary_b0", rendered[0].ID)
+        }
+        if rendered[0].Role != RoleSystem {
+                t.Errorf("summary role = %q, want system", rendered[0].Role)
         }
         // 最后一条应是 c（保留区）
         last := rendered[len(rendered)-1]
         if last.ID != "c" {
                 t.Errorf("last rendered msg ID = %q, want c", last.ID)
+        }
+}
+
+// TestRenderMessagesPrefixStable 验证前缀稳定性（核心语义，对齐原作者描述）：
+//
+//      [summary1] [summary2] ... [最近新增消息]
+//
+// summary 放在它替换的原始范围的最早消息位置（insertAt），不是堆到列表开头。
+// 一旦 summary 写定，后续轮次渲染时经 summaryMessageId 识别"已渲染的 summary"，
+// 保持其位置稳定——前缀缓存命中率因此达 98-99%。
+func TestRenderMessagesPrefixStable(t *testing.T) {
+        state := CreateInitialState()
+        config := DefaultConfig(100000)
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, Text: "first message"},
+                {ID: "b", Role: RoleAssistant, Text: "second message"},
+                {ID: "c", Role: RoleUser, Text: "third message"},
+                {ID: "d", Role: RoleAssistant, Text: "fourth message"},
+                {ID: "e", Role: RoleUser, Text: "fifth message"},
+        }
+        AssignRefs(msgs, state)
+
+        // 压缩 a..b（块 b0）
+        ranges1 := []PruneRange{
+                {StartRef: "m00000", EndRef: "m00001", Summary: "summary of a+b", Topic: "intro"},
+        }
+        _, _ = ApplyCompression(ranges1, msgs, state, config)
+
+        rendered1 := RenderMessages(msgs, state, config, true)
+        // 验证：summary 在最前（insertAt=a 的位置=0）
+        // 原版 acp-kernel 保留首条 user 消息（firstUserIndex），故 a 也保留
+        if rendered1[0].ID != "acp_summary_b0" {
+                t.Errorf("first rendered = %q, want acp_summary_b0", rendered1[0].ID)
+        }
+        // 第二条应是 a（首条 user 保留规则）或 c（如果 a 在 firstUserIndex 处被替换）
+        // 原版语义：firstUserIndex 处的 a 即使被覆盖也保留——验证此行为
+        foundA := false
+        for _, m := range rendered1 {
+                if m.ID == "a" {
+                        foundA = true
+                        break
+                }
+        }
+        if !foundA {
+                t.Errorf("first user message 'a' should be retained (firstUserIndex rule)")
+        }
+
+        // 现在把 rendered1 当作"上一轮发给 LLM 的消息列表"（含已渲染 summary）
+        // 压缩 c..d（块 b1）
+        ranges2 := []PruneRange{
+                {StartRef: "m00002", EndRef: "m00003", Summary: "summary of c+d", Topic: "middle"},
+        }
+        _, _ = ApplyCompression(ranges2, rendered1, state, config)
+
+        // 重新渲染：b0 summary 应保持在原位置（前缀稳定）
+        rendered2 := RenderMessages(rendered1, state, config, true)
+        if len(rendered2) < 3 {
+                t.Fatalf("rendered2 = %d msgs, want ≥3", len(rendered2))
+        }
+        // b0 summary 仍是第一条（前缀稳定）
+        if rendered2[0].ID != "acp_summary_b0" {
+                t.Errorf("after second compress: first rendered = %q, want acp_summary_b0 (prefix stable)", rendered2[0].ID)
+        }
+        // b1 summary 应存在（在 b0 之后某位置）
+        foundB1 := false
+        for _, m := range rendered2 {
+                if m.ID == "acp_summary_b1" {
+                        foundB1 = true
+                        break
+                }
+        }
+        if !foundB1 {
+                t.Errorf("acp_summary_b1 should be present after second compress")
+        }
+        // 最后是 e
+        last := rendered2[len(rendered2)-1]
+        if last.ID != "e" {
+                t.Errorf("last rendered = %q, want e", last.ID)
         }
 }
 
