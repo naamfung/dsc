@@ -828,12 +828,20 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 	m.llms[name] = impl
 	m.llmOrder = append(m.llmOrder, name) // 记录加载顺序（去重由加载前 unload 保证）
 	m.typeMap[name] = "llm"
-	// LLM 插件也可声明 Hook 订阅宿主事件（对齐 cordis：事件广播类型无关）
+	// 获取 LLM 的 PluginInfo 并存入 coreMetadata，供能力依赖解析（其他插件经
+	// Requires 声明对 LLM 能力的依赖时，宿主扫描 coreMetadata 找到匹配的 LLM
+	// provider）。LLM 的 llmMetadataServer 默认提供 CapabilityLLM="llm" 能力。
 	if gc, ok := rpcClient.(*plugin.GRPCClient); ok {
 		m.registerHookClientLocked(name, gc)
+		if info, err := GetPluginInfo(gc.Conn); err == nil {
+			m.coreMetadata[name] = info
+		} else {
+			m.logger.Warn("failed to get LLM PluginInfo (capability resolution may fail)", "name", name, "error", err)
+		}
 	}
 	m.recordLoadedBinaryLocked(name, binaryPath)
 	m.transitionLocked(name, StateReady, "")
+	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, client)
 
 	m.logger.Info("llm core loaded", "name", name)
