@@ -44,7 +44,11 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **CRON 工具（模型可調用）**：宿主內置 `cron_add` / `cron_list` / `cron_remove` / `cron_set_enabled` 四個模型工具，把宿主側的 cron 定時任務調度器以工具形式暴露給 agent，讓模型在評測（如 `tool-agentic-bench` 的 CRON 案例用例）或日常會話中能真實調用 DSC 的 CRON 機制（增 / 刪 / 列 / 啟停），而非僅經 TUI 斜杆命令或管理 API。變更類工具（`cron_add` / `cron_remove` / `cron_set_enabled`）聲明 `ApprovalRequester`，在審批策略非 `never` 時會被前置門控攔截；`cron_list` 是只讀工具、無需審批。
 
-- **聲明式插件依賴（按能力匹配，對齊 DSH/Cordis 的 provide + inject 模型）**：插件作者可經 `dsc.Config.Requires` 顯式聲明本插件依賴「某項能力」（capability）——而非依賴具體插件名。宿主在安裝 / 加載插件時掃描已加載插件的 `PluginInfo.Capabilities` 普通能力鍵（如 `supports_images: "true"`、`cron: "true"`），找到首個聲明該能力的插件並建立依賴關係——避免用戶在 config.yaml 手工指定 `depends_on` 按插件名引用易出錯。解析得到的依賴關係存於宿主運行時態 `m.resolvedDeps`，供運行時態查詢與反應式重算使用；`config.yaml` 不再含 `depends_on` 字段——能力依賴由插件二進制內的 `sdk.Config.Requires` 自描述，無需落盤。詳見 SDK README「聲明式依賴（Config.Requires）」一節。
+- **聲明式插件依賴（按能力匹配，對齊 DSH/Cordis 的 provide + inject 模型）**：插件作者可經 `dsc.Config.Requires` 顯式聲明本插件依賴「某項能力」（capability），經 `dsc.Config.Provides` 聲明本插件提供哪些能力——對齊 DSH/Cordis 的 `inject` / `provide` 雙向聲明機制。宿主在安裝 / 加載插件時掃描已加載插件的 `PluginInfo.Capabilities` 普通能力鍵（如 `supports_images: "true"`、`filesystem: "true"`），找到聲明該能力的插件並建立依賴關係——避免用戶在 config.yaml 手工指定 `depends_on` 按插件名引用易出錯。解析得到的依賴關係存於宿主運行時態 `m.resolvedDeps`，供運行時態查詢與反應式重算使用；`config.yaml` 不再含 `depends_on` 字段——能力依賴由插件二進制內的 `sdk.Config.Requires` 自描述，無需落盤。詳見 SDK README「聲明式依賴（Config.Requires）」一節。
+
+- **能力契約校驗（fail-loud，對齊 DSH 同域唯一 provider 約束）**：對齊 DSH/Cordis 的 `reflect.ts` `provide()` 在同一 scope 內第二個註冊同一服務名時 throw 的語義——DSC 的 `findProviderByCapabilityLocked` 對非 LLM 類型能力找到多個 provider 時 **fail-loud** 返回 error，不再靜默取首個，要求用戶在 config.yaml 中只啟用一個或經顯式選擇消除歧義。LLM 類型除外——對齊 DSH 的 `LlmRuntime.registerAdapter` adapter registry 模型，多個 LLM adapter 可註冊不同 provider route 並存。
+
+- **多 LLM provider 顯式選擇（對齊 DSH agentDefaultModel）**：當多個 LLM 插件並存時（如同時啟用 `llm-openai` 與 `llm-anthropic`），宿主優先選擇 `config.yaml` 的 `default_llm` 字段指定的 LLM 作為 agent 的 primary provider——對齊 DSH 的 `agentDefaultModel.currentSelection()` 顯式選擇機制。若 `default_llm` 未配置，按名升序取首個並記 warn 提示用戶設 `default_llm` 消除歧義。所有 LLM 插件默認提供 `CapabilityLLM="llm"` 能力（由 `llmMetadataServer` / `llmSdkMetadataServer` 自動聲明），agent 經 `Requires: [{Type:"llm", Capability:"llm"}]` 聲明依賴。
 
 - **配置自癒**：每個成功啟動後，把已生效的 `config.yaml` 與當前 mode 的 preset（如 `standard.yaml`）**各自獨立備份**到源文件同目錄的備份子目錄（`config.yaml` → `config-backups/`、preset → `preset-backups/`；旋轉保留最近 10 份、按各自前綴區分、互不串擾）。當某份配置因改壞或壞插件導致啟動報錯時，宿主會先把壞版各自留檔，再**分別還原各自最近正常備份**、重建插件集重試一次並以降級模式繼續啟動——而非直接退出，避免「模型搞壞配置就再也起不來」。同時 config.yaml 中啟用的 tool/policy/dsc 插件正式併入啟動合併集（與 preset 按名去重、**preset 優先**——preset 屬具體的預設，同名衝突取 preset，config 僅補 preset 沒有的，使模型安裝的插件仍能跨重啟生效）。
 
@@ -181,27 +185,27 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Tool 插件
 
-- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致。常用工具 `mkdir`/`ls`/`cat`/`touch`/`rm`/`cp`/`mv`/`grep`/`head`/`tail`/`wc` 已**进程内实现**（`interp.ExecHandler` 拦截，纯 Go 无外部依赖），因此即便在 Windows 且插件子进程 `PATH` 被宿主过滤时这些命令仍可用；未命中的命令仍回退默认 `PATH` 查找外部程序）
+- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致。常用工具 `mkdir`/`ls`/`cat`/`touch`/`rm`/`cp`/`mv`/`grep`/`head`/`tail`/`wc` 已**进程内实现**（`interp.ExecHandler` 拦截，纯 Go 无外部依赖），因此即便在 Windows 且插件子进程 `PATH` 被宿主过滤时这些命令仍可用；未命中的命令仍回退默认 `PATH` 查找外部程序；提供 `filesystem` 能力）
 
-- `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根）
+- `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根；提供 `editor` 能力）
 
-- `tool-browser-use`
+- `tool-browser-use`（无头浏览器工具：`web_fetch` / `web_search` / `browser_click` / `browser_type` / `browser_screenshot`；提供 `browser` 能力）
 
-- `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱）
+- `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱；提供 `lisp-eval` 能力）
 
-- `tool-skill`
+- `tool-skill`（技能读取/安装/卸载：`read_skill` / `install_skill` / `uninstall_skill` + `ContextFn` 注入技能索引到 system prompt；提供 `skill` 能力）
 
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify；内置只读 `list_lua_tools` 枚举当前已注册的 LUA 脚本工具；脚本工具在创造模式下热加载（约 2s 轮询扫描 `scripts/`），宿主会节流同步其到模型可直接调用的工具目录——新脚本工具无需重启即可被模型直接调用）
 
-- `tool-memory-service`（记忆库工具：原生 RPC 工具 + AfterTool 自动记忆钩子，落点宿主可执行目录 `memory/`，跨会话共享）
+- `tool-memory-service`（记忆库工具：完整增删改查——`memory_search` 检索（FTS5 + LIKE，时间衰减排序）、`memory_add` 新增（内容去重）、`memory_delete` 按 ID 删除、`memory_update` 按 ID 修改、`memory_list` 分页列表；AfterTool 自动记忆钩子把其他工具成功执行结果写入记忆库，落点宿主可执行目录 `memory/`，跨会话共享；提供 `memory` 能力）
 
 - `tool-harness-webui`（独立 HTTP 服务，代理宿主 admin API 的前端）
 
-- `tool-ssh`（SSH 远程命令执行终端：`ssh_connect` / `ssh_exec` / `ssh_list` / `ssh_close` 四类持久会话，登录支持密码或私钥，会话按 id 缓存复用，方便模型在远程主机上连续执行命令）
+- `tool-ssh`（SSH 远程命令执行终端：`ssh_connect` / `ssh_exec` / `ssh_list` / `ssh_close` 四类持久会话，登录支持密码或私钥，会话按 id 缓存复用，方便模型在远程主机上连续执行命令；提供 `ssh` 能力）
 
 - `tool-musicplayer`（后台音乐播放器：`music_play` / `music_stop` / `music_status` / `music_setdir`，异步播放 MP3/WAV 文件或目录、单曲/列表循环、随机播放（shuffle）、音量百分比调节；`music_setdir` 持久化默认播放目录到 `~/.dsc/musicplayer_src.txt`，`music_play` 的 path 可省略以用默认目录，`music_status` 查询播放模式/当前曲目/时长/音量）
 
-- `tool-agentic-bench`（模型能力自动评分测试台：`bench_start` / `bench_next` / `bench_submit` / `bench_report`，内置一组运行时集成测试用例，模型经真实工具逐一完成、插件进程自动计分并输出汇总表与 `bench-out/report.json`；期望答案只存插件进程内、不外泄给模型，file 类用例由插件直接读产物文件判定，可作无人值守运行——把 `DSC_WORKSPACE_ROOT` 指向临时目录后可用 `-input` 单回合跑全集，详见 `plugins/tool-agentic-bench/README.md`；注意无人值守须把 stdin 重定向（如 `"" | .\dsc.exe -input …`）以关闭 `DSC_SINGLE_TURN` 单轮上限，否则模型跑 1 轮即退出、无法完成多用例循环）
+- `tool-agentic-bench`（模型能力自动评分测试台：`bench_start` / `bench_next` / `bench_submit` / `bench_report`，内置 18 例运行时集成测试用例（含 CRON 机制真实调用案例 `cron_add_id` / `cron_list_roundtrip`），模型经真实工具逐一完成、插件进程自动计分并输出汇总表与 `bench-out/report.json`；期望答案只存插件进程内、不外泄给模型，file 类用例由插件直接读产物文件判定，可作无人值守运行——把 `DSC_WORKSPACE_ROOT` 指向临时目录后可用 `-input` 单回合跑全集，详见 `plugins/tool-agentic-bench/README.md`；注意无人值守须把 stdin 重定向（如 `"" | .\dsc.exe -input …`）以关闭 `DSC_SINGLE_TURN` 单轮上限，否则模型跑 1 轮即退出、无法完成多用例循环；提供 `agentic-bench` 能力）
 
 ### Policy 插件
 
