@@ -2399,14 +2399,21 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
         m.clients[name] = client
         m.typeMap[name] = "dsc"
         m.coreMetadata[name] = info
-        // 显式压缩后端接管（对齐 DSH preset 的 compaction group）：
-        // config.yaml 中 compaction: "tool-billion-context" 指定此后端插件。
-        // 宿主检测到 name 匹配时设 DSC_ACP_ACTIVE=1，通知 agent-react-loop 跳过
-        // 内联 compactHistory。不自动检测 Provides——"有能力"不等于"应接管"，
-        // 多个 Provides compaction 的插件并存时由用户显式选择。
+        // 显式压缩后端接管 + 能力验证（对齐 DSH preset compaction group + Cordis Service 单例）：
+        // 1. 用户在 config.yaml 中 compaction: "tool-billion-context" 显式选择后端
+        // 2. 宿主验证该插件确实声明了 Provides: {"compaction": "true"} 能力
+        // 3. 验证通过后设 DSC_ACP_ACTIVE=1，通知 agent 跳过内联压缩
+        // 若用户指定的插件未声明 compaction 能力，fail-loud 报错（不静默接管）。
         if m.compactionBackend != "" && m.compactionBackend == name {
-                os.Setenv("DSC_ACP_ACTIVE", "1")
-                m.logger.Info("compaction backend selected, agent inline compaction disabled", "backend", name)
+                if info != nil && len(info.Capabilities) > 0 {
+                        if v, ok := info.Capabilities["compaction"]; ok && v != "false" {
+                                os.Setenv("DSC_ACP_ACTIVE", "1")
+                                m.logger.Info("compaction backend selected, agent inline compaction disabled", "backend", name)
+                        } else {
+                                m.logger.Error("compaction backend does not declare compaction capability (Provides compaction)",
+                                        "backend", name, "hint", "plugin must declare Provides: {\"compaction\": \"true\"} in SDK Config")
+                        }
+                }
         }
         m.transitionLocked(name, StateActive, "")
         go m.monitorExit(name, client)
