@@ -32,10 +32,20 @@ type harnessData struct {
 var hd = &harnessData{adminURL: defaultAdminURL()}
 
 func defaultAdminURL() string {
+	// 宿主启动管理 API 后会经 os.Setenv("DSC_ADMIN_ADDR", actualAddr) 注入
+	// 实际监听地址（含自动自增后的端口号）。若管理 API 未启动（默认 TUI 模式），
+	// 该环境变量为空，health 检查会报告 admin 不可达。
 	if a := os.Getenv("DSC_ADMIN_ADDR"); a != "" {
-		return "http://127.0.0.1" + a
+		// DSC_ADMIN_ADDR 可能是 ":9999" 形式，需补全为 http://127.0.0.1:9999
+		if strings.HasPrefix(a, ":") {
+			return "http://127.0.0.1" + a
+		}
+		if !strings.HasPrefix(a, "http") {
+			return "http://" + a
+		}
+		return a
 	}
-	return "http://127.0.0.1:9999"
+	return "" // 管理 API 未启动
 }
 func webuiAddr() string {
 	if a := os.Getenv("HARNESS_WEBUI_ADDR"); a != "" {
@@ -233,7 +243,19 @@ func main() {
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService / PluginMetadata
 	// 与 go-core 组装。本插件为空壳工具（无业务工具，仅承载独立 HTTP 服务），
 	// 故用 sdk.ToolProvider 返回空集即可满足 SDK 校验。
-	sdk := dsc.New(dsc.Config{Name: "tool-harness-webui", Version: "0.1.0", Type: dsc.TypeTool})
+	//
+	// 声明 Requires: dsc/admin —— 告知宿主本插件依赖管理 API（admin 能力）。
+	// 宿主据此自动启动管理 API（若未显式 -admin 或 DSC_ADMIN_ADDR）。
+	// 若管理 API 未启动（DSC_NO_ADMIN=1），DSC_ADMIN_ADDR 环境变量为空，
+	// health 检查会报告 admin 不可达，插件优雅降级。
+	sdk := dsc.New(dsc.Config{
+		Name:    "tool-harness-webui",
+		Version: "0.1.0",
+		Type:    dsc.TypeTool,
+		Requires: []dsc.CapabilityRequirement{
+			{Type: "dsc", Capability: "admin"},
+		},
+	})
 
 	// 互通握手：宿主挂载聚合服务后回调，后台启动独立 HTTP 服务
 	// （不阻塞 gRPC 握手；host ListTools 时端口已监听）。

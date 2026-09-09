@@ -675,17 +675,32 @@ func main() {
 			logger.Info("cron scheduler started")
 		}
 
-		// 启动管理 API：监听地址取 -admin 旗标，未指定则回退环境变量 DSC_ADMIN_ADDR，
-		// 再默认绑定回环地址 127.0.0.1:9999（避免局域网内任意主机在未配置
-		// DSC_ADMIN_TOKEN 时经 /plugins/load 加载任意二进制触发 RCE；需要远程
-		// 管理时显式用 -admin :9999 并配置 token）。
-		// 设 DSC_NO_ADMIN=1 可完全关闭管理 API（多实例无需 admin 时节省端口）。
-		if os.Getenv("DSC_NO_ADMIN") == "1" || os.Getenv("DSC_NO_ADMIN") == "true" {
-			logger.Info("admin api disabled (DSC_NO_ADMIN=1)")
-		} else {
-			if adminAddr == "" {
-				adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+		// 启动管理 API（管理能力）：
+		// 管理能力是一种「可选能力」——只有需要它的插件（如 tool-harness-webui）
+		// 才声明依赖。宿主按以下优先级决定是否启动管理 API：
+		//   1. 用户显式 -admin <addr>：强制启动
+		//   2. DSC_ADMIN_ADDR 环境变量：强制启动
+		//   3. 配置中有插件声明 Requires: dsc/admin 能力依赖：自动启动
+		//   4. DSC_NO_ADMIN=1：强制关闭（即使有插件需要也不启动，插件应优雅降级）
+		//   5. 默认：关闭（TUI 终端用户通常不需要管理 API）
+		needAdmin := false
+		if adminAddr != "" {
+			// 用户显式 -admin
+			needAdmin = true
+		} else if os.Getenv("DSC_ADMIN_ADDR") != "" {
+			needAdmin = true
+			adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+		} else if os.Getenv("DSC_NO_ADMIN") != "1" && os.Getenv("DSC_NO_ADMIN") != "true" {
+			// 检查是否有插件声明了 requires/dsc/admin 能力依赖
+			if mgr.HasPluginRequiringCapability("dsc", "admin") {
+				needAdmin = true
+				logger.Info("admin api auto-enabled (plugin requires admin capability)")
 			}
+		}
+
+		if !needAdmin {
+			logger.Info("admin api disabled (use -admin <addr> or DSC_ADMIN_ADDR to enable)")
+		} else {
 			if adminAddr == "" {
 				adminAddr = "127.0.0.1:9999"
 			}
@@ -696,6 +711,8 @@ func main() {
 			}
 			adminAddr = finalAddr
 			logger.Info("admin api started", "addr", adminAddr)
+			// 把实际监听地址注入到环境变量，供 tool-harness-webui 等插件子进程读取
+			os.Setenv("DSC_ADMIN_ADDR", adminAddr)
 		}
 	}
 

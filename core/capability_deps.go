@@ -222,6 +222,27 @@ func (m *Manager) findProviderByCapabilityLocked(providerType, capability, selfN
 	}
 }
 
+// HasPluginRequiringCapability 报告是否有任何已加载的插件声明了
+// requires/<providerType>/<capability> 能力依赖。供宿主决定是否启动
+// 某些可选服务（如管理 API：只有 tool-harness-webui 等插件声明
+// requires/dsc/admin 时才自动启动）。线程安全。
+func (m *Manager) HasPluginRequiringCapability(providerType, capability string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, info := range m.coreMetadata {
+		if info == nil {
+			continue
+		}
+		requires := DecodeRequires(info)
+		for _, r := range requires {
+			if r.Type == providerType && r.Capability == capability {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // containsString 报告 slice 中是否含 s。
 func containsString(slice []string, s string) bool {
 	for _, v := range slice {
