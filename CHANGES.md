@@ -81,6 +81,14 @@ Cordis 用的是纯能力边界的依赖定义方式：
   master 上 5 次连测全失败）。改为 `<毫秒>.<进程内自增序号>.bak`，新增 `Manager.backupSeq
   atomic.Int64` 计数器，确保唯一性。修复后 10 次连测全过。
 
+- **provider 真实加载失败 fail loud（对齐 DSH "Misconfiguration fails loud at load"）**：
+  `LoadFromConfig` 中单个 provider 加载真实故障（如二进制缺失、类型/API 版本不匹配）原来
+  只 `transitionLocked(StateFailed)` 后 `continue` 静默跳过其余插件——这与 DSH/Cordis
+  「不静默跳过缺失引用、配置错误在加载点大声失败」的约定相悖，也掩盖了启动故障。现改为
+  `return` 错误并交由宿主启动自愈机制（`main.go` 还原最近正常配置重试，重试仍失败则 `fail`）
+  处理。**依赖未满足与真实故障明确分离**：能力依赖未满足仍走 PENDING 等待后续补足
+  （`repairPendingLocked` 反应式提升），二者互不影响。
+
 ### 测试
 - `core/capability_deps_test.go`：覆盖解析、解码、自动解析 LLM/Tool 依赖、保留显式声明、
   无 provider、自引用排除、多能力解析、`capability=false` 不匹配、`depsSatisfiedLocked`、

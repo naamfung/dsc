@@ -1911,14 +1911,15 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	// 按「能力依赖」加载 provider：所有 provider 直接尝试加载（插件进程本身不检查
 	// 依赖，宿主只在加载后解析其 Requires 能力依赖，未满足的由 repairPendingLocked
 	// 反应式重算提升——对齐 DSH/Cordis 的 _refresh + notify 模型）。
-	// 加载失败的（如二进制缺失、类型不匹配）标记为 Failed；这类是真实故障，
-	// 不是依赖未满足——后者由 reactivateAgentLocked / repairPendingLocked 经
-	// resolvedDeps 跟踪。
+	// 加载失败的（如二进制缺失、类型不匹配）是真实故障，不是依赖未满足：
+	// 依赖未满足会置 PENDING 等待后续补足；真实加载错误立即 fail loud，
+	// 让宿主启动自愈回滚到最近正常配置重试（符合 DSH 约定: Misconfiguration fails loud at load）。
 	for _, entry := range providerEntries {
 		if err := m.loadProviderDeclarativeLocked(entry); err != nil {
 			m.transitionLocked(entry.Name, StateFailed, err.Error())
-			m.logger.Warn("failed to load provider from config", "name", entry.Name, "error", err)
-			continue
+			// 真实加载故障 fail loud，不静默跳过——DSH 约定:
+			// "Misconfiguration fails loud at load when self-contained, otherwise at the earliest resolvable point; never silently skip a missing referent."
+			return fmt.Errorf("failed to load provider from config: %s: %w", entry.Name, err)
 		}
 		// 启动期也做能力解析：插件加载成功后 m.coreMetadata[entry.Name] 持有
 		// PluginInfo，解析其中的 requires/<type>/<cap> 编码并匹配已加载插件的能力键，
