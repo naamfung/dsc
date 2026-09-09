@@ -4,7 +4,7 @@
 
 ## 克隆指南
 
-普通用户请直接下载正式版二进制程序，开发请克隆 **master** 分支（非默认分支，需显式指定）：
+普通用户请直接下载正式版二进制程序，开发请克隆 **master** 分支：
 
 ```bash
 git clone -b master https://github.com/naamfung/dsc.git
