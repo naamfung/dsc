@@ -152,6 +152,10 @@ type Manager struct {
         // 非 nil 时（如 billion-context 插件注入），agent 经 HasCompactionEngine
         // 检测到后端存在，跳过内联压缩改由插件接管——对齐 DSH 的 CompactionEngine 后端替换模式。
         compaction CompactionEngine
+        // compactionBackend config.yaml 中显式声明的压缩后端插件名（对齐 DSH preset
+        // 的 compaction group）。registerDscCoreLocked 检测插件名匹配时设
+        // DSC_ACP_ACTIVE=1。空串 = 默认（agent 走内联压缩）。
+        compactionBackend string
 }
 
 type ManagerConfig struct {
@@ -1907,6 +1911,9 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
         m.mu.Lock()
         defer m.mu.Unlock()
 
+        // 保存显式声明的压缩后端插件名（供 registerDscCoreLocked 匹配检测）
+        m.compactionBackend = cfg.Compaction
+
         // 版本感知解析：各插件目录内若存在「<目录基名>-v<版本><ext>」的更高版本二进制，
         // 启动即直接加载最高版本，避免先起基线进程再由 watcher 换新（Windows 下运行中的
         // 同名二进制被占用不可覆盖，只能以新版本文件启动新进程）。
@@ -2392,15 +2399,14 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
         m.clients[name] = client
         m.typeMap[name] = "dsc"
         m.coreMetadata[name] = info
-        // 检测插件是否声明提供 compaction 能力——若是，设 DSC_ACP_ACTIVE=1
-        // 通知 agent-react-loop 跳过内联 compactHistory，由插件经 agent/pre-step
-        // 事件接管压缩。对齐 DSH：preset 不挂 compaction-basic 改挂 billion-context
-        // 的后端替换模式。任何声明 Provides compaction 的插件都自动接管，不硬编码插件名。
-        if info != nil && len(info.Capabilities) > 0 {
-                if v, ok := info.Capabilities["compaction"]; ok && v != "false" {
-                        os.Setenv("DSC_ACP_ACTIVE", "1")
-                        m.logger.Info("compaction capability provider detected, agent inline compaction disabled", "plugin", name)
-                }
+        // 显式压缩后端接管（对齐 DSH preset 的 compaction group）：
+        // config.yaml 中 compaction: "tool-billion-context" 指定此后端插件。
+        // 宿主检测到 name 匹配时设 DSC_ACP_ACTIVE=1，通知 agent-react-loop 跳过
+        // 内联 compactHistory。不自动检测 Provides——"有能力"不等于"应接管"，
+        // 多个 Provides compaction 的插件并存时由用户显式选择。
+        if m.compactionBackend != "" && m.compactionBackend == name {
+                os.Setenv("DSC_ACP_ACTIVE", "1")
+                m.logger.Info("compaction backend selected, agent inline compaction disabled", "backend", name)
         }
         m.transitionLocked(name, StateActive, "")
         go m.monitorExit(name, client)
