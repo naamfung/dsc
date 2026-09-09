@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	plugin "github.com/hashicorp/go-plugin"
 )
 
 // mockAgent 实现 Agent 接口，用于测试 agent 再激活时捕获 RegisterServices 调用。
@@ -423,5 +425,61 @@ func TestRepairPendingReactivateLoadedAgent(t *testing.T) {
 	ag.mu.Unlock()
 	if got.llm != 55 {
 		t.Fatalf("RegisterServices llm = %d, want 55", got.llm)
+	}
+}
+
+// TestAgentPluginInfoReadable 端到端验证：用真实 agent-react-loop 进程验证
+// loadAgentAndGetBroker 中 GetPluginInfo 能成功读取 agent 的 PluginInfo（含
+// requires/llm/llm 能力声明）。这是「service IDs not set」错误的根因测试——
+// 若 SDK 的 agentGRPCPlugin 未注册 PluginMetadataServer，GetPluginInfo 会失败，
+// resolvedDeps 为空，pickPrimaryLLM 返回空串，agent 永远进 PENDING 无法激活。
+func TestAgentPluginInfoReadable(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoRoot := filepath.Join("..")
+	agentExe := filepath.Join(tmpDir, "agent-react-loop.exe")
+	buildAgentBin(t, filepath.Join(repoRoot, "plugins", "agent-react-loop"), agentExe)
+
+	cfgPath := filepath.Join(tmpDir, "config", "config.yaml")
+	os.MkdirAll(filepath.Dir(cfgPath), 0755)
+	cfg := "default_llm: mock-llm\nplugins:\n  - name: agent-react-loop\n    type: agent\n    binary_path: " + agentExe + "\n    enabled: true\n"
+	os.WriteFile(cfgPath, []byte(cfg), 0644)
+
+	m := NewManager(&ManagerConfig{})
+	m.SetConfigPath(cfgPath)
+	loadTestAgent(t, m, "agent-react-loop", agentExe, tmpDir)
+	t.Cleanup(func() { m.Shutdown() })
+
+	// 手工调用 loadAgentAndGetBroker 会拉起第二个进程——这里用更直接的验证：
+	// 检查 loadTestAgent 后 agent 的 PluginInfo 是否在 coreMetadata 中
+	// （loadTestAgent 绕过了 loadAgentAndGetBroker，故手工验证 GetPluginInfo）
+	m.mu.RLock()
+	client, ok := m.clients["agent-react-loop"]
+	m.mu.RUnlock()
+	if !ok {
+		t.Fatal("agent-react-loop client not found")
+	}
+
+	// 获取 agent 的 grpc 连接
+	rpcClient, err := client.Client()
+	if err != nil {
+		t.Fatalf("client.Client: %v", err)
+	}
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		t.Fatal("not GRPCClient")
+	}
+
+	// 这就是 loadAgentAndGetBroker 中调用的 GetPluginInfo——
+	// 若 agentGRPCPlugin 未注册 PluginMetadataServer，此处会失败
+	info, err := GetPluginInfo(grpcClient.Conn)
+	if err != nil {
+		t.Fatalf("GetPluginInfo failed (agent PluginMetadataServer not registered?): %v", err)
+	}
+	if info.Type != "agent" {
+		t.Errorf("info.Type = %q, want agent", info.Type)
+	}
+	// 验证 requires/llm/llm 能力声明存在
+	if v, ok := info.Capabilities["requires/llm/llm"]; !ok || v != "true" {
+		t.Errorf("agent should declare requires/llm/llm=true, got caps=%+v", info.Capabilities)
 	}
 }
