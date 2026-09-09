@@ -142,7 +142,9 @@ func (bc *BillionContext) handlePreStep(ctx context.Context, dataJSON string) (s
         // 估算当前 token 数（粗略：消息文本字节/4）
         tokenCount := estimateTokens(protoMsgs)
 
-        // 跑 pipeline
+        // 跑 pipeline（renderTags=false：不注入 <acp> 标签到消息文本——标签的 tokens
+        // 属性每轮估算会变化，破坏前缀缓存。改为仅用 mNNNNN ref 映射，标签信息经
+        // acp_status 工具按需查询）
         result := bcacp.ProcessTurn(coreMsgs, state, bc.config, tokenCount)
 
         // 持久化更新后的 state
@@ -151,30 +153,47 @@ func (bc *BillionContext) handlePreStep(ctx context.Context, dataJSON string) (s
                 fmt.Fprintf(os.Stderr, "[billion-context] save state failed: %v\n", err)
         }
 
-        // 注入 ACP system prompt 作为消息列表头部（对齐 DSH systemPrompt.section 机制）
-        // 这段文本每轮都注入，包含压缩哲学、何时压缩、工具使用说明、蒸馏规则等。
-        // 经 agent/pre-step hook 在消息列表头部插入等价于 DSH 的 systemPrompt.section。
-        leadingMsgs := []bcacp.CoreMessage{{
-                ID:          "acp_system_prompt",
-                Role:        bcacp.RoleSystem,
-                ContentType: bcacp.ContentTypeText,
-                Text:        bcacp.ACPSystemPrompt,
-        }}
+        // 注入 ACP system prompt（对齐 DSH systemPrompt.section 机制）
+        //
+        // 前缀缓存稳定性关键设计：
+        //  - 不插入新的 system 消息（会改变消息数量与位置，破坏前缀缓存）
+        //  - 而是把 ACP 指导文本追加到第一条 system 消息的末尾（合并为一条消息）
+        //  - ACP 指导文本每轮完全一样 → 合并后的 system 消息内容稳定 → 前缀缓存命中
+        //  - 仅在首次注入时改变 system 消息内容（增加 ACP 段落），后续轮次文本不变
+        //
+        // nudge 处理（前缀缓存友好的方式）：
+        //  - nudge 文本每次不同（含 usage%、ranges），不能放在前缀位置
+        //  - 放在消息列表尾部（最后一条消息之后）作为临时 user 消息
+        //  - 尾部追加不影响前缀，且 nudge 仅在需要压缩时出现
+        renderedMsgs := result.Messages
+        if len(renderedMsgs) > 0 && renderedMsgs[0].Role == bcacp.RoleSystem {
+                // 合并到已有 system 消息：追加 ACP 段落
+                // 用 marker 检测是否已注入过（避免重复追加）
+                if !containsStr(renderedMsgs[0].Text, "[ACP System Prompt]") {
+                        renderedMsgs[0].Text = renderedMsgs[0].Text + "\n\n[ACP System Prompt]\n" + bcacp.ACPSystemPrompt
+                }
+        } else {
+                // 无 system 消息：在头部插入（首次创建，后续轮次稳定）
+                renderedMsgs = append([]bcacp.CoreMessage{{
+                        ID:          "acp_system_prompt",
+                        Role:        bcacp.RoleSystem,
+                        ContentType: bcacp.ContentTypeText,
+                        Text:        bcacp.ACPSystemPrompt,
+                }}, renderedMsgs...)
+        }
 
-        // 如果有 nudge 决策，注入提示作为额外的 system 消息（在 ACP system prompt 之后）
+        // nudge 作为尾部追加的 user 消息（不影响前缀缓存）
         if result.Nudge != nil && result.Nudge.ShouldInject {
                 nudgeText := bcacp.FormatNudgeText(*result.Nudge)
                 if nudgeText != "" {
-                        leadingMsgs = append(leadingMsgs, bcacp.CoreMessage{
+                        renderedMsgs = append(renderedMsgs, bcacp.CoreMessage{
                                 ID:          "acp_nudge",
-                                Role:        bcacp.RoleSystem,
+                                Role:        bcacp.RoleUser,
                                 ContentType: bcacp.ContentTypeText,
                                 Text:        nudgeText,
                         })
                 }
         }
-
-        renderedMsgs := append(leadingMsgs, result.Messages...)
 
         // 转回 proto.Message
         rewrittenProto := bcadapter.FromCoreMessages(renderedMsgs)
@@ -357,6 +376,11 @@ func estimateTokens(msgs []*proto.Message) int {
                 }
         }
         return total
+}
+
+// containsStr 报告 s 是否包含 sub（轻量实现，避免引入 strings 包）。
+func containsStr(s, sub string) bool {
+        return len(s) >= len(sub) && strings.Contains(s, sub)
 }
 
 // parseInt 轻量 string → int。

@@ -267,15 +267,13 @@ func TestProcessTurn(t *testing.T) {
         if len(result.State.MessageRefs.ByRaw) != 2 {
                 t.Errorf("refs assigned = %d, want 2", len(result.State.MessageRefs.ByRaw))
         }
-        // 渲染后的消息应含 <acp> 标签
-        foundTag := false
-        for _, m := range result.Messages {
-                if m.ID == "a" && containsStr(m.Text, "<acp") {
-                        foundTag = true
-                }
+        // renderTags=false：不注入 <acp> 标签到消息文本（保持前缀缓存稳定）
+        // 验证 ref 映射已建立（模型经 acp_status 工具查询 ref）
+        if RefForRaw("a", result.State) != "m00000" {
+                t.Errorf("ref for 'a' = %q, want m00000", RefForRaw("a", result.State))
         }
-        if !foundTag {
-                t.Errorf("rendered messages should contain <acp> tags")
+        if RefForRaw("b", result.State) != "m00001" {
+                t.Errorf("ref for 'b' = %q, want m00001", RefForRaw("b", result.State))
         }
 }
 
