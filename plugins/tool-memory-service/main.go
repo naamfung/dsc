@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"dsc-sdk"
+	dsc "dsc-sdk"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -25,6 +25,10 @@ const (
 	timeNodeDays = 30
 	// maxAutoMemoryLen 钩子自动记录单条记忆的最大长度（防长输出撑爆记忆库）
 	maxAutoMemoryLen = 2000
+	// defaultPageSize 列表查询的默认每页条数
+	defaultPageSize = 20
+	// maxPageSize 列表查询的最大每页条数
+	maxPageSize = 100
 )
 
 // Memory 对应 memories 表
@@ -54,8 +58,6 @@ type resultItem struct {
 }
 
 // dbPath 返回记忆库文件路径：位于 DSC 程序可执行目录下的 memory 目录中
-// （宿主把插件子进程工作目录设为可执行目录，故用 os.Getwd 解析；目录由本插件创建）。
-// 记忆是跨会话共享的，并非项目级，因此不复用 DSC_WORKSPACE_ROOT。
 func dbPath() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -64,7 +66,7 @@ func dbPath() string {
 	return filepath.Join(cwd, "memory", "memory.db")
 }
 
-// initDB 初始化数据库：常规表自动迁移 + FTS5 虚拟表与同步触发器 + 预置高频问题。
+// initDB 初始化数据库：常规表自动迁移 + FTS5 虚拟表与同步触发器。
 func initDB(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -75,53 +77,37 @@ func initDB(path string) error {
 		return err
 	}
 
-	// 自动迁移常规表（不含虚拟表）
 	if err := DB.AutoMigrate(&Memory{}, &CallLog{}); err != nil {
 		return err
 	}
 
-	// 创建 FTS5 虚拟表（需原生 SQL）
 	ftsSQL := `
-        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-            content,
-            content='memories',
-            content_rowid='id',
-            tokenize='unicode61'
-        );`
+	CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+		content,
+		content='memories',
+		content_rowid='id',
+		tokenize='unicode61'
+	);`
 	if err := DB.Exec(ftsSQL).Error; err != nil {
 		return err
 	}
 
-	// 创建触发器保持同步
 	triggers := []string{
 		`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-            INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
-        END;`,
+			INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+		END;`,
 		`CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-            INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
-        END;`,
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+		END;`,
 		`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-            INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
-            INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
-        END;`,
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+			INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+		END;`,
 	}
 	for _, trig := range triggers {
 		if err := DB.Exec(trig).Error; err != nil {
 			return err
 		}
-	}
-
-	// 预置高频问题（如果表为空）
-	var count int64
-	DB.Model(&Memory{}).Count(&count)
-	if count == 0 {
-		now := time.Now().Unix()
-		presets := []Memory{
-			{Content: "今天天气怎么样？", CreatedAt: now, LastAccess: now, AccessCount: 0, Archived: false, Source: "preset"},
-			{Content: "帮我写一份周报。", CreatedAt: now, LastAccess: now, AccessCount: 0, Archived: false, Source: "preset"},
-			{Content: "最近有什么新闻？", CreatedAt: now, LastAccess: now, AccessCount: 0, Archived: false, Source: "preset"},
-		}
-		DB.Create(&presets)
 	}
 	return nil
 }
@@ -143,9 +129,7 @@ func archiveIdleMemories(now time.Time) {
 		Update("archived", true)
 }
 
-// joinMatchTerms 把搜索关键词拼成 FTS5 MATCH 查询串：每个词按 FTS5 语法加双引号包裹
-// （词内双引号写成两个），以 OR 连接。加引号后含 `.`/`-`/`/` 等标点的词按短语解析，
-// 不再触发 "fts5: syntax error near '.'" 之类错误。
+// joinMatchTerms 把搜索关键词拼成 FTS5 MATCH 查询串
 func joinMatchTerms(keywords []string) string {
 	quoted := make([]string, 0, len(keywords))
 	for _, kw := range keywords {
@@ -164,10 +148,6 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 
 	var results []resultItem
 
-	// ---- 第一层：FTS5 检索 ----
-	// 关键词必须按 FTS5 语法转义后加引号包裹：未加引号的裸词中，`.`/`-`/`/` 等标点
-	// 会被 FTS5 当作语法字符（如 `config.yaml` 解析成列引用 `config.yaml`）而报
-	// "fts5: syntax error"。加引号后按短语（phrase）解析，标点仅作分词边界、不再报错。
 	matchQuery := joinMatchTerms(keywords)
 	type ftsRow struct {
 		ID          int64
@@ -179,21 +159,18 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 	}
 	var ftsRows []ftsRow
 	err := DB.Raw(`
-        SELECT m.id, m.content, m.created_at, m.last_access, m.access_count,
-               -bm25(memories_fts) AS rel_score
-        FROM memories_fts
-        JOIN memories m ON m.id = memories_fts.rowid
-        WHERE memories_fts MATCH ? AND m.archived = 0
-        ORDER BY rel_score DESC
-        LIMIT 50`, matchQuery).Scan(&ftsRows).Error
+	SELECT m.id, m.content, m.created_at, m.last_access, m.access_count,
+	       -bm25(memories_fts) AS rel_score
+	FROM memories_fts
+	JOIN memories m ON m.id = memories_fts.rowid
+	WHERE memories_fts MATCH ? AND m.archived = 0
+	ORDER BY rel_score DESC
+	LIMIT 50`, matchQuery).Scan(&ftsRows).Error
 	if err != nil {
-		// FTS 查询失败（语法/分词问题等）：不使工具整体失败，降级到 LIKE 兜底。
-		// 真正需要保留的错误（如 memories 表缺失）会由下方 LIKE 查询再次报出。
 		ftsRows = nil
 	}
 
 	if len(ftsRows) > 0 {
-		// FTS 有结果，计算时间衰减并组合
 		for _, row := range ftsRows {
 			mem := Memory{
 				ID:          row.ID,
@@ -207,7 +184,6 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 			results = append(results, resultItem{Memory: mem, Score: score})
 		}
 	} else {
-		// ---- 第二层：LIKE 模糊匹配兜底 ----
 		likeConditions := make([]string, len(keywords))
 		likeArgs := make([]interface{}, len(keywords))
 		for i, kw := range keywords {
@@ -227,12 +203,11 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 		}
 
 		for _, mem := range memories {
-			score := timeFactor(mem.LastAccess, now) // 相关性固定为1
+			score := timeFactor(mem.LastAccess, now)
 			results = append(results, resultItem{Memory: mem, Score: score})
 		}
 	}
 
-	// 稳定排序：分数降序，相同分数按 ID 升序
 	sort.SliceStable(results, func(i, j int) bool {
 		if results[i].Score != results[j].Score {
 			return results[i].Score > results[j].Score
@@ -242,7 +217,8 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 	return results, nil
 }
 
-// handleSearch 工具处理器：按 query/keywords 检索记忆，返回 JSON 结果。
+// ---- 查 (memory_search) ----
+
 func handleSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	var req struct {
 		Query    string `json:"query"`
@@ -261,7 +237,6 @@ func handleSearch(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", err
 	}
 
-	// 更新访问信息
 	for _, item := range results {
 		DB.Model(&Memory{}).Where("id = ?", item.ID).Updates(map[string]interface{}{
 			"last_access":  now.Unix(),
@@ -269,7 +244,6 @@ func handleSearch(ctx context.Context, args json.RawMessage) (string, error) {
 		})
 	}
 
-	// 记录调用日志
 	DB.Create(&CallLog{
 		Query:       req.Query,
 		Keywords:    kwStr,
@@ -287,14 +261,15 @@ func handleSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	return string(out), nil
 }
 
-// addMemory 写入一条记忆；content 相同则视为重复，跳过插入并返回重复标记。
+// ---- 增 (memory_add) ----
+
 func addMemory(content, source string) (id int64, dedup bool, err error) {
 	if source == "" {
 		source = "user"
 	}
 	var existing Memory
 	if err := DB.Where("content = ?", content).First(&existing).Error; err == nil {
-		return existing.ID, true, nil // 已存在相同记忆，去重
+		return existing.ID, true, nil
 	}
 	now := time.Now().Unix()
 	mem := Memory{
@@ -311,7 +286,6 @@ func addMemory(content, source string) (id int64, dedup bool, err error) {
 	return mem.ID, false, nil
 }
 
-// handleAdd 工具处理器：把一条记忆写入记忆库，返回 JSON 结果。
 func handleAdd(ctx context.Context, args json.RawMessage) (string, error) {
 	var req struct {
 		Content string `json:"content"`
@@ -337,7 +311,131 @@ func handleAdd(ctx context.Context, args json.RawMessage) (string, error) {
 	return string(out), nil
 }
 
-// memorySearchView 构造 memory_search 结果的结构化视图（表格）。
+// ---- 删 (memory_delete) ----
+
+func handleDelete(ctx context.Context, args json.RawMessage) (string, error) {
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.ID == 0 {
+		return "", fmt.Errorf("id is required")
+	}
+	result := DB.Delete(&Memory{}, req.ID)
+	if result.Error != nil {
+		return "", result.Error
+	}
+	if result.RowsAffected == 0 {
+		return "", fmt.Errorf("memory id %d not found", req.ID)
+	}
+	out, _ := json.Marshal(map[string]interface{}{
+		"ok":      true,
+		"id":      req.ID,
+		"deleted": result.RowsAffected,
+	})
+	return string(out), nil
+}
+
+// ---- 改 (memory_update) ----
+
+func handleUpdate(ctx context.Context, args json.RawMessage) (string, error) {
+	var req struct {
+		ID      int64  `json:"id"`
+		Content string `json:"content"`
+		Source  string `json:"source"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.ID == 0 {
+		return "", fmt.Errorf("id is required")
+	}
+
+	updates := map[string]interface{}{}
+	if req.Content != "" {
+		updates["content"] = req.Content
+	}
+	if req.Source != "" {
+		updates["source"] = req.Source
+	}
+	if len(updates) == 0 {
+		return "", fmt.Errorf("at least one of content or source must be provided")
+	}
+	updates["last_access"] = time.Now().Unix()
+
+	result := DB.Model(&Memory{}).Where("id = ?", req.ID).Updates(updates)
+	if result.Error != nil {
+		return "", result.Error
+	}
+	if result.RowsAffected == 0 {
+		return "", fmt.Errorf("memory id %d not found", req.ID)
+	}
+
+	var updated Memory
+	DB.First(&updated, req.ID)
+	out, _ := json.Marshal(map[string]interface{}{
+		"ok":      true,
+		"id":      req.ID,
+		"updated": result.RowsAffected,
+		"memory":  updated,
+	})
+	return string(out), nil
+}
+
+// ---- 查列表 (memory_list) ----
+
+func handleList(ctx context.Context, args json.RawMessage) (string, error) {
+	var req struct {
+		Page     int    `json:"page"`
+		PageSize int    `json:"page_size"`
+		Source   string `json:"source"`
+		Archived *bool  `json:"archived"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = defaultPageSize
+	}
+	if req.PageSize > maxPageSize {
+		req.PageSize = maxPageSize
+	}
+
+	query := DB.Model(&Memory{})
+	if req.Source != "" {
+		query = query.Where("source = ?", req.Source)
+	}
+	if req.Archived != nil {
+		query = query.Where("archived = ?", *req.Archived)
+	} else {
+		query = query.Where("archived = ?", false)
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var memories []Memory
+	query.Order("created_at DESC").
+		Offset((req.Page - 1) * req.PageSize).
+		Limit(req.PageSize).
+		Find(&memories)
+
+	out, _ := json.Marshal(map[string]interface{}{
+		"memories":  memories,
+		"total":     total,
+		"page":      req.Page,
+		"page_size": req.PageSize,
+	})
+	return string(out), nil
+}
+
+// ---- 视图 ----
+
 func memorySearchView(result string) (json.RawMessage, error) {
 	var out struct {
 		Results []struct {
@@ -368,7 +466,6 @@ func memorySearchView(result string) (json.RawMessage, error) {
 	}, rows), nil
 }
 
-// memoryAddView 构造 memory_add 结果的结构化视图（卡片）。
 func memoryAddView(result string) (json.RawMessage, error) {
 	var out struct {
 		ID    int64 `json:"id"`
@@ -389,8 +486,68 @@ func memoryAddView(result string) (json.RawMessage, error) {
 	}), nil
 }
 
+func memoryDeleteView(result string) (json.RawMessage, error) {
+	var out struct {
+		OK      bool  `json:"ok"`
+		ID      int64 `json:"id"`
+		Deleted int64 `json:"deleted"`
+	}
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		return nil, nil
+	}
+	return dsc.CardView("MemoryDelete", &dsc.ViewBadge{Text: "deleted", Tone: "yellow"}, []dsc.ViewField{
+		{Key: "id", Value: strconv.FormatInt(out.ID, 10)},
+		{Key: "rows", Value: strconv.FormatInt(out.Deleted, 10)},
+	}), nil
+}
+
+func memoryUpdateView(result string) (json.RawMessage, error) {
+	var out struct {
+		OK     bool  `json:"ok"`
+		ID     int64 `json:"id"`
+		Memory struct {
+			Content string `json:"content"`
+			Source  string `json:"source"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		return nil, nil
+	}
+	return dsc.CardView("MemoryUpdate", &dsc.ViewBadge{Text: "updated", Tone: "green"}, []dsc.ViewField{
+		{Key: "id", Value: strconv.FormatInt(out.ID, 10)},
+		{Key: "content", Value: out.Memory.Content},
+		{Key: "source", Value: out.Memory.Source},
+	}), nil
+}
+
+func memoryListView(result string) (json.RawMessage, error) {
+	var out struct {
+		Memories []struct {
+			ID      int64  `json:"id"`
+			Content string `json:"content"`
+			Source  string `json:"source"`
+		} `json:"memories"`
+		Total int64 `json:"total"`
+	}
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		return nil, nil
+	}
+	rows := make([]dsc.ViewRow, 0, len(out.Memories))
+	for _, m := range out.Memories {
+		rows = append(rows, dsc.ViewRow{
+			"id":      strconv.FormatInt(m.ID, 10),
+			"content": m.Content,
+			"source":  m.Source,
+		})
+	}
+	return dsc.TableView("Memory", &dsc.ViewBadge{Text: fmt.Sprintf("%d items", out.Total), Tone: "teal"}, []dsc.ViewColumn{
+		{Key: "id", Title: "id"},
+		{Key: "content", Title: "content"},
+		{Key: "source", Title: "source"},
+	}, rows), nil
+}
+
 // recordToolResult 是 AfterTool 钩子：把其他工具的成功执行结果自动写入记忆库
-// （源标记为 tool），使记忆库随工具活动自动积累；跳过记忆服务自身的工具避免回环。
 func recordToolResult(toolName, result, toolErr string) {
 	if toolErr != "" || result == "" {
 		return
@@ -414,52 +571,108 @@ func main() {
 	}
 
 	searchSchema := json.RawMessage(`{
-                "type": "object",
-                "properties": {
-                        "query": {"type": "string", "description": "自然语言查询语句"},
-                        "keywords": {"type": "string", "description": "空格分隔的搜索关键词，优先于 query；缺省时取 query"}
-                },
-                "description": "query 与 keywords 至少提供一个"
-        }`)
+		"type": "object",
+		"properties": {
+			"query": {"type": "string", "description": "自然语言查询语句"},
+			"keywords": {"type": "string", "description": "空格分隔的搜索关键词，优先于 query；缺省时取 query"}
+		},
+		"description": "query 与 keywords 至少提供一个"
+	}`)
 	addSchema := json.RawMessage(`{
-                "type": "object",
-                "properties": {
-                        "content": {"type": "string", "description": "要保存的记忆内容"},
-                        "source": {"type": "string", "description": "记忆来源标记，缺省 user"}
-                },
-                "required": ["content"]
-        }`)
+		"type": "object",
+		"properties": {
+			"content": {"type": "string", "description": "要保存的记忆内容"},
+			"source": {"type": "string", "description": "记忆来源标记，缺省 user"}
+		},
+		"required": ["content"]
+	}`)
+	deleteSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"id": {"type": "integer", "description": "要删除的记忆 ID"}
+		},
+		"required": ["id"]
+	}`)
+	updateSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"id": {"type": "integer", "description": "要修改的记忆 ID"},
+			"content": {"type": "string", "description": "新的记忆内容（可选，至少提供 content 或 source 之一）"},
+			"source": {"type": "string", "description": "新的来源标记（可选）"}
+		},
+		"required": ["id"]
+	}`)
+	listSchema := json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"page": {"type": "integer", "description": "页码，从 1 开始，默认 1"},
+			"page_size": {"type": "integer", "description": "每页条数，默认 20，最大 100"},
+			"source": {"type": "string", "description": "按来源筛选（可选）"},
+			"archived": {"type": "boolean", "description": "是否只看已归档记忆，默认 false"}
+		}
+	}`)
 
 	sdk := dsc.New(dsc.Config{
 		Name:    "memory-service",
-		Version: "1.0.0",
+		Version: "1.1.0",
 		Type:    dsc.TypeTool,
 		Provides: map[string]string{
-			// 提供 "memory" 能力：含 memory_search/memory_add 工具与 AfterTool 自动记忆钩子
 			"memory": "true",
 		},
 	})
+
+	// 查（搜索）
 	sdk.Tool(dsc.Tool{
 		Name:        "memory_search",
 		Description: "搜索记忆库：按关键词检索历史记忆（用户偏好、项目约定、工具执行结果等），返回按相关度与时间衰减排序的结果。参数 query 或 keywords 至少提供一个。",
 		Schema:      searchSchema,
 		Handler:     handleSearch,
-		Context:     "记忆服务：可用 memory_search 检索历史记忆、memory_add 保存值得长期保留的信息（用户偏好、项目约定、重要结论）。其他工具的执行结果会自动写入记忆库，无需手动重复添加。",
+		Context:     "记忆服务：可用 memory_search 检索、memory_add 新增、memory_update 修改、memory_delete 删除、memory_list 列表。其他工具的执行结果会自动写入记忆库。",
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
 			return memorySearchView(result)
 		},
 	})
+	// 增
 	sdk.Tool(dsc.Tool{
 		Name:        "memory_add",
-		Description: "添加一条记忆到记忆库：把值得长期保留的信息（如用户偏好、项目约定、重要结论）写入记忆库，供后续 memory_search 检索。参数 content 为记忆内容，source 可选（默认 user）。",
+		Description: "添加一条记忆到记忆库：把值得长期保留的信息（如用户偏好、项目约定、重要结论）写入记忆库，供后续 memory_search 检索。",
 		Schema:      addSchema,
 		Handler:     handleAdd,
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
 			return memoryAddView(result)
 		},
 	})
-	// 钩子：工具执行成功后自动沉淀为记忆（原 HTTP 实现没有钩子，SDK 化时补齐，
-	// 使记忆库能随工具活动自动积累，而非仅依赖模型显式调用 memory_add）。
+	// 删
+	sdk.Tool(dsc.Tool{
+		Name:        "memory_delete",
+		Description: "按 ID 删除一条记忆。删除后不可恢复，FTS 索引同步清除。",
+		Schema:      deleteSchema,
+		Handler:     handleDelete,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return memoryDeleteView(result)
+		},
+	})
+	// 改
+	sdk.Tool(dsc.Tool{
+		Name:        "memory_update",
+		Description: "按 ID 修改记忆内容或来源标记。至少提供 content 或 source 之一。修改后 last_access 自动刷新。",
+		Schema:      updateSchema,
+		Handler:     handleUpdate,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return memoryUpdateView(result)
+		},
+	})
+	// 查列表（分页）
+	sdk.Tool(dsc.Tool{
+		Name:        "memory_list",
+		Description: "分页列出记忆库中的记忆，按创建时间降序排列。可按来源筛选、查看已归档记忆。",
+		Schema:      listSchema,
+		Handler:     handleList,
+		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+			return memoryListView(result)
+		},
+	})
+
 	sdk.Hook(dsc.Hook{
 		AfterTool: func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (string, string) {
 			recordToolResult(toolName, result, toolErr)
