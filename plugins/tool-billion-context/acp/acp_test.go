@@ -303,6 +303,144 @@ func TestStatePersistence(t *testing.T) {
         }
 }
 
+// TestStripOrphanedToolResults 验证孤儿 tool-result 清理。
+// 场景：压缩范围切在 tool-call 与 tool-result 之间——tool-call 被压缩，
+// tool-result 留下成为孤儿，多数 provider 会报 HTTP 400。
+func TestStripOrphanedToolResults(t *testing.T) {
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, ContentType: ContentTypeText, Text: "do task"},
+                // tool-call "tc1" 在这里
+                {ID: "b", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "tc1", ToolName: "shell"},
+                // tool-result for tc1
+                {ID: "c", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "tc1", Text: "result"},
+                // 孤儿 tool-result：没有对应 tool-call（已被压缩）
+                {ID: "d", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "tc2", Text: "orphan result"},
+                {ID: "e", Role: RoleAssistant, ContentType: ContentTypeText, Text: "done"},
+        }
+        out := stripOrphanedToolResults(msgs)
+        // d 应被移除
+        for _, m := range out {
+                if m.ID == "d" {
+                        t.Errorf("orphan tool-result 'd' should be stripped")
+                }
+        }
+        if len(out) != 4 {
+                t.Errorf("after strip: %d messages, want 4 (d removed)", len(out))
+        }
+}
+
+// TestStripOrphanedToolCalls 验证孤儿 tool-call 清理。
+// 场景：压缩范围切在 tool-call 与 tool-result 之间——tool-result 被压缩，
+// tool-call 留下成为孤儿。
+func TestStripOrphanedToolCalls(t *testing.T) {
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, ContentType: ContentTypeText, Text: "do task"},
+                // tool-call "tc1" 有对应 result
+                {ID: "b", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "tc1", ToolName: "shell"},
+                {ID: "c", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "tc1", Text: "result"},
+                // 孤儿 tool-call：没有对应 tool-result（已被压缩）
+                {ID: "d", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "tc2", ToolName: "shell"},
+                {ID: "e", Role: RoleAssistant, ContentType: ContentTypeText, Text: "done"},
+        }
+        out := stripOrphanedToolCalls(msgs)
+        // d 应被移除
+        for _, m := range out {
+                if m.ID == "d" {
+                        t.Errorf("orphan tool-call 'd' should be stripped")
+                }
+        }
+        if len(out) != 4 {
+                t.Errorf("after strip: %d messages, want 4 (d removed)", len(out))
+        }
+}
+
+// TestStripOrphanedToolCallsCompressExempt 验证 compress 工具的 tool-call
+// 不被清理——它是模型发起的压缩请求，不需要 tool-result（其"结果"是消息列表改写本身）。
+func TestStripOrphanedToolCallsCompressExempt(t *testing.T) {
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, ContentType: ContentTypeText, Text: "do task"},
+                // compress tool-call 无对应 result——应保留（exempt）
+                {ID: "b", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "tc1", ToolName: "compress"},
+                {ID: "c", Role: RoleAssistant, ContentType: ContentTypeText, Text: "done"},
+        }
+        out := stripOrphanedToolCalls(msgs)
+        if len(out) != 3 {
+                t.Errorf("compress tool-call should be exempt: got %d msgs, want 3", len(out))
+        }
+}
+
+// TestStripOrphanedReasoning 验证孤儿 reasoning 清理。
+// 场景：严格 thinking 模型的 reasoning 必须紧跟 assistant text/tool-call，
+// 否则返回 HTTP 400。
+func TestStripOrphanedReasoning(t *testing.T) {
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, ContentType: ContentTypeText, Text: "do task"},
+                // reasoning 有 companion（后面的 assistant text）
+                {ID: "b", Role: RoleAssistant, ContentType: ContentTypeReasoning, Text: "thinking..."},
+                {ID: "c", Role: RoleAssistant, ContentType: ContentTypeText, Text: "answer"},
+                // 孤儿 reasoning：companion 被压缩，只留下 reasoning
+                {ID: "d", Role: RoleAssistant, ContentType: ContentTypeReasoning, Text: "more thinking..."},
+                {ID: "e", Role: RoleUser, ContentType: ContentTypeText, Text: "next"},
+        }
+        out := stripOrphanedReasoning(msgs)
+        // d 应被移除（companion 缺失）
+        for _, m := range out {
+                if m.ID == "d" {
+                        t.Errorf("orphan reasoning 'd' should be stripped")
+                }
+        }
+        if len(out) != 4 {
+                t.Errorf("after strip: %d messages, want 4 (d removed)", len(out))
+        }
+}
+
+// TestRenderMessagesWithOrphanCleanup 验证 RenderMessages 在压缩后自动清理孤儿。
+// 模拟压缩边界切断 tool-call ↔ tool-result 对的场景。
+func TestRenderMessagesWithOrphanCleanup(t *testing.T) {
+        state := CreateInitialState()
+        config := DefaultConfig(100000)
+        msgs := []CoreMessage{
+                {ID: "a", Role: RoleUser, ContentType: ContentTypeText, Text: "do task"},
+                {ID: "b", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "tc1", ToolName: "shell"},
+                {ID: "c", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "tc1", Text: "result1"},
+                {ID: "d", Role: RoleAssistant, ContentType: ContentTypeText, Text: "next step"},
+                {ID: "e", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "tc2", ToolName: "shell"},
+                {ID: "f", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "tc2", Text: "result2"},
+                {ID: "g", Role: RoleAssistant, ContentType: ContentTypeText, Text: "done"},
+        }
+        AssignRefs(msgs, state)
+
+        // 压缩 a..d（切在 b 与 c 之间：b 被压缩，c 留下成孤儿 tool-result；
+        // e..f 完整保留；d 也被压缩）
+        // 实际压缩 a..d 会同时压 b（tool-call）和 c（tool-result），不会产生孤儿——
+        // 这里改为压缩 a..b（只压 user 和 tool-call，留下孤儿 tool-result c）
+        ranges := []PruneRange{
+                {StartRef: "m00000", EndRef: "m00001", Summary: "user + first tool-call compressed"},
+        }
+        _, _ = ApplyCompression(ranges, msgs, state, config)
+
+        rendered := RenderMessages(msgs, state, config, false)
+        // 验证：孤儿 tool-result c 应被清理（其对应 tool-call b 被压缩）
+        for _, m := range rendered {
+                if m.ID == "c" {
+                        t.Errorf("orphan tool-result 'c' should be stripped after render")
+                }
+        }
+        // 验证：完整的 e..f 对应保留
+        foundE, foundF := false, false
+        for _, m := range rendered {
+                if m.ID == "e" {
+                        foundE = true
+                }
+                if m.ID == "f" {
+                        foundF = true
+                }
+        }
+        if !foundE || !foundF {
+                t.Errorf("complete tool pair e..f should be retained (got e=%v f=%v)", foundE, foundF)
+        }
+}
+
 func containsStr(s, sub string) bool {
         return len(s) >= len(sub) && (indexOf(s, sub) >= 0)
 }

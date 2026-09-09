@@ -176,8 +176,119 @@ func RenderMessages(messages []CoreMessage, state *CompressionState, config Conf
         // 重建消息列表：在锚点位置插入 summary，跳过被覆盖的原始消息
         out := rebuildMessagesWithAnchors(messages, covered, firstUserIndex, anchors)
 
+        // 清理孤儿配对（压缩边界可能切断 tool-call ↔ tool-result / reasoning ↔ assistant）
+        // 顺序对齐 acp-kernel：先 strip orphaned tool results → 再 strip orphaned tool calls
+        // → 最后 strip orphaned reasoning（移除 tool-call 可能使其前导 reasoning 变孤儿）
+        out = stripOrphanedToolResults(out)
+        out = stripOrphanedToolCalls(out)
+        out = stripOrphanedReasoning(out)
+
         // 注入 <acp> 标签（仅非 summary 消息）
         return renderTaggedMessages(out, state, renderTags)
+}
+
+// stripOrphanedToolResults 移除没有对应 tool-call 的 tool-result 消息
+// （对齐 acp-kernel stripOrphanedToolResults）。
+//
+// 触发场景：压缩范围边界切在 tool-call 与 tool-result 之间——
+// tool-call 被压缩进 summary，但 tool-result 留在消息列表中。
+// 多数 provider 收到无对应 tool-call 的 tool-result 会报 HTTP 400，
+// 故必须清理。
+func stripOrphanedToolResults(messages []CoreMessage) []CoreMessage {
+        knownCallIDs := map[string]bool{}
+        for _, m := range messages {
+                if m.ContentType == ContentTypeToolCall && m.ToolCallID != "" {
+                        knownCallIDs[m.ToolCallID] = true
+                }
+        }
+        out := messages[:0]
+        for _, m := range messages {
+                if m.ContentType == ContentTypeToolResult && m.ToolCallID != "" && !knownCallIDs[m.ToolCallID] {
+                        continue // 孤儿 tool-result：跳过
+                }
+                out = append(out, m)
+        }
+        return out
+}
+
+// stripOrphanedToolCalls 移除没有对应 tool-result 的 tool-call 消息
+// （对齐 acp-kernel stripOrphanedToolCalls）。
+//
+// 例外：compress 工具的 tool-call 保留——它是模型发起的压缩请求，
+// 不需要 tool-result（其"结果"是消息列表的改写本身）。
+//
+// 触发场景：压缩范围边界切在 tool-call 与 tool-result 之间——
+// tool-result 被压缩进 summary，但 tool-call 留在消息列表中。
+// 某些 provider 收到无对应 tool-result 的 tool-call 会在下一轮重复请求工具。
+func stripOrphanedToolCalls(messages []CoreMessage) []CoreMessage {
+        knownResultIDs := map[string]bool{}
+        for _, m := range messages {
+                if m.ContentType == ContentTypeToolResult && m.ToolCallID != "" {
+                        knownResultIDs[m.ToolCallID] = true
+                }
+        }
+        out := messages[:0]
+        for _, m := range messages {
+                if m.ContentType == ContentTypeToolCall && m.ToolCallID != "" &&
+                        m.ToolName != "compress" && // compress 工具的 call 不需要 result
+                        !knownResultIDs[m.ToolCallID] {
+                        continue // 孤儿 tool-call：跳过
+                }
+                out = append(out, m)
+        }
+        return out
+}
+
+// stripOrphanedReasoning 移除没有后续 assistant 文本/tool-call 的 reasoning 消息
+// （对齐 acp-kernel stripOrphanedReasoning）。
+//
+// 触发场景：严格 thinking 模型（DeepSeek R1 等）的 reasoning_content 必须紧跟
+// 一个 assistant 文本或 tool-call，否则返回 HTTP 400。压缩边界若切断
+// reasoning ↔ assistant 对（reasoning 被压缩进 summary，assistant 留下；
+// 或 assistant 被压缩，reasoning 留下），需移除孤儿 reasoning。
+//
+// 必须在 stripOrphanedToolCalls 之后跑：移除 tool-call 可能让其前导
+// reasoning 失去 companion。
+func stripOrphanedReasoning(messages []CoreMessage) []CoreMessage {
+        drop := map[int]bool{}
+        for i := 0; i < len(messages); i++ {
+                if drop[i] {
+                        continue
+                }
+                if messages[i].ContentType != ContentTypeReasoning {
+                        continue
+                }
+                // 找到连续 reasoning 段的末尾
+                j := i
+                for j+1 < len(messages) && messages[j+1].ContentType == ContentTypeReasoning {
+                        j++
+                }
+                // 检查下一条是否是 companion（assistant 的 text 或 tool-call）
+                hasCompanion := false
+                if j+1 < len(messages) {
+                        companion := messages[j+1]
+                        if companion.Role == RoleAssistant &&
+                                (companion.ContentType == ContentTypeText || companion.ContentType == ContentTypeToolCall) {
+                                hasCompanion = true
+                        }
+                }
+                if !hasCompanion {
+                        for k := i; k <= j; k++ {
+                                drop[k] = true
+                        }
+                }
+        }
+        if len(drop) == 0 {
+                return messages
+        }
+        out := messages[:0]
+        for i, m := range messages {
+                if drop[i] {
+                        continue
+                }
+                out = append(out, m)
+        }
+        return out
 }
 
 // summaryIDPrefix summary 消息 ID 前缀（对齐 acp-kernel SUMMARY_ID_PREFIX）。
