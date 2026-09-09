@@ -123,6 +123,9 @@ type ReactLoopAgent struct {
 	// todoAllowParallel 为 true 时允许多个任务同时 in_progress（DSC_TODO_ALLOW_PARALLEL，
 	// 缺省 false 强制单活跃项纪律）。
 	todoAllowParallel bool
+	// todoNudgeUsed 标记当前会话是否已用过 TODO 追问（防重复追问）。
+	// 每次 turn/start 时重置为 false，使每轮自然停止时最多追问一次。
+	todoNudgeUsed bool
 
 	// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链状态进程本地。
 	repeatChainName      string
@@ -307,6 +310,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 
 	// 轮次与用户输入作为会话事件记录（turn/start 为 log-only，user/message 进入 surface）
 	sess.Append(session.TurnStart, &session.TurnData{Turn: turnNo}, nil)
+	a.todoNudgeUsed = false // 每轮重置追问标记
 	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user", Images: images}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
 	// cancelLoop 返回被取消的结果
@@ -564,6 +568,31 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 					continue
 				}
 			}
+
+			// TODO 未完成追问（对齐 DSH 的「模型自然停止后检查未完成 TODO」语义）：
+			// 模型自然停止（无工具调用）后，若 TODO 列表中有 pending/in_progress 项，
+			// 系统自动追加一条用户消息追问，驱动模型继续处理。
+			// 仅在非单轮模式（交互式 / -input 多轮）下触发；每轮最多追问一次
+			//（通过 todoNudgeTurn 标记防止重复追问）。
+			if !a.singleTurn && !a.todoNudgeUsed {
+				todos := session.FoldTodos(sess.Events())
+				if hasPendingTodos(todos) {
+					a.todoNudgeUsed = true
+					nudgeMsg := buildTodoNudgePrompt(todos)
+					sess.Append(session.UserMessage, &session.UserMessageData{
+						Content: nudgeMsg,
+						Source:  "todo_nudge",
+					}, &session.SurfaceOp{Op: session.SurfaceAppend})
+					if emit != nil {
+						emit(&core.RunStreamResponse{
+							Output: nudgeMsg + "\n",
+							Status: "tool",
+						})
+					}
+					continue
+				}
+			}
+
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
@@ -1426,4 +1455,34 @@ func main() {
 		return nil
 	})
 	sdk.Serve()
+}
+
+// hasPendingTodos 报告 TODO 列表中是否有未完成的项（pending 或 in_progress）。
+func hasPendingTodos(todos []session.TodoItem) bool {
+	for _, t := range todos {
+		if t.Status == session.TodoPending || t.Status == session.TodoInProgress {
+			return true
+		}
+	}
+	return false
+}
+
+// buildTodoNudgePrompt 构造 TODO 追问提示词，列出未完成项提醒模型继续处理。
+func buildTodoNudgePrompt(todos []session.TodoItem) string {
+	var pending []string
+	for _, t := range todos {
+		if t.Status == session.TodoPending || t.Status == session.TodoInProgress {
+			status := t.Status
+			if status == session.TodoInProgress {
+				status = "进行中"
+			} else {
+				status = "待处理"
+			}
+			pending = append(pending, fmt.Sprintf("  - [%s] %s", status, t.Content))
+		}
+	}
+	if len(pending) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("你的待办清单中还有 %d 项未完成的任务：\n%s\n请继续处理这些待办项，或在确认无需处理后告知用户。", len(pending), strings.Join(pending, "\n"))
 }
