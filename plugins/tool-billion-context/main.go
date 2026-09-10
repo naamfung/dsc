@@ -388,19 +388,25 @@ func (bc *BillionContext) getSessionID() string {
 // 多轮派生导致索引平移，ref 映射仍正确。对齐 DSH 的 session event seq 稳定性。
 //
 // hash 算法：FNV-1a（无外部依赖，Go 标准库 hash/fnv）
-// 冲突处理：role 前缀 + hash 前 12 位 + index 后缀（相同内容但不同位置的消息
-// 如两个连续的 assistant 消息仍可区分）
+// hash 输入：role + content + toolCallId（tool 消息用 toolCallId 天然区分；
+// assistant 消息若有 toolCalls 则 hash 中含 toolCalls 的 name/id，也天然区分）
+// 不含视图 index：避免压缩/截断导致索引平移后 ID 变化。
 func (bc *BillionContext) msgIDProvider() func(idx int, msg *proto.Message) string {
         return func(idx int, msg *proto.Message) string {
                 h := fnv.New64a()
                 h.Write([]byte(msg.Role))
-                h.Write([]byte{0}) // 分隔符
+                h.Write([]byte{0})
                 h.Write([]byte(msg.Content))
                 if msg.ToolCallId != "" {
                         h.Write([]byte{0})
                         h.Write([]byte(msg.ToolCallId))
                 }
-                return fmt.Sprintf("msg-%s-%012x-%d", msg.Role, h.Sum64(), idx)
+                for _, tc := range msg.ToolCalls {
+                        h.Write([]byte{0})
+                        h.Write([]byte(tc.Id))
+                        h.Write([]byte(tc.Name))
+                }
+                return fmt.Sprintf("msg-%s-%016x", msg.Role, h.Sum64())
         }
 }
 

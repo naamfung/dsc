@@ -393,7 +393,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                 promptTokens = est
                         }
                 }
-                if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 && os.Getenv("DSC_COMPACTION_BACKEND") != "" {
+                // 有后端时跳过内联压缩（env 非空 = 后端接管）；无后端时走内联（== ""）
+                if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 && os.Getenv("DSC_COMPACTION_BACKEND") == "" {
                         if emit != nil {
                                 emit(&core.RunStreamResponse{
                                         Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",

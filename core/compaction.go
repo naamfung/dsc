@@ -275,8 +275,10 @@ func (e *BasicCompactionEngine) truncateCompact(messages []*Message, start, end 
 // 供 billion-context 等插件在加载时调用，替换默认的内联 compactHistory 路径。
 // 传 nil 恢复默认（无后端，agent 走内联压缩）。
 //
-// 注意：DSC_COMPACTION_BACKEND 环境变量的设置由 registerDscCoreLocked 经能力检测自动处理
-// （插件声明 Provides: {"compaction": "true"}），不在此方法重复设置。
+// DSC 的压缩后端接管机制与 DSH 不同：DSH 经 Cordis Service 单例（ctx.compaction）
+// 让 agent-loop 调用；DSC 经 agent/pre-step 事件让插件改写消息列表。两者效果等价
+// （后端在更低阈值主动压缩，agent 内联压缩不被触发），但机制不同。本方法保留
+// CompactionEngine 接口供未来可能的 Service 注入路径使用，当前接管走事件机制。
 func (m *Manager) SetCompactionEngine(engine CompactionEngine) {
         m.mu.Lock()
         defer m.mu.Unlock()
@@ -284,7 +286,8 @@ func (m *Manager) SetCompactionEngine(engine CompactionEngine) {
 }
 
 // HasCompactionEngine 报告是否有压缩引擎后端已注入。
-// agent-react-loop 据此决定是否跳过内联 compactHistory——有后端时由插件接管。
+// 当前接管机制走 agent/pre-step 事件（DSC_COMPACTION_BACKEND 环境变量），
+// 此方法供宿主内部查询是否有 Service 注入路径的后端（预留扩展）。
 func (m *Manager) HasCompactionEngine() bool {
         m.mu.RLock()
         defer m.mu.RUnlock()
