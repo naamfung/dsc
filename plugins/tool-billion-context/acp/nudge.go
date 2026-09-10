@@ -107,8 +107,9 @@ func DecideNudge(messages []CoreMessage, state *CompressionState, config Config,
 		decision.Tier = &tier
 		decision.TierTargetBlocks = t2Blocks
 		decision.ShouldInject = true
-		decision.Reason = fmt.Sprintf("T3 condense: %d tier-2 blocks >= tier3Trigger %d, usage %.0f%%",
-			t2Count, config.Tiers.Tier3Trigger, usage*100)
+		// 不暴露使用率百分比（对齐 ACP 设计：模型不应知道总上下文大小，
+		// 避免模型"认为还很健康就懒得压缩"）
+		decision.Reason = fmt.Sprintf("T3 condense: %d tier-2 blocks accumulated", t2Count)
 		return decision
 	}
 
@@ -118,15 +119,14 @@ func DecideNudge(messages []CoreMessage, state *CompressionState, config Config,
 		decision.Tier = &tier
 		decision.TierTargetBlocks = t1Blocks
 		decision.ShouldInject = true
-		decision.Reason = fmt.Sprintf("T2 distill: %d tier-1 blocks >= tier2Trigger %d, usage %.0f%%",
-			t1Count, config.Tiers.Tier2Trigger, usage*100)
+		decision.Reason = fmt.Sprintf("T2 distill: %d tier-1 blocks accumulated", t1Count)
 		return decision
 	}
 
 	// 全部条件满足：注入 nudge
+	// 不暴露使用率百分比——只告诉模型有可压缩内容（对齐 ACP 设计）
 	decision.ShouldInject = true
-	decision.Reason = fmt.Sprintf("context usage %.0f%% (≥%.0f%% threshold), %d compressible ranges",
-		usage*100, config.NudgeThresholdPct*100, len(ranges))
+	decision.Reason = fmt.Sprintf("%d compressible ranges detected", len(ranges))
 	return decision
 }
 
