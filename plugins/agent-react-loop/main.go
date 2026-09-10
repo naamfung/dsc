@@ -94,6 +94,11 @@ type ReactLoopAgent struct {
 	// 首次對話時構建一次，上下文壓縮後沿用，避免技能索引丢失
 	sysPrompt string
 
+	// hasCompactionBackend 宿主是否有 compaction 后端插件接管（经 ListContext 标记检测）。
+	// 有后端时跳过内联 compactHistory（后端在 pre-step 以更低阈值接管）；
+	// 无后端时走内联压缩。每轮 buildSystemPrompt 时更新（ListContext 响应实时反映插件生命周期）。
+	hasCompactionBackend bool
+
 	// 單輪模式（-input 自動化測試入口使用）：代理循環僅執行一次，
 	// 完成一輪（含工具調用）後自然結束，方便測試後程序自動退出
 	singleTurn bool
@@ -386,7 +391,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				promptTokens = est
 			}
 		}
-		if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 {
+		if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 && !a.hasCompactionBackend {
 			if emit != nil {
 				emit(&core.RunStreamResponse{
 					Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
@@ -816,8 +821,19 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 	resp, err := toolClient.ListContext(ctx, &proto.ListContextRequest{})
 	cancel()
 	if err == nil {
-		if content := strings.TrimSpace(resp.GetContent()); content != "" {
-			parts = append(parts, content)
+		listContextContent := strings.TrimSpace(resp.GetContent())
+		if listContextContent != "" {
+			// 检测 compaction 后端标记（宿主 ListContext 追加 [DSC_COMPACTION_BACKEND_ACTIVE]）
+			// 有后端时跳过内联 compactHistory——后端在 pre-step 以更低阈值接管。
+			// 此检测每轮 buildSystemPrompt 执行，与插件生命周期同步：
+			// 后端加载 → 标记出现 → 跳过内联；后端卸载 → 标记消失 → 恢复内联。
+			a.hasCompactionBackend = strings.Contains(listContextContent, "[DSC_COMPACTION_BACKEND_ACTIVE]")
+			// 标记不进 system prompt（对模型不可见）
+			listContextContent = strings.ReplaceAll(listContextContent, "[DSC_COMPACTION_BACKEND_ACTIVE]", "")
+			listContextContent = strings.TrimSpace(listContextContent)
+			if listContextContent != "" {
+				parts = append(parts, listContextContent)
+			}
 		}
 	}
 

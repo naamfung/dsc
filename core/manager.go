@@ -1560,6 +1560,16 @@ func (m *Manager) ListContext(ctx context.Context) (string, error) {
 			parts = append(parts, content)
 		}
 	}
+	// compaction 后端状态标记（对齐 DSH ctx.compaction Service 的运行时查询）：
+	// 如果有插件声明了 Provides compaction 能力且经 config.Compaction 显式选择，
+	// 在 ListContext 响应末尾追加标记。agent 的 buildSystemPrompt 检查此标记决定
+	// 是否跳过内联 compactHistory——有后端时后端在 pre-step 以更低阈值接管，
+	// 无后端时内联压缩作为唯一路径。
+	// 此机制与插件生命周期同步：插件卸载后 HasPluginProvidingCapability 返回 false，
+	// 标记消失，agent 自动恢复内联压缩。不依赖 env 或跨进程状态同步。
+	if m.HasPluginProvidingCapability("compaction") {
+		parts = append(parts, "[DSC_COMPACTION_BACKEND_ACTIVE]")
+	}
 	return strings.Join(parts, "\n\n"), nil
 }
 
