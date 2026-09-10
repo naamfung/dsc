@@ -133,6 +133,20 @@ LLM 请求的前缀（system prompt、工具目录、上下文片段等）参与
 
 - 提交信息简洁，聚焦「为什么」而非「改了什么」。
 
+### 8. 临时方案收拢为通用方案
+
+在实现过程中，探索路径经常产生临时方案（如硬编码插件名、env 快照、绑在特定 Service 上的方法）。当多个插件面临相同需求时，这些临时方案应收拢抽象到 SDK 成为通用方案，而非逐个插件重复实现。
+
+- **判据**：某项能力被两个或以上插件需要，或某个临时方案（env 变量、硬编码名、绑在特定 Service 上的方法）在后续插件开发中被重复遇到——即应收拢为 SDK 通用方案。
+
+- **红线**：
+  - 不得在宿主核心代码（`core/`）中硬编码任何特定插件名——必须经能力边界体系（`Provides`/`Requires`）或显式配置字段。
+  - 不得用环境变量传递跨进程的运行时状态——env 在子进程 spawn 时快照，动态加载/卸载不同步。运行时状态应经 RPC（如 `ListContext`）或事件（如 `agent/pre-step`）查询。
+  - 不得把通用能力绑在特定 Service 上——如 `ListContext` 不应仅绑在 `ToolService` 上，应提升到所有插件类型都能用的 `PluginHookService`。
+  - 临时方案在确认需求通用后，须在当次提交中收拢——不得留到后续"再整理"。
+
+- **对齐 DSH Cordis**：DSH 的 `ctx` 是统一入口——`ctx.on()` / `ctx.compaction` / `ctx.systemPrompt.section()` / `ctx.get('tokenMeter')`。DSC 的等价物（`EventBus` / `CompactionEngine` / `Hook.ContextFn` / `HasPluginProvidingCapability`）散落在不同文件中，但 SDK 的 `SDK` struct 是插件开发者的统一入口。新增通用能力时应经 SDK 暴露，而非要求插件开发者直接 import `core/` 包。
+
 ## 文档同步
 
 - **README 必须时刻反映代码实现的实际变化**。任何会改变 README 所述内容（架构、目录/模块与依赖增减、关键行为、安全设定）的源码修改，须在本次提交内一并同步更新 README，不允许 README 与实现漂移。

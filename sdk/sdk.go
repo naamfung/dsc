@@ -167,8 +167,56 @@ func (s *SDK) Policy(impl proto.FsObservationPolicyServiceServer) *SDK {
 
 // Hook 注册插件钩子（任何类型均可）：宿主在工具流水线执行前/后调用
 // BeforeTool/AfterTool，并把宿主事件广播给 OnEvent。
+//
+// 对齐 DSH Cordis：Hook 是 DSC 的统一扩展入口，等价于 DSH 的 ctx.on() +
+// ctx.systemPrompt.section() + tools/pre-execute + tools/post-execute：
+//   - Hook.OnEvent   ≈ ctx.on('agent/pre-step', ...)（事件订阅，waterfall/emit）
+//   - Hook.ContextFn ≈ ctx.systemPrompt.section({text})（system prompt 贡献）
+//   - Hook.BeforeTool ≈ tools/pre-execute（工具执行前拦截/改写/veto）
+//   - Hook.AfterTool  ≈ tools/post-execute（工具执行后改写结果）
+//
+// 详见 docs/cordis-alignment.md。
 func (s *SDK) Hook(h Hook) *SDK {
 	s.hook = &h
+	return s
+}
+
+// OnEvent 便捷方法：注册事件监听器（对齐 DSH ctx.on()）。
+// 等价于 sdk.Hook(dsc.Hook{OnEvent: fn})，用于只需要事件订阅的场景。
+func (s *SDK) OnEvent(fn func(ctx context.Context, eventType, dataJSON string) (resultJSON string, err error)) *SDK {
+	if s.hook == nil {
+		s.hook = &Hook{}
+	}
+	s.hook.OnEvent = fn
+	return s
+}
+
+// Context 便捷方法：注册 system prompt 贡献（对齐 DSH ctx.systemPrompt.section()）。
+// 等价于 sdk.Hook(dsc.Hook{ContextFn: fn})，用于只需要贡献 system prompt 的场景。
+// 任何插件类型（tool/llm/agent/policy/dsc）均可调用——宿主经 ListContext 聚合。
+func (s *SDK) Context(fn func() string) *SDK {
+	if s.hook == nil {
+		s.hook = &Hook{}
+	}
+	s.hook.ContextFn = fn
+	return s
+}
+
+// BeforeTool 便捷方法：注册工具执行前拦截器（对齐 DSH tools/pre-execute）。
+func (s *SDK) BeforeTool(fn func(ctx context.Context, toolName, argumentsJSON string) (rewrittenJSON string, err error)) *SDK {
+	if s.hook == nil {
+		s.hook = &Hook{}
+	}
+	s.hook.BeforeTool = fn
+	return s
+}
+
+// AfterTool 便捷方法：注册工具执行后拦截器（对齐 DSH tools/post-execute）。
+func (s *SDK) AfterTool(fn func(ctx context.Context, toolName, argumentsJSON, result, toolErr string) (newResult, newErr string)) *SDK {
+	if s.hook == nil {
+		s.hook = &Hook{}
+	}
+	s.hook.AfterTool = fn
 	return s
 }
 
