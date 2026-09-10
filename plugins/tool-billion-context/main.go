@@ -74,7 +74,6 @@ func main() {
 		Version: "0.1.0",
 		Type:    dsc.TypeDsc,
 		// 声明提供 "compaction" 能力：宿主检测到任何插件 Provides compaction 后，
-		// 自动设 DSC_ACP_ACTIVE=1 让 agent-react-loop 跳过内联 compactHistory。
 		// 对齐 DSH preset 不挂 compaction-basic 改挂 billion-context 的后端替换模式——
 		// 不硬编码插件名，任何声明 Provides compaction 的插件都接管。
 		Provides: map[string]string{
