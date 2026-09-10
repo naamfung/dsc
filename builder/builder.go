@@ -55,6 +55,7 @@ var publicPlugins = []string{
 	"llm-ollama",
 	"tool-filesystem",
 	"tool-str-replace-editor",
+	"tool-billion-context",
 	"tool-browser-use",
 	"tool-lisp-eval",
 	"tool-skill",

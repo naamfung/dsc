@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,10 +28,10 @@ import (
 
 	dsc "dsc-sdk"
 	"dsc/core"
-
-	bcacp "dsc-plugin-tool-billion-context/acp"
-	bcadapter "dsc-plugin-tool-billion-context/adapter"
 	"dsc/proto"
+
+	bcacp "tool-billion-context/acp"
+	bcadapter "tool-billion-context/adapter"
 )
 
 // BillionContext 插件主结构。
@@ -226,7 +225,7 @@ func (bc *BillionContext) handlePreStep(ctx context.Context, dataJSON string) (s
 	}
 
 	// 转换为 acp 核心消息格式
-	coreMsgs := bcadapter.ToCoreMessages(protoMsgs, bc.msgIDProvider())
+	coreMsgs := bcadapter.ToCoreMessages(protoMsgs, nil)
 
 	// 缓存消息列表供 handleCompress 使用（解决"compress 工具调用时无消息列表"的致命 bug）
 	bc.mu.Lock()
@@ -456,34 +455,6 @@ func (bc *BillionContext) getSessionID() string {
 		return id
 	}
 	return "default"
-}
-
-// msgIDProvider 提供消息 ID 生成器。
-// 用 role + 内容 hash 生成稳定 ID：同一条消息（相同 role + content）在任何视图
-// 位置都得到相同 ID，即使 agent 内联压缩改写 surface、historyInjection 截断、
-// 多轮派生导致索引平移，ref 映射仍正确。对齐 DSH 的 session event seq 稳定性。
-//
-// hash 算法：FNV-1a（无外部依赖，Go 标准库 hash/fnv）
-// hash 输入：role + content + toolCallId（tool 消息用 toolCallId 天然区分；
-// assistant 消息若有 toolCalls 则 hash 中含 toolCalls 的 name/id，也天然区分）
-// 不含视图 index：避免压缩/截断导致索引平移后 ID 变化。
-func (bc *BillionContext) msgIDProvider() func(idx int, msg *proto.Message) string {
-	return func(idx int, msg *proto.Message) string {
-		h := fnv.New64a()
-		h.Write([]byte(msg.Role))
-		h.Write([]byte{0})
-		h.Write([]byte(msg.Content))
-		if msg.ToolCallId != "" {
-			h.Write([]byte{0})
-			h.Write([]byte(msg.ToolCallId))
-		}
-		for _, tc := range msg.ToolCalls {
-			h.Write([]byte{0})
-			h.Write([]byte(tc.Id))
-			h.Write([]byte(tc.Name))
-		}
-		return fmt.Sprintf("msg-%s-%016x", msg.Role, h.Sum64())
-	}
 }
 
 // estimateTokens 估算 proto.Message 列表的总 token 数。

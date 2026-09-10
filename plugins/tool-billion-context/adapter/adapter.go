@@ -5,12 +5,13 @@ package adapter
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sync"
 
-	bcacp "dsc-plugin-tool-billion-context/acp"
 	"dsc/proto"
+	bcacp "tool-billion-context/acp"
 )
 
 // ToCoreMessages 把 DSC proto.Message 列表转为 acp CoreMessage 列表。
@@ -72,10 +73,25 @@ func FromCoreMessages(coreMsgs []bcacp.CoreMessage) []*proto.Message {
 	return out
 }
 
-// defaultIDProvider 默认 ID 提供者：用 role + index 生成稳定 ID。
-// 调用方可覆盖以使用 session seq 或 content hash。
-func defaultIDProvider(idx int, msg *proto.Message) string {
-	return fmt.Sprintf("msg-%d", idx)
+// defaultIDProvider 默认 ID 提供者：基于消息内容生成稳定 ID。
+// 不含视图索引：同一条消息（相同 role + content + toolCallId + toolCalls）在
+// 任何视图位置都得到相同 ID，压缩/截断导致索引平移时 ref 映射仍正确。
+// hash 算法：FNV-1a（Go 标准库，无外部依赖）。调用方仍可覆盖以使用 session seq。
+func defaultIDProvider(_ int, msg *proto.Message) string {
+	h := fnv.New64a()
+	h.Write([]byte(msg.Role))
+	h.Write([]byte{0})
+	h.Write([]byte(msg.Content))
+	if msg.ToolCallId != "" {
+		h.Write([]byte{0})
+		h.Write([]byte(msg.ToolCallId))
+	}
+	for _, tc := range msg.ToolCalls {
+		h.Write([]byte{0})
+		h.Write([]byte(tc.Id))
+		h.Write([]byte(tc.Name))
+	}
+	return fmt.Sprintf("msg-%s-%016x", msg.Role, h.Sum64())
 }
 
 // StateStore 负责 acp state 的持久化（JSON 文件）。
