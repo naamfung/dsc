@@ -68,10 +68,25 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("OnEvent(agent/error) 失败: %v", err)
 	}
 
-	// 5. 无模型可调用的工具面：通用插件不注册 ToolService，ListTools 应报未实现
-	//（而非返回 notify 工具），证明已收敛为纯后台程序性插件。
+	// 5. 无模型可调用的工具面：通用（dsc）类型插件虽始终注册 ToolServiceServer
+	//（对齐 DSH/Cordis 的「插件类型与服务正交」模型，便于 dsc-billion-context 等需要
+	// 同时声明 hook + tools 的插件），但 dsc-notify 未注册任何 sdk.Tool，故
+	// ListTools 应成功返回空列表（而非报未实现），证明工具面已收敛为空。
 	tc := proto.NewToolServiceClient(conn)
-	if _, err := tc.ListTools(ctx, &proto.ListToolsRequest{}); err == nil {
-		t.Fatalf("dsc 通用插件不应暴露 ListTools（工具面已收敛）")
+	list, err := tc.ListTools(ctx, &proto.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v（期望成功返回空列表）", err)
+	}
+	if len(list.Tools) != 0 {
+		names := []string{}
+		for _, tool := range list.Tools {
+			names = append(names, tool.Name)
+		}
+		t.Fatalf("dsc-notify 不应注册任何工具，但 ListTools 返回 %d 个：%v", len(list.Tools), names)
+	}
+
+	// 6. 能力声明校验：notify 提供 "notify" 能力（其他插件可经 Requires 声明依赖）
+	if v, ok := info.Capabilities["notify"]; !ok || v != "true" {
+		t.Fatalf("notify 插件应声明 Provides: {notify: true}，实际 Capabilities=%+v", info.Capabilities)
 	}
 }

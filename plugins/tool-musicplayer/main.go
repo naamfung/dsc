@@ -402,20 +402,27 @@ func resample16Stereo(pcm []byte, inRate, inCh int) []byte {
 // ---------- 工具注册 ----------
 
 func main() {
-	sdk := dsc.New(dsc.Config{Name: "musicplayer", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "musicplayer",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		// 声明提供 "music" 能力：能力边界模型不依赖具体插件名，其他插件若需
+		// 媒体播放能力可经 Requires: [{Type:"tool", Capability:"music"}] 声明依赖。
+		Provides: map[string]string{"music": "true"},
+	})
 
 	sdk.Tool(dsc.Tool{
 		Name:        "music_play",
 		Description: "后台播放背景音乐（mp3/wav），异步播放、不阻塞其它工作。path 为单个音频文件或包含 .mp3/.wav 的目录；可省略以使用默认播放目录（用 music_setdir 预先设定）。loop 取 off(播完即止)/one(单曲循环)/list(目录列表循环)；shuffle 为 true 时随机打乱播放顺序（仅目录有意义）；volume 为音量百分比 1-100（省略或 0 为默认 100，-1 为显式静音）。播放即返回，可随时用 music_stop 停止。",
 		Schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path":   {"type": "string", "description": "音频文件路径或目录；省略则用默认播放目录（music_setdir 设定）"},
-				"loop":   {"type": "string", "enum": ["off", "one", "list"], "description": "off=播完即止; one=单曲循环(文件)/单曲重复; list=列表循环(目录整列表循环)", "default": "off"},
-				"shuffle":{"type": "boolean", "description": "随机播放：打乱列表顺序（对多个文件的目录有意义），默认 false 顺序播放", "default": false},
-				"volume": {"type": "integer", "minimum": -1, "maximum": 100, "description": "音量百分比 1-100；省略或 0 为默认 100；-1 为显式静音（仍播放但无声）", "default": 100}
-			}
-		}`),
+                        "type": "object",
+                        "properties": {
+                                "path":   {"type": "string", "description": "音频文件路径或目录；省略则用默认播放目录（music_setdir 设定）"},
+                                "loop":   {"type": "string", "enum": ["off", "one", "list"], "description": "off=播完即止; one=单曲循环(文件)/单曲重复; list=列表循环(目录整列表循环)", "default": "off"},
+                                "shuffle":{"type": "boolean", "description": "随机播放：打乱列表顺序（对多个文件的目录有意义），默认 false 顺序播放", "default": false},
+                                "volume": {"type": "integer", "minimum": -1, "maximum": 100, "description": "音量百分比 1-100；省略或 0 为默认 100；-1 为显式静音（仍播放但无声）", "default": 100}
+                        }
+                }`),
 		Handler: func(_ context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Path    string `json:"path"`
@@ -545,12 +552,12 @@ func main() {
 		Name:        "music_setdir",
 		Description: "设定默认播放目录并持久化（重启后仍生效），之后 music_play 可省略 path 直接播放该目录下的 mp3/wav。path 必须为存在的目录。",
 		Schema: json.RawMessage(`{
-			"type": "object",
-			"properties": {
-				"path": {"type": "string", "description": "要设为默认播放目录的路径"}
-			},
-			"required": ["path"]
-		}`),
+                        "type": "object",
+                        "properties": {
+                                "path": {"type": "string", "description": "要设为默认播放目录的路径"}
+                        },
+                        "required": ["path"]
+                }`),
 		Handler: func(_ context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Path string `json:"path"`

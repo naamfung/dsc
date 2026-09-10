@@ -315,7 +315,18 @@ func (s *SDK) validate() error {
 			return fmt.Errorf("policy 类型插件必须注册策略服务（调用 sdk.Policy(...)）")
 		}
 	case TypeDsc:
-		// 通用类型：无强制的 tool/llm/agent/policy 服务；仅元数据 + 可选 Hook。
+		// 通用类型：可同时声明 hook + tools + 自定义能力（Provides）。
+		// 工具非强制；声明了工具时宿主侧 case "dsc" 会探测 ListTools 并登记为
+		// tool provider（对齐 DSH/Cordis 的「插件类型与服务正交」模型）。
+		// 校验工具字段（若有）：保证 Name + Handler 完整，与 TypeTool 同款约束。
+		for i, t := range s.tools {
+			if t.Name == "" {
+				return fmt.Errorf("tools[%d].Name 不能为空", i)
+			}
+			if t.Handler == nil {
+				return fmt.Errorf("tools[%d]（%s）未设置 Handler", i, t.Name)
+			}
+		}
 	default:
 		return fmt.Errorf("不支持的插件类型 %q（tool | llm | agent | policy | dsc）", s.cfg.Type)
 	}

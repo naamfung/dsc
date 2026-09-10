@@ -97,7 +97,9 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("GetInfo = %+v, err %v", info, err)
 	}
 
-	// 5. 工具目录（SDK 自动聚合 memory_search + memory_add）
+	// 5. 工具目录（SDK 自动聚合 memory_search / memory_add / memory_delete /
+	// memory_update / memory_list 五个工具）。仅校验关键工具存在，不锁死总数，
+	// 避免后续新增工具时本断言反复 false-positive 失败。
 	tc := proto.NewToolServiceClient(conn)
 	list, err := tc.ListTools(ctx, &proto.ListToolsRequest{})
 	if err != nil {
@@ -107,8 +109,10 @@ func TestE2EWithHostClient(t *testing.T) {
 	for _, tool := range list.Tools {
 		names[tool.Name] = true
 	}
-	if len(list.Tools) != 2 || !names["memory_search"] || !names["memory_add"] {
-		t.Fatalf("ListTools = %+v", list.Tools)
+	for _, required := range []string{"memory_search", "memory_add", "memory_delete", "memory_update", "memory_list"} {
+		if !names[required] {
+			t.Fatalf("ListTools missing required tool %q; got %+v", required, list.Tools)
+		}
 	}
 
 	// 6. 真实执行：memory_add → memory_search

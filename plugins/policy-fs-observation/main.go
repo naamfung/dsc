@@ -65,7 +65,15 @@ func (s *FsObservationPolicyServer) UpdateObservation(ctx context.Context, req *
 func main() {
 	policyServer := NewFsObservationPolicyServer()
 
-	sdk := dsc.New(dsc.Config{Name: "fs-observation-policy", Version: "1.0.0", Type: dsc.TypePolicy})
+	sdk := dsc.New(dsc.Config{
+		Name:    "fs-observation-policy",
+		Version: "1.0.0",
+		Type:    dsc.TypePolicy,
+		// 声明提供 "fs-observation-policy" 能力：其他插件（如编辑器类工具）若需
+		// 经策略服务观测文件变更可经 Requires 声明依赖，宿主据此按能力匹配（而非
+		// 插件名）。对齐 DSH/Cordis 的 provide + inject 能力边界模型。
+		Provides: map[string]string{"fs-observation-policy": "true"},
+	})
 	sdk.Policy(policyServer)
 	sdk.Serve()
 }

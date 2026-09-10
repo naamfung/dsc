@@ -468,9 +468,12 @@ func main() {
 		// 声明式能力：本族工具要求审批策略为 never（宿主据此在非 never 时于执行前
 		// 拒绝，避免无人值守评测中途反复弹窗授权）。
 		Capabilities: []string{dsc.CapabilityRequiresNeverApproval},
-		// Context 进入 ListContext / system prompt：引导模型真实完成任务、不得向
-		// bench 工具索要答案，否则评分失真。
-		Context: "bench_* 工具是一套模型能力评分测试台（bench），评分对象是模型自身。请真实使用你的工具（文件系统、shell、lisp_eval 等）逐一完成任务：对 file 类用例必须用文件工具把产物写到规定的 reply.txt，对 answer 类用例把答案经 bench_submit 提交。bench 只负责评分，不会也不会告诉你期望答案——不要向 bench 工具索要标准答案，这会判 FAIL。全部用例完成后调用 bench_report 查看自动计分汇总。",
+		// ContextFn 进入 ListContext / system prompt：每次求值（动态内容如用例索引
+		// 安装后即时反映），引导模型真实完成任务、不得向 bench 工具索要答案，否则评分失真。
+		// 对齐 DSH ctx.systemPrompt.section 与 SDK 的 Tool.ContextFn 动态模式。
+		ContextFn: func() string {
+			return "bench_* 工具是一套模型能力评分测试台（bench），评分对象是模型自身。请真实使用你的工具（文件系统、shell、lisp_eval 等）逐一完成任务：对 file 类用例必须用文件工具把产物写到规定的 reply.txt，对 answer 类用例把答案经 bench_submit 提交。bench 只负责评分，不会也不会告诉你期望答案——不要向 bench 工具索要标准答案，这会判 FAIL。全部用例完成后调用 bench_report 查看自动计分汇总。"
+		},
 	})
 	sdk.Tool(dsc.Tool{
 		Name:         "bench_next",

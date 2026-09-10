@@ -371,7 +371,15 @@ func playWorker() {
 // 工具，仅经 Hook.OnEvent 订阅宿主事件实现程序性完成音效——agent 回合完成
 // （成功 idle / 失败 error）时播放相应音效，完全由宿主事件驱动、不依赖模型调用。
 func main() {
-	sdk := dsc.New(dsc.Config{Name: "notify", Version: "1.0.0", Type: dsc.TypeDsc})
+	sdk := dsc.New(dsc.Config{
+		Name:    "notify",
+		Version: "1.0.0",
+		Type:    dsc.TypeDsc,
+		// 声明提供 "notify" 能力：其他插件若需经此插件发布用户通知（音效/桌面提示）
+		// 可经 Requires: [{Type:"dsc", Capability:"notify"}] 声明依赖。对齐 DSH/Cordis
+		// 的 provide + inject 能力边界模型——不依赖具体插件名匹配。
+		Provides: map[string]string{"notify": "true"},
+	})
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) (string, error) {
 			switch eventType {

@@ -82,27 +82,27 @@ func initDB(path string) error {
 	}
 
 	ftsSQL := `
-	CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-		content,
-		content='memories',
-		content_rowid='id',
-		tokenize='unicode61'
-	);`
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                content,
+                content='memories',
+                content_rowid='id',
+                tokenize='unicode61'
+        );`
 	if err := DB.Exec(ftsSQL).Error; err != nil {
 		return err
 	}
 
 	triggers := []string{
 		`CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-			INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
-		END;`,
+                        INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+                END;`,
 		`CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
-		END;`,
+                        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+                END;`,
 		`CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
-			INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
-		END;`,
+                        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.id, old.content);
+                        INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
+                END;`,
 	}
 	for _, trig := range triggers {
 		if err := DB.Exec(trig).Error; err != nil {
@@ -159,13 +159,13 @@ func searchMemories(query string, now time.Time) ([]resultItem, error) {
 	}
 	var ftsRows []ftsRow
 	err := DB.Raw(`
-	SELECT m.id, m.content, m.created_at, m.last_access, m.access_count,
-	       -bm25(memories_fts) AS rel_score
-	FROM memories_fts
-	JOIN memories m ON m.id = memories_fts.rowid
-	WHERE memories_fts MATCH ? AND m.archived = 0
-	ORDER BY rel_score DESC
-	LIMIT 50`, matchQuery).Scan(&ftsRows).Error
+        SELECT m.id, m.content, m.created_at, m.last_access, m.access_count,
+               -bm25(memories_fts) AS rel_score
+        FROM memories_fts
+        JOIN memories m ON m.id = memories_fts.rowid
+        WHERE memories_fts MATCH ? AND m.archived = 0
+        ORDER BY rel_score DESC
+        LIMIT 50`, matchQuery).Scan(&ftsRows).Error
 	if err != nil {
 		ftsRows = nil
 	}
@@ -571,46 +571,46 @@ func main() {
 	}
 
 	searchSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"query": {"type": "string", "description": "自然语言查询语句"},
-			"keywords": {"type": "string", "description": "空格分隔的搜索关键词，优先于 query；缺省时取 query"}
-		},
-		"description": "query 与 keywords 至少提供一个"
-	}`)
+                "type": "object",
+                "properties": {
+                        "query": {"type": "string", "description": "自然语言查询语句"},
+                        "keywords": {"type": "string", "description": "空格分隔的搜索关键词，优先于 query；缺省时取 query"}
+                },
+                "description": "query 与 keywords 至少提供一个"
+        }`)
 	addSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"content": {"type": "string", "description": "要保存的记忆内容"},
-			"source": {"type": "string", "description": "记忆来源标记，缺省 user"}
-		},
-		"required": ["content"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "content": {"type": "string", "description": "要保存的记忆内容"},
+                        "source": {"type": "string", "description": "记忆来源标记，缺省 user"}
+                },
+                "required": ["content"]
+        }`)
 	deleteSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"id": {"type": "integer", "description": "要删除的记忆 ID"}
-		},
-		"required": ["id"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "id": {"type": "integer", "description": "要删除的记忆 ID"}
+                },
+                "required": ["id"]
+        }`)
 	updateSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"id": {"type": "integer", "description": "要修改的记忆 ID"},
-			"content": {"type": "string", "description": "新的记忆内容（可选，至少提供 content 或 source 之一）"},
-			"source": {"type": "string", "description": "新的来源标记（可选）"}
-		},
-		"required": ["id"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "id": {"type": "integer", "description": "要修改的记忆 ID"},
+                        "content": {"type": "string", "description": "新的记忆内容（可选，至少提供 content 或 source 之一）"},
+                        "source": {"type": "string", "description": "新的来源标记（可选）"}
+                },
+                "required": ["id"]
+        }`)
 	listSchema := json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"page": {"type": "integer", "description": "页码，从 1 开始，默认 1"},
-			"page_size": {"type": "integer", "description": "每页条数，默认 20，最大 100"},
-			"source": {"type": "string", "description": "按来源筛选（可选）"},
-			"archived": {"type": "boolean", "description": "是否只看已归档记忆，默认 false"}
-		}
-	}`)
+                "type": "object",
+                "properties": {
+                        "page": {"type": "integer", "description": "页码，从 1 开始，默认 1"},
+                        "page_size": {"type": "integer", "description": "每页条数，默认 20，最大 100"},
+                        "source": {"type": "string", "description": "按来源筛选（可选）"},
+                        "archived": {"type": "boolean", "description": "是否只看已归档记忆，默认 false"}
+                }
+        }`)
 
 	sdk := dsc.New(dsc.Config{
 		Name:    "memory-service",
@@ -627,7 +627,11 @@ func main() {
 		Description: "搜索记忆库：按关键词检索历史记忆（用户偏好、项目约定、工具执行结果等），返回按相关度与时间衰减排序的结果。参数 query 或 keywords 至少提供一个。",
 		Schema:      searchSchema,
 		Handler:     handleSearch,
-		Context:     "记忆服务：可用 memory_search 检索、memory_add 新增、memory_update 修改、memory_delete 删除、memory_list 列表。其他工具的执行结果会自动写入记忆库。",
+		// ContextFn 动态贡献 system prompt（每次 ListContext 求值，对齐 DSH
+		// ctx.systemPrompt.section）：记忆库规模/容量等运行态变化时即时反映。
+		ContextFn: func() string {
+			return "记忆服务：可用 memory_search 检索、memory_add 新增、memory_update 修改、memory_delete 删除、memory_list 列表。其他工具的执行结果会自动写入记忆库。"
+		},
 		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
 			return memorySearchView(result)
 		},

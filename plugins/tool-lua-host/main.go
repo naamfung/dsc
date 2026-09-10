@@ -46,7 +46,15 @@ func main() {
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService / PluginHookService /
 	// PluginMetadata 与 go-core 组装。脚本经 dsc.register_tool 注册的工具为运行时
 	// 动态集合，故用 sdk.ToolProvider 每次求值；脚本钩子经 sdk.Hook 转发到宿主流水线。
-	sdk := dsc.New(dsc.Config{Name: "tool-lua-host", Version: "1.0.0", Type: dsc.TypeTool})
+	sdk := dsc.New(dsc.Config{
+		Name:    "tool-lua-host",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		// 声明提供 "lua-host" 能力：插件经 dsc.register_tool 动态注册 Lua 脚本工具，
+		// 其他插件若需在 Lua 运行时扩展或调用脚本工具可经 Requires 声明依赖。
+		// 对齐 DSH/Cordis 的 provide + inject 能力边界模型。
+		Provides: map[string]string{"lua-host": "true"},
+	})
 
 	// 互通握手（机制 1/2/4）：宿主把聚合 LLM / 聚合 Tool / 插件通知服务挂到本插件
 	// client broker 后回调。此处经 ic 拿到宿主能力客户端（SDK 已 Dial 完毕），

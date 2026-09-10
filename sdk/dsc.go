@@ -11,10 +11,17 @@ import (
 	"google.golang.org/grpc"
 )
 
-// dscGRPCPlugin 是通用（dsc）类型插件的 go-core 适配器：不注册任何
-// tool/llm/agent/policy 服务，只注册插件元数据与可选的 Hook 服务。
-// 宿主加载它时同样登记 hook client（见 core/manager.go 的 loadPluginWithBroker），
-// 使这类「纯后台/程序性」插件能经 OnEvent 订阅宿主事件广播。
+// dscGRPCPlugin 是通用（dsc）类型插件的 go-core 适配器：注册插件元数据、Hook
+// 服务，以及（可选的）ToolServiceServer。
+//
+// 对齐 DSH/Cordis 的「插件类型与服务正交」模型：TypeDsc 是「通用」类型，可
+// 同时声明 hook + tools + 自定义能力（Provides）。宿主加载它时登记 hook
+// client，使其能接收宿主事件广播；若插件还经 sdk.Tool 注册了工具，宿主探测
+// 到非空工具集后会把它同时登记为 tool provider（model 可见的工具生效）。
+//
+// 始终注册 ToolServiceServer（即便工具集为空）：让宿主可以无差错地调用
+// ListTools 探测，empty 列表时宿主跳过 tool 登记。这与 TypeTool 行为一致，
+// 但宿主侧的 case "dsc" 路径不会把 typeMap 改写为 "tool"（保留 dsc 身份）。
 type dscGRPCPlugin struct {
 	plugin.NetRPCUnsupportedPlugin
 	sdk *SDK
@@ -23,6 +30,11 @@ type dscGRPCPlugin struct {
 func (p *dscGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
 	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg})
 	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})
+	// 始终注册 ToolServiceServer：让宿主经 ListTools 探测插件是否暴露工具。
+	// 工具集为空时 ListTools 返回空列表，宿主据此跳过 tool 登记——零行为变化
+	// （如 dsc-notify 无工具时与历史行为一致）。非空时宿主登记为 tool provider。
+	// 对齐 DSH/Cordis：插件类型与服务正交，TypeDsc 亦可暴露模型可见工具。
+	proto.RegisterToolServiceServer(s, &toolServiceServer{sdk: p.sdk, broker: broker})
 	return nil
 }
 

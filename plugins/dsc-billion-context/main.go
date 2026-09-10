@@ -86,21 +86,62 @@ func main() {
 		Name:        "compress",
 		Description: "Replace a contiguous range of older conversation with a detailed summary you write. Use when content is genuinely consumed (no longer needed for the current task step). Batch form: content=[{startId,endId,summary,topic?}].",
 		Handler:     bc.handleCompress,
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "content": {
+      "type": "array",
+      "description": "Batch of ranges to compress. Each range becomes one summary block (T1). Use bN block refs (e.g. b0..b4) to trigger T2 distillation.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "startId": {"type": "string", "description": "Message ref of range start (mNNNNN or bN for tier escalation)"},
+          "endId":   {"type": "string", "description": "Message ref of range end (inclusive)"},
+          "summary": {"type": "string", "description": "Your detailed summary of the range (preserves key facts, decisions, code references)"},
+          "topic":   {"type": "string", "description": "Optional topic label for the block (helps later search)"}
+        },
+        "required": ["startId", "endId", "summary"]
+      }
+    }
+  },
+  "required": ["content"]
+}`),
 	})
 	sdkInst.Tool(dsc.Tool{
 		Name:        "decompress",
 		Description: "Restore a previously compressed block's content. Use when you need exact details lost in compression.",
 		Handler:     bc.handleDecompress,
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "blockId": {"type": "string", "description": "The bN block id returned from a previous compress call"},
+    "full":    {"type": "boolean", "description": "If true, restore full original content; false (default) returns only the summary", "default": false}
+  },
+  "required": ["blockId"]
+}`),
 	})
 	sdkInst.Tool(dsc.Tool{
 		Name:        "search_context",
 		Description: "Search through compressed block summaries by keyword. Use BEFORE decompressing to find the right block.",
 		Handler:     bc.handleSearch,
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "query": {"type": "string", "description": "Keyword or phrase to search for in compressed block summaries (substring match)"},
+    "limit": {"type": "integer", "description": "Max results to return (default 5)", "default": 5, "minimum": 1, "maximum": 50}
+  },
+  "required": ["query"]
+}`),
 	})
 	sdkInst.Tool(dsc.Tool{
 		Name:        "acp_status",
 		Description: "Show context usage and compressible ranges. No args = overview. Use to find what to compress next.",
 		Handler:     bc.handleStatus,
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}`),
 	})
 
 	// Hook: 拦截 agent/pre-step 改写消息列表 + ContextFn 贡献 ACP system prompt

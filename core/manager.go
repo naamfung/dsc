@@ -964,6 +964,10 @@ func (m *Manager) setReloadFailed(name string, err error) {
 
 // hotReloadPlugin 內部重載 DSCPlugin。准备阶段（拉起/握手/验证）不持 mu，
 // 仅最终交换临界区短持 mu；交换时重校验插件在准备期间未被卸载。
+//
+// 对齐 SDK 的 TypeDsc 扩展（dscGRPCPlugin 始终注册 ToolServiceServer）：热重载后
+// 同样需刷新 hook client 与（若插件暴露工具）重新探测并登记工具，否则旧连接
+// 死后 hook 调用与 tool 调用都会失败。无工具时 ListTools 返回空列表，跳过 tool 登记。
 func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, handshake plugin.HandshakeConfig, coreLogger hclog.Logger) error {
 	// ---- 准备阶段（不持 m.mu）：拉起并验证新进程 ----
 	cmd := exec.Command(newBinaryPath)
@@ -1003,6 +1007,37 @@ func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, ha
 		return fmt.Errorf("new core does not implement DSCPlugin interface")
 	}
 
+	// 捕获新 grpcClient（用于刷新 hook client 与探测工具）+ 快照只读的 broker 与
+	// 旧 hook 接线状态（判断是否需刷新）。准备阶段不持 m.mu。
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		newClient.Kill()
+		m.setReloadFailed(name, fmt.Errorf("new core is not a gRPC client"))
+		return fmt.Errorf("new core is not a gRPC client")
+	}
+	m.mu.RLock()
+	broker := m.broker
+	_, hadHookClient := m.toolHookClients[name]
+	hadTools := false
+	if names, ok := m.coreToolNames[name]; ok && len(names) > 0 {
+		hadTools = true
+	}
+	m.mu.RUnlock()
+
+	// 准备阶段：若旧实例登记过工具，则在新进程上重新 stage（host broker 挂载 + 互通 + 列清单）。
+	// 旧实例无工具时跳过——避免对纯后台插件（如 dsc-notify）发起无谓的 ToolService 调用。
+	var st *stagedTool
+	if hadTools && broker != nil {
+		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
+		refs := interconnectRefs{hasAggLLM: m.agentLLMServiceID != 0, agentLLMName: m.agentLLMName}
+		st, err = m.stageToolPlugin(name, grpcClient, toolClient, broker, refs)
+		if err != nil {
+			newClient.Kill()
+			m.setReloadFailed(name, err)
+			return fmt.Errorf("failed to stage dsc core '%s' tools: %w", name, err)
+		}
+	}
+
 	// ---- 交换阶段（短临界 m.mu）----
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1016,6 +1051,21 @@ func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, ha
 	m.clients[name] = newClient
 	m.plugins[name] = newImpl
 	m.typeMap[name] = "dsc"
+
+	// 刷新 hook client：旧连接死后，hook 调用会失败。仅当旧实例登记过 hook client
+	// 时刷新（避免给纯遗留 Load 路径的 dsc 插件无中生有地加 hook 接线）。
+	if hadHookClient {
+		m.registerHookClientLocked(name, grpcClient)
+	}
+
+	// 重新提交工具：若 stage 成功且非空，commit 到工具注册表。stop hooks 已由
+	// runStopHooksLocked 触发（撤销旧工具），此处 commit 重新登记新工具。
+	if st != nil && len(st.tools) > 0 {
+		st.info, _ = GetPluginInfo(grpcClient.Conn) // 已校验过类型，忽略二次错误
+		st.client = newClient
+		m.commitDscToolPluginLocked(st)
+	}
+
 	if oldClient != nil {
 		oldClient.Kill()
 	}
@@ -1023,7 +1073,7 @@ func (m *Manager) hotReloadPlugin(name, newBinaryPath string, execDir string, ha
 	m.transitionLocked(name, StateReady, "")
 	go m.monitorExit(name, newClient)
 
-	m.logger.Info("core hot-reloaded", "name", name)
+	m.logger.Info("core hot-reloaded", "name", name, "hadHook", hadHookClient, "hadTools", hadTools)
 	return nil
 }
 
@@ -2411,14 +2461,33 @@ func (m *Manager) registerPolicyLocked(name string, info *metadata.PluginInfo, c
 	m.logger.Info("Policy core loaded and bridged to tool pipeline", "name", name)
 }
 
-// registerDscCoreLocked 登记通用（dsc）类型插件：不注册任何 tool/llm/agent/policy
-// 服务，仅登记 hook client 以接收宿主事件广播（OnEvent）。供纯后台插件（如通知、
-// 探针）订阅宿主事件；loadPluginWithBroker 的 case "dsc" 与宿主链测试共用（单一真源）。
-func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, client *plugin.Client, grpcClient *plugin.GRPCClient) {
+// registerDscCoreLocked 登记通用（dsc）类型插件：注册 hook client 接收宿主
+// 事件广播（OnEvent），并探测插件是否经 sdk.Tool 注册了工具——若有则同时登记为
+// tool provider（model 可见）。对齐 DSH/Cordis 的「插件类型与服务正交」模型：
+// TypeDsc 是「通用」类型，可同时声明 hook + tools + Provides 自定义能力。
+// loadPluginWithBroker 的 case "dsc" 与宿主链测试共用（单一真源）。
+func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, client *plugin.Client, grpcClient *plugin.GRPCClient, broker *plugin.GRPCBroker, refs interconnectRefs) {
 	m.registerHookClientLocked(name, grpcClient)
 	m.clients[name] = client
 	m.typeMap[name] = "dsc"
 	m.coreMetadata[name] = info
+	// 探测插件是否暴露工具（SDK 的 dscGRPCPlugin 始终注册 ToolServiceServer，
+	// 即便工具集为空）：若 ListTools 返回非空，经 stageToolPlugin 完成互通握手
+	// 与 host broker 挂载，再 commitDscToolPluginLocked 把工具写入注册表。
+	// typeMap 保持 "dsc"——既保留插件身份，又使其同时具备 tool provider 能力。
+	// 失败（如插件未实现 ToolService）时仅 Warn，不影响 hook 与 metadata 登记。
+	if broker != nil && grpcClient != nil {
+		toolClient := proto.NewToolServiceClient(grpcClient.Conn)
+		st, err := m.stageToolPlugin(name, grpcClient, toolClient, broker, refs)
+		if err != nil {
+			m.logger.Warn("dsc plugin tool probe failed (plugin may not expose tools)", "name", name, "error", err)
+		} else if len(st.tools) > 0 {
+			st.info = info
+			st.client = client
+			m.commitDscToolPluginLocked(st)
+		}
+		// len(st.tools) == 0：插件无工具（如 dsc-notify），不登记 tool provider。
+	}
 	// 压缩后端检测（对齐 DSH preset compaction group + 能力验证）：
 	// config.yaml 中 compaction 字段显式选择后端，宿主验证该
 	// 插件声明了 Provides: {"compaction": "true"} 能力。验证通过后仅记日志——
@@ -2440,6 +2509,34 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
 	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, client)
 	m.logger.Info("dsc core registered", "name", name)
+}
+
+// commitDscToolPluginLocked 把 TypeDsc 插件探测到的工具写入宿主共享映射与
+// 工具注册表。与 commitToolPluginLocked 的关键差异：
+//   - 不覆盖 typeMap（保持 "dsc"——既保留身份又登记为 tool provider）
+//   - 不重复登记 hook client（registerDscCoreLocked 已登记）
+//   - 同样建立卸载清理 hook，确保插件卸载时工具从注册表移除
+//
+// 需已持有 m.mu。调用方须先卸载旧实例（runStopHooksLocked）再 commit。
+func (m *Manager) commitDscToolPluginLocked(st *stagedTool) {
+	m.toolServiceIDs[st.name] = st.serviceID
+	m.toolClients[st.name] = st.toolClient
+	m.putToolHookOrderLocked(st.name)
+	m.coreToolNames[st.name] = st.toolNames
+	for _, t := range st.tools {
+		if err := m.toolRegistry.Register(t); err != nil {
+			m.logger.Warn("failed to register tool", "tool", t.Name(), "core", st.name, "error", err)
+			continue
+		}
+		m.toolNameToServiceID[t.Name()] = st.serviceID
+	}
+	// 不设 typeMap——registerDscCoreLocked 已设为 "dsc"，保留插件身份。
+	m.coreMetadata[st.name] = st.info
+	m.addStopHookLocked(st.name, func() error {
+		m.unregisterPluginToolsLocked(st.name)
+		return nil
+	})
+	m.logger.Info("DSC plugin tools registered", "name", st.name, "toolCount", len(st.tools), "serviceID", st.serviceID)
 }
 
 // registerHookClientLocked 把插件接入宿主事件广播（OnEvent）：登记 hook client。
@@ -2557,9 +2654,10 @@ func (m *Manager) loadPluginWithBroker(entry PluginEntry, broker *plugin.GRPCBro
 		m.registerPolicyLocked(entry.Name, info, client, grpcClient)
 
 	case "dsc":
-		// 通用类型：无 tool/llm/agent/policy 服务，仅登记 hook client 以接收宿主
-		// 事件广播（OnEvent），供「纯后台/程序性」插件（如通知、探针）订阅。
-		m.registerDscCoreLocked(entry.Name, info, client, grpcClient)
+		// 通用类型：注册 hook client + 探测并登记可选工具（对齐 DSH/Cordis 的
+		// 「插件类型与服务正交」模型）。TypeDsc 可同时声明 hook + tools + Provides。
+		refs := interconnectRefs{hasAggLLM: m.agentLLMServiceID != 0, agentLLMName: m.agentLLMName}
+		m.registerDscCoreLocked(entry.Name, info, client, grpcClient, broker, refs)
 
 	default:
 		client.Kill()

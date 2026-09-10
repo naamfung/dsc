@@ -49,9 +49,11 @@ func TestHostDscChainRegistersHook(t *testing.T) {
 	}
 
 	// 2. 经生产同款登记（loadPluginWithBroker case "dsc" 的单一真源）把插件接入事件订阅
+	// broker 传 nil：测试不验证工具探测路径（dsc-notify 无工具，ListTools 返回空列表，
+	// registerDscCoreLocked 的 if broker != nil 守卫会跳过探测），仅验证 hook 接线。
 	m := NewManager(&ManagerConfig{ExecDir: dir})
 	m.mu.Lock()
-	m.registerDscCoreLocked("dsc-notify", info, client, grpcClient)
+	m.registerDscCoreLocked("dsc-notify", info, client, grpcClient, nil, interconnectRefs{})
 	m.mu.Unlock()
 	t.Cleanup(func() { m.Shutdown() })
 
