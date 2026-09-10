@@ -2420,7 +2420,7 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
 	m.typeMap[name] = "dsc"
 	m.coreMetadata[name] = info
 	// 压缩后端检测（对齐 DSH preset compaction group + 能力验证）：
-	// config.yaml 中 compaction: "tool-billion-context" 显式选择后端，宿主验证该
+	// config.yaml 中 compaction: "dsc-billion-context" 显式选择后端，宿主验证该
 	// 插件声明了 Provides: {"compaction": "true"} 能力。验证通过后仅记日志——
 	// 不再设环境变量（env 不能跨进程动态同步，导致动态加载/卸载与 agent env 快照
 	// 不同步）。后端接管经 agent/pre-step 事件机制：有后端时 pre-step 改写消息列表

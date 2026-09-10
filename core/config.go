@@ -47,7 +47,7 @@ type Config struct {
 	// Compaction 显式声明压缩后端（对齐 DSH preset 的 compaction group）：
 	//   ""             — 默认：agent 走内联 compactHistory（向后兼容）
 	//   "builtin"      — 使用宿主 BasicCompactionEngine
-	//   "tool-billion-context" — 使用 billion-context 插件的 ACP 压缩
+	//   "dsc-billion-context" — 使用 billion-context 插件的 ACP 压缩
 	//   其他插件名      — 使用该插件提供的压缩能力（插件需声明 Provides compaction）
 	// 对齐 DSH：preset YAML 显式挂 compaction-basic 或 billion-context-dsh，
 	// Cordis Service 单例确保每 context 只有一个 CompactionEngine 后端。
