@@ -275,6 +275,11 @@ message NotifyResponse {}
 //   - emit 模式：宿主忽略返回值；listener 可不实现 next
 //   - waterfall 模式：listener 调 next() 委托下游，不调即 veto
 //   - 同步语义：宿主等待所有 listener 返回后才继续
+//
+// ListContext 对齐 DSH ctx.systemPrompt.section：任何插件类型（tool/llm/agent/
+// policy/dsc）都能贡献 system prompt 片段。此前 ListContext 仅在 ToolService 上，
+// dsc 类型插件（如 billion-context）无法贡献——现提升到 PluginHookService 使
+// 所有类型可用。
 service PluginHookService {
   // 工具执行前（宿主 pre-execute 流水线内，按插件加载顺序调用）：可 veto
   // 或改写参数；veto 阻止执行。
@@ -285,6 +290,11 @@ service PluginHookService {
   // 同步分发：宿主按事件名决定的分发模式（emit/serial/bail/waterfall）
   // 调用所有插件并等待返回。
   rpc OnEvent(OnEventRequest) returns (OnEventResponse);
+  // 贡献 system prompt 片段（对齐 DSH ctx.systemPrompt.section）。
+  // 任何插件类型均可实现：tool 贡献工具使用说明、dsc 贡献 ACP 压缩指导等。
+  // 宿主聚合所有插件的贡献，拼接到 agent 的 system prompt。
+  // 旧插件未实现时返回 Unimplemented，宿主应跳过。
+  rpc ListContext(ListContextRequest) returns (ListContextResponse);
 }
 
 message BeforeToolRequest {

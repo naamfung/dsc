@@ -1477,9 +1477,10 @@ var PluginNotifyService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PluginHookService_BeforeTool_FullMethodName = "/dsc.PluginHookService/BeforeTool"
-	PluginHookService_AfterTool_FullMethodName  = "/dsc.PluginHookService/AfterTool"
-	PluginHookService_OnEvent_FullMethodName    = "/dsc.PluginHookService/OnEvent"
+	PluginHookService_BeforeTool_FullMethodName  = "/dsc.PluginHookService/BeforeTool"
+	PluginHookService_AfterTool_FullMethodName   = "/dsc.PluginHookService/AfterTool"
+	PluginHookService_OnEvent_FullMethodName     = "/dsc.PluginHookService/OnEvent"
+	PluginHookService_ListContext_FullMethodName = "/dsc.PluginHookService/ListContext"
 )
 
 // PluginHookServiceClient is the client API for PluginHookService service.
@@ -1495,6 +1496,11 @@ const (
 //   - emit 模式：宿主忽略返回值；listener 可不实现 next
 //   - waterfall 模式：listener 调 next() 委托下游，不调即 veto
 //   - 同步语义：宿主等待所有 listener 返回后才继续
+//
+// ListContext 对齐 DSH ctx.systemPrompt.section：任何插件类型（tool/llm/agent/
+// policy/dsc）都能贡献 system prompt 片段。此前 ListContext 仅在 ToolService 上，
+// dsc 类型插件（如 billion-context）无法贡献——现提升到 PluginHookService 使
+// 所有类型可用。
 type PluginHookServiceClient interface {
 	// 工具执行前（宿主 pre-execute 流水线内，按插件加载顺序调用）：可 veto
 	// 或改写参数；veto 阻止执行。
@@ -1505,6 +1511,11 @@ type PluginHookServiceClient interface {
 	// 同步分发：宿主按事件名决定的分发模式（emit/serial/bail/waterfall）
 	// 调用所有插件并等待返回。
 	OnEvent(ctx context.Context, in *OnEventRequest, opts ...grpc.CallOption) (*OnEventResponse, error)
+	// 贡献 system prompt 片段（对齐 DSH ctx.systemPrompt.section）。
+	// 任何插件类型均可实现：tool 贡献工具使用说明、dsc 贡献 ACP 压缩指导等。
+	// 宿主聚合所有插件的贡献，拼接到 agent 的 system prompt。
+	// 旧插件未实现时返回 Unimplemented，宿主应跳过。
+	ListContext(ctx context.Context, in *ListContextRequest, opts ...grpc.CallOption) (*ListContextResponse, error)
 }
 
 type pluginHookServiceClient struct {
@@ -1545,6 +1556,16 @@ func (c *pluginHookServiceClient) OnEvent(ctx context.Context, in *OnEventReques
 	return out, nil
 }
 
+func (c *pluginHookServiceClient) ListContext(ctx context.Context, in *ListContextRequest, opts ...grpc.CallOption) (*ListContextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListContextResponse)
+	err := c.cc.Invoke(ctx, PluginHookService_ListContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PluginHookServiceServer is the server API for PluginHookService service.
 // All implementations must embed UnimplementedPluginHookServiceServer
 // for forward compatibility.
@@ -1558,6 +1579,11 @@ func (c *pluginHookServiceClient) OnEvent(ctx context.Context, in *OnEventReques
 //   - emit 模式：宿主忽略返回值；listener 可不实现 next
 //   - waterfall 模式：listener 调 next() 委托下游，不调即 veto
 //   - 同步语义：宿主等待所有 listener 返回后才继续
+//
+// ListContext 对齐 DSH ctx.systemPrompt.section：任何插件类型（tool/llm/agent/
+// policy/dsc）都能贡献 system prompt 片段。此前 ListContext 仅在 ToolService 上，
+// dsc 类型插件（如 billion-context）无法贡献——现提升到 PluginHookService 使
+// 所有类型可用。
 type PluginHookServiceServer interface {
 	// 工具执行前（宿主 pre-execute 流水线内，按插件加载顺序调用）：可 veto
 	// 或改写参数；veto 阻止执行。
@@ -1568,6 +1594,11 @@ type PluginHookServiceServer interface {
 	// 同步分发：宿主按事件名决定的分发模式（emit/serial/bail/waterfall）
 	// 调用所有插件并等待返回。
 	OnEvent(context.Context, *OnEventRequest) (*OnEventResponse, error)
+	// 贡献 system prompt 片段（对齐 DSH ctx.systemPrompt.section）。
+	// 任何插件类型均可实现：tool 贡献工具使用说明、dsc 贡献 ACP 压缩指导等。
+	// 宿主聚合所有插件的贡献，拼接到 agent 的 system prompt。
+	// 旧插件未实现时返回 Unimplemented，宿主应跳过。
+	ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error)
 	mustEmbedUnimplementedPluginHookServiceServer()
 }
 
@@ -1586,6 +1617,9 @@ func (UnimplementedPluginHookServiceServer) AfterTool(context.Context, *AfterToo
 }
 func (UnimplementedPluginHookServiceServer) OnEvent(context.Context, *OnEventRequest) (*OnEventResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OnEvent not implemented")
+}
+func (UnimplementedPluginHookServiceServer) ListContext(context.Context, *ListContextRequest) (*ListContextResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListContext not implemented")
 }
 func (UnimplementedPluginHookServiceServer) mustEmbedUnimplementedPluginHookServiceServer() {}
 func (UnimplementedPluginHookServiceServer) testEmbeddedByValue()                           {}
@@ -1662,6 +1696,24 @@ func _PluginHookService_OnEvent_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginHookService_ListContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListContextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginHookServiceServer).ListContext(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PluginHookService_ListContext_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginHookServiceServer).ListContext(ctx, req.(*ListContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PluginHookService_ServiceDesc is the grpc.ServiceDesc for PluginHookService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1680,6 +1732,10 @@ var PluginHookService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "OnEvent",
 			Handler:    _PluginHookService_OnEvent_Handler,
+		},
+		{
+			MethodName: "ListContext",
+			Handler:    _PluginHookService_ListContext_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

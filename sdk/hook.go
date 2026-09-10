@@ -42,6 +42,11 @@ type Hook struct {
 	// 通知型 listener（如 notify、approval 审计）写法：返回 ("", nil)。
 	// 拦截型 listener（如 billion-context）写法：根据 eventType 改写 resultJSON 返回。
 	OnEvent func(ctx context.Context, eventType, dataJSON string) (resultJSON string, err error)
+	// ContextFn 贡献 system prompt 片段（对齐 DSH ctx.systemPrompt.section）。
+	// 任何插件类型（tool/llm/agent/policy/dsc）均可实现。宿主聚合所有插件
+	// 的贡献，拼接到 agent 的 system prompt。返回空串表示无贡献。
+	// 每次调用求值（动态内容如技能索引安装后即时反映）。
+	ContextFn func() string
 }
 
 // hookServiceServer 实现宿主 PluginHookService 的适配层。
@@ -93,4 +98,13 @@ func (s *hookServiceServer) OnEvent(ctx context.Context, req *proto.OnEventReque
 		resp.Error = err.Error()
 	}
 	return resp, nil
+}
+
+// ListContext 贡献 system prompt 片段（对齐 DSH ctx.systemPrompt.section）。
+// 任何插件类型均可实现。未实现 ContextFn 时返回空串（无贡献）。
+func (s *hookServiceServer) ListContext(ctx context.Context, req *proto.ListContextRequest) (*proto.ListContextResponse, error) {
+	if s.hook == nil || s.hook.ContextFn == nil {
+		return &proto.ListContextResponse{}, nil
+	}
+	return &proto.ListContextResponse{Content: s.hook.ContextFn()}, nil
 }

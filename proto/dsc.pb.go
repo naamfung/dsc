@@ -3762,12 +3762,13 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"\x14UserQuestionsService\x12(\n" +
 	"\x03Ask\x12\x0f.dsc.AskRequest\x1a\x10.dsc.AskResponse2H\n" +
 	"\x13PluginNotifyService\x121\n" +
-	"\x06Notify\x12\x12.dsc.NotifyRequest\x1a\x13.dsc.NotifyResponse2\xc4\x01\n" +
+	"\x06Notify\x12\x12.dsc.NotifyRequest\x1a\x13.dsc.NotifyResponse2\x86\x02\n" +
 	"\x11PluginHookService\x12=\n" +
 	"\n" +
 	"BeforeTool\x12\x16.dsc.BeforeToolRequest\x1a\x17.dsc.BeforeToolResponse\x12:\n" +
 	"\tAfterTool\x12\x15.dsc.AfterToolRequest\x1a\x16.dsc.AfterToolResponse\x124\n" +
-	"\aOnEvent\x12\x13.dsc.OnEventRequest\x1a\x14.dsc.OnEventResponse2\xbb\x01\n" +
+	"\aOnEvent\x12\x13.dsc.OnEventRequest\x1a\x14.dsc.OnEventResponse\x12@\n" +
+	"\vListContext\x12\x17.dsc.ListContextRequest\x1a\x18.dsc.ListContextResponse2\xbb\x01\n" +
 	"\x1aFsObservationPolicyService\x12I\n" +
 	"\x0eGetObservation\x12\x1a.dsc.GetObservationRequest\x1a\x1b.dsc.GetObservationResponse\x12R\n" +
 	"\x11UpdateObservation\x12\x1d.dsc.UpdateObservationRequest\x1a\x1e.dsc.UpdateObservationResponseB\vZ\tdsc/protob\x06proto3"
@@ -3899,42 +3900,44 @@ var file_proto_dsc_proto_depIdxs = []int32{
 	38, // 44: dsc.PluginHookService.BeforeTool:input_type -> dsc.BeforeToolRequest
 	40, // 45: dsc.PluginHookService.AfterTool:input_type -> dsc.AfterToolRequest
 	42, // 46: dsc.PluginHookService.OnEvent:input_type -> dsc.OnEventRequest
-	59, // 47: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
-	61, // 48: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
-	3,  // 49: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	5,  // 50: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	7,  // 51: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	9,  // 52: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	11, // 53: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	12, // 54: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
-	3,  // 55: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	5,  // 56: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	21, // 57: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
-	23, // 58: dsc.AgentService.SwitchSession:output_type -> dsc.SwitchSessionResponse
-	25, // 59: dsc.AgentService.SetPlanMode:output_type -> dsc.SetPlanModeResponse
-	27, // 60: dsc.AgentService.SetHistoryInjection:output_type -> dsc.SetHistoryInjectionResponse
-	29, // 61: dsc.AgentService.SetUserQuestionsService:output_type -> dsc.SetUserQuestionsServiceResponse
-	51, // 62: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	31, // 63: dsc.AgentService.InjectMessage:output_type -> dsc.InjectMessageResponse
-	34, // 64: dsc.AgentService.DebugSnapshot:output_type -> dsc.DebugSnapshotResponse
-	17, // 65: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	18, // 66: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
-	3,  // 67: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	5,  // 68: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	9,  // 69: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	53, // 70: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	55, // 71: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	57, // 72: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
-	1,  // 73: dsc.ToolService.SetInterconnect:output_type -> dsc.InterconnectResponse
-	48, // 74: dsc.UserQuestionsService.Ask:output_type -> dsc.AskResponse
-	37, // 75: dsc.PluginNotifyService.Notify:output_type -> dsc.NotifyResponse
-	39, // 76: dsc.PluginHookService.BeforeTool:output_type -> dsc.BeforeToolResponse
-	41, // 77: dsc.PluginHookService.AfterTool:output_type -> dsc.AfterToolResponse
-	43, // 78: dsc.PluginHookService.OnEvent:output_type -> dsc.OnEventResponse
-	60, // 79: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
-	62, // 80: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
-	49, // [49:81] is the sub-list for method output_type
-	17, // [17:49] is the sub-list for method input_type
+	56, // 47: dsc.PluginHookService.ListContext:input_type -> dsc.ListContextRequest
+	59, // 48: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
+	61, // 49: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
+	3,  // 50: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	5,  // 51: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	7,  // 52: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	9,  // 53: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	11, // 54: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	12, // 55: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
+	3,  // 56: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	5,  // 57: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	21, // 58: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
+	23, // 59: dsc.AgentService.SwitchSession:output_type -> dsc.SwitchSessionResponse
+	25, // 60: dsc.AgentService.SetPlanMode:output_type -> dsc.SetPlanModeResponse
+	27, // 61: dsc.AgentService.SetHistoryInjection:output_type -> dsc.SetHistoryInjectionResponse
+	29, // 62: dsc.AgentService.SetUserQuestionsService:output_type -> dsc.SetUserQuestionsServiceResponse
+	51, // 63: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	31, // 64: dsc.AgentService.InjectMessage:output_type -> dsc.InjectMessageResponse
+	34, // 65: dsc.AgentService.DebugSnapshot:output_type -> dsc.DebugSnapshotResponse
+	17, // 66: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	18, // 67: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
+	3,  // 68: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	5,  // 69: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	9,  // 70: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	53, // 71: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	55, // 72: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	57, // 73: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
+	1,  // 74: dsc.ToolService.SetInterconnect:output_type -> dsc.InterconnectResponse
+	48, // 75: dsc.UserQuestionsService.Ask:output_type -> dsc.AskResponse
+	37, // 76: dsc.PluginNotifyService.Notify:output_type -> dsc.NotifyResponse
+	39, // 77: dsc.PluginHookService.BeforeTool:output_type -> dsc.BeforeToolResponse
+	41, // 78: dsc.PluginHookService.AfterTool:output_type -> dsc.AfterToolResponse
+	43, // 79: dsc.PluginHookService.OnEvent:output_type -> dsc.OnEventResponse
+	57, // 80: dsc.PluginHookService.ListContext:output_type -> dsc.ListContextResponse
+	60, // 81: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
+	62, // 82: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
+	50, // [50:83] is the sub-list for method output_type
+	17, // [17:50] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
 	17, // [17:17] is the sub-list for extension extendee
 	0,  // [0:17] is the sub-list for field type_name

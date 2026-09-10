@@ -1535,16 +1535,33 @@ func (m *Manager) ExportSession(id string) (string, error) {
 // 隨 map 遍歷隨機變動，會使請求前綴字節不穩定、命中前綴緩存失效（與 agent 端對工具
 // 目錄的排序一致）。順序不影響功能，但必須確定。
 func (m *Manager) ListContext(ctx context.Context) (string, error) {
+	// 聚合所有插件的 system prompt 贡献（对齐 DSH ctx.systemPrompt.section）：
+	// 经 PluginHookService.ListContext 调用每个插件的 Hook.ContextFn。
+	// 此前仅聚合 toolClients（ToolService.ListContext）——dsc 类型插件（如
+	// billion-context）无法贡献。现改为经 hookClientsSnapshot 聚合所有类型。
+	// 旧插件未实现 PluginHookService.ListContext 时返回 Unimplemented，跳过。
+	m.mu.RLock()
+	clients := make([]proto.PluginHookServiceClient, 0, len(m.toolHookOrder))
+	for _, n := range m.toolHookOrder {
+		if c, ok := m.toolHookClients[n]; ok && c != nil {
+			clients = append(clients, c)
+		}
+	}
+	names := make([]string, len(m.toolHookOrder))
+	copy(names, m.toolHookOrder)
+	m.mu.RUnlock()
+
 	type namedClient struct {
 		name string
-		cl   proto.ToolServiceClient
+		cl   proto.PluginHookServiceClient
 	}
-	m.mu.Lock()
-	pairs := make([]namedClient, 0, len(m.toolClients))
-	for name, c := range m.toolClients {
-		pairs = append(pairs, namedClient{name: name, cl: c})
+	pairs := make([]namedClient, 0, len(clients))
+	for i, c := range clients {
+		if c == nil || i >= len(names) {
+			continue
+		}
+		pairs = append(pairs, namedClient{name: names[i], cl: c})
 	}
-	m.mu.Unlock()
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
 
 	var parts []string
@@ -1553,20 +1570,13 @@ func (m *Manager) ListContext(ctx context.Context) (string, error) {
 		resp, err := p.cl.ListContext(ctx, &proto.ListContextRequest{})
 		cancel()
 		if err != nil {
-			// 舊插件未實現 ListContext（Unimplemented）或暂时不可用，跳过
-			continue
+			continue // Unimplemented 或暂时不可用，跳过
 		}
 		if content := strings.TrimSpace(resp.GetContent()); content != "" {
 			parts = append(parts, content)
 		}
 	}
-	// compaction 后端状态标记（对齐 DSH ctx.compaction Service 的运行时查询）：
-	// 如果有插件声明了 Provides compaction 能力且经 config.Compaction 显式选择，
-	// 在 ListContext 响应末尾追加标记。agent 的 buildSystemPrompt 检查此标记决定
-	// 是否跳过内联 compactHistory——有后端时后端在 pre-step 以更低阈值接管，
-	// 无后端时内联压缩作为唯一路径。
-	// 此机制与插件生命周期同步：插件卸载后 HasPluginProvidingCapability 返回 false，
-	// 标记消失，agent 自动恢复内联压缩。不依赖 env 或跨进程状态同步。
+	// compaction 后端状态标记（对齐 DSH ctx.compaction Service 的运行时查询）
 	if m.HasPluginProvidingCapability("compaction") {
 		parts = append(parts, "[DSC_COMPACTION_BACKEND_ACTIVE]")
 	}

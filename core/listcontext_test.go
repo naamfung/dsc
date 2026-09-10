@@ -8,7 +8,23 @@ import (
 	"google.golang.org/grpc"
 )
 
-// lctxMockClient 实现 proto.ToolServiceClient 的最小 mock，ListContext 返回固定片段。
+// hookMockClient 实现 proto.PluginHookServiceClient 的最小 mock，ListContext 返回固定片段。
+type hookMockClient struct{ content string }
+
+func (*hookMockClient) BeforeTool(context.Context, *proto.BeforeToolRequest, ...grpc.CallOption) (*proto.BeforeToolResponse, error) {
+	return &proto.BeforeToolResponse{}, nil
+}
+func (*hookMockClient) AfterTool(context.Context, *proto.AfterToolRequest, ...grpc.CallOption) (*proto.AfterToolResponse, error) {
+	return &proto.AfterToolResponse{}, nil
+}
+func (*hookMockClient) OnEvent(context.Context, *proto.OnEventRequest, ...grpc.CallOption) (*proto.OnEventResponse, error) {
+	return &proto.OnEventResponse{}, nil
+}
+func (m *hookMockClient) ListContext(context.Context, *proto.ListContextRequest, ...grpc.CallOption) (*proto.ListContextResponse, error) {
+	return &proto.ListContextResponse{Content: m.content}, nil
+}
+
+// lctxMockClient 实现 proto.ToolServiceClient 的最小 mock（旧 ListContext 测试用）。
 type lctxMockClient struct{ content string }
 
 func (*lctxMockClient) ExecuteTool(context.Context, *proto.ExecuteToolRequest, ...grpc.CallOption) (*proto.ExecuteToolResponse, error) {
@@ -26,12 +42,14 @@ func (*lctxMockClient) SetInterconnect(context.Context, *proto.InterconnectReque
 
 // TestListContextStableOrder 校验 ListContext 按插件名稳定排序拼接上下文片段：
 // map 遍历顺序随机，但输出必须按名确定，使 system prompt 前缀稳定、命中前缀缓存。
+// ListContext 现经 PluginHookService（所有插件类型可用，对齐 DSH ctx.systemPrompt.section）。
 func TestListContextStableOrder(t *testing.T) {
 	m := NewManager(&ManagerConfig{})
 	m.mu.Lock()
-	m.toolClients["zzz"] = &lctxMockClient{content: "ctx-z"}
-	m.toolClients["aaa"] = &lctxMockClient{content: "ctx-a"}
-	m.toolClients["mmm"] = &lctxMockClient{content: "ctx-m"}
+	m.toolHookClients["zzz"] = &hookMockClient{content: "ctx-z"}
+	m.toolHookClients["aaa"] = &hookMockClient{content: "ctx-a"}
+	m.toolHookClients["mmm"] = &hookMockClient{content: "ctx-m"}
+	m.toolHookOrder = []string{"zzz", "aaa", "mmm"}
 	m.mu.Unlock()
 
 	got, err := m.ListContext(context.Background())
