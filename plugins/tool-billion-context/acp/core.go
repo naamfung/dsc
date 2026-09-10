@@ -112,7 +112,7 @@ func BuildStatus(messages []CoreMessage, state *CompressionState, config Config,
                 ActiveBlocks:       activeCount,
                 TotalBlocks:        len(state.Blocks),
                 TokensCompressed:   state.Stats.TokensCompressed,
-                CompressibleRanges: computeCompressibleRanges(messages, state, config),
+                CompressibleRanges: ComputeCompressibleRanges(messages, state, config),
                 Breakdown: map[string]int{
                         "tokensCompressed":   state.Stats.TokensCompressed,
                         "compressionCount":   state.Stats.CompressionCount,

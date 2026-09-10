@@ -113,15 +113,91 @@ func main() {
         sdkInst.Serve()
 }
 
-// onEvent 处理宿主事件。关心 agent/pre-step（改写消息列表）；
+// onEvent 处理宿主事件。
+// - agent/pre-step：改写消息列表（注入 ACP system prompt、prune、nudge）
+// - agent/request-error：上下文溢出时触发紧急压缩后返回 {"retry": true} 让宿主重试
 // 其余事件忽略（返回空 result，不影响宿主）。
 func (bc *BillionContext) onEvent(ctx context.Context, eventType, dataJSON string) (string, error) {
         switch eventType {
         case string(core.EventAgentPreStep):
                 return bc.handlePreStep(ctx, dataJSON)
+        case string(core.EventAgentRequestError):
+                return bc.handleRequestError(ctx, dataJSON)
         default:
                 return "", nil
         }
+}
+
+// handleRequestError 处理 agent/request-error 事件：上下文溢出时触发紧急压缩，
+// 返回 {"retry": true} 让宿主重新走 pre-step（已压缩的消息列表）+ 重新调 provider。
+//
+// 仅对 context_window_exceeded 错误码触发紧急压缩——其他错误（rate_limited 等）
+// 不触发压缩，返回空 result（不重试）。
+//
+// 紧急压缩策略：把最近的可压缩范围（跳过保留区与受保护工具）全部压缩为一条摘要。
+// 这比 nudge 路径更激进——nudge 在 45% 阈值触发；这里是溢出时的最后安全阀。
+func (bc *BillionContext) handleRequestError(ctx context.Context, dataJSON string) (string, error) {
+        var ev core.AgentRequestErrorEvent
+        if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
+                return "", fmt.Errorf("billion-context: parse request-error event: %w", err)
+        }
+
+        // 仅对上下文溢出触发紧急压缩
+        if ev.Code != "context_window_exceeded" {
+                return "", nil
+        }
+
+        sessionID := bc.getSessionID()
+        state, err := bc.store.Load(sessionID)
+        if err != nil {
+                return "", fmt.Errorf("billion-context: load state for emergency compress: %w", err)
+        }
+
+        // 从缓存获取消息列表
+        bc.mu.Lock()
+        cachedMsgs := bc.lastMessages
+        bc.mu.Unlock()
+        if len(cachedMsgs) == 0 {
+                return "", nil // 无缓存消息，无法压缩
+        }
+
+        // 计算可压缩范围（跳过保留区与受保护工具）
+        ranges := bcacp.ComputeCompressibleRanges(cachedMsgs, state, bc.config)
+        if len(ranges) == 0 {
+                // 无可压缩范围：不能救，不重试
+                return "", nil
+        }
+
+        // 紧急压缩：把最大的可压缩范围压为一条摘要
+        // 选 tokens 最大的 range
+        best := ranges[0]
+        for _, r := range ranges[1:] {
+                if r.Tokens > best.Tokens {
+                        best = r
+                }
+        }
+
+        // 生成紧急摘要（用固定模板，不调 LLM——溢出时可能已经无法再调 LLM）
+        summary := fmt.Sprintf("[Emergency compaction: %d messages (~%d tokens) compressed due to context overflow. "+
+                "Key details preserved from compressed range %s..%s.]",
+                best.Count, best.Tokens, best.StartRef, best.EndRef)
+
+        pruneRanges := []bcacp.PruneRange{
+                {StartRef: best.StartRef, EndRef: best.EndRef, Summary: summary, Topic: "emergency-overflow"},
+        }
+        _, result := bcacp.ApplyCompression(pruneRanges, cachedMsgs, state, bc.config)
+        if result.BlocksCreated == 0 {
+                return "", nil // 压缩失败，不重试
+        }
+
+        // 持久化
+        if err := bc.store.Save(sessionID, state); err != nil {
+                fmt.Fprintf(os.Stderr, "[billion-context] emergency compress save state failed: %v\n", err)
+        }
+
+        // 返回 {"retry": true}：让宿主重新走 pre-step（插件已压缩消息）+ 重新调 provider
+        out, _ := json.Marshal(map[string]any{"retry": true})
+        return string(out), nil
 }
 
 // handlePreStep 处理 agent/pre-step 事件：跑 acp pipeline，返回改写后的消息列表。

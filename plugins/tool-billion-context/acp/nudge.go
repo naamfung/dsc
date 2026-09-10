@@ -75,7 +75,7 @@ func DecideNudge(messages []CoreMessage, state *CompressionState, config Config,
         decision.Breakdown["baselineTokens"] = state.Nudge.BaselineTokens
 
         // 计算可压缩范围
-        ranges := computeCompressibleRanges(messages, state, config)
+        ranges := ComputeCompressibleRanges(messages, state, config)
         decision.CompressibleRanges = ranges
         decision.Breakdown["compressibleRanges"] = len(ranges)
         if len(ranges) == 0 {
@@ -130,9 +130,9 @@ func DecideNudge(messages []CoreMessage, state *CompressionState, config Config,
         return decision
 }
 
-// computeCompressibleRanges 计算可压缩范围（对齐 acp-kernel buildCompressibleRanges）。
+// ComputeCompressibleRanges 计算可压缩范围（对齐 acp-kernel buildCompressibleRanges）。
 // 跳过：已被覆盖的消息、保留区内的尾部消息、受保护工具的 tool-call/result。
-func computeCompressibleRanges(messages []CoreMessage, state *CompressionState, config Config) []CompressibleRange {
+func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, config Config) []CompressibleRange {
         covered := state.CoveredMessageIDs()
         protected := map[string]bool{}
         for _, t := range config.ProtectedTools {
