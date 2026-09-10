@@ -1,4 +1,4 @@
-// Package main 实现 tool-billion-context 插件：以 acp-kernel 算法接管 DSC 的上下文压缩。
+// Package main 实现 dsc-billion-context 插件：以 acp-kernel 算法接管 DSC 的上下文压缩。
 //
 // 接管方式（零 agent 改动）：
 //  1. 注册 Hook.OnEvent 订阅 agent/pre-step 事件
@@ -30,8 +30,8 @@ import (
 	"dsc/core"
 	"dsc/proto"
 
-	bcacp "tool-billion-context/acp"
-	bcadapter "tool-billion-context/adapter"
+	bcacp "dsc-billion-context/acp"
+	bcadapter "dsc-billion-context/adapter"
 )
 
 // BillionContext 插件主结构。
@@ -70,7 +70,7 @@ func main() {
 	}
 
 	sdkInst := dsc.New(dsc.Config{
-		Name:    "tool-billion-context",
+		Name:    "dsc-billion-context",
 		Version: "0.1.0",
 		Type:    dsc.TypeDsc,
 		// 声明提供 "compaction" 能力：宿主检测到任何插件 Provides compaction 后，

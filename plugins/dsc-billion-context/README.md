@@ -1,4 +1,4 @@
-# tool-billion-context
+# dsc-billion-context
 
 DSC 上下文管理插件：以 [acp-kernel](https://github.com/ranxianglei/acp-kernel) 算法接管 DSC 默认的压缩机制。
 
@@ -23,7 +23,7 @@ DSC 上下文管理插件：以 [acp-kernel](https://github.com/ranxianglei/acp-
 
 ## 接管流程
 
-1. 用户在 `config.yaml` 中声明 `compaction: tool-billion-context` 显式选择后端
+1. 用户在 `config.yaml` 中声明 `compaction: dsc-billion-context` 显式选择后端
 2. 宿主验证插件声明了 `Provides: {"compaction": "true"}` 能力（对齐 DSH preset + 能力验证）
 3. 插件经 `Hook.ContextFn` 贡献 ACP system prompt（压缩哲学、何时压缩、工具使用说明、蒸馏规则）
 4. agent 每轮 `buildSystemPrompt` 经 `ListContext` 拉取 ACP 指导（对齐 DSH `ctx.systemPrompt.section`）
@@ -69,12 +69,12 @@ agent-react-loop 的内联 `compactHistory`（80% 阈值）作为**兜底安全�
 
 在 `config.yaml` 中声明：
 ```yaml
-compaction: tool-billion-context
+compaction: dsc-billion-context
 plugins:
-  - name: tool-billion-context
+  - name: dsc-billion-context
     type: dsc
     enabled: true
-    binary_path: ./plugins/tool-billion-context/tool-billion-context
+    binary_path: ./plugins/dsc-billion-context/dsc-billion-context
 ```
 
 环境变量：

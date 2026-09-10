@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	bcacp "dsc-billion-context/acp"
 	"dsc/proto"
-	bcacp "tool-billion-context/acp"
 )
 
 // ToCoreMessages 把 DSC proto.Message 列表转为 acp CoreMessage 列表。

@@ -1,4 +1,4 @@
-module tool-billion-context
+module dsc-billion-context
 
 go 1.26.0
 
