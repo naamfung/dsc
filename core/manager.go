@@ -149,7 +149,7 @@ type Manager struct {
 
 	// compaction 上下文压缩引擎（对齐 DSH ctx.compaction Service）。
 	// 默认 nil：agent-react-loop 走内联 compactHistory 路径（向后兼容）。
-	// 非 nil 时（如 billion-context 插件注入），agent 经 HasCompactionEngine
+	// 非 nil 时（如压缩后端插件注入），agent 经 HasCompactionEngine
 	// 检测到后端存在，跳过内联压缩改由插件接管——对齐 DSH 的 CompactionEngine 后端替换模式。
 	compaction CompactionEngine
 	// compactionBackend config.yaml 中显式声明的压缩后端插件名（对齐 DSH preset
@@ -1538,7 +1538,7 @@ func (m *Manager) ListContext(ctx context.Context) (string, error) {
 	// 聚合所有插件的 system prompt 贡献（对齐 DSH ctx.systemPrompt.section）：
 	// 经 PluginHookService.ListContext 调用每个插件的 Hook.ContextFn。
 	// 此前仅聚合 toolClients（ToolService.ListContext）——dsc 类型插件（如
-	// billion-context）无法贡献。现改为经 hookClientsSnapshot 聚合所有类型。
+	// 等 dsc 类型插件无法贡献。现改为经 hookClientsSnapshot 聚合所有类型。
 	// 旧插件未实现 PluginHookService.ListContext 时返回 Unimplemented，跳过。
 	m.mu.RLock()
 	clients := make([]proto.PluginHookServiceClient, 0, len(m.toolHookOrder))
@@ -2420,7 +2420,7 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
 	m.typeMap[name] = "dsc"
 	m.coreMetadata[name] = info
 	// 压缩后端检测（对齐 DSH preset compaction group + 能力验证）：
-	// config.yaml 中 compaction: "dsc-billion-context" 显式选择后端，宿主验证该
+	// config.yaml 中 compaction 字段显式选择后端，宿主验证该
 	// 插件声明了 Provides: {"compaction": "true"} 能力。验证通过后仅记日志——
 	// 不再设环境变量（env 不能跨进程动态同步，导致动态加载/卸载与 agent env 快照
 	// 不同步）。后端接管经 agent/pre-step 事件机制：有后端时 pre-step 改写消息列表
