@@ -74,7 +74,16 @@ type toolServiceServer struct {
 	ic *Interconnect
 }
 
-func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (*proto.ExecuteToolResponse, error) {
+func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (resp *proto.ExecuteToolResponse, rerr error) {
+	// recover：插件 Handler 中的 panic（如 mvdan/sh expand 遇到不支持的语法）
+	// 会导致整个插件进程崩溃退出（exit status 1）。此处捕获 panic 转为错误返回，
+	// 使模型收到错误信息而非连接中断——对齐 DSH 的工具执行容错语义。
+	defer func() {
+		if r := recover(); r != nil {
+			resp = &proto.ExecuteToolResponse{Error: fmt.Sprintf("tool %s panicked: %v", req.ToolName, r)}
+			rerr = nil
+		}
+	}()
 	for _, t := range s.sdk.snapshotTools() {
 		if t.Name == req.ToolName {
 			res, err := t.Handler(ctx, json.RawMessage(req.ArgumentsJson))
