@@ -568,7 +568,7 @@ func main() {
 }`),
 		Handler: handleReadText,
 		ContextFn: func() string {
-			return "PDF 工具集：pdf_read_text 提取纯文本（按页或选页，支持 WinAnsi/MacRoman/CJK ToUnicode CMap 字体解码）；pdf_info 查元数据；pdf_outline 看书签大纲；pdf_search 全文搜索关键词；pdf_extract_images 提取嵌入图片到本地目录。"
+			return "PDF 工具集（读取 + 创建）：读取侧 pdf_read_text/pdf_info/pdf_outline/pdf_search/pdf_extract_images；创建侧 pdf_create_text（从文本生成 PDF，自动分页）/pdf_images_to_pdf（图片转 PDF）/pdf_append_text（向已有 PDF 追加文本页）。标准 14 字体（Times/Helvetica/Courier 等）开箱即用；中文等 CJK 内容建议经 pdf_images_to_pdf 走视觉路径。"
 		},
 	})
 
@@ -630,6 +630,59 @@ func main() {
   "required": ["file_path"]
 }`),
 		Handler: handleExtractImages,
+	})
+
+	// 工具 6: pdf_create_text —— 从纯文本创建 PDF
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_create_text",
+		Description: "Create a new PDF file from plain text. Supports standard 14 fonts (Times/Helvetica/Courier variants, Symbol, ZapfDingbats), auto-pagination, and A4/Letter/Legal paper sizes. Text is split by newlines; each page holds as many lines as fit. Use this to generate PDF reports, documents, or code listings from text content.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "out_path": {"type": "string", "description": "Output PDF file path (must be within workspace root). Will be created or overwritten."},
+    "text": {"type": "string", "description": "Text content for the PDF. Newlines (\\n) start new lines; long lines may overflow horizontally."},
+    "font": {"type": "string", "description": "Font name (default Helvetica). Must be one of: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Symbol, ZapfDingbats.", "default": "Helvetica"},
+    "font_size": {"type": "number", "description": "Font size in points (default 12).", "default": 12, "minimum": 4, "maximum": 200},
+    "paper": {"type": "string", "description": "Paper size (default A4). Options: A4, A4P, A4L (landscape), Letter, LetterP, LetterL, Legal, LegalP, LegalL.", "default": "A4"},
+    "margin": {"type": "number", "description": "Page margin in points (default 50). Must be less than half of paper width/height.", "default": 50, "minimum": 0, "maximum": 300}
+  },
+  "required": ["out_path", "text"]
+}`),
+		Handler: handleCreateText,
+	})
+
+	// 工具 7: pdf_images_to_pdf —— 图片列表转 PDF
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_images_to_pdf",
+		Description: "Convert a list of image files into a PDF (one image per page). Supports JPG, PNG, TIFF, and WEBP. Useful for creating PDFs from screenshots, scanned documents, or when you need to embed visual content that text-based PDF creation cannot handle (e.g., CJK text without embedded fonts, complex layouts).",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "image_paths": {"type": "array", "items": {"type": "string"}, "description": "List of image file paths (must be within workspace root). Each image becomes one page."},
+    "out_path": {"type": "string", "description": "Output PDF file path (must be within workspace root)."}
+  },
+  "required": ["image_paths", "out_path"]
+}`),
+		Handler: handleImagesToPDF,
+	})
+
+	// 工具 8: pdf_append_text —— 在已有 PDF 末尾追加文本页
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_append_text",
+		Description: "Append text as new page(s) to an existing PDF file. The original content is preserved; new pages are added at the end. Useful for adding conclusions, appendices, or notes to an existing document. Uses the same font/pagination as pdf_create_text.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the existing PDF file (must be within workspace root). Will be modified in place."},
+    "text": {"type": "string", "description": "Text content to append. Newlines (\\n) start new lines."},
+    "font": {"type": "string", "description": "Font name (default Helvetica). Must be a standard 14 font.", "default": "Helvetica"},
+    "font_size": {"type": "number", "description": "Font size in points (default 12).", "default": 12, "minimum": 4, "maximum": 200},
+    "paper": {"type": "string", "description": "Paper size for new pages (default A4). Original pages keep their size.", "default": "A4"},
+    "margin": {"type": "number", "description": "Page margin in points (default 50).", "default": 50, "minimum": 0, "maximum": 300}
+  },
+  "required": ["file_path", "text"]
+}`),
+		Handler: handleAppendText,
 	})
 
 	sdk.Serve()

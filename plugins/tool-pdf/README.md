@@ -47,6 +47,8 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 
 ## 模型可见工具
 
+### 读取侧（5 个）
+
 | 工具 | 用途 |
 |------|------|
 | `pdf_read_text` | 提取纯文本（按页或选页，支持 WinAnsi/MacRoman/CJK ToUnicode CMap 字体解码） |
@@ -54,6 +56,28 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 | `pdf_outline` | 书签大纲（目录树） |
 | `pdf_search` | 全文搜索关键词（返回命中页号与上下文片段） |
 | `pdf_extract_images` | 提取嵌入图片到本地目录 |
+
+### 创建侧（3 个）
+
+| 工具 | 用途 |
+|------|------|
+| `pdf_create_text` | 从纯文本创建 PDF（自动分页，标准 14 字体，A4/Letter/Legal 纸张） |
+| `pdf_images_to_pdf` | 图片列表转 PDF（每张图一页，支持 JPG/PNG/TIFF/WEBP） |
+| `pdf_append_text` | 向已有 PDF 末尾追加文本页（保留原内容） |
+
+## 创建 PDF 字体支持
+
+仅支持 PDF 标准 14 字体（无需嵌入，开箱即用）：
+
+- **Times**: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic
+- **Helvetica**: Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique
+- **Courier**: Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique
+- **Symbol**: Symbol（希腊字母与数学符号）
+- **ZapfDingbats**: ZapfDingbats（装饰符号）
+
+**中文/CJK 限制**：标准 14 字体不含 CJK 字形。如需生成含中文的 PDF，建议：
+1. 用 `pdf_images_to_pdf` 把渲染好的图片（含中文）封装为 PDF
+2. 或在宿主层用视觉模型直接生成 PDF 内容
 
 ## 沙箱
 

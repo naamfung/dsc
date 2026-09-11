@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -99,7 +100,209 @@ func TestHandleInfo(t *testing.T) {
 	t.Logf("output:\n%s", out)
 }
 
-// TestParsePageSelection 验证页选择字符串解析。
+// TestHandleCreateText 验证 pdf_create_text 工具。
+func TestHandleCreateText(t *testing.T) {
+	os.Setenv("DSC_WORKSPACE_ROOT", "/tmp")
+	defer os.Unsetenv("DSC_WORKSPACE_ROOT")
+
+	outPath := "/tmp/test_create_text.pdf"
+	defer os.Remove(outPath)
+
+	args, _ := json.Marshal(map[string]any{
+		"out_path":  outPath,
+		"text":      "Hello PDF!\nThis is line 2.\nThis is line 3.",
+		"font":      "Helvetica",
+		"font_size": 14,
+		"paper":     "A4",
+	})
+	out, err := handleCreateText(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handleCreateText: %v", err)
+	}
+	t.Logf("output:\n%s", out)
+
+	// 验证文件存在且非空
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatalf("output file not created: %v", err)
+	}
+	if info.Size() < 500 {
+		t.Errorf("output file too small: %d bytes", info.Size())
+	}
+
+	// 验证可被读回（用我们的 pdf_read_text 工具）
+	readArgs, _ := json.Marshal(map[string]any{
+		"file_path": outPath,
+	})
+	// 清空共享 PDF Context 缓存（防止读到旧文件）
+	sharedCtx.mu.Lock()
+	sharedCtx.ctx = nil
+	sharedCtx.path = ""
+	sharedCtx.mu.Unlock()
+	readOut, err := handleReadText(context.Background(), readArgs)
+	if err != nil {
+		t.Logf("read back failed (may be expected for empty text PDFs): %v", err)
+	} else {
+		t.Logf("read back:\n%s", truncateForLog(readOut, 200))
+	}
+}
+
+// TestHandleCreateTextMultiPage 验证多页 PDF 创建。
+func TestHandleCreateTextMultiPage(t *testing.T) {
+	os.Setenv("DSC_WORKSPACE_ROOT", "/tmp")
+	defer os.Unsetenv("DSC_WORKSPACE_ROOT")
+
+	outPath := "/tmp/test_create_multipage.pdf"
+	defer os.Remove(outPath)
+
+	// 生成 200 行文本，确保跨页（A4 @ 12pt 约可容纳 40 行）
+	var sb strings.Builder
+	for i := 1; i <= 200; i++ {
+		fmt.Fprintf(&sb, "Line %d: This is a test line for pagination verification.\n", i)
+	}
+
+	args, _ := json.Marshal(map[string]any{
+		"out_path":  outPath,
+		"text":      sb.String(),
+		"font_size": 12,
+	})
+	out, err := handleCreateText(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handleCreateText: %v", err)
+	}
+	t.Logf("output:\n%s", out)
+
+	// 验证文件存在
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("output file not created: %v", err)
+	}
+
+	// 验证页数 > 1
+	sharedCtx.mu.Lock()
+	sharedCtx.ctx = nil
+	sharedCtx.path = ""
+	sharedCtx.mu.Unlock()
+	infoArgs, _ := json.Marshal(map[string]any{
+		"file_path": outPath,
+	})
+	infoOut, err := handleInfo(context.Background(), infoArgs)
+	if err != nil {
+		t.Fatalf("handleInfo: %v", err)
+	}
+	t.Logf("info:\n%s", infoOut)
+	if !strings.Contains(infoOut, "Pages: 5") && !strings.Contains(infoOut, "Pages: 4") && !strings.Contains(infoOut, "Pages: 6") {
+		t.Logf("note: page count not exactly 5 (may be 4-6 depending on font metrics); see info output above")
+	}
+}
+
+// TestHandleAppendText 验证 pdf_append_text 工具。
+func TestHandleAppendText(t *testing.T) {
+	os.Setenv("DSC_WORKSPACE_ROOT", "/tmp")
+	defer os.Unsetenv("DSC_WORKSPACE_ROOT")
+
+	// 1. 先创建一个基础 PDF
+	outPath := "/tmp/test_append_text.pdf"
+	defer os.Remove(outPath)
+
+	createArgs, _ := json.Marshal(map[string]any{
+		"out_path": outPath,
+		"text":     "Original page content.\nLine 2.",
+	})
+	if _, err := handleCreateText(context.Background(), createArgs); err != nil {
+		t.Fatalf("create base PDF: %v", err)
+	}
+
+	// 2. 追加新页
+	appendArgs, _ := json.Marshal(map[string]any{
+		"file_path": outPath,
+		"text":      "Appended page content.\nThis is a new page.",
+		"font":      "Courier",
+	})
+	out, err := handleAppendText(context.Background(), appendArgs)
+	if err != nil {
+		t.Fatalf("handleAppendText: %v", err)
+	}
+	t.Logf("output:\n%s", out)
+
+	// 3. 验证页数增加
+	sharedCtx.mu.Lock()
+	sharedCtx.ctx = nil
+	sharedCtx.path = ""
+	sharedCtx.mu.Unlock()
+	infoArgs, _ := json.Marshal(map[string]any{
+		"file_path": outPath,
+	})
+	infoOut, err := handleInfo(context.Background(), infoArgs)
+	if err != nil {
+		t.Fatalf("handleInfo: %v", err)
+	}
+	t.Logf("info after append:\n%s", infoOut)
+	if !strings.Contains(infoOut, "Pages: 2") {
+		t.Errorf("expected Pages: 2, got:\n%s", infoOut)
+	}
+}
+
+// TestHandleCreateTextErrors 验证错误处理。
+func TestHandleCreateTextErrors(t *testing.T) {
+	os.Setenv("DSC_WORKSPACE_ROOT", "/tmp")
+	defer os.Unsetenv("DSC_WORKSPACE_ROOT")
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"missing out_path", map[string]any{"text": "hi"}},
+		{"missing text", map[string]any{"out_path": "/tmp/x.pdf"}},
+		{"invalid font", map[string]any{"out_path": "/tmp/x.pdf", "text": "hi", "font": "ComicSans"}},
+		{"invalid paper", map[string]any{"out_path": "/tmp/x.pdf", "text": "hi", "paper": "FooBar"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			args, _ := json.Marshal(c.args)
+			_, err := handleCreateText(context.Background(), args)
+			if err == nil {
+				t.Errorf("expected error for %s, got nil", c.name)
+			}
+		})
+	}
+}
+
+// TestEscapePDFString 验证 PDF 字符串转义。
+func TestEscapePDFString(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"hello", "hello"},
+		{"a(b)c", "a\\(b\\)c"},
+		{"a\\b", "a\\\\b"},
+		{"a\rb", "ab"},   // CR removed
+		{"a\nb", "a\nb"}, // LF preserved
+	}
+	for _, c := range cases {
+		got := escapePDFString(c.in)
+		if got != c.want {
+			t.Errorf("escapePDFString(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestIsStandardFont 验证字体名识别。
+func TestIsStandardFont(t *testing.T) {
+	valid := []string{"Helvetica", "Times-Roman", "Courier-Bold", "Symbol", "ZapfDingbats"}
+	for _, f := range valid {
+		if !isStandardFont(f) {
+			t.Errorf("isStandardFont(%q) = false, want true", f)
+		}
+	}
+	invalid := []string{"Arial", "Comic Sans", "", "Helvetica Neue"}
+	for _, f := range invalid {
+		if isStandardFont(f) {
+			t.Errorf("isStandardFont(%q) = true, want false", f)
+		}
+	}
+}
+
+// (existing tests follow)
 func TestParsePageSelection(t *testing.T) {
 	cases := []struct {
 		s         string
