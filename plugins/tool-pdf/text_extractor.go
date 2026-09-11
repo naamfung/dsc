@@ -44,6 +44,19 @@ type textFragment struct {
 // 失败时返回空串与错误；尽力而为的部分错误（字体解码失败、内容流解析警告）
 // 不返回错误，仅影响输出完整性。
 func extractPageText(ctx *model.Context, pageNr int) (string, error) {
+	lines, err := extractPageLines(ctx, pageNr)
+	if err != nil {
+		return "", err
+	}
+	if len(lines) == 0 {
+		return "", nil
+	}
+	return renderLines(lines), nil
+}
+
+// extractPageLines 提取单页带位置的文本片段（按 y 聚合的视觉行）。
+// 与 extractPageText 共享全部解析路径，供表格检测等需要原始坐标的功能使用。
+func extractPageLines(ctx *model.Context, pageNr int) ([]textLine, error) {
 	// 1. 加载页面字体字典
 	decoders, err := loadPageFontDecoders(ctx, pageNr)
 	if err != nil {
@@ -54,27 +67,21 @@ func extractPageText(ctx *model.Context, pageNr int) (string, error) {
 	// 2. 读页面内容流
 	pageDict, _, _, err := ctx.PageDict(pageNr, false)
 	if err != nil {
-		return "", fmt.Errorf("page %d: page dict: %w", pageNr, err)
+		return nil, fmt.Errorf("page %d: page dict: %w", pageNr, err)
 	}
 	content, err := ctx.PageContent(pageDict, pageNr)
 	if err != nil {
 		if err == model.ErrNoContent {
-			return "", nil
+			return nil, nil
 		}
-		return "", fmt.Errorf("page %d: content: %w", pageNr, err)
+		return nil, fmt.Errorf("page %d: content: %w", pageNr, err)
 	}
 
 	// 3. tokenize
 	toks := tokenizeContentStream(content)
 
 	// 4. 解释操作符，提取带位置的文本片段
-	lines := interpretTextOperators(toks, decoders)
-	if len(lines) == 0 {
-		return "", nil
-	}
-
-	// 5. 行排序（y 降序）+ 行内排序（x 升序）+ 拼接
-	return renderLines(lines), nil
+	return interpretTextOperators(toks, decoders), nil
 }
 
 // loadPageFontDecoders 从页面资源字典加载字体，构建 fontDecoder。

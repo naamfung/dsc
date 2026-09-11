@@ -675,6 +675,87 @@ func main() {
 		Handler: handleAppendText,
 	})
 
+	// 工具 9: pdf_extract_tables —— 提取 PDF 表格结构
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_extract_tables",
+		Description: "Detect and extract table-like structure from a PDF: returns pages as column-aligned grids (columns separated by '|'). Works when text is laid out in aligned columns (reports, invoices, schedules). If no aligned-column table is detected, falls back to advising pdf_read_text. Use this when you need row/column structure rather than a flat textual stream.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
+    "pages": {"type": "string", "description": "Optional page selection, e.g. \"1,3,5-7\". Omit for all pages.", "default": ""},
+    "max_pages": {"type": "integer", "description": "Maximum pages to scan (default 20).", "default": 20, "minimum": 1, "maximum": 1000}
+  },
+  "required": ["file_path"]
+}`),
+		Handler: handleExtractTables,
+	})
+
+	// 工具 10: pdf_merge_pdfs —— 合并多个 PDF
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_merge_pdfs",
+		Description: "Merge multiple PDF files into a single PDF in the given order. Useful for combining scanned docs, reports, or chapters into one file.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "input_paths": {"type": "array", "items": {"type": "string"}, "description": "List of PDF paths to merge, in order (must be within workspace root)."},
+    "out_path": {"type": "string", "description": "Output PDF path (must be within workspace root)."},
+    "divider_page": {"type": "boolean", "description": "Insert a blank divider page between each merged document (default false).", "default": false}
+  },
+  "required": ["input_paths", "out_path"]
+}`),
+		Handler: handleMergePDFs,
+	})
+
+	// 工具 11: pdf_split_pdfs —— 按页拆分 PDF
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_split_pdfs",
+		Description: "Split a PDF into multiple PDFs by page span (default 1 page each), writing them to an output directory. Useful for separating pages or chapters.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF to split (must be within workspace root)."},
+    "out_dir": {"type": "string", "description": "Output directory for the split PDFs (must be within workspace root)."},
+    "span": {"type": "integer", "description": "Number of pages per output part (default 1).", "default": 1, "minimum": 1, "maximum": 10000}
+  },
+  "required": ["file_path", "out_dir"]
+}`),
+		Handler: handleSplitPDFs,
+	})
+
+	// 工具 12: pdf_extract_pages —— 抽选页生成新 PDF
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_extract_pages",
+		Description: "Extract a selection of pages from a PDF into a new single PDF, preserving order. Pages can be listed and ranged, e.g. \"1,3,5-7\". Useful for building a sub-document or removing pages.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the source PDF (must be within workspace root)."},
+    "out_path": {"type": "string", "description": "Output PDF path (must be within workspace root)."},
+    "pages": {"type": "string", "description": "Page selection, e.g. \"1,3,5-7\"."}
+  },
+  "required": ["file_path", "out_path", "pages"]
+}`),
+		Handler: handleExtractPagesTool,
+	})
+
+	// 工具 13: pdf_to_images —— 页面转 PNG（需外部渲染器）
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_to_images",
+		Description: "Render PDF pages to PNG images in an output directory for visual/layout analysis. Requires an external rasterizer (mutool / pdftoppm / Ghostscript) on PATH, or set DSC_PDF_RENDERER. If none is available, use pdf_extract_images to extract embedded images instead.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
+    "pages": {"type": "string", "description": "Optional page selection. Rendered as a contiguous page block covering the selection. Omit for all pages.", "default": ""},
+    "out_dir": {"type": "string", "description": "Output directory for PNG images (default <workspace>/pdf-images/<name>/render/)."},
+    "dpi": {"type": "integer", "description": "Render resolution in DPI (default 150).", "default": 150, "minimum": 50, "maximum": 600}
+  },
+  "required": ["file_path"]
+}`),
+		Handler: handlePageToImages,
+	})
+
 	sdk.Serve()
 }
 
