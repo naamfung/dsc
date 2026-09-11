@@ -47,7 +47,7 @@ var platforms = []platform{
 	{Name: "freebsd-amd64", GOOS: "freebsd", GOARCH: "amd64", HostDir: "dsc"},
 }
 
-// publicPlugins 发布于发布包内的对外插件（build.sh 同款目录名）；目录缺失时自动跳过。
+// publicPlugins 发布于发布包内的对外插件；目录缺失时自动跳过。
 var publicPlugins = []string{
 	"agent-react-loop",
 	"llm-openai",
@@ -58,6 +58,7 @@ var publicPlugins = []string{
 	"dsc-billion-context",
 	"tool-browser-use",
 	"tool-lisp-eval",
+	"tool-pdf",
 	"tool-skill",
 	"tool-memory-service",
 	"dsc-notify",
