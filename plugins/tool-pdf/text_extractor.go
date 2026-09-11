@@ -17,6 +17,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -33,8 +34,10 @@ type textLine struct {
 }
 
 type textFragment struct {
-	x float64
-	s string
+	x        float64
+	s        string
+	rot      float64 // 文本矩阵旋转角（度）；0 表示正常横行
+	fontSize float64 // 字号，用于估算片段宽度做列分隔
 }
 
 // extractPageText 从 pdfcpu Context 提取单页文本。
@@ -412,6 +415,7 @@ type textState struct {
 	fontName string
 	fontSize float64
 	tm       [6]float64 // 文本矩阵 (a, b, c, d, e, f)
+	rot      float64    // 文本矩阵旋转角（度），由 Tm 的 a/b 分量推导
 	tl       float64    // 文本行距
 	tj       float64    // 字符间距（Tc 操作符）
 	tw       float64    // 词间距（Tw 操作符）
@@ -509,7 +513,7 @@ func interpretTextOperators(toks []token, decoders map[string]*fontDecoder) []te
 		if curLine == nil || abs(curLine.y-y) > st.fontSize*0.5 {
 			curLine = findOrCreateLine(y, st.fontSize)
 		}
-		curLine.frag = append(curLine.frag, textFragment{x: x, s: s})
+		curLine.frag = append(curLine.frag, textFragment{x: x, s: s, rot: st.rot, fontSize: st.fontSize})
 	}
 
 	for i := 0; i < len(toks); i++ {
@@ -520,6 +524,7 @@ func interpretTextOperators(toks []token, decoders map[string]*fontDecoder) []te
 			case "BT":
 				st.inText = true
 				st.tm = [6]float64{1, 0, 0, 1, 0, 0}
+				st.rot = 0
 				curLine = nil
 				stack = stack[:0]
 			case "ET":
@@ -552,6 +557,7 @@ func interpretTextOperators(toks []token, decoders map[string]*fontDecoder) []te
 					st.tm[3] = stack[len(stack)-3].num
 					st.tm[4] = stack[len(stack)-2].num
 					st.tm[5] = stack[len(stack)-1].num
+					st.rot = rotationDegrees(st.tm)
 				}
 				stack = stack[:0]
 				curLine = nil
@@ -686,28 +692,176 @@ func interpretTextOperators(toks []token, decoders map[string]*fontDecoder) []te
 	return out
 }
 
-// renderLines 把视觉行按 y 降序排列、行内按 x 升序排列，拼成最终文本。
+// rotTol 判定「正常横行」的旋转角容差（度）。
+const rotTol = 5.0
+
+// columnGapEm 判定「列分隔」的相邻片段间隙（em）阈值：间隙 ≥ 此值视为栏/列边界，
+// 行内以制表符分隔，保留「行 × 栏」结构。
+const columnGapEm = 1.5
+
+// renderLines 把视觉行整理为最终文本：正常横行按 y 降序、行内按 x 升序输出，
+// 行内片段间按横向间隙识别列边界（以制表符分隔）；旋转文本（非 ~0°）单独分区输出，
+// 避免被混入正常行。
 func renderLines(lines []textLine) string {
-	sort.SliceStable(lines, func(i, j int) bool {
-		return lines[i].y > lines[j].y // y 大的在上
-	})
+	var normals []textLine
+	var rotated []textFragment
+	for _, l := range lines {
+		for _, f := range l.frag {
+			if abs(f.rot) < rotTol {
+				idx := -1
+				for i := range normals {
+					if abs(normals[i].y-l.y) < columnYJoinTol {
+						idx = i
+						break
+					}
+				}
+				if idx < 0 {
+					normals = append(normals, textLine{y: l.y})
+					idx = len(normals) - 1
+				}
+				normals[idx].frag = append(normals[idx].frag, f)
+			} else {
+				rotated = append(rotated, f)
+			}
+		}
+	}
+
 	var b strings.Builder
-	for i, l := range lines {
-		// 行内按 x 升序
-		sort.SliceStable(l.frag, func(i, j int) bool {
-			return l.frag[i].x < l.frag[j].x
-		})
-		for j, f := range l.frag {
+	if len(normals) > 0 {
+		b.WriteString(renderNormalFragments(normals))
+	}
+	if len(rotated) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(renderRotatedFragments(rotated))
+	}
+	return b.String()
+}
+
+// renderNormalFragments 把正常横行（按 y 分组）拼成文本：
+// 行按 y 降序、行内按 x 升序，片段的横向间隙 ≥ fontSize*columnGapEm 时视为列边界以制表符分隔。
+func renderNormalFragments(rows []textLine) string {
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].y > rows[j].y })
+
+	var b strings.Builder
+	for i, r := range rows {
+		sort.SliceStable(r.frag, func(a, b int) bool { return r.frag[a].x < r.frag[b].x })
+		for j, f := range r.frag {
+			if j > 0 {
+				prev := r.frag[j-1]
+				if columnGap(f, prev) {
+					b.WriteString("\t")
+				} else {
+					b.WriteString(" ")
+				}
+			}
+			b.WriteString(f.s)
+		}
+		if i < len(rows)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+// columnYJoinTol 判定同一行（列聚合）的 y 容差（points）。
+const columnYJoinTol = 4.0
+
+// columnGap 报告当前片段 cur 与前一片段 prev 之间是否为列边界。
+// 用估算宽度还原 prev 的右端点，若 cur.x 与其相差 ≥ fontSize*columnGapEm 视为列边界。
+func columnGap(cur, prev textFragment) bool {
+	if prev.fontSize <= 0 {
+		prev.fontSize = cur.fontSize
+	}
+	gap := cur.x - (prev.x + estFragmentWidth(prev.s, prev.fontSize))
+	return gap >= prev.fontSize*columnGapEm
+}
+
+// renderRotatedFragments 把旋转文本按相近旋转角分桶，每组以方向标注前缀输出。
+func renderRotatedFragments(frags []textFragment) string {
+	type bucket struct {
+		ang  float64
+		frag []textFragment
+	}
+	var bs []bucket
+	for _, f := range frags {
+		a := math.Round(f.rot/5) * 5
+		idx := -1
+		for i := range bs {
+			if abs(bs[i].ang-a) < 1 {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			bs = append(bs, bucket{ang: a})
+			idx = len(bs) - 1
+		}
+		bs[idx].frag = append(bs[idx].frag, f)
+	}
+
+	var b strings.Builder
+	for i, bk := range bs {
+		fmt.Fprintf(&b, "〔rotate %s°〕", formatAngle(bk.ang))
+		for j, f := range bk.frag {
 			if j > 0 {
 				b.WriteString(" ")
 			}
 			b.WriteString(f.s)
 		}
-		if i < len(lines)-1 {
-			b.WriteString("\n")
+		if i < len(bs)-1 {
+			b.WriteString(" ")
 		}
 	}
 	return b.String()
+}
+
+// formatAngle 去掉浮点尾噪（如 -0）后输出角度。
+func formatAngle(a float64) string {
+	if abs(a) < 0.5 {
+		return "0"
+	}
+	return fmt.Sprintf("%.0f", a)
+}
+
+// rotationDegrees 从文本矩阵 a/b 分量推导旋转角（度），归一化到 (-180, 180]。
+func rotationDegrees(tm [6]float64) float64 {
+	a, b := tm[0], tm[1]
+	deg := math.Atan2(b, a) * 180 / math.Pi
+	return math.Round(deg*100) / 100
+}
+
+// isCJKWidthRune 报告字符是否为全角宽（CJK 区），用于估算片段宽度。
+func isCJKWidthRune(r rune) bool {
+	if r >= 0x1100 && r <= 0x11FF { // Hangul Jamo
+		return true
+	}
+	if (r >= 0x2E80 && r <= 0x9FFF) || r >= 0xAC00 && r <= 0xD7AF { // 中日韩
+		return true
+	}
+	if r >= 0xF900 && r <= 0xFAFF { // 兼容
+		return true
+	}
+	return r >= 0xFF00 && r <= 0xFFEF // 全角形式
+}
+
+// estFragmentWidth 按字号估算一个文本片段的宽度（points）：全角字符 ≈ 1em，半角 ≈ 0.5em。
+func estFragmentWidth(s string, fontSize float64) float64 {
+	if fontSize <= 0 {
+		fontSize = 10
+	}
+	w := 0.0
+	for _, r := range s {
+		if r == ' ' {
+			w += fontSize * 0.3
+		} else if isCJKWidthRune(r) {
+			w += fontSize
+		} else {
+			w += fontSize * 0.5
+		}
+	}
+	return w
 }
 
 func abs(x float64) float64 {
