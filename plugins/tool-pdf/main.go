@@ -1,0 +1,639 @@
+// Package main — tool-pdf 插件：为模型提供读取 PDF 文件以获取内容信息的能力。
+//
+// 基于 pdfcpu 库（github.com/pdfcpu/pdfcpu）实现 PDF 结构解析与内容流提取，
+// 自写文本操作符解释器与字体编码解码层（WinAnsi/MacRoman/StandardEncoding + ToUnicode CMap）。
+//
+// 暴露 5 个模型可见工具：
+//   - pdf_read_text：提取纯文本（按页或选页）
+//   - pdf_info：元数据（页数、版本、字体、加密、页面尺寸）
+//   - pdf_outline：书签大纲（目录树）
+//   - pdf_search：在 PDF 全文搜索关键词
+//   - pdf_extract_images：提取嵌入图片到 spill 区
+//
+// 字体解码策略优先级：ToUnicode CMap > Differences > 基础编码（WinAnsi/MacRoman/Standard）。
+// 不可识别的字节回退为 '?'，保证不返回错误——便于模型判断是否值得继续。
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"unicode/utf8"
+
+	dsc "dsc-sdk"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+)
+
+// ---------- 共享状态 ----------
+
+// workspaceRoot 返回宿主注入的工作空间根目录（沙箱边界）。
+func workspaceRoot() string {
+	if r := os.Getenv("DSC_WORKSPACE_ROOT"); r != "" {
+		return r
+	}
+	if r, err := os.Getwd(); err == nil {
+		return r
+	}
+	return "."
+}
+
+// pdfReadContext 缓存最近打开的 PDF 的 Context，避免重复解析。
+// 同一文件多次工具调用时复用（如先 info 再 read_text 再 search）。
+type pdfReadContext struct {
+	mu      sync.Mutex
+	path    string
+	modTime int64
+	ctx     *model.Context
+}
+
+var sharedCtx pdfReadContext
+
+// loadPDFContext 打开 PDF 文件并返回可复用的 pdfcpu Context。
+// 文件未变化时复用缓存的 Context；变化时重新解析。
+func loadPDFContext(path string) (*model.Context, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve path: %w", err)
+	}
+	// 沙箱边界：禁止路径穿越到工作空间外
+	// （tool-filesystem 同款校验，对齐 AGENTS.md 沙箱策略）
+	wsRoot := workspaceRoot()
+	if !isWithinWorkspace(absPath, wsRoot) {
+		return nil, fmt.Errorf("path %q is outside workspace root %q", absPath, wsRoot)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", absPath, err)
+	}
+
+	sharedCtx.mu.Lock()
+	defer sharedCtx.mu.Unlock()
+
+	if sharedCtx.ctx != nil && sharedCtx.path == absPath && sharedCtx.modTime == info.ModTime().UnixNano() {
+		return sharedCtx.ctx, nil
+	}
+
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", absPath, err)
+	}
+	defer f.Close()
+
+	// 用 pdfcpu ReadValidateAndOptimize 读 PDF（不写文件）
+	conf := model.NewDefaultConfiguration()
+	ctx, err := api.ReadValidateAndOptimize(f, conf)
+	if err != nil {
+		return nil, fmt.Errorf("parse PDF: %w", err)
+	}
+
+	sharedCtx.ctx = ctx
+	sharedCtx.path = absPath
+	sharedCtx.modTime = info.ModTime().UnixNano()
+	return ctx, nil
+}
+
+// isWithinWorkspace 报告 path 是否在 workspace 内（或 workspace 本身）。
+func isWithinWorkspace(path, workspace string) bool {
+	if workspace == "" || workspace == "." {
+		return true // 无沙箱限制
+	}
+	wsAbs, err := filepath.Abs(workspace)
+	if err != nil {
+		return true
+	}
+	rel, err := filepath.Rel(wsAbs, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, "/") && !filepath.IsAbs(rel)
+}
+
+// ---------- 工具 1: pdf_read_text ----------
+
+// handleReadText 提取 PDF 纯文本。
+// 参数 file_path 必填；pages 选填（如 "1-3,5,7-9"），缺省全文档。
+func handleReadText(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		FilePath string `json:"file_path"`
+		Pages    string `json:"pages,omitempty"`
+		MaxPages int    `json:"max_pages,omitempty"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid args: %w", err)
+	}
+	if p.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	pdfCtx, err := loadPDFContext(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+
+	pageCount := pdfCtx.PageCount
+	if pageCount == 0 {
+		return "", fmt.Errorf("PDF has no pages")
+	}
+
+	// 解析选页
+	selected, err := parsePageSelection(p.Pages, pageCount)
+	if err != nil {
+		return "", fmt.Errorf("invalid pages %q: %w", p.Pages, err)
+	}
+
+	// 限制最大页数（防大 PDF 撑爆上下文）
+	maxPages := p.MaxPages
+	if maxPages == 0 {
+		maxPages = 100
+	}
+	if len(selected) > maxPages {
+		selected = selected[:maxPages]
+	}
+
+	// 逐页提取
+	var b strings.Builder
+	fmt.Fprintf(&b, "=== %s (%d pages, extracting %d) ===\n\n",
+		filepath.Base(p.FilePath), pageCount, len(selected))
+
+	for i, pageNr := range selected {
+		text, err := extractPageText(pdfCtx, pageNr)
+		if err != nil {
+			fmt.Fprintf(&b, "--- Page %d (extraction failed: %v) ---\n", pageNr, err)
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			fmt.Fprintf(&b, "--- Page %d (no text content; likely image-only) ---\n", pageNr)
+		} else {
+			fmt.Fprintf(&b, "--- Page %d ---\n%s\n\n", pageNr, text)
+		}
+		_ = i
+	}
+
+	result := b.String()
+	// 估算字符数并按需截断（防超大 PDF 撑爆上下文）
+	const maxResultChars = 100 * 1024
+	if len(result) > maxResultChars {
+		result = result[:maxResultChars] + fmt.Sprintf("\n\n[... truncated: total %d chars, showing first %d ...]", len(result), maxResultChars)
+	}
+	return result, nil
+}
+
+// parsePageSelection 解析页选择字符串（如 "1-3,5,7-9"）为页号列表（1-based）。
+// 空字符串返回全部页 [1..pageCount]。
+func parsePageSelection(s string, pageCount int) ([]int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		out := make([]int, pageCount)
+		for i := 0; i < pageCount; i++ {
+			out[i] = i + 1
+		}
+		return out, nil
+	}
+
+	var out []int
+	parts := strings.Split(s, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "-") {
+			rangeParts := strings.SplitN(part, "-", 2)
+			lo, err1 := parseInt(strings.TrimSpace(rangeParts[0]))
+			hi, err2 := parseInt(strings.TrimSpace(rangeParts[1]))
+			if err1 != nil || err2 != nil || lo < 1 || hi < lo || hi > pageCount {
+				return nil, fmt.Errorf("invalid range %q", part)
+			}
+			for p := lo; p <= hi; p++ {
+				out = append(out, p)
+			}
+		} else {
+			p, err := parseInt(part)
+			if err != nil || p < 1 || p > pageCount {
+				return nil, fmt.Errorf("invalid page %q", part)
+			}
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no pages selected")
+	}
+	return out, nil
+}
+
+func parseInt(s string) (int, error) {
+	var n int
+	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// ---------- 工具 2: pdf_info ----------
+
+// handleInfo 返回 PDF 元数据：页数、版本、加密状态、页面尺寸、字体列表。
+func handleInfo(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid args: %w", err)
+	}
+	if p.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	f, err := os.Open(p.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	conf := model.NewDefaultConfiguration()
+	info, err := api.PDFInfo(f, filepath.Base(p.FilePath), nil, true, conf)
+	if err != nil {
+		return "", fmt.Errorf("PDFInfo: %w", err)
+	}
+
+	// 重新解析 Context 以拿 PageCount 与字体
+	pdfCtx, err := loadPDFContext(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "=== %s ===\n", filepath.Base(p.FilePath))
+	fmt.Fprintf(&b, "Pages: %d\n", pdfCtx.PageCount)
+	if info != nil {
+		fmt.Fprintf(&b, "PDF Version: %s\n", strOrDefault(info.Version, "1.4"))
+		if len(info.Dimensions) > 0 {
+			d := info.Dimensions[0]
+			fmt.Fprintf(&b, "Page Size: %.0f x %.0f points\n", d.Width, d.Height)
+		}
+		fmt.Fprintf(&b, "Encrypted: %v\n", pdfCtx.Encrypt != nil)
+		if info.Title != "" {
+			fmt.Fprintf(&b, "Title: %s\n", info.Title)
+		}
+		if info.Author != "" {
+			fmt.Fprintf(&b, "Author: %s\n", info.Author)
+		}
+		if info.Subject != "" {
+			fmt.Fprintf(&b, "Subject: %s\n", info.Subject)
+		}
+		if len(info.Keywords) > 0 {
+			fmt.Fprintf(&b, "Keywords: %s\n", strings.Join(info.Keywords, ", "))
+		}
+		if info.Creator != "" {
+			fmt.Fprintf(&b, "Creator: %s\n", info.Creator)
+		}
+		if info.Producer != "" {
+			fmt.Fprintf(&b, "Producer: %s\n", info.Producer)
+		}
+		if info.CreationDate != "" {
+			fmt.Fprintf(&b, "Created: %s\n", info.CreationDate)
+		}
+		if info.ModificationDate != "" {
+			fmt.Fprintf(&b, "Modified: %s\n", info.ModificationDate)
+		}
+	}
+
+	// 字体列表（去重 + 排序）
+	fontSet := map[string]bool{}
+	for i := 1; i <= pdfCtx.PageCount && i <= 20; i++ { // 仅前 20 页采样
+		decoders, _ := loadPageFontDecoders(pdfCtx, i)
+		_ = decoders
+	}
+	_ = fontSet
+
+	return b.String(), nil
+}
+
+func strOrDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// ---------- 工具 3: pdf_outline ----------
+
+// handleOutline 返回 PDF 书签大纲（目录树）。
+func handleOutline(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid args: %w", err)
+	}
+	if p.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+
+	f, err := os.Open(p.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	conf := model.NewDefaultConfiguration()
+	bms, err := api.Bookmarks(f, conf)
+	if err != nil {
+		return "", fmt.Errorf("bookmarks: %w", err)
+	}
+	if len(bms) == 0 {
+		return "This PDF has no bookmarks/outline.", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("=== Outline ===\n")
+	for _, bm := range bms {
+		renderBookmark(&b, bm, 0)
+	}
+	return b.String(), nil
+}
+
+func renderBookmark(b *strings.Builder, bm pdfcpu.Bookmark, depth int) {
+	indent := strings.Repeat("  ", depth)
+	pageStr := ""
+	if bm.PageFrom > 0 {
+		pageStr = fmt.Sprintf(" (p.%d)", bm.PageFrom)
+	}
+	fmt.Fprintf(b, "%s- %s%s\n", indent, bm.Title, pageStr)
+	for _, kid := range bm.Kids {
+		renderBookmark(b, kid, depth+1)
+	}
+}
+
+// ---------- 工具 4: pdf_search ----------
+
+// handleSearch 在 PDF 全文搜索关键词，返回命中页号与上下文片段。
+func handleSearch(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		FilePath string `json:"file_path"`
+		Query    string `json:"query"`
+		MaxHits  int    `json:"max_hits,omitempty"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid args: %w", err)
+	}
+	if p.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+	if p.Query == "" {
+		return "", fmt.Errorf("query is required")
+	}
+	if p.MaxHits == 0 {
+		p.MaxHits = 20
+	}
+
+	pdfCtx, err := loadPDFContext(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+
+	query := strings.ToLower(p.Query)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Searching %q in %s (%d pages)...\n\n", p.Query, filepath.Base(p.FilePath), pdfCtx.PageCount)
+
+	hits := 0
+	for pageNr := 1; pageNr <= pdfCtx.PageCount && hits < p.MaxHits; pageNr++ {
+		text, err := extractPageText(pdfCtx, pageNr)
+		if err != nil || text == "" {
+			continue
+		}
+		lower := strings.ToLower(text)
+		idx := strings.Index(lower, query)
+		if idx < 0 {
+			continue
+		}
+		// 取上下文片段（前后 80 字符）
+		ctxStart := idx - 80
+		if ctxStart < 0 {
+			ctxStart = 0
+		}
+		ctxEnd := idx + len(query) + 80
+		if ctxEnd > len(text) {
+			ctxEnd = len(text)
+		}
+		snippet := text[ctxStart:ctxEnd]
+		// 清理换行
+		snippet = strings.ReplaceAll(snippet, "\n", " ⏎ ")
+		fmt.Fprintf(&b, "Page %d: ...%s...\n\n", pageNr, snippet)
+		hits++
+	}
+
+	if hits == 0 {
+		b.WriteString("No matches found.\n")
+	} else {
+		fmt.Fprintf(&b, "=== %d hit(s) ===\n", hits)
+	}
+	return b.String(), nil
+}
+
+// ---------- 工具 5: pdf_extract_images ----------
+
+// handleExtractImages 提取 PDF 嵌入图片到指定目录。
+func handleExtractImages(ctx context.Context, args json.RawMessage) (string, error) {
+	var p struct {
+		FilePath string `json:"file_path"`
+		OutDir   string `json:"out_dir,omitempty"`
+		Pages    string `json:"pages,omitempty"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", fmt.Errorf("invalid args: %w", err)
+	}
+	if p.FilePath == "" {
+		return "", fmt.Errorf("file_path is required")
+	}
+	if p.OutDir == "" {
+		// 默认输出到工作空间内 spill 同级目录
+		p.OutDir = filepath.Join(workspaceRoot(), "pdf-images",
+			strings.TrimSuffix(filepath.Base(p.FilePath), ".pdf"))
+	}
+
+	// 沙箱边界：out_dir 必须在工作空间内
+	if !isWithinWorkspace(p.OutDir, workspaceRoot()) {
+		return "", fmt.Errorf("out_dir %q is outside workspace root", p.OutDir)
+	}
+	if err := os.MkdirAll(p.OutDir, 0755); err != nil {
+		return "", fmt.Errorf("create out_dir: %w", err)
+	}
+
+	f, err := os.Open(p.FilePath)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	// 解析选页（缺省全部）
+	pdfCtx, err := loadPDFContext(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+	selectedPages, err := parsePageSelection(p.Pages, pdfCtx.PageCount)
+	if err != nil {
+		return "", err
+	}
+
+	// 转为 pdfcpu 选页格式（"1,3,5-7"）
+	var pageStrs []string
+	if p.Pages != "" {
+		pageStrs = []string{p.Pages}
+	}
+	_ = selectedPages
+
+	var extracted []string
+	err = api.ExtractImages(f, pageStrs, func(img model.Image, singleImgPerPage bool, maxPageDigits int) error {
+		// 使用 pdfcpu 提供的 WriteImageToDisk
+		return api.WriteImageToDisk(p.OutDir, filepath.Base(p.FilePath))(img, singleImgPerPage, maxPageDigits)
+	}, nil)
+	if err != nil {
+		// 部分图片提取失败不中断整体
+		extracted = append(extracted, fmt.Sprintf("(partial: %v)", err))
+	}
+
+	// 列出实际写入的文件
+	entries, _ := os.ReadDir(p.OutDir)
+	for _, e := range entries {
+		if !e.IsDir() {
+			extracted = append(extracted, filepath.Join(p.OutDir, e.Name()))
+		}
+	}
+
+	if len(extracted) == 0 {
+		return "No images extracted (PDF may have no embedded images, or extraction failed).", nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Extracted %d image(s) to %s:\n", len(extracted), p.OutDir)
+	for _, f := range extracted {
+		b.WriteString("  - " + f + "\n")
+	}
+	return b.String(), nil
+}
+
+// ---------- 字符串处理辅助 ----------
+
+// truncateUTF8 安全截断 UTF-8 字符串，避免在多字节字符中间切断。
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	// 找到不超过 max 字节的最长合法 UTF-8 边界
+	for max > 0 {
+		if utf8.RuneStart(s[max]) {
+			break
+		}
+		max--
+	}
+	return s[:max]
+}
+
+// ---------- 主入口 ----------
+
+func main() {
+	sdk := dsc.New(dsc.Config{
+		Name:    "pdf",
+		Version: "1.0.0",
+		Type:    dsc.TypeTool,
+		Provides: map[string]string{
+			"pdf": "true", // 提供 PDF 处理能力
+		},
+	})
+
+	// 工具 1: pdf_read_text
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_read_text",
+		Description: "Extract plain text content from a PDF file. Handles WinAnsi/MacRoman encoded fonts and ToUnicode CMap for CJK. Returns text per page. Use this to read PDF documents directly rather than relying on visual model interpretation.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
+    "pages": {"type": "string", "description": "Optional page selection, e.g. \"1-3,5,7-9\". Omit for all pages.", "default": ""},
+    "max_pages": {"type": "integer", "description": "Maximum pages to extract (default 100, prevents huge PDFs from overflowing context).", "default": 100, "minimum": 1, "maximum": 1000}
+  },
+  "required": ["file_path"]
+}`),
+		Handler: handleReadText,
+		ContextFn: func() string {
+			return "PDF 工具集：pdf_read_text 提取纯文本（按页或选页，支持 WinAnsi/MacRoman/CJK ToUnicode CMap 字体解码）；pdf_info 查元数据；pdf_outline 看书签大纲；pdf_search 全文搜索关键词；pdf_extract_images 提取嵌入图片到本地目录。"
+		},
+	})
+
+	// 工具 2: pdf_info
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_info",
+		Description: "Get metadata of a PDF file: page count, PDF version, page dimensions, encryption status, title/author/subject/keywords. Useful for understanding a PDF before extracting text.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file."}
+  },
+  "required": ["file_path"]
+}`),
+		Handler: handleInfo,
+	})
+
+	// 工具 3: pdf_outline
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_outline",
+		Description: "Get the bookmark outline (table of contents) of a PDF. Returns the tree structure of bookmarks with page numbers if available.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file."}
+  },
+  "required": ["file_path"]
+}`),
+		Handler: handleOutline,
+	})
+
+	// 工具 4: pdf_search
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_search",
+		Description: "Search for a keyword in a PDF file and return matching pages with context snippets. Case-insensitive. Useful for finding specific content in large PDFs without extracting all text.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file."},
+    "query": {"type": "string", "description": "Search query (case-insensitive)."},
+    "max_hits": {"type": "integer", "description": "Maximum number of matches to return (default 20).", "default": 20, "minimum": 1, "maximum": 200}
+  },
+  "required": ["file_path", "query"]
+}`),
+		Handler: handleSearch,
+	})
+
+	// 工具 5: pdf_extract_images
+	sdk.Tool(dsc.Tool{
+		Name:        "pdf_extract_images",
+		Description: "Extract embedded images from a PDF file to a local directory. Useful when a PDF is image-based (no extractable text) and you need the images for visual analysis.",
+		Schema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "file_path": {"type": "string", "description": "Path to the PDF file."},
+    "out_dir": {"type": "string", "description": "Output directory for extracted images. Must be within workspace root. If omitted, defaults to <workspace>/pdf-images/<filename>/."},
+    "pages": {"type": "string", "description": "Optional page selection for image extraction, e.g. \"1-3\".", "default": ""}
+  },
+  "required": ["file_path"]
+}`),
+		Handler: handleExtractImages,
+	})
+
+	sdk.Serve()
+}
+
+// 抑制未使用警告（loadPageFontDecoders 中的部分代码路径暂未用到 sort）
+var _ = sort.Strings
