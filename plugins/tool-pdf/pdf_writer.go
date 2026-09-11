@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/font"
 	pdfcpulib "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	pdffont "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/font"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
@@ -125,8 +126,8 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 		return "", 0, fmt.Errorf("ensure font %s: %w", fontName, err)
 	}
 
-	// 5. 计算每页可容纳的行数（保守估算：行高 = 字号 × 1.5）
-	lineHeight := fontSize * 1.5
+	// 5. 计算每页可容纳的行数（行距：CJK 用字体真实度量，标准 14 用 1.5×字号）
+	lineHeight := lineHeightForFont(fontName, fontSize, cjk)
 	usableHeight := dim.Height - 2*margin
 	maxLinesPerPage := int(usableHeight / lineHeight)
 	if maxLinesPerPage < 1 {
@@ -336,6 +337,23 @@ func isStandardFont(name string) bool {
 	return false
 }
 
+// lineHeightForFont 计算分页与渲染共用的行距（points）。
+// 标准 14 字体沿用 1.5×字号的经验值；CJK 字体取 pdfcpu 提供的真实字体行高
+// （字体 bbox 高度按字号缩放），并设下限为 1.2×字号，保证行间不重叠。
+// 分页与 addPageWithText 必须共用同一行距，二者才一致。
+func lineHeightForFont(fontName string, fontSize float64, cjk bool) float64 {
+	lh := fontSize * 1.5
+	if cjk {
+		if m, err := font.LineHeight(fontName, int(fontSize)); err == nil && m > 0 {
+			lh = m
+		}
+		if min := fontSize * 1.2; lh < min {
+			lh = min
+		}
+	}
+	return lh
+}
+
 // handleCreateText 是 pdf_create_text 工具的处理器。
 // 从纯文本创建 PDF 文件。
 func handleCreateText(ctx context.Context, args json.RawMessage) (string, error) {
@@ -500,7 +518,7 @@ func handleAppendText(ctx context.Context, args json.RawMessage) (string, error)
 	if err != nil {
 		return "", err
 	}
-	lineHeight := fontSize * 1.5
+	lineHeight := lineHeightForFont(fontName, fontSize, cjk)
 	usableHeight := dim.Height - 2*margin
 	maxLinesPerPage := int(usableHeight / lineHeight)
 	if maxLinesPerPage < 1 {

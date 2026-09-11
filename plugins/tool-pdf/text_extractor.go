@@ -17,9 +17,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/pdfcpu/pdfcpu/pkg/font"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
@@ -135,10 +137,14 @@ func buildDecoderFromFontDict(xref *model.XRefTable, d types.Dict) *fontDecoder 
 	if subtype != nil && *subtype == "Type0" {
 		dec.isCID = true
 		// Type0 字体：检查 DescendantFonts → CIDFont → Encoding
-		// 通常 ToUnicode CMap 已足够，但若无 ToUnicode 则回退 Identity-H（无法解码）
+		// 通常 ToUnicode CMap 已足够；若无 ToUnicode，尝试从内嵌 TrueType 的 cmap
+		// 回退建立 CID/GID→Unicode，扩大中文可读范围；仍失败再回退 Identity（输出 ?）。
 		if len(dec.toUnicode) == 0 {
-			// 没有 ToUnicode，CID 字体无法可靠解码——标记为 Identity
-			dec.base = "identity-h"
+			if m := cidFallbackUnicode(xref, d); len(m) > 0 {
+				dec.toUnicode = m
+			} else {
+				dec.base = "identity-h"
+			}
 		}
 		return dec
 	}
@@ -206,6 +212,118 @@ func loadCMapStream(xref *model.XRefTable, indRef types.IndirectRef) ([]byte, er
 		}
 	}
 	return sd.Content, nil
+}
+
+// cidFallbackUnicode 在 Type0（CID）字体没有 ToUnicode CMap 时，尝试从内嵌 TrueType
+// （FontFile2）的 cmap 建立 GID→Unicode 映射（要求 CIDToGIDMap 为 Identity，即字符码==GID）。
+// 这是读取侧中文的一个回退路径：许多旧版 CJK PDF 会省略 ToUnicode 但仍内嵌带 cmap 的子集字体。
+// 仅尽力而为：任何一步失败即返回 nil，调用方回退为输出 '?'。
+func cidFallbackUnicode(xref *model.XRefTable, fontDict types.Dict) map[string]string {
+	dfRef := descendantCIDFontRef(xref, fontDict)
+	if dfRef == nil {
+		return nil
+	}
+	df, err := xref.DereferenceDict(*dfRef)
+	if err != nil || df == nil {
+		return nil
+	}
+	// 仅支持 Identity（及缺省）CIDToGIDMap；流式映射不支持
+	if o, found := df.Find("CIDToGIDMap"); found && o != nil {
+		o, err = xref.Dereference(o)
+		if err != nil || o == nil {
+			return nil
+		}
+		if nm, ok := o.(types.Name); ok && string(nm) != "Identity" {
+			return nil
+		}
+		// 流式 CIDToGIDMap 无法直接取 GID，跳过
+		if _, ok := o.(types.StreamDict); ok {
+			return nil
+		}
+	}
+	// FontDescriptor → FontFile2（内嵌 TrueType 字体字节）
+	fdObj, found := df.Find("FontDescriptor")
+	if !found || fdObj == nil {
+		return nil
+	}
+	fd, err := xref.DereferenceDict(fdObj)
+	if err != nil || fd == nil {
+		return nil
+	}
+	ffRef := fd.IndirectRefEntry("FontFile2")
+	if ffRef == nil {
+		return nil
+	}
+	bb, err := loadCMapStream(xref, *ffRef)
+	if err != nil || len(bb) == 0 {
+		return nil
+	}
+	return gidToUnicodeFromTTF(bb)
+}
+
+// descendantCIDFontRef 返回 Type0 字体字典首个 DescendantFont（CIDFont）引用。
+func descendantCIDFontRef(xref *model.XRefTable, fontDict types.Dict) *types.IndirectRef {
+	o, found := fontDict.Find("DescendantFonts")
+	if !found || o == nil {
+		return nil
+	}
+	arr, err := xref.DereferenceArray(o)
+	if err != nil || len(arr) == 0 {
+		return nil
+	}
+	if ir, ok := arr[0].(types.IndirectRef); ok {
+		return &ir
+	}
+	return nil
+}
+
+// gidToUnicodeFromTTF 解析一段 TrueType 字体字节，返回 GID→Unicode 映射。
+// 借助 pdfcpu 的字体注册机制：把字节写入临时 .ttf 安装进进程级字体目录，
+// 读取其 cmap 生成的 TTFLight.ToUnicode（GID→Unicode），再转为按字体映射 key 的形式。
+func gidToUnicodeFromTTF(bb []byte) map[string]string {
+	if len(bb) == 0 {
+		return nil
+	}
+	fontDir, err := ensureUserFontDir()
+	if err != nil {
+		return nil
+	}
+	tmp, err := os.CreateTemp("", "pdf-embed-font-*.ttf")
+	if err != nil {
+		return nil
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(bb); err != nil {
+		tmp.Close()
+		return nil
+	}
+	if err := tmp.Close(); err != nil {
+		return nil
+	}
+	report, err := font.InstallTrueTypeFont(fontDir, tmpName)
+	if err != nil || len(report.Fonts) != 1 {
+		return nil
+	}
+	ps := report.Fonts[0].PostScriptName
+	if ps == "" {
+		return nil
+	}
+	if err := font.ReloadUserFonts(); err != nil {
+		return nil
+	}
+	ttf, ok, err := font.UserFont(ps)
+	if err != nil || !ok {
+		return nil
+	}
+	m := make(map[string]string, len(ttf.ToUnicode))
+	for gid, r := range ttf.ToUnicode {
+		m[fmt.Sprintf("%04X", gid)] = string(rune(r))
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // parseDifferences 解析 Encoding.Differences 数组，填充 decoder.differences。
@@ -307,6 +425,54 @@ func newTextState() *textState {
 		tm:       [6]float64{1, 0, 0, 1, 0, 0},
 		fontSize: 10,
 	}
+}
+
+// tjWordSpaceMinEm 视为词间隔的前向间距下限（em 单位）。
+// PDF TJ 数组的 kerning 数值单位为 1/1000 em；词间隔通常约 0.22~0.4 em。
+const tjWordSpaceMinEm = 0.22
+
+// tjItem 表示 TJ 数组中的一个字符串条目及其之前的前向间距（em 单位）。
+// 首条目的 gapEm 恒为 0（其前无间距）。
+type tjItem struct {
+	text  string
+	gapEm float64
+}
+
+// renderTJItems 把 TJ 数组条目拼成文本，按词间隔插入空格。
+//
+// 词间隔判定：前向间距 ≥ tjWordSpaceMinEm 视为潜在词间隔；但当出现「连续 ≥3 个大间距」
+// 时判定为均匀字距（tracking，如代码字体、装饰性行距逐字加宽），不插空格。
+// 这样既保留「两词之间单次大间距」的词间隔，又抑制整段逐字加宽带来的误插空格。
+func renderTJItems(items []tjItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(items[0].text)
+	for k := 1; k < len(items); k++ {
+		if isWordGap(items, k) {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(items[k].text)
+	}
+	return sb.String()
+}
+
+// isWordGap 报告第 k 个条目前的大间距是否为词间隔。
+// k 处间距须 ≥ tjWordSpaceMinEm；若包含 k 的连续大间距 run 长度 ≥ 3，视为字距，返回 false。
+func isWordGap(items []tjItem, k int) bool {
+	if k < 1 || k >= len(items) || items[k].gapEm < tjWordSpaceMinEm {
+		return false
+	}
+	lo, hi := k, k
+	for lo >= 1 && items[lo-1].gapEm >= tjWordSpaceMinEm {
+		lo--
+	}
+	for hi < len(items)-1 && items[hi+1].gapEm >= tjWordSpaceMinEm {
+		hi++
+	}
+	// 连续大间距达 3 个以上 → 均匀字距（tracking），非词间隔
+	return hi-lo+1 < 3
 }
 
 // interpretTextOperators 解释 token 流中的文本相关操作符，
@@ -478,28 +644,30 @@ func interpretTextOperators(toks []token, decoders map[string]*fontDecoder) []te
 			// 简化：始终把字符串压栈，Tj/TJ 处理时再消费
 			stack = append(stack, t)
 		case tokBOA:
-			// 开始 TJ 数组：立即把栈上现有操作数清空，标记数组开始
-			stack = append(stack, t)
-			// TJ 数组元素处理：直接消费后续字符串与数字
+			// TJ 数组：把 (字符串, 字偶间距) 收集为条目，再按词间隔判定拼接。
+			// 间距数值单位为 1/1000 em（负值使笔右移，即前向间距）。
+			stack = stack[:0]
 			j := i + 1
 			dec := decoders[st.fontName]
 			if dec == nil {
 				dec = newFontDecoder()
 			}
-			var sb strings.Builder
+			var items []tjItem
 			for j < len(toks) && toks[j].kind != tokEOA {
-				if toks[j].kind == tokString {
-					sb.WriteString(dec.decode([]byte(toks[j].str)))
-				}
-				// 数字（kerning）忽略；只有大幅度负值才加空格（避免误把字偶间距当词间隔）
-				// 阈值 -500 是经验值：典型 TJ 字偶间距 -50 ~ -200，词间距 -500 ~ -2000
-				if toks[j].kind == tokNumber && toks[j].num < -500 {
-					sb.WriteString(" ")
+				switch toks[j].kind {
+				case tokString:
+					items = append(items, tjItem{text: dec.decode([]byte(toks[j].str))})
+				case tokNumber:
+					if len(items) > 0 {
+						items[len(items)-1].gapEm = -toks[j].num / 1000
+					}
 				}
 				j++
 			}
-			emitString(sb.String())
 			i = j // 跳到 EOA
+			if len(items) > 0 {
+				emitString(renderTJItems(items))
+			}
 			stack = stack[:0]
 		case tokNumber, tokName:
 			stack = append(stack, t)
