@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	dsc-sdk v0.0.0
-	github.com/pdfcpu/pdfcpu v0.0.0-00010101000000-000000000000
+	github.com/pdfcpu/pdfcpu v0.15.0
 )
 
 require (
@@ -50,8 +50,6 @@ replace dsc-sdk => ../../sdk
 replace dsc => ../..
 
 replace github.com/hashicorp/go-plugin => ../../plugin
-
-replace github.com/pdfcpu/pdfcpu => ../../../pdfcpu
 
 replace github.com/toon-format/toon-go => ../../libs/toon-go
 
