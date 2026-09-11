@@ -87,7 +87,10 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 
 ### 内置 CJK 字体（支持中文等字符，自动嵌入）
 
-插件自带 TrueType 中文字体放于 `fonts/` 目录（当前含 HarmonyOS Sans 全字重及简繁变体）。
+**字体需自行下载**：字体体积大，不进公开仓库。`fonts/` 目录中的字体文件未随源码跟踪，
+需按 `fonts/字体下载.txt` 的地址自行下载后放入 `plugins/tool-pdf/fonts/`（部署时随插件二进制一起，
+运行时查找优先级：可执行文件同级 `fonts/` → 工作目录 `fonts/`）。当前推荐 HarmonyOS Sans（简体中文字重）。
+
 `pdf_create_text` / `pdf_append_text` 的 `font` 参数接受这些 `.ttf` 的文件名主干（不含扩展名），
 例如简体中文用 `HarmonyOS_Sans_SC_Regular`。
 
@@ -118,7 +121,8 @@ plugins:
     binary_path: ./plugins/tool-pdf/tool-pdf
 ```
 
-`fonts/` 目录需随插件二进制一起部署（查找优先级：可执行文件同级 `fonts/` → 工作目录 `fonts/`）。
+`fonts/` 目录不进公开仓库，需按「内置 CJK 字体」一节所述自行下载字体文件，并随插件二进制一起部署
+（查找优先级：可执行文件同级 `fonts/` → 工作目录 `fonts/`）。若缺失字体，中文创建会返回「bundled font ... not found」错误。
 
 ## 限制
 
