@@ -1,5 +1,9 @@
 // Package main — tool-pdf 插件的「页面转图」模块。
 //
+// 临时禁用：本模块依赖外部命令（mutool / pdftoppm / Ghostscript），未真机验证，
+// 当前不在 main.go 注册工具（注册块已注释）。恢复时取消 main.go 中 pdf_to_images
+// 注册块注释即可；命令构造与渲染器探测逻辑均在本文件，保持可编译。
+//
 // pdfcpu 本身不提供整页光栅化（只提取嵌入图），故本模块委托外部 PDF 渲染器
 // （mutool / pdftoppm / Ghostscript）把选页渲染为 PNG，供模型作视觉/版面分析。
 //

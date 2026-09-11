@@ -740,21 +740,25 @@ func main() {
 	})
 
 	// 工具 13: pdf_to_images —— 页面转 PNG（需外部渲染器）
-	sdk.Tool(dsc.Tool{
-		Name:        "pdf_to_images",
-		Description: "Render PDF pages to PNG images in an output directory for visual/layout analysis. Requires an external rasterizer (mutool / pdftoppm / Ghostscript) on PATH, or set DSC_PDF_RENDERER. If none is available, use pdf_extract_images to extract embedded images instead.",
-		Schema: json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
-    "pages": {"type": "string", "description": "Optional page selection. Rendered as a contiguous page block covering the selection. Omit for all pages.", "default": ""},
-    "out_dir": {"type": "string", "description": "Output directory for PNG images (default <workspace>/pdf-images/<name>/render/)."},
-    "dpi": {"type": "integer", "description": "Render resolution in DPI (default 150).", "default": 150, "minimum": 50, "maximum": 600}
-  },
-  "required": ["file_path"]
-}`),
-		Handler: handlePageToImages,
-	})
+	// 暂时禁用：依赖外部命令（mutool/pdftoppm/gs），未真机验证。恢复时取消本注册块注释即可，
+	// 实现保留于 pdf_render.go（含命令构造与渲染器探测逻辑）。
+	/*
+			sdk.Tool(dsc.Tool{
+				Name:        "pdf_to_images",
+				Description: "Render PDF pages to PNG images in an output directory for visual/layout analysis. Requires an external rasterizer (mutool / pdftoppm / Ghostscript) on PATH, or set DSC_PDF_RENDERER. If none is available, use pdf_extract_images to extract embedded images instead.",
+				Schema: json.RawMessage(`{
+		  "type": "object",
+		  "properties": {
+		    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
+		    "pages": {"type": "string", "description": "Optional page selection. Rendered as a contiguous page block covering the selection. Omit for all pages.", "default": ""},
+		    "out_dir": {"type": "string", "description": "Output directory for PNG images (default <workspace>/pdf-images/<name>/render/)."},
+		    "dpi": {"type": "integer", "description": "Render resolution in DPI (default 150).", "default": 150, "minimum": 50, "maximum": 600}
+		  },
+		  "required": ["file_path"]
+		}`),
+				Handler: handlePageToImages,
+			})
+	*/
 
 	sdk.Serve()
 }

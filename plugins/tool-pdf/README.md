@@ -79,11 +79,8 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 | `pdf_split_pdfs` | 按页拆分为多个 PDF（默认每页一段，可指定 span） |
 | `pdf_extract_pages` | 从 PDF 抽选页生成新 PDF（如 `"1,3,5-7"`） |
 
-### 视觉侧（1 个）
-
-| 工具 | 用途 |
-|------|------|
-| `pdf_to_images` | 把页面渲染为 PNG（供视觉/版面分析）。**依赖外部渲染器**：mutool / pdftoppm / Ghostscript 其一在 PATH（或设 `DSC_PDF_RENDERER` 指定），否则报错并建议回落 `pdf_extract_images` 提取嵌入图。渲染按覆盖所选页的最小连续页段执行，分辨率默认 150 DPI（`dpi` 参数可调）。 |
+> 页面转图（`pdf_to_images`）**当前临时禁用**：其依赖外部渲染器（mutool / pdftoppm / Ghostscript），
+> 未真机验证。实现保留在 `pdf_render.go`，恢复时取消 `main.go` 中注册块注释即可。
 
 ## 创建 PDF 字体支持
 
@@ -144,9 +141,9 @@ plugins:
   仅当既无 ToUnicode、又非嵌入 TrueType 时才输出 `?`（可经 `pdf_extract_images` 走视觉路径）。
 - **加密 PDF**：当前不支持密码输入；加密 PDF 的 `pdf_read_text` 会失败。
 - **位置感知**：按 y 聚合行；行内按横向间隙识别多栏并以制表符分隔；`Tm` 的旋转角
-  非零文本单独分区输出（标注 `〔rotate N°〕`），避免混入正常行。表格提取（`pdf_extract_tables`）
-  基于整页 x 对齐聚类，仅覆盖常规报表/发票/日程等对齐列布局，不恢复表格边框、合并单元格。
-- **页面转图需外部渲染器**：`pdf_to_images` 依赖 mutool / pdftoppm / Ghostscript（或
-  `DSC_PDF_RENDERER`）。渲染器缺失时报错并建议回落 `pdf_extract_images`。
+  非零文本单独分区输出（标注 `〔rotate N°〕`），避免混入正常行。不恢复斜排/镜像等复杂版面。
+- **表格提取为启发式**：`pdf_extract_tables` 基于整页 x 对齐聚类，仅覆盖常规报表/发票/
+  日程等对齐列布局，不恢复表格边框、合并单元格。
+- **页面转图暂时禁用**：`pdf_to_images` 依赖外部渲染器且未真机验证，当前未注册；恢复方式见上文。
 - **CJK 分页行距**：用字体真实行高（下限 1.2×字号）计算每页行数，替代固定的 1.5×字号；
   折行后的行数计入分页。

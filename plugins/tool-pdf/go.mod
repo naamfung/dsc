@@ -1,4 +1,4 @@
-module dsc-plugin-tool-pdf
+module tool-pdf
 
 go 1.26.0
 
