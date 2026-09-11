@@ -75,9 +75,11 @@ type toolServiceServer struct {
 }
 
 func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteToolRequest) (resp *proto.ExecuteToolResponse, rerr error) {
-	// recover：插件 Handler 中的 panic（如 mvdan/sh expand 遇到不支持的语法）
-	// 会导致整个插件进程崩溃退出（exit status 1）。此处捕获 panic 转为错误返回，
-	// 使模型收到错误信息而非连接中断——对齐 DSH 的工具执行容错语义。
+	// recover：插件 Handler 与 ViewFn 中的 panic（如 mvdan/sh expand 遇到不支持的
+	// 语法、ViewFn 解析失败、nil 指针等）会导致整个插件进程崩溃退出（exit status 1）。
+	// 此处统一捕获 panic 转为错误返回，使模型收到错误信息而非连接中断——对齐 DSH 的
+	// 工具执行容错语义。这是 SDK 层对插件作者的兜底保护，宿主侧 executeToolBody 与
+	// RemoteTool.ExecuteWithView 还有第二、第三层 recover 作为最终防线。
 	defer func() {
 		if r := recover(); r != nil {
 			resp = &proto.ExecuteToolResponse{Error: fmt.Sprintf("tool %s panicked: %v", req.ToolName, r)}
@@ -91,7 +93,8 @@ func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteT
 				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
 			}
 			resp := &proto.ExecuteToolResponse{Content: res}
-			// 可选结构化视图：插件基于参数与结果声明显示 spec，TUI 统一渲染（缺失/出错时回退）
+			// 可选结构化视图：插件基于参数与结果声明显示 spec，TUI 统一渲染（缺失/出错时回退）。
+			// ViewFn panic 也被外层 defer 统一捕获——视图生成不应中断工具执行。
 			if t.ViewFn != nil {
 				if v, verr := t.ViewFn(ctx, json.RawMessage(req.ArgumentsJson), res); verr == nil && len(v) > 0 {
 					resp.ViewJson = string(v)

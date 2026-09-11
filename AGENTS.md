@@ -147,6 +147,22 @@ LLM 请求的前缀（system prompt、工具目录、上下文片段等）参与
 
 - **对齐 DSH Cordis**：DSH 的 `ctx` 是统一入口——`ctx.on()` / `ctx.compaction` / `ctx.systemPrompt.section()` / `ctx.get('tokenMeter')`。DSC 的等价物（`EventBus` / `CompactionEngine` / `Hook.ContextFn` / `HasPluginProvidingCapability`）散落在不同文件中，但 SDK 的 `SDK` struct 是插件开发者的统一入口。新增通用能力时应经 SDK 暴露，而非要求插件开发者直接 import `core/` 包。
 
+### 9. 工具意外不得中断会话（三层 panic recover 防线）
+
+工具执行过程中发生的 panic（无论是宿主内置工具的 nil 指针、插件 Handler 中的 mvdan/sh expand 不支持语法、ViewFn 序列化失败、还是 gRPC 传输异常）都必须被 recover 转为错误返回给模型——绝不允许崩溃宿主进程导致 LLM 连接中断。此规则经三层防线实现，新增工具或修改执行路径时必须保持三层完整：
+
+1. **SDK 层**（`sdk/tool.go::toolServiceServer.ExecuteTool`）：捕获 `Tool.Handler` 与 `Tool.ViewFn` 中的 panic，转为 `ExecuteToolResponse{Error: "tool X panicked: ..."}`。这是插件作者的第一道防线——所有用 SDK 的插件自动获得此保护。
+
+2. **宿主执行层**（`core/tool_pipeline.go::executeToolBody`）：捕获所有宿主侧工具（含 builtin / `read_spill` / `run_code` / agent 内部工具等）的 panic，转为 `tool X panicked: ...` 错误。覆盖未用 SDK 的工具（如 Lua 脚本工具、host 内置工具）。
+
+3. **远程边界层**（`core/remote_tool.go::RemoteTool.ExecuteWithView`）：捕获插件 gRPC 客户端调用的 panic（如 nil client、序列化失败），转为 `tool X panicked (remote): ...` 错误。兜底覆盖未用 SDK 的插件与 gRPC 传输异常。
+
+- **判据**：任何工具（无论 builtin、SDK 插件、Lua 脚本工具）panic 都应返回错误给模型，使模型能感知失败并自行纠正；不得让 panic 一路冒泡导致宿主进程退出，使整个会话中断。
+
+- **红线**：修改工具执行路径（如新增 waterfall 阶段、新增工具类型）时必须保证上述三层 recover 完整。删除任一层 recover 视为破坏此红线——除非有同等的替代保护（如新工具路径自带 recover）。
+
+- **工具描述自描述**：内置工具（如 `read_spill`）的 `Description()` 必须明确说明：工具的输入格式、何时不该使用、错误时模型的应对策略。模型不应把 `read_spill` 误当作通用文件读取工具——经描述与 JSON Schema `pattern` 约束双重保证。
+
 ## 文档同步
 
 - **README 必须时刻反映代码实现的实际变化**。任何会改变 README 所述内容（架构、目录/模块与依赖增减、关键行为、安全设定）的源码修改，须在本次提交内一并同步更新 README，不允许 README 与实现漂移。

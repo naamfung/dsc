@@ -54,7 +54,17 @@ func (r *RemoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 
 // ExecuteWithView 与 Execute 语义相同，额外返回插件的 ViewJson（Tool.ViewFn 产物）。
 // 宿主聚合路径据此透传插件视图，避免视图在聚合层被丢弃。
-func (r *RemoteTool) ExecuteWithView(ctx context.Context, args json.RawMessage) (string, string, error) {
+//
+// 通用 panic recover：插件 gRPC 客户端调用若 panic（如 nil client / 序列化失败），
+// 转为错误返回而非崩溃宿主。插件 SDK 层（sdk/tool.go）已先行 recover 一次（Handler
+// panic），本层兜底覆盖 gRPC 传输异常与未用 SDK 的插件。对齐「工具意外不中断会话」
+// 的最终防线设计（与 core.executeToolBody 的 panic recover 互补）。
+func (r *RemoteTool) ExecuteWithView(ctx context.Context, args json.RawMessage) (result string, viewJSON string, errRet error) {
+	defer func() {
+		if rv := recover(); rv != nil {
+			errRet = fmt.Errorf("tool %s panicked (remote): %v", r.name, rv)
+		}
+	}()
 	resp, err := r.client.ExecuteTool(ctx, &proto.ExecuteToolRequest{
 		ToolName:      r.name,
 		ArgumentsJson: string(args),

@@ -246,3 +246,109 @@ func TestToolExecuteWaterfallVeto(t *testing.T) {
 		t.Fatalf("execute veto 应返回错误, got %v", err)
 	}
 }
+
+// panickyTool 在 Execute 中 panic，用于验证 executeToolBody 的通用 panic recover。
+type panickyTool struct{ name string }
+
+func (t *panickyTool) Name() string                      { return t.name }
+func (t *panickyTool) Description() string               { return "panics on execute" }
+func (t *panickyTool) ParametersSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (t *panickyTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	panic("simulated tool panic — should not crash host")
+}
+
+// TestExecuteToolRecoversFromPanic 验证 host 侧 executeToolBody 的通用 panic recover：
+// 工具 Execute panic 时返回错误而非崩溃宿主进程。对齐「工具意外不中断会话」
+// 的最终防线设计——覆盖所有宿主侧工具（builtin / read_spill / run_code / agent 内部工具等）。
+func TestExecuteToolRecoversFromPanic(t *testing.T) {
+	m := newPipelineManager(t)
+	if err := m.toolRegistry.Register(&panickyTool{name: "panicky"}); err != nil {
+		t.Fatalf("register panicky tool: %v", err)
+	}
+	_, err := m.ExecuteTool(context.Background(), "panicky", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("panicky tool should return error, got nil")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("err = %v, want contains 'panicked'", err)
+	}
+	if !strings.Contains(err.Error(), "simulated tool panic") {
+		t.Fatalf("err = %v, want contains panic message", err)
+	}
+}
+
+// TestExecuteToolRecoversFromViewPanic 验证 ViewExecutor 的 ViewFn panic 也被 recover。
+type panickyViewExecutor struct{ name string }
+
+func (t *panickyViewExecutor) Name() string                      { return t.name }
+func (t *panickyViewExecutor) Description() string               { return "panics on view exec" }
+func (t *panickyViewExecutor) ParametersSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (t *panickyViewExecutor) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	return "ok", nil
+}
+func (t *panickyViewExecutor) ExecuteWithView(_ context.Context, _ json.RawMessage) (string, string, error) {
+	panic("simulated view-exec panic — should not crash host")
+}
+
+func TestExecuteToolRecoversFromViewPanic(t *testing.T) {
+	m := newPipelineManager(t)
+	if err := m.toolRegistry.Register(&panickyViewExecutor{name: "panicky-view-exec"}); err != nil {
+		t.Fatalf("register panicky view-exec tool: %v", err)
+	}
+	_, err := m.ExecuteTool(context.Background(), "panicky-view-exec", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("panicky view-exec tool should return error, got nil")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("err = %v, want contains 'panicked'", err)
+	}
+}
+
+// TestRemoteToolRecoversFromPanic 验证 RemoteTool.ExecuteWithView 的通用 panic recover：
+// 客户端调用 panic 时返回错误而非崩溃宿主。模拟方式：直接调用 nil client 触发 panic。
+func TestRemoteToolRecoversFromPanic(t *testing.T) {
+	rt := &RemoteTool{name: "nil-client"}
+	// client 为 nil，调用 .ExecuteTool 必然 panic（nil pointer dereference）。
+	_, _, err := rt.ExecuteWithView(context.Background(), json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("nil client should cause panic that is recovered to error, got nil err")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("err = %v, want contains 'panicked'", err)
+	}
+}
+
+// TestReadSpillRejectsFilePath 验证 read_spill 工具拒绝文件路径形式的 locator，
+// 引导模型改用 spill:N 格式。这修复了模型误把 read_spill 当成文件读取工具的问题。
+func TestReadSpillRejectsFilePath(t *testing.T) {
+	store, err := NewSpillStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSpillStore: %v", err)
+	}
+	tool := &readSpillTool{store: store}
+
+	// 文件路径形式的 locator 应被拒绝（不返回底层 file-not-found 错误）
+	_, err = tool.Execute(context.Background(), json.RawMessage(`{"locator":"D:/foo/spill-3.txt"}`))
+	if err == nil {
+		t.Fatal("file path locator should be rejected")
+	}
+	if !strings.Contains(err.Error(), "spill:<id>") {
+		t.Fatalf("err = %v, want hint about spill:<id> format", err)
+	}
+	if !strings.Contains(err.Error(), "filesystem path") {
+		t.Fatalf("err = %v, want hint about filesystem path misuse", err)
+	}
+
+	// 合法 locator 应正常工作（先保存再读取）
+	locator, err := store.SaveText("hello spill")
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	out, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"locator":%q}`, locator)))
+	if err != nil {
+		t.Fatalf("read spill: %v", err)
+	}
+	if out != "hello spill" {
+		t.Fatalf("got %q, want 'hello spill'", out)
+	}
+}
