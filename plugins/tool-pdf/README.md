@@ -1,6 +1,6 @@
 # tool-pdf
 
-DSC 插件：为模型提供读取 PDF 文件以获取内容信息的能力。
+DSC 插件：为模型提供读取 PDF 文件以及创建 PDF 文件的能力。
 
 ## 设计
 
@@ -10,6 +10,9 @@ DSC 插件：为模型提供读取 PDF 文件以获取内容信息的能力。
 pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节），不提供「文本提取」能力——
 其 `api.ExtractContent` 返回的是 PDF 内容流操作符（如 `[(Hello) -100 (World)] TJ`），不是纯文本。
 本插件填补这最后一层：把操作符序列解释为带位置的文本片段，经字体字典解码为 Unicode，按视觉行重组。
+
+创建侧把自带的 TrueType 中文字体注册进 pdfcpu 的字体嵌入机制，走 Type0 嵌入子集路径渲染中文，
+并按可用行宽做字符级折行（含避头尾 kinsoku 规则）。
 
 ### 架构
 
@@ -33,10 +36,17 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 │                                                              │
 │  font_decoder.go                                            │
 │    └─ decode(bytes) → Unicode string                        │
+│                                                              │
+│  pdf_writer.go + font_cjk.go（创建侧）                      │
+│    ├─ resolveFontName：标准 14 或自带 CJK 字体解析           │
+│    ├─ wrapTextForRender：CJK 按行宽折行（避头尾）            │
+│    └─ createPDFFromText / handleAppendText                  │
+│        标准 14 字体：直接写字符码                             │
+│        CJK 字体：注册 fonts/ 下 .ttf → Embed=GID → 子集嵌入  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 字体解码优先级
+### 字体解码优先级（读取侧）
 
 1. **ToUnicode CMap**（最高优先级）：直接给出 Unicode 字符，最可靠
 2. **Encoding.Differences**：覆盖基础编码的字符映射
@@ -61,13 +71,13 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 
 | 工具 | 用途 |
 |------|------|
-| `pdf_create_text` | 从纯文本创建 PDF（自动分页，标准 14 字体，A4/Letter/Legal 纸张） |
+| `pdf_create_text` | 从纯文本创建 PDF（自动分页与 CJK 折行，标准 14 字体 + 内置 CJK 字体，A4/Letter/Legal 纸张） |
 | `pdf_images_to_pdf` | 图片列表转 PDF（每张图一页，支持 JPG/PNG/TIFF/WEBP） |
-| `pdf_append_text` | 向已有 PDF 末尾追加文本页（保留原内容） |
+| `pdf_append_text` | 向已有 PDF 末尾追加文本页（保留原内容，支持 CJK 字体与折行） |
 
 ## 创建 PDF 字体支持
 
-仅支持 PDF 标准 14 字体（无需嵌入，开箱即用）：
+### 标准 14 字体（无需嵌入，开箱即用）
 
 - **Times**: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic
 - **Helvetica**: Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique
@@ -75,9 +85,20 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 - **Symbol**: Symbol（希腊字母与数学符号）
 - **ZapfDingbats**: ZapfDingbats（装饰符号）
 
-**中文/CJK 限制**：标准 14 字体不含 CJK 字形。如需生成含中文的 PDF，建议：
-1. 用 `pdf_images_to_pdf` 把渲染好的图片（含中文）封装为 PDF
-2. 或在宿主层用视觉模型直接生成 PDF 内容
+### 内置 CJK 字体（支持中文等字符，自动嵌入）
+
+插件自带 TrueType 中文字体放于 `fonts/` 目录（当前含 HarmonyOS Sans 全字重及简繁变体）。
+`pdf_create_text` / `pdf_append_text` 的 `font` 参数接受这些 `.ttf` 的文件名主干（不含扩展名），
+例如简体中文用 `HarmonyOS_Sans_SC_Regular`。
+
+实现方式：把选中的 `.ttf` 安装进 pdfcpu 的「用户字体注册表」（进程级临时目录，不污染用户主页），
+经 `EnsureFontDict` 生成 **Identity-H + CIDToGIDMap Identity** 的 Type0 嵌入子集字体；
+`WriteMultiLine` 以 `Embed` 模式把每个 Unicode 码点编码为 2 字节 GID 并累计 `UsedGIDs`，
+写入前调用 `UpdateUserfonts` 按已用 GID 收尾（子集化、写宽度/CIDSet/ToUnicode）。
+CJK 文本按页面可用行宽做字符级折行，复用 pdfcpu 的 `WordWrapFloat`（自动避头尾，
+禁止行首/行尾悬挂禁则标点）。
+
+生成的 PDF 嵌入字体子集并携带 ToUnicode CMap，可被本插件 `pdf_read_text` 及第三方阅读器正常提取中文。
 
 ## 沙箱
 
@@ -97,11 +118,15 @@ plugins:
     binary_path: ./plugins/tool-pdf/tool-pdf
 ```
 
+`fonts/` 目录需随插件二进制一起部署（查找优先级：可执行文件同级 `fonts/` → 工作目录 `fonts/`）。
+
 ## 限制
 
 - **TJ 字偶间距启发式**：当前用 `-500` 阈值判断是否在 TJ 数组中插入空格。
   部分使用大量字偶间距的 PDF（如代码字体）可能在字符间误插空格。
-- **CID 字体无 ToUnicode**：若 CID 字体（CJK 常用）缺少 ToUnicode CMap，
+- **CID 字体无 ToUnicode（读取侧）**：若 CID 字体（CJK 常用）缺少 ToUnicode CMap，
   无法可靠解码（输出 `?` 占位）。可经 `pdf_extract_images` 走视觉路径。
 - **加密 PDF**：当前不支持密码输入；加密 PDF 的 `pdf_read_text` 会失败。
 - **位置感知简化**：仅按 y 坐标聚合行，不处理多列布局、旋转文本、表格等复杂版面。
+- **CJK 分页行数为估算**：按「行数 × 1.5 字号」估算每页容量（折行后的行数计入），
+  极端字号与行距组合可能与实际略有出入。

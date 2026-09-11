@@ -2,10 +2,12 @@
 //
 // 基于 pdfcpu 的 XRefTable + Page + TextDescriptor API 创建 PDF 文件。
 // 支持标准 14 字体（Times / Helvetica / Courier 及 Bold/Italic 变体），
-// 自动分页（按行数估算 + bbox 兜底），纸张可选（A4 / Letter / Legal）。
+// 以及插件自带的内嵌 CJK 字体（如 HarmonyOS Sans SC，走 Type0 嵌入子集路径）。
+// CJK 文本按可用行宽做字符级折行（含避头尾），自动分页，纸张可选（A4 / Letter / Legal）。
 //
 // 设计原则：
 //   - 标准 14 字体无需嵌入，开箱即用
+//   - 中文字体经 pdfcpu 用户字体注册表嵌入子集，渲染后可正常被读取器提取
 //   - 自动分页按字号 × 1.5 行距估算，保守不溢出
 //   - 所有输出路径必须在工作空间根内（沙箱边界）
 package main
@@ -52,7 +54,7 @@ var standardFonts = []string{
 // 参数：
 //   - outPath: 输出 PDF 路径（必须在工作空间内）
 //   - text: 文本内容（\n 分行）
-//   - fontName: 字体名（默认 "Helvetica"；可选标准 14 字体之一）
+//   - fontName: 字体名（默认 "Helvetica"；可选标准 14 字体之一或内置 CJK 字体名）
 //   - fontSize: 字号（默认 12）
 //   - paper: 纸张（默认 "A4"）
 //   - margin: 页边距（默认 50 points）
@@ -69,9 +71,12 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 	if fontName == "" {
 		fontName = "Helvetica"
 	}
-	if !isStandardFont(fontName) {
-		return "", 0, fmt.Errorf("unsupported font %q (must be one of standard 14: Times/Helvetica/Courier variants, Symbol, ZapfDingbats)", fontName)
+	// 解析字体：标准 14 字体原样；内置 CJK 字体解析为 pdfcpu PostScript 名并走嵌入子集路径
+	pdfName, cjk, err := resolveFontName(fontName)
+	if err != nil {
+		return "", 0, err
 	}
+	fontName = pdfName
 	if fontSize <= 0 || fontSize > 200 {
 		fontSize = 12
 	}
@@ -104,7 +109,17 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 	}
 	xRefTable := ctx.XRefTable
 
-	// 4. 注册字体到 XRefTable（标准 14 字体无需嵌入，仅创建字体字典引用）
+	// 重新断言字体目录：NewDefaultConfiguration 会把 font.UserFontDir 重置为用户目录，
+	// 而嵌入字体（.gob）实际安装在进程级目录中，必须在使用字体前改回。
+	if cjk {
+		if _, err := ensureUserFontDir(); err != nil {
+			return "", 0, err
+		}
+	}
+
+	// 4. 注册字体到 XRefTable
+	// 标准 14 字体仅创建字体字典引用；CJK 字体创建嵌入 Type0 子集字典（插入 W/CIDSet/ToUnicode 引用，
+	// 占位内容；实际子集在步骤 7.5 写入前按已用 GID 收尾）。
 	fontIndRef, err := pdffont.EnsureFontDict(xRefTable, fontName, "", "", false, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("ensure font %s: %w", fontName, err)
@@ -118,8 +133,11 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 		maxLinesPerPage = 1
 	}
 
-	// 6. 按行切分文本（保留空行）
-	lines := strings.Split(text, "\n")
+	// 6. 按行切分文本并按可用行宽折行（CJK 字符级折行，Latin 保持原样避免回归）
+	lines, err := wrapTextForRender(text, fontName, fontSize, dim.Width-2*margin, cjk)
+	if err != nil {
+		return "", 0, err
+	}
 
 	// 7. 分页渲染
 	pageCount := 0
@@ -129,7 +147,7 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 			end = len(lines)
 		}
 		pageLines := lines[start:end]
-		if err := addPageWithText(ctx, xRefTable, fontIndRef, fontName, pageLines, fontSize, dim, margin, lineHeight); err != nil {
+		if err := addPageWithText(ctx, xRefTable, fontIndRef, fontName, pageLines, fontSize, dim, margin, lineHeight, cjk); err != nil {
 			return "", 0, fmt.Errorf("page %d: %w", pageCount+1, err)
 		}
 		pageCount++
@@ -137,10 +155,22 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 
 	if pageCount == 0 {
 		// 至少一页（即使内容为空）
-		if err := addPageWithText(ctx, xRefTable, fontIndRef, fontName, []string{""}, fontSize, dim, margin, lineHeight); err != nil {
+		if err := addPageWithText(ctx, xRefTable, fontIndRef, fontName, []string{""}, fontSize, dim, margin, lineHeight, cjk); err != nil {
 			return "", 0, fmt.Errorf("page 1: %w", err)
 		}
 		pageCount = 1
+	}
+
+	// 7.5 收尾嵌入字体：按写入过程中累计的已用 GID 重新子集化、写宽度/CIDSet/ToUnicode。
+	// pdfcpu 的 WriteContext 不自动做此步（仅 stamp/form 等路径手动调用），必须显式收尾，
+	// 否则嵌入字体将只有 .notdef（glyph 0），渲染为空。
+	if cjk {
+		if _, err := ensureUserFontDir(); err != nil {
+			return "", 0, err
+		}
+		if err := pdffont.UpdateUserfonts(xRefTable, map[string]types.IndirectRef{fontName: *fontIndRef}); err != nil {
+			return "", 0, fmt.Errorf("finalize font %s: %w", fontName, err)
+		}
 	}
 
 	// 8. 写入文件
@@ -156,7 +186,9 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 
 // addPageWithText 向 PDF Context 添加一页，写入多行文本。
 // 文本从页面左上角开始，按行高向下排列（PDF 坐标系 y 轴向上，故首行 y 最高）。
-func addPageWithText(ctx *model.Context, xRefTable *model.XRefTable, fontIndRef *types.IndirectRef, fontName string, lines []string, fontSize float64, dim types.Dim, margin, lineHeight float64) error {
+// embed 为 true 表示字体为内嵌 CJK 字体：WriteMultiLine 需以 Embed 模式把每个
+// Unicode 码点编码为 2 字节 GID，并累计 UsedGIDs。
+func addPageWithText(ctx *model.Context, xRefTable *model.XRefTable, fontIndRef *types.IndirectRef, fontName string, lines []string, fontSize float64, dim types.Dim, margin, lineHeight float64, embed bool) error {
 	// 1. 创建页面对象（pdfcpu model.Page：包含 MediaBox + FontMap + 内容 Buf）
 	p := model.Page{
 		MediaBox: types.RectForDim(dim.Width, dim.Height),
@@ -189,15 +221,21 @@ func addPageWithText(ctx *model.Context, xRefTable *model.XRefTable, fontIndRef 
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		// 转义 PDF 字符串字面量特殊字符
-		escaped := escapePDFString(line)
+		// 转义 PDF 字符串字面量特殊字符。
+		// 标准 14 字体绕开 WriteMultiLine 的自动转义，故在此预转义；
+		// 内嵌 CJK 字体由 WriteMultiLine(PrepBytes) 统一编码为 GID 并转义，此处不再预转义。
+		text := line
+		if !embed {
+			text = escapePDFString(line)
+		}
 		td := model.TextDescriptor{
-			Text:     escaped,
+			Text:     text,
 			FontName: fontName,
 			FontKey:  fontKey,
 			FontSize: fontSize,
 			Scale:    1.0,
 			ScaleAbs: true,
+			Embed:    embed,
 			X:        margin,
 			Y:        y,
 		}
@@ -409,22 +447,30 @@ func handleAppendText(ctx context.Context, args json.RawMessage) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("open: %w", err)
 	}
-	defer f.Close()
 	conf := model.NewDefaultConfiguration()
 	pdfCtx, err := api.ReadValidateAndOptimize(f, conf)
+	// 解析完成后立即关闭源文件：ReadValidateAndOptimize 已把结构读入内存，
+	// 尽早释放句柄，Windows 下才能原地覆盖写回（rename 目标文件不能正被打开）。
+	closeErr := f.Close()
 	if err != nil {
 		return "", fmt.Errorf("parse PDF: %w", err)
 	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close source PDF: %w", closeErr)
+	}
 	xRefTable := pdfCtx.XRefTable
 
-	// 参数默认值
+	// 参数默认值 + 字体解析
 	fontName := p.Font
 	if fontName == "" {
 		fontName = "Helvetica"
 	}
-	if !isStandardFont(fontName) {
-		return "", fmt.Errorf("unsupported font %q (must be standard 14)", fontName)
+	pdfName, cjk, err := resolveFontName(fontName)
+	if err != nil {
+		return "", err
 	}
+	fontName = pdfName
+
 	fontSize := p.FontSize
 	if fontSize <= 0 || fontSize > 200 {
 		fontSize = 12
@@ -438,20 +484,28 @@ func handleAppendText(ctx context.Context, args json.RawMessage) (string, error)
 		dim = paperSizes["A4"]
 	}
 
-	// 注册字体
+	// 注册字体前重新断言字体目录（NewDefaultConfiguration 已把 UserFontDir 重置）
+	if cjk {
+		if _, err := ensureUserFontDir(); err != nil {
+			return "", err
+		}
+	}
 	fontIndRef, err := pdffont.EnsureFontDict(xRefTable, fontName, "", "", false, nil)
 	if err != nil {
 		return "", fmt.Errorf("ensure font %s: %w", fontName, err)
 	}
 
-	// 分页 + 追加
+	// 分页 + 追加：先按行切分并按可用行宽折行（同 createPDFFromText）
+	lines, err := wrapTextForRender(p.Text, fontName, fontSize, dim.Width-2*margin, cjk)
+	if err != nil {
+		return "", err
+	}
 	lineHeight := fontSize * 1.5
 	usableHeight := dim.Height - 2*margin
 	maxLinesPerPage := int(usableHeight / lineHeight)
 	if maxLinesPerPage < 1 {
 		maxLinesPerPage = 1
 	}
-	lines := strings.Split(p.Text, "\n")
 	addedPages := 0
 	for start := 0; start < len(lines); start += maxLinesPerPage {
 		end := start + maxLinesPerPage
@@ -459,13 +513,22 @@ func handleAppendText(ctx context.Context, args json.RawMessage) (string, error)
 			end = len(lines)
 		}
 		pageLines := lines[start:end]
-		if err := addPageWithText(pdfCtx, xRefTable, fontIndRef, fontName, pageLines, fontSize, dim, margin, lineHeight); err != nil {
+		if err := addPageWithText(pdfCtx, xRefTable, fontIndRef, fontName, pageLines, fontSize, dim, margin, lineHeight, cjk); err != nil {
 			return "", fmt.Errorf("append page %d: %w", addedPages+1, err)
 		}
 		addedPages++
 	}
 
-	// 写回文件（覆盖原文件）
+	// 写回文件（覆盖原文件）——先收尾嵌入字体（同 createPDFFromText）
+	if cjk {
+		if _, err := ensureUserFontDir(); err != nil {
+			return "", err
+		}
+		if err := pdffont.UpdateUserfonts(xRefTable, map[string]types.IndirectRef{fontName: *fontIndRef}); err != nil {
+			return "", fmt.Errorf("finalize font %s: %w", fontName, err)
+		}
+	}
+
 	tmpOut := absPath + ".tmp"
 	if err := api.CreatePDFFile(xRefTable, tmpOut, conf); err != nil {
 		return "", fmt.Errorf("write PDF: %w", err)

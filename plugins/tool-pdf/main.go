@@ -2,13 +2,11 @@
 //
 // 基于 pdfcpu 库（github.com/pdfcpu/pdfcpu）实现 PDF 结构解析与内容流提取，
 // 自写文本操作符解释器与字体编码解码层（WinAnsi/MacRoman/StandardEncoding + ToUnicode CMap）。
+// 创建侧支持标准 14 字体与内置 CJK 字体（Type0 嵌入子集，渲染中文）。
 //
-// 暴露 5 个模型可见工具：
-//   - pdf_read_text：提取纯文本（按页或选页）
-//   - pdf_info：元数据（页数、版本、字体、加密、页面尺寸）
-//   - pdf_outline：书签大纲（目录树）
-//   - pdf_search：在 PDF 全文搜索关键词
-//   - pdf_extract_images：提取嵌入图片到 spill 区
+// 暴露的工具：
+//   - 读取：pdf_read_text（提取纯文本）、pdf_info、pdf_outline、pdf_search、pdf_extract_images
+//   - 创建：pdf_create_text、pdf_images_to_pdf、pdf_append_text
 //
 // 字体解码策略优先级：ToUnicode CMap > Differences > 基础编码（WinAnsi/MacRoman/Standard）。
 // 不可识别的字节回退为 '?'，保证不返回错误——便于模型判断是否值得继续。
@@ -309,14 +307,6 @@ func handleInfo(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 	}
 
-	// 字体列表（去重 + 排序）
-	fontSet := map[string]bool{}
-	for i := 1; i <= pdfCtx.PageCount && i <= 20; i++ { // 仅前 20 页采样
-		decoders, _ := loadPageFontDecoders(pdfCtx, i)
-		_ = decoders
-	}
-	_ = fontSet
-
 	return b.String(), nil
 }
 
@@ -568,7 +558,7 @@ func main() {
 }`),
 		Handler: handleReadText,
 		ContextFn: func() string {
-			return "PDF 工具集（读取 + 创建）：读取侧 pdf_read_text/pdf_info/pdf_outline/pdf_search/pdf_extract_images；创建侧 pdf_create_text（从文本生成 PDF，自动分页）/pdf_images_to_pdf（图片转 PDF）/pdf_append_text（向已有 PDF 追加文本页）。标准 14 字体（Times/Helvetica/Courier 等）开箱即用；中文等 CJK 内容建议经 pdf_images_to_pdf 走视觉路径。"
+			return "PDF 工具集（读取 + 创建）：读取侧 pdf_read_text/pdf_info/pdf_outline/pdf_search/pdf_extract_images；创建侧 pdf_create_text（从文本生成 PDF，自动分页，支持中文）/pdf_images_to_pdf（图片转 PDF）/pdf_append_text（向已有 PDF 追加文本页）。标准 14 字体开箱即用；中文等 CJK 内容可用插件自带的 HarmonyOS Sans SC 等中文字体直接生成。"
 		},
 	})
 
@@ -635,13 +625,13 @@ func main() {
 	// 工具 6: pdf_create_text —— 从纯文本创建 PDF
 	sdk.Tool(dsc.Tool{
 		Name:        "pdf_create_text",
-		Description: "Create a new PDF file from plain text. Supports standard 14 fonts (Times/Helvetica/Courier variants, Symbol, ZapfDingbats), auto-pagination, and A4/Letter/Legal paper sizes. Text is split by newlines; each page holds as many lines as fit. Use this to generate PDF reports, documents, or code listings from text content.",
+		Description: "Create a new PDF file from plain text. Supports the standard 14 fonts (Times/Helvetica/Courier variants, Symbol, ZapfDingbats) and bundled CJK TrueType fonts (e.g. HarmonyOS_Sans_SC_Regular for Simplified Chinese) that are embedded automatically. Auto-pagination and A4/Letter/Legal paper sizes. Text is split by newlines; each page holds as many lines as fit. Use this to generate PDF reports, documents, or code listings, including Chinese-language documents.",
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "out_path": {"type": "string", "description": "Output PDF file path (must be within workspace root). Will be created or overwritten."},
-    "text": {"type": "string", "description": "Text content for the PDF. Newlines (\\n) start new lines; long lines may overflow horizontally."},
-    "font": {"type": "string", "description": "Font name (default Helvetica). Must be one of: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Symbol, ZapfDingbats.", "default": "Helvetica"},
+    "text": {"type": "string", "description": "Text content for the PDF. Newlines (\\n) start new lines. For Chinese document use one of the bundled CJK fonts."},
+    "font": {"type": "string", "description": "Font name (default Helvetica). Standard 14: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Symbol, ZapfDingbats. Or any bundled CJK TrueType font name in the plugin fonts/ directory, e.g. HarmonyOS_Sans_SC_Regular (Simplified Chinese).", "default": "Helvetica"},
     "font_size": {"type": "number", "description": "Font size in points (default 12).", "default": 12, "minimum": 4, "maximum": 200},
     "paper": {"type": "string", "description": "Paper size (default A4). Options: A4, A4P, A4L (landscape), Letter, LetterP, LetterL, Legal, LegalP, LegalL.", "default": "A4"},
     "margin": {"type": "number", "description": "Page margin in points (default 50). Must be less than half of paper width/height.", "default": 50, "minimum": 0, "maximum": 300}
@@ -669,13 +659,13 @@ func main() {
 	// 工具 8: pdf_append_text —— 在已有 PDF 末尾追加文本页
 	sdk.Tool(dsc.Tool{
 		Name:        "pdf_append_text",
-		Description: "Append text as new page(s) to an existing PDF file. The original content is preserved; new pages are added at the end. Useful for adding conclusions, appendices, or notes to an existing document. Uses the same font/pagination as pdf_create_text.",
+		Description: "Append text as new page(s) to an existing PDF file. The original content is preserved; new pages are added at the end. Useful for adding conclusions, appendices, or notes to an existing document. Supports standard 14 fonts and bundled CJK fonts (embedded). Uses the same font/pagination as pdf_create_text.",
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "file_path": {"type": "string", "description": "Path to the existing PDF file (must be within workspace root). Will be modified in place."},
     "text": {"type": "string", "description": "Text content to append. Newlines (\\n) start new lines."},
-    "font": {"type": "string", "description": "Font name (default Helvetica). Must be a standard 14 font.", "default": "Helvetica"},
+    "font": {"type": "string", "description": "Font name (default Helvetica). Must be a standard 14 font or a bundled CJK TrueType font (e.g. HarmonyOS_Sans_SC_Regular).", "default": "Helvetica"},
     "font_size": {"type": "number", "description": "Font size in points (default 12).", "default": 12, "minimum": 4, "maximum": 200},
     "paper": {"type": "string", "description": "Paper size for new pages (default A4). Original pages keep their size.", "default": "A4"},
     "margin": {"type": "number", "description": "Page margin in points (default 50).", "default": 50, "minimum": 0, "maximum": 300}

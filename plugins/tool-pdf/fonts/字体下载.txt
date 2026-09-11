@@ -1,0 +1,11 @@
+鸿蒙黑体
+https://developer.huawei.com.cn/images/download/general/HarmonyOS-Sans.zip
+
+思源黑体
+https://github.com/adobe-fonts/source-han-sans/releases
+
+思源宋体
+https://github.com/adobe-fonts/source-han-serif/releases
+
+Maple Mono（编程字体）,带连字和控制台图标的圆角等宽字体，中英文宽度完美2:1，细粒度的自定义选项
+https://github.com/subframe7536/maple-font
