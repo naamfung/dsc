@@ -189,6 +189,8 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 - `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致。常用工具 `mkdir`/`ls`/`cat`/`touch`/`rm`/`cp`/`mv`/`grep`/`head`/`tail`/`wc` 已**进程内实现**（`interp.ExecHandler` 拦截，纯 Go 无外部依赖），因此即便在 Windows 且插件子进程 `PATH` 被宿主过滤时这些命令仍可用；未命中的命令仍回退默认 `PATH` 查找外部程序；提供 `filesystem` 能力）
 
+- `tool-pdf`（PDF 读取与创建。读取侧：`pdf_read_text` / `pdf_info` / `pdf_outline` / `pdf_search` / `pdf_extract_images`，自写内容流解释器 + 字体解码（WinAnsi/MacRoman/Standard + ToUnicode CMap；CID 字体缺 ToUnicode 时回退解析内嵌 TrueType cmap 解码中文），按 y 聚合行、按横向间隙识别多栏（以制表符分隔）、依 `Tm` 旋转角把非横行单独分区输出，尽力还原阅读顺序。创建侧：`pdf_create_text` / `pdf_images_to_pdf` / `pdf_append_text`，支持标准 14 字体与自带 CJK 字体（Type0 嵌入子集、字符级折行与真实行距分页）。携带中文字体体积大不进公开仓库，需按插件 `fonts/字体下载.txt` 自行下载。提供 `pdf` 能力）
+
 - `tool-str-replace-editor`（文件编辑：接受 `/workspace` 虚拟根前缀并剥离映射到工作区根；提供 `editor` 能力）
 
 - `tool-browser-use`（无头浏览器工具：`web_fetch` / `web_search` / `browser_click` / `browser_type` / `browser_screenshot`；提供 `browser` 能力）
