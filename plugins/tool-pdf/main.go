@@ -536,7 +536,7 @@ func main() {
 	// 工具 1: pdf_read_text
 	sdk.Tool(dsc.Tool{
 		Name:        "pdf_read_text",
-		Description: "Extract plain text content from a PDF file, page by page. Supports WinAnsi/MacRoman encoded fonts and ToUnicode CMap for CJK. For large PDFs, read in batches using the \"pages\" parameter (e.g. pages=\"1-10\" then pages=\"11-20\") rather than reading all at once—this avoids context overflow and ensures you see all content. Use pdf_info first to check page count.",
+		Description: "Extract plain text content from a PDF file, page by page. Supports WinAnsi/MacRoman encoded fonts and ToUnicode CMap for CJK. For large PDFs, read in batches using the \"pages\" parameter (e.g. pages=\"1-10\" then pages=\"11-20\") rather than reading all at once—this avoids context overflow and ensures you see all content. If a single page has very dense content (e.g. academic papers with small font), read page by page (pages=\"1\" then pages=\"2\") to avoid truncation. Use pdf_info first to check page count.",
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
