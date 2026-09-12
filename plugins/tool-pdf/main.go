@@ -137,9 +137,10 @@ func handleReadText(ctx context.Context, args json.RawMessage) (string, error) {
 	}
 
 	// 限制最大页数（防大 PDF 撑爆上下文）
+	// 默认 10 页/次——引导模型分批读取大 PDF，而非一次性请求全部页
 	maxPages := p.MaxPages
 	if maxPages == 0 {
-		maxPages = 100
+		maxPages = 10
 	}
 	if len(selected) > maxPages {
 		selected = selected[:maxPages]
@@ -169,7 +170,13 @@ func handleReadText(ctx context.Context, args json.RawMessage) (string, error) {
 	// 估算字符数并按需截断（防超大 PDF 撑爆上下文）
 	const maxResultChars = 100 * 1024
 	if len(result) > maxResultChars {
-		result = result[:maxResultChars] + fmt.Sprintf("\n\n[... truncated: total %d chars, showing first %d ...]", len(result), maxResultChars)
+		extractedPages := len(selected)
+		result = result[:maxResultChars] + fmt.Sprintf(
+			"\n\n[... truncated: total %d chars, showing first %d. "+
+				"This batch extracted %d pages. For remaining pages, call pdf_read_text again with pages=\"%d-%d\". "+
+				"Do NOT repeat the same call—use the \"pages\" parameter to read the next batch.]",
+			len(result), maxResultChars, extractedPages,
+			selected[len(selected)-1]+1, selected[len(selected)-1]+1+maxPages-1)
 	}
 	return result, nil
 }
@@ -529,13 +536,13 @@ func main() {
 	// 工具 1: pdf_read_text
 	sdk.Tool(dsc.Tool{
 		Name:        "pdf_read_text",
-		Description: "Extract plain text content from a PDF file. Handles WinAnsi/MacRoman encoded fonts and ToUnicode CMap for CJK. Returns text per page. Use this to read PDF documents directly rather than relying on visual model interpretation.",
+		Description: "Extract plain text content from a PDF file, page by page. Supports WinAnsi/MacRoman encoded fonts and ToUnicode CMap for CJK. For large PDFs, read in batches using the \"pages\" parameter (e.g. pages=\"1-10\" then pages=\"11-20\") rather than reading all at once—this avoids context overflow and ensures you see all content. Use pdf_info first to check page count.",
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
-    "pages": {"type": "string", "description": "Optional page selection, e.g. \"1-3,5,7-9\". Omit for all pages.", "default": ""},
-    "max_pages": {"type": "integer", "description": "Maximum pages to extract (default 100, prevents huge PDFs from overflowing context).", "default": 100, "minimum": 1, "maximum": 1000}
+    "file_path": {"type": "string", "description": "Path to the PDF file."},
+    "pages": {"type": "string", "description": "Page selection to extract, e.g. \"1-10\" or \"1,3,5-7\". For large PDFs, read in batches of ~10 pages at a time. Omit only for small PDFs (<20 pages).", "default": ""},
+    "max_pages": {"type": "integer", "description": "Max pages per call (default 10). If \"pages\" selects more than this, only the first max_pages are returned. Increase only for small pages.", "default": 10, "minimum": 1, "maximum": 100}
   },
   "required": ["file_path"]
 }`),
