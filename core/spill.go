@@ -119,8 +119,8 @@ func spillPreview(content, locator string, head int) string {
 	headStr := string(runes[:head])
 	tailStr := string(runes[len(runes)-head:])
 	return fmt.Sprintf(
-		"[内容已外置: %s]\n%s\n...(完整内容共 %d 字符，可用 read_spill 工具按定位符读取)\n%s",
-		locator, headStr, len(runes), tailStr)
+		"[内容已外置: %s]\n%s\n...(完整内容共 %d 字符。请用 read_spill 工具传入 locator %s 读取完整内容，不要重复调用原工具——重复调用只会返回相同结果并生成新的 locator)\n%s",
+		locator, headStr, len(runes), locator, tailStr)
 }
 
 // readSpillTool 按定位符取回外置内容的工具（模型端读取完整结果）。
