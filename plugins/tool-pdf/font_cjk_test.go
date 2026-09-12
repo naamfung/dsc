@@ -21,17 +21,18 @@ func sourceDir(t *testing.T) string {
 }
 
 // setupCJKEnv 配置测试环境：DSC_WORKSPACE_ROOT 与 TOOL_PDF_FONTS_DIR。
-// 若 CJK 字体未下载则 skip 测试（避免在无字体环境下报错而非跳过）。
+// 若 CJK 字体未就绪（TestMain 下载失败且无已有字体）则 skip 测试。
+// cjkFontName/cjkFontFile 由 TestMain 动态解析（可能是用户已有的字体或自动下载的字体）。
 func setupCJKEnv(t *testing.T) string {
 	t.Helper()
 	srcDir := sourceDir(t)
 	fontsDir := filepath.Join(srcDir, "fonts")
 	os.Setenv("TOOL_PDF_FONTS_DIR", fontsDir)
 
-	// 检查 CJK 字体是否存在；不存在则 skip（TestMain 会尝试自动下载，但下载失败时仍 skip）
+	// 检查 CJK 字体是否存在；不存在则 skip
 	fontPath := filepath.Join(fontsDir, cjkFontFile)
 	if st, err := os.Stat(fontPath); err != nil || st.Size() < 1000000 {
-		t.Skipf("CJK font %s not available (download failed or incomplete); skipping CJK test", cjkFontFile)
+		t.Skipf("CJK font %s not available; skipping CJK test", cjkFontFile)
 	}
 
 	ws := t.TempDir()

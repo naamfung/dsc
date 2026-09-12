@@ -7,17 +7,24 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
 // cjkFontName 测试使用的 CJK 字体名（文件名主干，不含扩展名）。
-// Noto Sans SC 是 Google 开源的 CJK 字体（基于思源黑体），经 Google Fonts gstatic
-// 公开分发 TrueType 格式（.ttf，含 glyf 表），pdfcpu 可直接嵌入。
+// TestMain 启动时自动检测：若 fonts/ 目录已存在任意 .ttf 字体则用之；
+// 否则从 Google Fonts gstatic 下载 Noto Sans SC Regular（TrueType 格式）。
 // License: OFL-1.1。
-const cjkFontName = "NotoSansSC-Regular"
+var cjkFontName = "NotoSansSC-Regular"
 
 // cjkFontFile 字体文件名（.ttf 格式，TrueType glyf table）。
-const cjkFontFile = "NotoSansSC-Regular.ttf"
+var cjkFontFile = "NotoSansSC-Regular.ttf"
+
+// defaultCJKFontName / defaultCJKFontFile 是 TestMain 自动下载的默认字体。
+const (
+	defaultCJKFontName = "NotoSansSC-Regular"
+	defaultCJKFontFile = "NotoSansSC-Regular.ttf"
+)
 
 // cjkFontURLs 字体下载源（按优先级尝试；Google Fonts gstatic 优先）。
 // 注意：必须使用 TrueType (.ttf) 格式——pdfcpu 不支持 OpenType CFF (.otf) 字体。
@@ -26,34 +33,41 @@ var cjkFontURLs = []string{
 	"https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/Variable/TTF/Subset/NotoSansSC-VF.ttf",
 }
 
-// TestMain 在所有测试前自动检查 fonts/ 目录，若 CJK 字体缺失则自动下载。
+// TestMain 在所有测试前自动检查 fonts/ 目录：
+//  1. 若已存在任意 .ttf 字体（如用户手动放置的 HarmonyOS Sans SC），直接用之，不下载
+//  2. 若无任何 .ttf 字体，从 Google Fonts gstatic 下载 Noto Sans SC Regular
+//  3. 下载失败时 CJK 测试自动 skip（不报错）
 //
-// 设计目标：让插件在任何开发环境（含 CI）中都能跑完整测试，无需手动下载字体。
-// 下载的字体保留在 fonts/ 目录（不删除），后续测试可直接复用。
-//
-// 字体选择：Source Han Sans SC（思源黑体）—— Adobe + Google 联合开源（OFL-1.1），
-// GitHub 公开仓库 adobe-fonts/source-han-sans 稳定分发，无需 license 担忧。
-// 原硬编码 HarmonyOS Sans SC 改为通用名，任何 .ttf/.otf CJK 字体均可工作。
+// 设计目标：让插件在任何开发环境（含 CI）中都能跑完整测试，无需手动下载字体；
+// 同时尊重用户已有的字体配置（不覆盖、不忽略用户手动放置的 .ttf 字体）。
 func TestMain(m *testing.M) {
-	if err := ensureCJKFont(); err != nil {
+	if err := resolveCJKFont(); err != nil {
 		// 下载失败不阻止测试——CJK 测试会自行 skip
-		fmt.Fprintf(os.Stderr, "[font_setup] CJK font download skipped: %v\n", err)
-		fmt.Fprintf(os.Stderr, "[font_setup] CJK tests will be skipped. Manually download %s to plugins/tool-pdf/fonts/ to enable them.\n", cjkFontFile)
+		fmt.Fprintf(os.Stderr, "[font_setup] CJK font setup failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[font_setup] CJK tests will be skipped. Manually place a .ttf CJK font in plugins/tool-pdf/fonts/ to enable them.\n")
 	}
 	os.Exit(m.Run())
 }
 
-// ensureCJKFont 确保 fonts/ 目录中存在 CJK 字体文件。
-// 已存在则跳过；不存在则依次尝试 cjkFontURLs 中的下载源。
-func ensureCJKFont() error {
+// resolveCJKFont 解析测试使用的 CJK 字体：
+//  1. 扫描 fonts/ 目录，若已有任意 .ttf 字体则用它（设置 cjkFontName/cjkFontFile）
+//  2. 若无，下载默认字体（Noto Sans SC Regular）
+func resolveCJKFont() error {
 	srcDir := testSourceDir()
 	fontsDir := filepath.Join(srcDir, "fonts")
-	fontPath := filepath.Join(fontsDir, cjkFontFile)
 
-	// 已存在则跳过
-	if st, err := os.Stat(fontPath); err == nil && st.Size() > 1000000 {
+	// 1. 扫描已有 .ttf 字体
+	if name, file, ok := findExistingTTF(fontsDir); ok {
+		cjkFontName = name
+		cjkFontFile = file
+		fmt.Fprintf(os.Stderr, "[font_setup] using existing font: %s\n", file)
 		return nil
 	}
+
+	// 2. 无已有字体，下载默认字体
+	cjkFontName = defaultCJKFontName
+	cjkFontFile = defaultCJKFontFile
+	fontPath := filepath.Join(fontsDir, cjkFontFile)
 
 	// 确保 fonts 目录存在
 	if err := os.MkdirAll(fontsDir, 0755); err != nil {
@@ -70,6 +84,40 @@ func ensureCJKFont() error {
 		return nil
 	}
 	return fmt.Errorf("all download sources failed")
+}
+
+// findExistingTTF 扫描 fonts/ 目录，返回第一个找到的 .ttf 字体文件名与主干名。
+// 若目录中有多个 .ttf，取文件大小最大的（通常 CJK 字体远大于 Latin 字体）。
+func findExistingTTF(fontsDir string) (name, file string, ok bool) {
+	entries, err := os.ReadDir(fontsDir)
+	if err != nil {
+		return "", "", false
+	}
+	var bestFile string
+	var bestSize int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if ext != ".ttf" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.Size() > bestSize {
+			bestSize = info.Size()
+			bestFile = e.Name()
+		}
+	}
+	if bestFile == "" || bestSize < 1000000 {
+		// 小于 1MB 的不太可能是 CJK 字体（CJK 字体通常 > 5MB）
+		return "", "", false
+	}
+	stem := strings.TrimSuffix(bestFile, filepath.Ext(bestFile))
+	return stem, bestFile, true
 }
 
 // downloadFont 从 url 下载字体到 outPath（先写临时文件再 rename，避免半成品）。
