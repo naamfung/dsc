@@ -2,8 +2,10 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -14,10 +16,19 @@ func TestHookBridgeLoadConfig(t *testing.T) {
 	os.WriteFile(hookPath, []byte("#!/bin/sh\ncat > /dev/null\necho '{\"veto\":false}'"), 0755)
 
 	configPath := filepath.Join(dir, "hooks.json")
-	os.WriteFile(configPath, []byte(`{
-		"before_tool": [{"matcher": "shell", "command": "`+hookPath+`"}],
-		"after_tool": [{"matcher": "*", "command": "`+hookPath+`"}]
-	}`), 0644)
+	// 用 json.Marshal 构造配置：自动转义路径中的反斜杆（Windows 路径含 \U 等，
+	// 直接字符串拼接会把非法转义塞进 JSON，导致解析失败）
+	cfg := HookConfig{
+		BeforeTool: []HookEntry{{Matcher: "shell", Command: hookPath}},
+		AfterTool:  []HookEntry{{Matcher: "*", Command: hookPath}},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	hb := NewHookBridge()
 	if err := hb.LoadConfig(configPath); err != nil {
@@ -59,37 +70,57 @@ func TestHookBridgeMatchPattern(t *testing.T) {
 }
 
 func TestHookBridgeBeforeToolVeto(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes a /bin/sh shebang script; not supported on Windows")
+	}
 	dir := t.TempDir()
 	// 创建一个 veto 钩子
 	hookPath := filepath.Join(dir, "veto.sh")
 	os.WriteFile(hookPath, []byte("#!/bin/sh\ncat > /dev/null\necho '{\"veto\":true,\"output\":\"blocked by hook\"}'"), 0755)
 
 	configPath := filepath.Join(dir, "hooks.json")
-	os.WriteFile(configPath, []byte(`{
-		"before_tool": [{"matcher": "shell", "command": "`+hookPath+`"}]
-	}`), 0644)
+	cfg := HookConfig{
+		BeforeTool: []HookEntry{{Matcher: "shell", Command: hookPath}},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	hb := NewHookBridge()
 	if err := hb.LoadConfig(configPath); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	_, err := hb.RunBeforeTool(context.Background(), "shell", `{"command":"ls"}`)
+	_, err = hb.RunBeforeTool(context.Background(), "shell", `{"command":"ls"}`)
 	if err == nil {
 		t.Error("should be vetoed")
 	}
 }
 
 func TestHookBridgeAfterToolModify(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executes a /bin/sh shebang script; not supported on Windows")
+	}
 	dir := t.TempDir()
 	// 创建一个修改结果的钩子
 	hookPath := filepath.Join(dir, "modify.sh")
 	os.WriteFile(hookPath, []byte("#!/bin/sh\ncat > /dev/null\necho '{\"veto\":false,\"output\":\"modified result\"}'"), 0755)
 
 	configPath := filepath.Join(dir, "hooks.json")
-	os.WriteFile(configPath, []byte(`{
-		"after_tool": [{"matcher": "*", "command": "`+hookPath+`"}]
-	}`), 0644)
+	cfg := HookConfig{
+		AfterTool: []HookEntry{{Matcher: "*", Command: hookPath}},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	hb := NewHookBridge()
 	if err := hb.LoadConfig(configPath); err != nil {

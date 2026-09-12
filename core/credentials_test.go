@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -116,13 +117,16 @@ func TestCredentialStorePersistence(t *testing.T) {
 		t.Errorf("persistence = %q, want secret-value", val)
 	}
 
-	// 文件权限应为 0600
-	info, err := os.Stat(filepath.Join(dir, "plugin-z.json"))
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("file perm = %o, want 0600", info.Mode().Perm())
+	// 文件权限应为 0600（Unix 权限位；Windows 无权限位语义，os.Stat 恒返回
+	// 0666/0444，权限断言仅在 Unix 系平台成立）
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(dir, "plugin-z.json"))
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("file perm = %o, want 0600", info.Mode().Perm())
+		}
 	}
 }
 
