@@ -12,6 +12,7 @@ import (
 
 // sourceDir 返回本文件的目录，用于定位插件 fonts/ 目录（测试时工作目录可能不是插件目录）。
 func sourceDir(t *testing.T) string {
+	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -20,11 +21,18 @@ func sourceDir(t *testing.T) string {
 }
 
 // setupCJKEnv 配置测试环境：DSC_WORKSPACE_ROOT 与 TOOL_PDF_FONTS_DIR。
+// 若 CJK 字体未下载则 skip 测试（避免在无字体环境下报错而非跳过）。
 func setupCJKEnv(t *testing.T) string {
 	t.Helper()
 	srcDir := sourceDir(t)
 	fontsDir := filepath.Join(srcDir, "fonts")
 	os.Setenv("TOOL_PDF_FONTS_DIR", fontsDir)
+
+	// 检查 CJK 字体是否存在；不存在则 skip（TestMain 会尝试自动下载，但下载失败时仍 skip）
+	fontPath := filepath.Join(fontsDir, cjkFontFile)
+	if st, err := os.Stat(fontPath); err != nil || st.Size() < 1000000 {
+		t.Skipf("CJK font %s not available (download failed or incomplete); skipping CJK test", cjkFontFile)
+	}
 
 	ws := t.TempDir()
 	os.Setenv("DSC_WORKSPACE_ROOT", ws)
@@ -36,7 +44,8 @@ func setupCJKEnv(t *testing.T) string {
 }
 
 // TestCreateReadChineseRoundTrip 端到端验证中文 PDF 创建并读回：
-// 用内置 HarmonyOS Sans SC 字体生成含中文的 PDF，再用 pdf_read_text 读回，断言中文存活。
+// 用 CJK 字体（Source Han Sans SC 或任何已下载的 CJK 字体）生成含中文的 PDF，
+// 再用 pdf_read_text 读回，断言中文存活。
 func TestCreateReadChineseRoundTrip(t *testing.T) {
 	ws := setupCJKEnv(t)
 	outPath := filepath.Join(ws, "chinese.pdf")
@@ -46,7 +55,7 @@ func TestCreateReadChineseRoundTrip(t *testing.T) {
 	createArgs, _ := json.Marshal(map[string]any{
 		"out_path":  outPath,
 		"text":      body,
-		"font":      "HarmonyOS_Sans_SC_Regular",
+		"font":      cjkFontName,
 		"font_size": 14,
 		"paper":     "A4",
 	})
@@ -100,7 +109,7 @@ func TestCreateReadChineseAppend(t *testing.T) {
 	appendArgs, _ := json.Marshal(map[string]any{
 		"file_path": outPath,
 		"text":      "追加的中文页面内容。",
-		"font":      "HarmonyOS_Sans_SC_Regular",
+		"font":      cjkFontName,
 	})
 	if _, err := handleAppendText(context.Background(), appendArgs); err != nil {
 		t.Fatalf("append Chinese page: %v", err)

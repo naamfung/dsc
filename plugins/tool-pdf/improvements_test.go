@@ -57,30 +57,18 @@ func TestRenderTJItems(t *testing.T) {
 	}
 }
 
-// findHarmonySCRegular 定位并读取自带简体中文字体的字节（测试用）。
-func findHarmonySCRegular(t *testing.T) []byte {
+// findCJKFontFile 定位并读取自带简体中文字体的字节（测试用）。
+// 使用 cjkFontFile 常量（TestMain 自动下载的字体），不再硬编码特定字体名。
+func findCJKFontFile(t *testing.T) []byte {
 	t.Helper()
 	fsDir := bundledFontsDir()
 	if fsDir == "" {
 		t.Skip("fonts dir not found; set TOOL_PDF_FONTS_DIR")
 	}
-	var path string
-	err := filepath.WalkDir(fsDir, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && filepath.Base(p) == "HarmonyOS_Sans_SC_Regular.ttf" {
-			path = p
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	if err != nil || path == "" {
-		t.Skipf("HarmonyOS_Sans_SC_Regular.ttf not found under %s", fsDir)
-	}
+	path := filepath.Join(fsDir, cjkFontFile)
 	bb, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read font: %v", err)
+		t.Skipf("%s not found under %s (TestMain should have downloaded it)", cjkFontFile, fsDir)
 	}
 	return bb
 }
@@ -89,7 +77,7 @@ func findHarmonySCRegular(t *testing.T) []byte {
 // 至少覆盖若干 CJK 区汉字——这是读侧无 ToUnicode 时的中文回退基础。
 func TestGIDToUnicodeFromTTF(t *testing.T) {
 	setupCJKEnv(t)
-	m := gidToUnicodeFromTTF(findHarmonySCRegular(t))
+	m := gidToUnicodeFromTTF(findCJKFontFile(t))
 	if len(m) == 0 {
 		t.Fatal("expected non-empty GID→Unicode map")
 	}
@@ -147,7 +135,7 @@ func TestLineHeightForFont(t *testing.T) {
 		t.Errorf("Courier lineHeight = %v, want 18", got)
 	}
 
-	ps, cjk, err := resolveFontName("HarmonyOS_Sans_SC_Regular")
+	ps, cjk, err := resolveFontName(cjkFontName)
 	if err != nil || !cjk {
 		t.Skipf("skip CJK line-height check: %v (%v)", cjk, err)
 	}
@@ -159,8 +147,10 @@ func TestLineHeightForFont(t *testing.T) {
 	if got < min {
 		t.Errorf("CJK lineHeight = %v, want >= floor %v", got, min)
 	}
-	if got >= 18 {
-		t.Errorf("CJK lineHeight = %v, want < 1.5×12 (18) to show real metrics are used", got)
+	// CJK 字体的实际行高由字体度量决定，可能远大于 1.5×字号（如 Noto Sans SC 约 34pt）。
+	// 关键是它 != 18（标准 14 字体的 1.5×12），证明走的是真实字体度量而非固定值。
+	if got == 18 {
+		t.Errorf("CJK lineHeight = 18 (1.5×12), expected real font metrics to be used (got %v for %s)", got, ps)
 	}
 	if !strings.Contains(strings.ToLower(ps), "harmony") {
 		t.Logf("CJK psName=%q", ps)

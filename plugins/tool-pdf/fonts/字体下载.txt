@@ -1,11 +1,34 @@
-鸿蒙黑体
-https://developer.huawei.com.cn/images/download/general/HarmonyOS-Sans.zip
+CJK 字体下载说明
+=================
 
-思源黑体
-https://github.com/adobe-fonts/source-han-sans/releases
+测试自动下载
+------------
+运行 `go test` 时，TestMain 会自动检查 fonts/ 目录：
+- 若 NotoSansSC-Regular.ttf 不存在，则从 Google Fonts gstatic 下载（TrueType 格式）
+- 下载后保留在 fonts/ 目录，后续测试直接复用
+- 下载失败时 CJK 测试自动 skip（不报错）
 
-思源宋体
-https://github.com/adobe-fonts/source-han-serif/releases
+注意：必须使用 TrueType (.ttf) 格式——pdfcpu 不支持 OpenType CFF (.otf) 字体。
+Google Fonts gstatic 提供的 Noto Sans SC 是 TrueType 格式（含 glyf table）。
 
-Maple Mono（编程字体）,带连字和控制台图标的圆角等宽字体，中英文宽度完美2:1，细粒度的自定义选项
-https://github.com/subframe7536/maple-font
+手动下载（可选）
+----------------
+如需手动放置其他 CJK 字体，仅支持 .ttf (TrueType) 格式。
+字体名按文件名主干匹配（不区分大小写），例如：
+- NotoSansSC-Regular.ttf → 字体名 "NotoSansSC-Regular"
+- SourceHanSansSC-Regular.ttf → 字体名 "SourceHanSansSC-Regular"
+- HarmonyOS_Sans_SC_Regular.ttf → 字体名 "HarmonyOS_Sans_SC_Regular"
+
+推荐字体（TrueType 格式）
+-------------------------
+1. Noto Sans SC — Google 开源，OFL-1.1（TestMain 默认下载）
+   https://fonts.google.com/noto/specimen/Noto+Sans+SC
+
+2. Source Han Sans SC（思源黑体）— Adobe + Google 联合开源，OFL-1.1
+   需找 TrueType 版本（GitHub release 的 SubsetOTF 是 CFF 格式，不可用）
+   https://github.com/adobe-fonts/source-han-sans
+
+3. HarmonyOS Sans SC（鸿蒙黑体）— 华为开源，OFL-1.1
+   需从 .zip 解压后取 .ttf 文件
+   https://developer.huawei.com/cn/design/harmonyos-symbol/
+

@@ -75,6 +75,7 @@ func fontNameStem(name string) string {
 }
 
 // findBundledFont 在 fonts 目录中按「文件名主干」精确匹配一个 .ttf。
+// 仅支持 TrueType (.ttf) 格式——pdfcpu 不支持 OpenType CFF (.otf) 字体。
 // 存在多个同名（不同子目录）视为歧义错误。
 func findBundledFont(name string) (string, error) {
 	fsDir := bundledFontsDir()
@@ -90,8 +91,9 @@ func findBundledFont(name string) (string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".ttf") {
-			return nil
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".ttf" {
+			return nil // 仅支持 TrueType，不支持 .otf（CFF）
 		}
 		if fontNameStem(path) == target {
 			matches = append(matches, path)
@@ -102,7 +104,7 @@ func findBundledFont(name string) (string, error) {
 		return "", fmt.Errorf("walk fonts directory: %w", err)
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf("bundled font %q not found in %s (use a standard 14 font or a bundled CJK .ttf name)", name, fsDir)
+		return "", fmt.Errorf("bundled font %q not found in %s (use a standard 14 font or a bundled CJK .ttf name; .otf/CFF not supported)", name, fsDir)
 	}
 	if len(matches) > 1 {
 		return "", fmt.Errorf("bundled font %q is ambiguous, matches: %v", name, matches)

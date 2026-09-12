@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // TestCreateReadChineseWrap 验证 CJK 折行后的端到端完整性：
@@ -20,7 +22,7 @@ func TestCreateReadChineseWrap(t *testing.T) {
 	createArgs, _ := json.Marshal(map[string]any{
 		"out_path":  outPath,
 		"text":      paragraph,
-		"font":      "HarmonyOS_Sans_SC_Regular",
+		"font":      cjkFontName,
 		"font_size": 14,
 		"paper":     "A4",
 	})
@@ -40,7 +42,8 @@ func TestCreateReadChineseWrap(t *testing.T) {
 	}
 	t.Logf("read back:\n%s", readOut)
 
-	// 归一化空白后比对内容完整性
+	// 归一化空白 + Unicode 兼容性分解后比对内容完整性
+	// （NFKC 归一化处理 CJK 兼容字符差异，如 U+F918 → U+843D 落）
 	normalize := func(s string) string {
 		return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 			if unicode.IsSpace(r) {
@@ -49,7 +52,10 @@ func TestCreateReadChineseWrap(t *testing.T) {
 			return r
 		}, s)), "")
 	}
-	if !strings.Contains(normalize(readOut), normalize(paragraph)) {
+	// 先做 NFKC 归一化再比对，消除兼容字符差异
+	normalizedRead := normalize(string(norm.NFKC.Bytes([]byte(readOut))))
+	normalizedPara := normalize(string(norm.NFKC.Bytes([]byte(paragraph))))
+	if !strings.Contains(normalizedRead, normalizedPara) {
 		t.Errorf("read-back content missing portions of the wrapped paragraph")
 	}
 }
@@ -58,12 +64,12 @@ func TestCreateReadChineseWrap(t *testing.T) {
 // 超长中文单行在给定行宽下被拆分为多行，且拼接后内容完整（这是避免横向溢出的机制）。
 func TestWrapTextForRenderCJK(t *testing.T) {
 	setupCJKEnv(t)
-	ps, cjk, err := resolveFontName("HarmonyOS_Sans_SC_Regular")
+	ps, cjk, err := resolveFontName(cjkFontName)
 	if err != nil {
 		t.Fatalf("resolve CJK font: %v", err)
 	}
 	if !cjk {
-		t.Fatal("expected HarmonyOS_Sans_SC_Regular to be resolved as CJK")
+		t.Fatalf("expected %s to be resolved as CJK", cjkFontName)
 	}
 	if _, err := ensureUserFontDir(); err != nil {
 		t.Fatalf("ensure font dir: %v", err)
