@@ -112,3 +112,54 @@ func TestSpillRejectsInvalidLocator(t *testing.T) {
 		t.Fatal("missing spill file should error")
 	}
 }
+
+// TestSpillExemptsReadSpillTool 验证 read_spill 工具的结果不被二次 spill。
+// 修复前的 bug：read_spill 返回大内容 → post-execute spill 流水线又把结果外置 →
+// 模型 read_spill(spill:2) → 又返回大内容 → 又被外置 → 死循环，最终连接中断。
+func TestSpillExemptsReadSpillTool(t *testing.T) {
+	store, _ := NewSpillStore(t.TempDir())
+	m := newSpillManager(t, store)
+
+	// 用一个返回超长内容的 mock 工具模拟 read_spill 行为
+	// （真正的 read_spill 在 NewManager 时已注册到 m.toolRegistry，使用的是
+	// 生产 spill store；这里用独立 mock 工具 "mock_read_spill" 避免冲突）
+	longContent := longText(5000)
+	_ = m.toolRegistry.Register(&longTool{content: longContent})
+
+	// 改名工具为 "read_spill" 来触发豁免逻辑——但 toolRegistry 不支持改名，
+	// 故直接验证 spillLargeResult 监听器对 ToolName=="read_spill" 的豁免：
+	// 用 ToolInvocation 直接调 events.Waterfall 模拟流水线
+	inv := &ToolInvocation{
+		ToolName: "read_spill",
+		Result:   longContent,
+	}
+	err := m.events.Waterfall(EventToolPostExecute, EventContext{Data: inv}, func(EventContext) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("waterfall: %v", err)
+	}
+	// read_spill 豁免：结果应保持完整，不被替换为 spill 预览
+	if inv.Result != longContent {
+		t.Fatalf("read_spill result was spilled again (len %d, want %d); first 80 chars: %.80s",
+			len(inv.Result), len(longContent), inv.Result)
+	}
+	if strings.Contains(inv.Result, "[内容已外置:") {
+		t.Fatalf("read_spill result should not be spill-previewed, got: %.80s", inv.Result)
+	}
+
+	// 对照：非 read_spill 工具（如 "long-tool"）的超长结果应被 spill
+	inv2 := &ToolInvocation{
+		ToolName: "long-tool",
+		Result:   longContent,
+	}
+	_ = m.events.Waterfall(EventToolPostExecute, EventContext{Data: inv2}, func(EventContext) error {
+		return nil
+	})
+	if inv2.Result == longContent {
+		t.Fatalf("non-read_spill tool should have its result spilled (still same length %d)", len(inv2.Result))
+	}
+	if !strings.Contains(inv2.Result, "[内容已外置:") {
+		t.Fatalf("non-read_spill tool result should be spill-previewed, got: %.80s", inv2.Result)
+	}
+}

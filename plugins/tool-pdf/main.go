@@ -31,7 +31,10 @@ import (
 
 // ---------- 共享状态 ----------
 
-// workspaceRoot 返回宿主注入的工作空间根目录（沙箱边界）。
+// workspaceRoot 返回宿主注入的工作空间根目录（沙箱边界，仅用于默认输出路径推断）。
+// 注意：本插件不做 workspace 越界检查——沙箱策略由宿主工具流水线 pre-execute
+// 瀑布统一判定（与 tool-filesystem / tool-str-replace-editor 一致）。
+// 这避免了 full-access 模式下插件仍自行拒绝 workspace 外路径的问题。
 func workspaceRoot() string {
 	if r := os.Getenv("DSC_WORKSPACE_ROOT"); r != "" {
 		return r
@@ -55,16 +58,15 @@ var sharedCtx pdfReadContext
 
 // loadPDFContext 打开 PDF 文件并返回可复用的 pdfcpu Context。
 // 文件未变化时复用缓存的 Context；变化时重新解析。
+//
+// 沙箱策略由宿主工具流水线 pre-execute 瀑布统一判定（read-only 拒绝写、
+// workspace-write 限制 workspace 内、full-access 全开），本插件不做越界检查——
+// 与 tool-filesystem / tool-str-replace-editor 一致，避免 full-access 模式下
+// 插件仍自行拒绝 workspace 外路径。
 func loadPDFContext(path string) (*model.Context, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve path: %w", err)
-	}
-	// 沙箱边界：禁止路径穿越到工作空间外
-	// （tool-filesystem 同款校验，对齐 AGENTS.md 沙箱策略）
-	wsRoot := workspaceRoot()
-	if !isWithinWorkspace(absPath, wsRoot) {
-		return nil, fmt.Errorf("path %q is outside workspace root %q", absPath, wsRoot)
 	}
 
 	info, err := os.Stat(absPath)
@@ -98,24 +100,8 @@ func loadPDFContext(path string) (*model.Context, error) {
 	return ctx, nil
 }
 
-// isWithinWorkspace 报告 path 是否在 workspace 内（或 workspace 本身）。
-func isWithinWorkspace(path, workspace string) bool {
-	if workspace == "" || workspace == "." {
-		return true // 无沙箱限制
-	}
-	wsAbs, err := filepath.Abs(workspace)
-	if err != nil {
-		return true
-	}
-	rel, err := filepath.Rel(wsAbs, path)
-	if err != nil {
-		return false
-	}
-	if rel == "." {
-		return true
-	}
-	return !strings.HasPrefix(rel, "..") && !strings.HasPrefix(rel, "/") && !filepath.IsAbs(rel)
-}
+// isWithinWorkspace 已移除——沙箱策略由宿主工具流水线 pre-execute 瀑布统一判定。
+// 本插件不做 workspace 越界检查，与 tool-filesystem / tool-str-replace-editor 一致。
 
 // ---------- 工具 1: pdf_read_text ----------
 
@@ -453,10 +439,7 @@ func handleExtractImages(ctx context.Context, args json.RawMessage) (string, err
 			strings.TrimSuffix(filepath.Base(p.FilePath), ".pdf"))
 	}
 
-	// 沙箱边界：out_dir 必须在工作空间内
-	if !isWithinWorkspace(p.OutDir, workspaceRoot()) {
-		return "", fmt.Errorf("out_dir %q is outside workspace root", p.OutDir)
-	}
+	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
 	if err := os.MkdirAll(p.OutDir, 0755); err != nil {
 		return "", fmt.Errorf("create out_dir: %w", err)
 	}
@@ -743,21 +726,21 @@ func main() {
 	// 暂时禁用：依赖外部命令（mutool/pdftoppm/gs），未真机验证。恢复时取消本注册块注释即可，
 	// 实现保留于 pdf_render.go（含命令构造与渲染器探测逻辑）。
 	/*
-			sdk.Tool(dsc.Tool{
-				Name:        "pdf_to_images",
-				Description: "Render PDF pages to PNG images in an output directory for visual/layout analysis. Requires an external rasterizer (mutool / pdftoppm / Ghostscript) on PATH, or set DSC_PDF_RENDERER. If none is available, use pdf_extract_images to extract embedded images instead.",
-				Schema: json.RawMessage(`{
-		  "type": "object",
-		  "properties": {
-		    "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
-		    "pages": {"type": "string", "description": "Optional page selection. Rendered as a contiguous page block covering the selection. Omit for all pages.", "default": ""},
-		    "out_dir": {"type": "string", "description": "Output directory for PNG images (default <workspace>/pdf-images/<name>/render/)."},
-		    "dpi": {"type": "integer", "description": "Render resolution in DPI (default 150).", "default": 150, "minimum": 50, "maximum": 600}
-		  },
-		  "required": ["file_path"]
-		}`),
-				Handler: handlePageToImages,
-			})
+	           sdk.Tool(dsc.Tool{
+	                   Name:        "pdf_to_images",
+	                   Description: "Render PDF pages to PNG images in an output directory for visual/layout analysis. Requires an external rasterizer (mutool / pdftoppm / Ghostscript) on PATH, or set DSC_PDF_RENDERER. If none is available, use pdf_extract_images to extract embedded images instead.",
+	                   Schema: json.RawMessage(`{
+	     "type": "object",
+	     "properties": {
+	       "file_path": {"type": "string", "description": "Path to the PDF file (must be within workspace root)."},
+	       "pages": {"type": "string", "description": "Optional page selection. Rendered as a contiguous page block covering the selection. Omit for all pages.", "default": ""},
+	       "out_dir": {"type": "string", "description": "Output directory for PNG images (default <workspace>/pdf-images/<name>/render/)."},
+	       "dpi": {"type": "integer", "description": "Render resolution in DPI (default 150).", "default": 150, "minimum": 50, "maximum": 600}
+	     },
+	     "required": ["file_path"]
+	   }`),
+	                   Handler: handlePageToImages,
+	           })
 	*/
 
 	sdk.Serve()

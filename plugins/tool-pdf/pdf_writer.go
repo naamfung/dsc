@@ -92,14 +92,10 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 		margin = 50
 	}
 
-	// 2. 沙箱边界：out_path 必须在工作空间内
+	// 2. 解析输出路径（沙箱策略由宿主流水线统一判定，本插件不做越界检查）
 	absOut, err := filepath.Abs(outPath)
 	if err != nil {
 		return "", 0, fmt.Errorf("resolve out_path: %w", err)
-	}
-	wsRoot := workspaceRoot()
-	if !isWithinWorkspace(absOut, wsRoot) {
-		return "", 0, fmt.Errorf("out_path %q is outside workspace root %q", absOut, wsRoot)
 	}
 
 	// 3. 创建空 PDF Context（含 pageTree root，无页）
@@ -398,20 +394,10 @@ func handleImagesToPDF(ctx context.Context, args json.RawMessage) (string, error
 		return "", fmt.Errorf("out_path is required")
 	}
 
-	// 沙箱边界
+	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
 	absOut, err := filepath.Abs(p.OutPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve out_path: %w", err)
-	}
-	wsRoot := workspaceRoot()
-	if !isWithinWorkspace(absOut, wsRoot) {
-		return "", fmt.Errorf("out_path %q is outside workspace root %q", absOut, wsRoot)
-	}
-	for _, imgPath := range p.ImagePaths {
-		absImg, err := filepath.Abs(imgPath)
-		if err != nil || !isWithinWorkspace(absImg, wsRoot) {
-			return "", fmt.Errorf("image_path %q is outside workspace root", imgPath)
-		}
 	}
 
 	// 使用 pdfcpu 的 ImportImagesFile
@@ -450,14 +436,10 @@ func handleAppendText(ctx context.Context, args json.RawMessage) (string, error)
 		return "", fmt.Errorf("text is required")
 	}
 
-	// 沙箱边界
+	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
 	absPath, err := filepath.Abs(p.FilePath)
 	if err != nil {
 		return "", fmt.Errorf("resolve file_path: %w", err)
-	}
-	wsRoot := workspaceRoot()
-	if !isWithinWorkspace(absPath, wsRoot) {
-		return "", fmt.Errorf("file_path %q is outside workspace root %q", absPath, wsRoot)
 	}
 
 	// 读取原 PDF

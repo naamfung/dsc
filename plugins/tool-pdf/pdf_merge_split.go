@@ -22,16 +22,14 @@ import (
 )
 
 // resolveWorkspacePaths 把全部路径解析为绝对路径并校验均在沙箱内。
+// resolveWorkspacePaths 把路径列表绝对化（沙箱策略由宿主流水线统一判定，
+// 本插件不做越界检查——与 tool-filesystem / tool-str-replace-editor 一致）。
 func resolveWorkspacePaths(paths []string) ([]string, error) {
-	wsRoot := workspaceRoot()
 	abs := make([]string, 0, len(paths))
 	for _, p := range paths {
 		a, err := filepath.Abs(p)
 		if err != nil {
 			return nil, fmt.Errorf("resolve path %q: %w", p, err)
-		}
-		if !isWithinWorkspace(a, wsRoot) {
-			return nil, fmt.Errorf("path %q is outside workspace root %q", a, wsRoot)
 		}
 		abs = append(abs, a)
 	}

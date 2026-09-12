@@ -84,6 +84,10 @@ func (s *SpillStore) Read(locator string) (string, error) {
 
 // spillLargeResult 工具流水线 post-execute 策略：结果超过阈值（字符数）时
 // 外置为头尾预览 + 定位符。保存失败时保留内联结果（尽力而为，不阻断执行）。
+//
+// read_spill 工具自身豁免：其结果本身已是「按定位符取回的外置内容」，再次 spill
+// 会导致死循环（read_spill(spill:1) → 返回 338K → spill 为 spill:2 → 模型调
+// read_spill(spill:2) → 返回 338K → spill 为 spill:3 → 无限循环，最终连接中断）。
 func spillLargeResult(store *SpillStore, threshold int) WaterfallListener {
 	return func(ctx EventContext, next func(EventContext) error) error {
 		inv, _ := ctx.Data.(*ToolInvocation)
@@ -91,6 +95,10 @@ func spillLargeResult(store *SpillStore, threshold int) WaterfallListener {
 			return err
 		}
 		if inv == nil || inv.Err != nil || len([]rune(inv.Result)) <= threshold {
+			return nil
+		}
+		// read_spill 工具自身豁免：避免「取回外置内容 → 又被 spill → 再取回」死循环
+		if inv.ToolName == "read_spill" {
 			return nil
 		}
 		locator, err := store.SaveText(inv.Result)

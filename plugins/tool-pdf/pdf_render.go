@@ -142,9 +142,7 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 		p.OutDir = filepath.Join(workspaceRoot(), "pdf-images",
 			strings.TrimSuffix(filepath.Base(p.FilePath), ".pdf"), "render")
 	}
-	if !isWithinWorkspace(p.OutDir, workspaceRoot()) {
-		return "", fmt.Errorf("out_dir %q is outside workspace root", p.OutDir)
-	}
+	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
 	dpi := p.DPI
 	if dpi <= 0 {
 		dpi = renderDPI
