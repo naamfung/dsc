@@ -232,6 +232,8 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		jobs:                jobs.NewRegistry(),
 	}
 	m.jobs.SetLogger(m.logger)
+	// 事件总线监听器 panic 恢复时用宿主主 logger 记录调用栈（定位根因）。
+	m.events.SetLogger(m.logger)
 	m.ptc = cfg.PTC
 	// 註冊內置工具（現已遷移至獨立插件 tool-str-replace-editor）
 	// 後續可註冊更多工具

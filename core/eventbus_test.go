@@ -180,3 +180,82 @@ func TestContextNameAssigned(t *testing.T) {
 		t.Fatalf("ctx.Name = %q, want %q", got, testEv)
 	}
 }
+
+// ---------- 监听器 panic 恢复（事件总线兜底，防止宿主进程崩溃） ----------
+
+func TestEmitRecoversListenerPanicAndContinues(t *testing.T) {
+	b := NewEventBus()
+	var order []string
+	b.On(testEv, func(EventContext) (any, error) { order = append(order, "a"); panic("boom-a") })
+	b.On(testEv, func(EventContext) (any, error) { order = append(order, "b"); return nil, nil })
+	b.OnAny(func(EventContext) (any, error) { order = append(order, "any"); return nil, nil })
+	b.Emit(testEv, EventContext{}) // 不得 panic 冒泡
+	if strings.Join(order, "") != "abany" {
+		t.Fatalf("order = %v, want [a b any]（panic 监听器后仍继续）", order)
+	}
+}
+
+func TestParallelRecoversListenerPanic(t *testing.T) {
+	b := NewEventBus()
+	b.On(testEv, func(EventContext) (any, error) { panic("boom") })
+	err := b.Parallel(testEv, EventContext{})
+	if err == nil {
+		t.Fatal("expected error from panicked listener")
+	}
+	if !strings.Contains(err.Error(), "test/event") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want event name + boom", err)
+	}
+}
+
+func TestSerialRecoversListenerPanic(t *testing.T) {
+	b := NewEventBus()
+	b.On(testEv, func(EventContext) (any, error) { return nil, nil })
+	b.On(testEv, func(EventContext) (any, error) { panic("boom") })
+	err := b.Serial(testEv, EventContext{})
+	if err == nil {
+		t.Fatal("expected error from panicked listener")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want boom", err)
+	}
+}
+
+func TestBailRecoversListenerPanic(t *testing.T) {
+	b := NewEventBus()
+	b.On(testEv, func(EventContext) (any, error) { panic("boom") })
+	v, err := b.Bail(testEv, EventContext{})
+	if v != nil || err == nil {
+		t.Fatalf("bail = (%v, %v), want (nil, error)", v, err)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v, want boom", err)
+	}
+}
+
+func TestWaterfallRecoversListenerPanic(t *testing.T) {
+	b := NewEventBus()
+	// 外层监听器调用 next 后 panic；内层与兜底均已执行，但 panic 不得冒泡
+	b.OnWaterfall(testEv, func(ctx EventContext, next func(EventContext) error) error {
+		_ = next(ctx)
+		panic("boom-outer")
+	})
+	b.OnWaterfall(testEv, func(ctx EventContext, next func(EventContext) error) error {
+		_ = next(ctx)
+		panic("boom-inner")
+	})
+	err := b.Waterfall(testEv, EventContext{}, func(EventContext) error { return nil })
+	if err == nil {
+		t.Fatal("expected error from panicked waterfall listener")
+	}
+	if !strings.Contains(err.Error(), "test/event") {
+		t.Fatalf("err = %v, want event name", err)
+	}
+}
+
+func TestWaterfallRecoversFallbackPanic(t *testing.T) {
+	b := NewEventBus()
+	err := b.Waterfall(testEv, EventContext{}, func(EventContext) error { panic("boom-fallback") })
+	if err == nil || !strings.Contains(err.Error(), "boom-fallback") {
+		t.Fatalf("err = %v, want boom-fallback", err)
+	}
+}

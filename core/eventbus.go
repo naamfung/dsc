@@ -3,7 +3,11 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
+
+	"github.com/hashicorp/go-hclog"
 )
 
 // 通用事件分发总线（对齐 DSH Cordis events.ts 的分发模式）：
@@ -54,6 +58,9 @@ type EventBus struct {
 	emit map[EventName][]listenerEntry
 	wf   map[EventName][]waterfallEntry
 	any  []listenerEntry // 全局监听器（带 order，供移除；Emit 时与按名监听器一起调用）
+	// logger 可选：监听器 panic 恢复时的日志记录器（nil 时静默——不中断是首要目标，
+	// 日志仅用于定位根因，未配置时放弃记录）。
+	logger hclog.Logger
 }
 
 // NewEventBus 创建事件总线。
@@ -62,6 +69,31 @@ func NewEventBus() *EventBus {
 		emit: make(map[EventName][]listenerEntry),
 		wf:   make(map[EventName][]waterfallEntry),
 	}
+}
+
+// SetLogger 设置监听器 panic 日志记录器（nil 时静默忽略 panic 日志）。
+func (b *EventBus) SetLogger(l hclog.Logger) {
+	b.logger = l
+}
+
+// logPanic 记录监听器 panic（含调用栈），供各分发模式 recover 后调用。
+func (b *EventBus) logPanic(name EventName, r any) {
+	if b.logger == nil {
+		return
+	}
+	b.logger.Error("event listener panicked (recovered)",
+		"event", string(name), "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+}
+
+// callListener 调用单个监听器，把 panic 转为错误返回并记录日志（供 Emit/Parallel/Serial/Bail 复用）。
+func (b *EventBus) callListener(name EventName, fn Listener, ctx EventContext) (v any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.logPanic(name, r)
+			v, err = nil, fmt.Errorf("event %s listener panicked: %v", name, r)
+		}
+	}()
+	return fn(ctx)
 }
 
 // OnAny 注册全局监听器（每次 Emit 都会调用，无论事件名；供宿主向插件广播
@@ -161,13 +193,18 @@ func (b *EventBus) snapshotWaterfall(name EventName) []WaterfallListener {
 
 // Emit 同步顺序调用所有监听器，忽略返回值；监听器错误仅记录不中断。
 // 按名监听器与全局监听器（OnAny）都会收到事件。
+// 监听器 panic 不冒泡、不中断后续监听器：单个坏监听器不影响事件通知（已记录日志）。
 func (b *EventBus) Emit(name EventName, ctx EventContext) {
 	ctx.Name = name
 	for _, fn := range b.snapshotEmit(name) {
-		_, _ = fn(ctx)
+		if _, err := b.callListener(name, fn, ctx); err != nil {
+			_ = err // panic 已转错误并记录日志；Emit 忽略返回值
+		}
 	}
 	for _, fn := range b.snapshotAny() {
-		_, _ = fn(ctx)
+		if _, err := b.callListener(name, fn, ctx); err != nil {
+			_ = err
+		}
 	}
 }
 
@@ -181,7 +218,9 @@ func (b *EventBus) Parallel(name EventName, ctx EventContext) error {
 		wg.Add(1)
 		go func(fn Listener) {
 			defer wg.Done()
-			if _, err := fn(ctx); err != nil {
+			// 监听器 panic 在 goroutine 内 recover：goroutine panic 无法被外层 defer
+			// 捕获，若不在此处接住会直接 crash 整个宿主进程。
+			if _, err := b.callListener(name, fn, ctx); err != nil {
 				errCh <- err
 			}
 		}(fn)
@@ -199,7 +238,7 @@ func (b *EventBus) Parallel(name EventName, ctx EventContext) error {
 func (b *EventBus) Serial(name EventName, ctx EventContext) error {
 	ctx.Name = name
 	for _, fn := range b.snapshotEmit(name) {
-		if _, err := fn(ctx); err != nil {
+		if _, err := b.callListener(name, fn, ctx); err != nil {
 			return err
 		}
 	}
@@ -211,7 +250,7 @@ func (b *EventBus) Serial(name EventName, ctx EventContext) error {
 func (b *EventBus) Bail(name EventName, ctx EventContext) (any, error) {
 	ctx.Name = name
 	for _, fn := range b.snapshotEmit(name) {
-		if v, err := fn(ctx); v != nil || err != nil {
+		if v, err := b.callListener(name, fn, ctx); v != nil || err != nil {
 			return v, err
 		}
 	}
@@ -221,8 +260,17 @@ func (b *EventBus) Bail(name EventName, ctx EventContext) (any, error) {
 // Waterfall 按洋葱模型委托调用监听器链：从最外层监听器开始，每个监听器
 // 通过 next 委托给链上后续监听器（含兜底 next）；监听器不调用 next 即
 // 中断链（veto），其返回值为最终结果。无监听器时直接调用兜底 next。
-func (b *EventBus) Waterfall(name EventName, ctx EventContext, next func(EventContext) error) error {
+// 监听器 panic 不冒泡：洋葱链任意一层（含兜底 next）panic 都转为错误返回
+// 并记录日志——工具流水线 pre/execute/post 与 LLM 请求均走 Waterfall，
+// 监听器 panic 不得 crash 宿主进程导致 LLM 连接中断。
+func (b *EventBus) Waterfall(name EventName, ctx EventContext, next func(EventContext) error) (errRet error) {
 	ctx.Name = name
+	defer func() {
+		if r := recover(); r != nil {
+			b.logPanic(name, r)
+			errRet = fmt.Errorf("event %s listener panicked: %v", name, r)
+		}
+	}()
 	listeners := b.snapshotWaterfall(name)
 	if len(listeners) == 0 {
 		return next(ctx)
