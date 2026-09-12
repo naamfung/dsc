@@ -20,7 +20,7 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **ReAct 循環**：實現 Agent 的 Reasoning and Acting 循環，支持多輪推理與工具執行。
 
-- **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（不额外拦截）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控；`read-only` 同时会禁用「命令无法从参数判定是否只读」的解释器/执行器（如 shell），防止 `echo x > /anywhere` 绕开只读档。
+- **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（整个文件系统皆可写）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控；`read-only` 同时会禁用「命令无法从参数判定是否只读」的解释器/执行器（如 shell），防止 `echo x > /anywhere` 绕开只读档。
 
 - **工具調用超時（活躍續命）**：shell 与命令型工具采用「十分鐘起步、活躍續命」超时（对齐 rex shell）——启动 10 分钟预算（`DSC_SHELL_TIMEOUT` 可覆盖），只要 stdout/stderr 持续有新输出就不间断续命，仅对「长时间完全无新输出」才判定超时，避免一刀切固定时长方误杀仍在产出嘅长编译/测试。
 
@@ -36,7 +36,7 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **項目級歷史隔離**：默认会话按当前工作区项目路径命名（`C:\...\DeepClean` → `C--...-DeepClean.jsonl`），同项目跨时期共享历史、不同项目隔离，不再使用硬编码 `default.jsonl`；TUI 的当前会话标识与切换也统一对齐该项目 key（宿主 `DefaultSessionID()` 与 agent 的 `projectKey` 同源），`/session default` 解析到项目 key、`/export` 导出真实存档，且**标题栏不再显示会话 id**（经 `/sessions` 列表与 `/export` 管理，避免「显示名 ≠ 存档名」的脱节）；`/settings history <N|off|unlimited>` 实时生效并持久化到 config.yaml（`history_injection`：-1 禁止 / 0 未定义 / N>0 启用 N 条）。
 
-- **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——`full-access` 显示「文件系统」，其余显示工作区目录基础名（限长）。
+- **沙箱范围可见**：TUI 左下角状态栏随 `/sandbox` 即时显示当前工作范围——各档均显示工作区目录基础名（限长），沙箱模式经后缀标记呈现（🔒 只读 / ✎ 工作区写 / ⚡ 全开）。
 
 - **事件體系（對齊 DSH harness 事件）**：宿主 EventBus 採與 DSH cordis events 一致的五種分發模式（`emit` 廣播通知 / `waterfall` 洋葱攔截 / `serial` 順序 / `bail` 短路 / `parallel` 並發），並經互通機制把宿主事件廣播給插件（`Hook.OnEvent`），**不限定插件類型**——任意註冊了 Hook 的插件（tool/dsc/llm/agent/policy）都能訂閱，對齊 DSH cordis 的「事件廣播類型無關」；令插件可獨立訂閱系統事件而不改宿主。已對齊的關鍵事件：工具流水線 `tools/pre-execute` / `tools/execute` / `tools/post-execute`（waterfall 攔截，veto 即阻止；execute 供插件包圍執行與超時策略）與 `tools/result`（emit 結果廣播）；agent 回合生命週期 `agent/status`（running/idle）與 `agent/error`（emit，成功/失敗區分）。因 DSC 的 agent 為獨立 gRPC 插件進程（不同於 DSH 宿主內循環），僅對齊機制與有真實消費者的事件，不機械照搬無消費者或需跨進程空轉的事件。這些領域事件與運行時日誌可經管理 API 的 SSE 端點實時觀測：`/plugins/domain-events`（推送全部 EventBus 領域事件，含字段保真載荷）與 `/plugins/logs`（推送宿主日誌與插件子進程經轉發上來的日志；宿主與插件 logger 統一接入扇出 sink，即使默認靜默模式也按需可察）。管理 API 另提供 `GET /plugins/tools`，一次性返回模型當前可直接調用的工具目錄（含插件熱加載的動態工具，如 tool-lua-host 腳本工具），作為調試視圖。`-input` 非 headless 且已加載通知插件（如 notify）時，回合結束後會短暫寬限（約 0.8s）再關閉插件，確保異步的回合完成音效（約 0.29s）能完整播完，避免被插件進程回收截斷。
 

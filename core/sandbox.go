@@ -11,9 +11,9 @@ import (
 // Sandbox 进程效应策略层（对齐 DSH sandbox 的 fail-closed 语义，Windows
 // 兼容的工具级实现）：工具流水线 pre-execute 阶段按策略拦截文件写操作。
 //
-//	ReadOnly       只允许读，任何文件写操作一律拒绝
-//	WorkspaceWrite 允许 workspace 内写，拒绝 workspace 外写（缺省）
-//	FullAccess     不额外拦截（workspace 保护等既有约束仍生效）
+//      ReadOnly       只允许读，任何文件写操作一律拒绝
+//      WorkspaceWrite 允许 workspace 内写，拒绝 workspace 外写（缺省）
+//      FullAccess     整个文件系统皆可写（workspace 保护等既有约束仍生效）
 //
 // 策略未显式配置时缺省 WorkspaceWrite；写操作判定失败时拒绝（fail-closed）。
 
@@ -21,7 +21,7 @@ import (
 type SandboxPolicy int
 
 const (
-	// SandboxFullAccess 不额外拦截写操作。
+	// SandboxFullAccess 整个文件系统皆可写。
 	SandboxFullAccess SandboxPolicy = iota
 	// SandboxWorkspaceWrite 仅允许 workspace 内写（缺省）。
 	SandboxWorkspaceWrite
