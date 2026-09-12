@@ -69,6 +69,33 @@ func bundledFontsDir() string {
 	return ""
 }
 
+// listAvailableCJKFonts 扫描 fonts/ 目录，返回所有可用 .ttf 字体名的列表字符串。
+// 经 ContextFn 注入 system prompt，让模型知道实际有哪些字体可用——
+// 而非硬编码特定字体名。空目录返回提示让模型知道可用标准 14 字体。
+func listAvailableCJKFonts() string {
+	fsDir := bundledFontsDir()
+	if fsDir == "" {
+		return " 当前无 CJK 字体（仅支持标准 14 字体）。"
+	}
+	var names []string
+	_ = filepath.WalkDir(fsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".ttf" {
+			return nil
+		}
+		stem := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
+		names = append(names, stem)
+		return nil
+	})
+	if len(names) == 0 {
+		return " 当前无 CJK 字体（仅支持标准 14 字体）。"
+	}
+	return " 可用 CJK 字体（.ttf）: " + strings.Join(names, ", ") + "。"
+}
+
 // fontNameStem 归一并取 .ttf 文件名主干（不含路径与扩展名），用于字体名匹配。
 func fontNameStem(name string) string {
 	return strings.TrimSuffix(strings.ToLower(filepath.Base(name)), filepath.Ext(name))

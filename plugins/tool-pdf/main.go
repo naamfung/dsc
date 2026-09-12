@@ -541,7 +541,7 @@ func main() {
 }`),
 		Handler: handleReadText,
 		ContextFn: func() string {
-			return "PDF 工具集（读取 + 创建）：读取侧 pdf_read_text/pdf_info/pdf_outline/pdf_search/pdf_extract_images；创建侧 pdf_create_text（从文本生成 PDF，自动分页，支持中文）/pdf_images_to_pdf（图片转 PDF）/pdf_append_text（向已有 PDF 追加文本页）。标准 14 字体开箱即用；中文等 CJK 内容可用插件自带的 HarmonyOS Sans SC 等中文字体直接生成。"
+			return "PDF 工具集（读取 + 创建）：读取侧 pdf_read_text/pdf_info/pdf_outline/pdf_search/pdf_extract_images；创建侧 pdf_create_text（从文本生成 PDF，自动分页，支持中文）/pdf_images_to_pdf（图片转 PDF）/pdf_append_text（向已有 PDF 追加文本页）。标准 14 字体开箱即用。" + listAvailableCJKFonts()
 		},
 	})
 
@@ -608,13 +608,13 @@ func main() {
 	// 工具 6: pdf_create_text —— 从纯文本创建 PDF
 	sdk.Tool(dsc.Tool{
 		Name:        "pdf_create_text",
-		Description: "Create a new PDF file from plain text. Supports the standard 14 fonts (Times/Helvetica/Courier variants, Symbol, ZapfDingbats) and bundled CJK TrueType fonts (e.g. HarmonyOS_Sans_SC_Regular for Simplified Chinese) that are embedded automatically. Auto-pagination and A4/Letter/Legal paper sizes. Text is split by newlines; each page holds as many lines as fit. Use this to generate PDF reports, documents, or code listings, including Chinese-language documents.",
+		Description: "Create a new PDF file from plain text. Supports the standard 14 fonts (Times/Helvetica/Courier variants, Symbol, ZapfDingbats) and any bundled CJK TrueType fonts (.ttf in the plugin fonts/ directory) that are embedded automatically. Auto-pagination and A4/Letter/Legal paper sizes. Text is split by newlines; each page holds as many lines as fit. Use this to generate PDF reports, documents, or code listings, including Chinese-language documents. Available CJK fonts are listed in the system prompt context.",
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
     "out_path": {"type": "string", "description": "Output PDF file path (must be within workspace root). Will be created or overwritten."},
     "text": {"type": "string", "description": "Text content for the PDF. Newlines (\\n) start new lines. For Chinese document use one of the bundled CJK fonts."},
-    "font": {"type": "string", "description": "Font name (default Helvetica). Standard 14: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Symbol, ZapfDingbats. Or any bundled CJK TrueType font name in the plugin fonts/ directory, e.g. HarmonyOS_Sans_SC_Regular (Simplified Chinese).", "default": "Helvetica"},
+    "font": {"type": "string", "description": "Font name (default Helvetica). Standard 14: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Symbol, ZapfDingbats. Or any bundled CJK TrueType font name from the plugin fonts/ directory (see system prompt for available fonts).", "default": "Helvetica"},
     "font_size": {"type": "number", "description": "Font size in points (default 12).", "default": 12, "minimum": 4, "maximum": 200},
     "paper": {"type": "string", "description": "Paper size (default A4). Options: A4, A4P, A4L (landscape), Letter, LetterP, LetterL, Legal, LegalP, LegalL.", "default": "A4"},
     "margin": {"type": "number", "description": "Page margin in points (default 50). Must be less than half of paper width/height.", "default": 50, "minimum": 0, "maximum": 300}
@@ -648,7 +648,7 @@ func main() {
   "properties": {
     "file_path": {"type": "string", "description": "Path to the existing PDF file (must be within workspace root). Will be modified in place."},
     "text": {"type": "string", "description": "Text content to append. Newlines (\\n) start new lines."},
-    "font": {"type": "string", "description": "Font name (default Helvetica). Must be a standard 14 font or a bundled CJK TrueType font (e.g. HarmonyOS_Sans_SC_Regular).", "default": "Helvetica"},
+    "font": {"type": "string", "description": "Font name (default Helvetica). Must be a standard 14 font or a bundled CJK TrueType font (see system prompt for available fonts).", "default": "Helvetica"},
     "font_size": {"type": "number", "description": "Font size in points (default 12).", "default": 12, "minimum": 4, "maximum": 200},
     "paper": {"type": "string", "description": "Paper size for new pages (default A4). Original pages keep their size.", "default": "A4"},
     "margin": {"type": "number", "description": "Page margin in points (default 50).", "default": 50, "minimum": 0, "maximum": 300}
