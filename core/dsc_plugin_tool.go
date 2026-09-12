@@ -802,7 +802,17 @@ func (t *loadDscPluginTool) persistEntry(name, typ, bin string) error {
 }
 
 func (t *loadDscPluginTool) result(name, typ, status string, loaded, persist bool) (string, error) {
-	note := "插件已载入本进程，其工具立即可用（出现在你的工具列表中），无需磁盘验证"
+	// 收集该插件注册的工具名，让模型知道具体有哪些工具可用——
+	// 避免模型加载后仍困惑「没看到 PDF 相关工具」。
+	t.m.mu.RLock()
+	toolNames := t.m.coreToolNames[name]
+	t.m.mu.RUnlock()
+	toolsList := ""
+	if len(toolNames) > 0 {
+		toolsList = "（工具: " + strings.Join(toolNames, ", ") + "）"
+	}
+
+	note := "插件已载入本进程，其工具立即可用" + toolsList + "，无需磁盘验证"
 	if persist {
 		note += "；已写入 config.yaml，重启后仍自动加载"
 	} else {
@@ -815,6 +825,7 @@ func (t *loadDscPluginTool) result(name, typ, status string, loaded, persist boo
 		"status":  status,
 		"loaded":  loaded,
 		"persist": persist,
+		"tools":   toolNames,
 		"note":    note,
 	})
 	if err != nil {

@@ -716,6 +716,28 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// 步骤结束（log-only）
 		sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
 
+		// 工具执行后刷新工具列表：若本轮调用了 load_dsc_plugin / unload_dsc_plugin 等，
+		// 宿主工具注册表已更新，但 availableTools 仍是 RunStream 开始时的快照——
+		// 下一次 LLM 请求会带着过时的工具列表，模型看不到新加载的工具。
+		// 刷新 availableTools 确保模型在下一轮看到最新工具集。
+		for _, tc := range toolCalls {
+			if tc.Name == "load_dsc_plugin" || tc.Name == "unload_dsc_plugin" || tc.Name == "install_dsc_plugin" || tc.Name == "uninstall_dsc_plugin" {
+				if refreshed, err := toolClient.ListTools(ctx, &proto.ListToolsRequest{}); err == nil {
+					availableTools = append(refreshed.Tools, a.hostTools()...)
+					// 同步更新 a.lastToolNames，避免下次 RunStream 误判为变更触发不必要的 system prompt 重建
+					refreshedNames := make([]string, len(availableTools))
+					for i, t := range availableTools {
+						refreshedNames[i] = t.Name
+					}
+					sort.Strings(refreshedNames)
+					a.lastToolNames = refreshedNames
+					// 重建 system prompt（工具上下文已变，如 ContextFn 贡献的字体清单）
+					a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
+				}
+				break // 一次刷新即可
+			}
+		}
+
 		// 宿主 goal 工具标记 complete/blocked：物理轮次在本步骤后停止（对齐 DSH concludeTurn）
 		if concludeTurn {
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "goal-concluded"}, nil)
