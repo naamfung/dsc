@@ -19,6 +19,7 @@ protoc_dir/
 
 *.txt
 
+plugins/tool-pdf/fonts/HarmonyOS-Sans/
 plugins/tool-harness-webui/webui/dist/
 plugins/tool-novelforge/
 plugins/tool-jyutzyun/
