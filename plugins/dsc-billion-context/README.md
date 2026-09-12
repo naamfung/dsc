@@ -80,7 +80,9 @@ plugins:
 环境变量：
 - `DSC_CONTEXT_WINDOW`：模型上下文窗口大小（默认 131072）
 - `DSC_EXEC_DIR`：state 存储目录（默认当前目录）
-- `DSC_SESSION_ID`：当前会话 ID（默认 "default"）
+- `DSC_SESSION_ID`：当前会话 ID（缺省按工作区路径派生的项目级键，对齐宿主 session
+  存储的 `SessionKeyForProject`——同一项目同名、不同项目隔离；如
+  `C:\Users\...\DeepClean` → `C--Users-...-DeepClean.json`）
 
 ## 已实现
 

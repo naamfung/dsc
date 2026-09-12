@@ -29,6 +29,7 @@ import (
 	dsc "dsc-sdk"
 	"dsc/core"
 	"dsc/proto"
+	"dsc/session"
 
 	bcacp "dsc-billion-context/acp"
 	bcadapter "dsc-billion-context/adapter"
@@ -36,10 +37,12 @@ import (
 
 // BillionContext 插件主结构。
 type BillionContext struct {
-	mu        sync.Mutex
-	store     *bcadapter.StateStore
-	config    bcacp.Config
-	sessionID string // 当前会话 ID（经环境变量 DSC_SESSION_ID 注入）
+	mu     sync.Mutex
+	store  *bcadapter.StateStore
+	config bcacp.Config
+	// sessionID 当前会话 ID（DSC_SESSION_ID 注入；缺省按工作区派生的项目级键，
+	// 对齐宿主 session 存储的 SessionKeyForProject——同一项目同名、不同项目隔离）
+	sessionID string
 
 	// lastMessages 缓存最近一次 pre-step 收到的 CoreMessage 列表，供 handleCompress
 	// 解析 mNNNNN 边界引用（解决"compress 工具调用时无消息列表"的致命 bug）。
@@ -467,12 +470,14 @@ func (bc *BillionContext) handleStatus(ctx context.Context, args json.RawMessage
 }
 
 // getSessionID 获取当前会话 ID。
-// 优先级：环境变量 DSC_SESSION_ID > "default"
+// 优先级：环境变量 DSC_SESSION_ID > 项目级键（工作区路径派生，对齐宿主 session
+// 存储的 SessionKeyForProject——同一项目同名、不同项目隔离；替代硬编码 default，
+// 避免跨项目压缩状态被混入）。
 func (bc *BillionContext) getSessionID() string {
 	if id := os.Getenv("DSC_SESSION_ID"); id != "" {
 		return id
 	}
-	return "default"
+	return session.SessionKeyForProject(dsc.WorkspaceRoot())
 }
 
 // estimateTokens 估算 proto.Message 列表的总 token 数。
