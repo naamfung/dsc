@@ -141,3 +141,30 @@ func TestCreateReadChineseAppend(t *testing.T) {
 		t.Errorf("read-back text missing appended Chinese content")
 	}
 }
+
+// TestScanBundledTTFs 验证插件的 scanBundledTTFs() 能正确扫描 fonts/ 目录。
+// 这同时是对 listAvailableCJKFonts()（system prompt 注入的字体清单）的间接测试——
+// 两者共用 scanBundledTTFs() 同一路径，确保测试与生产行为一致。
+func TestScanBundledTTFs(t *testing.T) {
+	setupCJKEnv(t)
+
+	names := scanBundledTTFs()
+	if len(names) == 0 {
+		t.Skip("no .ttf fonts found; skipping scan test")
+	}
+	t.Logf("scanBundledTTFs found %d font(s): %v", len(names), names)
+
+	// scanBundledTTFs 按文件大小降序排列——CJK 字体应排在最前
+	if names[0] != cjkFontName {
+		t.Errorf("expected first font to be %q (largest), got %q", cjkFontName, names[0])
+	}
+
+	// listAvailableCJKFonts 应包含所有扫描到的字体名
+	prompt := listAvailableCJKFonts()
+	for _, n := range names {
+		if !strings.Contains(prompt, n) {
+			t.Errorf("listAvailableCJKFonts() missing font %q in prompt: %s", n, prompt)
+		}
+	}
+	t.Logf("listAvailableCJKFonts prompt: %s", prompt)
+}

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -40,6 +39,9 @@ var cjkFontURLs = []string{
 //
 // 设计目标：让插件在任何开发环境（含 CI）中都能跑完整测试，无需手动下载字体；
 // 同时尊重用户已有的字体配置（不覆盖、不忽略用户手动放置的 .ttf 字体）。
+//
+// 字体检测复用插件的 scanBundledTTFs()——与生产代码同一路径，确保测试与
+// 实际行为一致（而非测试自写一套独立扫描逻辑）。
 func TestMain(m *testing.M) {
 	if err := resolveCJKFont(); err != nil {
 		// 下载失败不阻止测试——CJK 测试会自行 skip
@@ -50,17 +52,22 @@ func TestMain(m *testing.M) {
 }
 
 // resolveCJKFont 解析测试使用的 CJK 字体：
-//  1. 扫描 fonts/ 目录，若已有任意 .ttf 字体则用它（设置 cjkFontName/cjkFontFile）
-//  2. 若无，下载默认字体（Noto Sans SC Regular）
+//  1. 用插件的 scanBundledTTFs() 扫描 fonts/ 目录（与生产代码同路径）
+//  2. 若已有任意 .ttf 字体则用最大的那个（CJK 字体通常 >5MB）
+//  3. 若无，下载默认字体（Noto Sans SC Regular）
 func resolveCJKFont() error {
 	srcDir := testSourceDir()
 	fontsDir := filepath.Join(srcDir, "fonts")
 
-	// 1. 扫描已有 .ttf 字体
-	if name, file, ok := findExistingTTF(fontsDir); ok {
-		cjkFontName = name
-		cjkFontFile = file
-		fmt.Fprintf(os.Stderr, "[font_setup] using existing font: %s\n", file)
+	// 确保 fonts 目录存在（scanBundledTTFs 依赖它）
+	_ = os.MkdirAll(fontsDir, 0755)
+
+	// 1. 复用插件的 scanBundledTTFs 检测已有字体（按大小降序，最大的在前）
+	names := scanBundledTTFs()
+	if len(names) > 0 {
+		cjkFontName = names[0]
+		cjkFontFile = cjkFontName + ".ttf"
+		fmt.Fprintf(os.Stderr, "[font_setup] using existing font: %s\n", cjkFontFile)
 		return nil
 	}
 
@@ -68,11 +75,6 @@ func resolveCJKFont() error {
 	cjkFontName = defaultCJKFontName
 	cjkFontFile = defaultCJKFontFile
 	fontPath := filepath.Join(fontsDir, cjkFontFile)
-
-	// 确保 fonts 目录存在
-	if err := os.MkdirAll(fontsDir, 0755); err != nil {
-		return fmt.Errorf("create fonts dir: %w", err)
-	}
 
 	// 依次尝试下载源
 	for _, url := range cjkFontURLs {
@@ -84,40 +86,6 @@ func resolveCJKFont() error {
 		return nil
 	}
 	return fmt.Errorf("all download sources failed")
-}
-
-// findExistingTTF 扫描 fonts/ 目录，返回第一个找到的 .ttf 字体文件名与主干名。
-// 若目录中有多个 .ttf，取文件大小最大的（通常 CJK 字体远大于 Latin 字体）。
-func findExistingTTF(fontsDir string) (name, file string, ok bool) {
-	entries, err := os.ReadDir(fontsDir)
-	if err != nil {
-		return "", "", false
-	}
-	var bestFile string
-	var bestSize int64
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext != ".ttf" {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.Size() > bestSize {
-			bestSize = info.Size()
-			bestFile = e.Name()
-		}
-	}
-	if bestFile == "" || bestSize < 1000000 {
-		// 小于 1MB 的不太可能是 CJK 字体（CJK 字体通常 > 5MB）
-		return "", "", false
-	}
-	stem := strings.TrimSuffix(bestFile, filepath.Ext(bestFile))
-	return stem, bestFile, true
 }
 
 // downloadFont 从 url 下载字体到 outPath（先写临时文件再 rename，避免半成品）。

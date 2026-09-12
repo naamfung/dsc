@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -73,11 +74,26 @@ func bundledFontsDir() string {
 // 经 ContextFn 注入 system prompt，让模型知道实际有哪些字体可用——
 // 而非硬编码特定字体名。空目录返回提示让模型知道可用标准 14 字体。
 func listAvailableCJKFonts() string {
-	fsDir := bundledFontsDir()
-	if fsDir == "" {
+	names := scanBundledTTFs()
+	if len(names) == 0 {
 		return " 当前无 CJK 字体（仅支持标准 14 字体）。"
 	}
-	var names []string
+	return " 可用 CJK 字体（.ttf）: " + strings.Join(names, ", ") + "。"
+}
+
+// scanBundledTTFs 扫描 fonts/ 目录，返回所有 .ttf 字体文件的主干名（不含扩展名）。
+// 按文件大小降序排列（CJK 字体通常 >5MB，排在前面优先被选中）。
+// 供 listAvailableCJKFonts（system prompt 注入）与 TestMain（字体检测）共用。
+func scanBundledTTFs() []string {
+	fsDir := bundledFontsDir()
+	if fsDir == "" {
+		return nil
+	}
+	type fontEntry struct {
+		name string
+		size int64
+	}
+	var entries []fontEntry
 	_ = filepath.WalkDir(fsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -86,14 +102,23 @@ func listAvailableCJKFonts() string {
 		if ext != ".ttf" {
 			return nil
 		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
 		stem := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
-		names = append(names, stem)
+		entries = append(entries, fontEntry{name: stem, size: info.Size()})
 		return nil
 	})
-	if len(names) == 0 {
-		return " 当前无 CJK 字体（仅支持标准 14 字体）。"
+	// 按文件大小降序（CJK 字体优先）
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].size > entries[j].size
+	})
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.name
 	}
-	return " 可用 CJK 字体（.ttf）: " + strings.Join(names, ", ") + "。"
+	return names
 }
 
 // fontNameStem 归一并取 .ttf 文件名主干（不含路径与扩展名），用于字体名匹配。
