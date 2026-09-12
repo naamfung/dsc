@@ -13,6 +13,8 @@ default_llm: llm-anthropic
 
 #context_window: 131072
 
+compaction: dsc-billion-context
+
 # 历史注入持久化编码（/settings history 写回）：-1 禁止（不注入历史）、0 未定义（默认不限制）、
 
 # >0 启用并注入最近 N 条。
@@ -62,7 +64,7 @@ plugins:
     type: agent
     binary_path: ./plugins/agent-react-loop/agent-react-loop.exe
     enabled: true
-  - name: tool-musicplayer
-    type: tool
-    binary_path: ./plugins/tool-musicplayer/tool-musicplayer.exe
+  - name: dsc-billion-context
+    type: dsc
     enabled: true
+    binary_path: ./plugins/dsc-billion-context/dsc-billion-context
