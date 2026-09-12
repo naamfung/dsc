@@ -30,9 +30,11 @@ const (
 	// TypePolicy 策略插件：注册宿主可桥接的策略服务（如文件系统观测
 	// FsObservationPolicyService）；宿主经主连接直接取对应 proto 客户端。
 	TypePolicy Type = "policy"
-	// TypeDsc 通用插件：不注册任何 tool/llm/agent/policy 服务，仅提供元数据与
-	// 可选 Hook（OnEvent 订阅宿主事件等）。作为「纯后台/程序性」插件的通用类型，
-	// 宿主加载它时同样登记 hook client，使其能接收宿主事件广播。目录前缀 dsc-。
+	// TypeDsc 通用插件：不注册 llm/agent/policy 服务，仅提供元数据与可选 Hook
+	// （OnEvent 订阅宿主事件等）；可声明工具（sdk.Tool/ToolProvider），宿主经
+	// ListTools 探测并登记为 tool provider（工具集为空时跳过登记，零行为变化）。
+	// 作为「纯后台/程序性」插件的通用类型，宿主加载它时同样登记 hook client，
+	// 使其能接收宿主事件广播。目录前缀 dsc-。
 	TypeDsc Type = "dsc"
 )
 

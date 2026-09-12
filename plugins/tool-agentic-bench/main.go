@@ -128,7 +128,7 @@ func hBenchStart(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 	}
 	outRoot := filepath.Join(state.root, benchOutDirName)
-	if err := os.MkdirAll(outRoot, 0o755); err != nil {
+	if err := dsc.MkdirAll(outRoot); err != nil {
 		return "", fmt.Errorf("创建产物目录失败: %w", err)
 	}
 	type caseListItem struct {
@@ -236,7 +236,7 @@ func hBenchSubmit(ctx context.Context, args json.RawMessage) (string, error) {
 	if c.Kind == "answer" {
 		candidate = p.Answer
 	} else { // file：插件直接读产物文件判定（端态校验，无需模型回传内容）。
-		raw, err := os.ReadFile(filepath.Join(caseOutDir(root, c.ID), "reply.txt"))
+		raw, err := dsc.ReadFile(filepath.Join(caseOutDir(root, c.ID), "reply.txt"))
 		if err != nil {
 			state.results[c.ID] = CaseResult{Status: "fail", Feedback: "未找到产物文件 " + c.Relative, DurationMs: msSince(startAt)}
 			return submitPayload(c.ID, "fail", "FAIL（未找到产物文件 "+c.Relative+"）", false, root), nil

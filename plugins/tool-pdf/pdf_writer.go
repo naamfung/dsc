@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	dsc "dsc-sdk"
+
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/font"
 	pdfcpulib "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
@@ -171,7 +173,7 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 	}
 
 	// 8. 写入文件
-	if err := os.MkdirAll(filepath.Dir(absOut), 0755); err != nil {
+	if err := dsc.MkdirAll(filepath.Dir(absOut)); err != nil {
 		return "", 0, fmt.Errorf("create output dir: %w", err)
 	}
 	if err := api.CreatePDFFile(xRefTable, absOut, conf); err != nil {

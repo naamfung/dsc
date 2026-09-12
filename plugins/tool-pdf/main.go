@@ -31,20 +31,6 @@ import (
 
 // ---------- 共享状态 ----------
 
-// workspaceRoot 返回宿主注入的工作空间根目录（沙箱边界，仅用于默认输出路径推断）。
-// 注意：本插件不做 workspace 越界检查——沙箱策略由宿主工具流水线 pre-execute
-// 瀑布统一判定（与 tool-filesystem / tool-str-replace-editor 一致）。
-// 这避免了 full-access 模式下插件仍自行拒绝 workspace 外路径的问题。
-func workspaceRoot() string {
-	if r := os.Getenv("DSC_WORKSPACE_ROOT"); r != "" {
-		return r
-	}
-	if r, err := os.Getwd(); err == nil {
-		return r
-	}
-	return "."
-}
-
 // pdfReadContext 缓存最近打开的 PDF 的 Context，避免重复解析。
 // 同一文件多次工具调用时复用（如先 info 再 read_text 再 search）。
 type pdfReadContext struct {
@@ -442,12 +428,12 @@ func handleExtractImages(ctx context.Context, args json.RawMessage) (string, err
 	}
 	if p.OutDir == "" {
 		// 默认输出到工作空间内 spill 同级目录
-		p.OutDir = filepath.Join(workspaceRoot(), "pdf-images",
+		p.OutDir = filepath.Join(dsc.WorkspaceRoot(), "pdf-images",
 			strings.TrimSuffix(filepath.Base(p.FilePath), ".pdf"))
 	}
 
 	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
-	if err := os.MkdirAll(p.OutDir, 0755); err != nil {
+	if err := dsc.MkdirAll(p.OutDir); err != nil {
 		return "", fmt.Errorf("create out_dir: %w", err)
 	}
 

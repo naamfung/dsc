@@ -268,14 +268,14 @@ func main() {
 		}
 		hd.ic = ic
 		hd.mu.Unlock()
-		go func() {
+		dsc.SafeGoroutine(func() {
 			if err := startHTTP(); err != nil {
 				hd.mu.Lock()
 				hd.lastErr = fmt.Sprintf("http: %v", err)
 				hd.mu.Unlock()
 				fmt.Printf("[tool-harness-webui] http server failed: %v\n", err)
 			}
-		}()
+		})
 		return nil
 	})
 

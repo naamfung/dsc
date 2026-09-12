@@ -53,6 +53,7 @@ cd examples/tool-simple && go build -o my-tool.exe .
 | `dsc.TypeLLM` | `sdk.LLM(impl)` | 实现 `plugin.LLMProvider`（Chat / ChatStream / Name / Version / HealthCheck） |
 | `dsc.TypeAgent` | `sdk.Agent(impl)` | 实现 `plugin.Agent`（Run / RunStream / RegisterServices / InjectMessage 等 11 个方法） |
 | `dsc.TypePolicy` | `sdk.Policy(impl)` | 实现 `proto.FsObservationPolicyServiceServer`（宿主桥接到工具流水线） |
+| `dsc.TypeDsc` | `sdk.Tool(...)` / `sdk.ToolProvider(...)` / `sdk.Hook(...)` / `sdk.Context(...)` 等可选 | 通用/纯后台插件：不注册 llm/agent/policy 服务；**可注册工具**——宿主经 ListTools 探测并登记为 tool provider（工具集为空时跳过登记，零行为变化）；可加钩子订阅宿主事件广播；目录前缀 `dsc-` |
 
 所有类型的元数据（Type/Name/Version/APIVersion）由 SDK 自动提供，宿主加载时校验
 `APIVersion ∈ [1.0, 2.0)`。
@@ -220,6 +221,39 @@ env := dsc.ReadEnv() // Mode / WorkspaceRoot / SessionDir / ContextWindow / ...
 宿主统一注入 `DSC_*` 环境变量（workspace 根、模式、会话目录、上下文容量等），
 插件只读即可，无需关心注入细节。
 
+## 统一文件 IO
+
+所有插件读写文件统一经 SDK 助手，获得一致的错误包装（`read <path>: ...` /
+`write <path>: ...`）与防御性 recover（panic 转错误返回，绝不 crash 插件进程
+导致 LLM 连接中断）。错误信息里的路径统一**正斜杆**呈现（`filepath.ToSlash`），
+与内部 POSIX shell（tool-filesystem 的 mvdan/sh）风格一致——Windows 上底层
+`os.*` 错误内嵌反斜杆路径，直接回显会给模型造成两种风格混杂的混乱；底层错误
+仍经 `Unwrap` 保留，`errors.Is/As` 照常可用。
+
+```go
+data, err := dsc.ReadFile(path)                    // 读取
+err  = dsc.WriteFile(path, data)                   // 写入（默认 0644）
+err  = dsc.MkdirAll(dir)                           // 建目录（默认 0755）
+root := dsc.WorkspaceRoot()                        // 工作空间根（DSC_WORKSPACE_ROOT，回退 cwd）
+abs, err := dsc.AbsPath(path)                      // 绝对路径规范化
+```
+
+注意：本层不做 workspace 越界检查——沙箱策略由宿主工具流水线统一判定，插件
+自行判定反而会在 full-access 模式下误拒 workspace 外路径。
+
+## 后台 goroutine
+
+所有后台 goroutine 一律经 `SafeGoroutine` 启动（禁止裸 `go func()`）：
+
+```go
+dsc.SafeGoroutine(func() {
+	// 后台任务；panic 被 recover 并连同调用栈打到 stderr，绝不 crash 插件进程
+})
+```
+
+goroutine 里的 panic 无法被工具执行链路的 recover 捕获（recover 只对当前
+goroutine 有效），不在此接住会直接干掉整个插件进程导致 LLM 连接中断。
+
 ## LUA 插件开发
 
 SDK 面向 Go 插件；**LUA 工具开发走既有的 tool-lua-host 通路**（无需本 SDK）：
@@ -242,6 +276,8 @@ sdk/
   metadata.go      元数据服务
   interconnect.go  宿主能力客户端集（LLM / Tool / Notify）
   env.go           进程上下文（DSC_* 环境变量）
+  fs.go            统一文件 IO 助手（ReadFile / WriteFile / MkdirAll / WorkspaceRoot / AbsPath）
+  safe.go          后台 goroutine 兜底（SafeGoroutine：recover + stderr 记录）
   examples/        可构建示例：tool-simple / hook-tool / llm-proxy
 ```
 

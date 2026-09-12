@@ -113,7 +113,7 @@ func (s *SkillStore) removeInstalled(name string) error {
 
 // parseSkillFile 解析 SKILL.md：可选 YAML frontmatter（name/description）+ Markdown 正文。
 func parseSkillFile(path, fallbackName string) (Skill, bool) {
-	data, err := os.ReadFile(path)
+	data, err := dsc.ReadFile(path)
 	if err != nil {
 		return Skill{}, false
 	}
@@ -394,7 +394,7 @@ func copyDir(src, dst string) error {
 			if strings.EqualFold(d.Name(), ".git") {
 				return filepath.SkipDir
 			}
-			return os.MkdirAll(target, 0o755)
+			return dsc.MkdirAll(target)
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -409,14 +409,14 @@ func copyDir(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := dsc.MkdirAll(filepath.Dir(dst)); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(src)
+	data, err := dsc.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o644)
+	return dsc.WriteFile(dst, data)
 }
 
 // UninstallSkillTool 卸载（删除）用户安装的外置技能；内置技能（skills/builtin）不可卸载。

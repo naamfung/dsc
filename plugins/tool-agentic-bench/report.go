@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -46,7 +45,7 @@ func buildReport(root string, results map[string]CaseResult, totalMs int64) (str
 			"dur":    fmt.Sprintf("%dms", res.DurationMs),
 		})
 		got := ""
-		if details, err := os.ReadFile(filepath.Join(root, benchOutDirName, c.ID, "reply.txt")); err == nil {
+		if details, err := dsc.ReadFile(filepath.Join(root, benchOutDirName, c.ID, "reply.txt")); err == nil {
 			got = strings.TrimSpace(string(details))
 		}
 		recs = append(recs, map[string]any{
@@ -96,8 +95,8 @@ func buildReport(root string, results map[string]CaseResult, totalMs int64) (str
 
 	// 便于无人值守运行收集的固定路径 JSON 报告。
 	reportPath := filepath.Join(root, benchOutDirName, "report.json")
-	_ = os.MkdirAll(filepath.Dir(reportPath), 0o755)
-	_ = os.WriteFile(reportPath, summaryJSON, 0o644)
+	_ = dsc.MkdirAll(filepath.Dir(reportPath))
+	_ = dsc.WriteFile(reportPath, summaryJSON)
 
 	badgeTone := "red"
 	if passed == total {

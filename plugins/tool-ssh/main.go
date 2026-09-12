@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -47,7 +46,7 @@ func (m *SSHSessionManager) connect(host string, port int, username, password, p
 		auth = append(auth, ssh.Password(password))
 	}
 	if privateKeyPath != "" {
-		pem, err := os.ReadFile(privateKeyPath)
+		pem, err := dsc.ReadFile(privateKeyPath)
 		if err != nil {
 			return "", fmt.Errorf("read private key: %w", err)
 		}

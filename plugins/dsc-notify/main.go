@@ -188,7 +188,7 @@ func initGlobalAudio() error {
 
 // 播放 PCM 数据（内置音效）
 func playPCM(pcm []byte) {
-	go func() {
+	dsc.SafeGoroutine(func() {
 		reader := bytes.NewReader(pcm)
 		player := globalCtx.NewPlayer(reader)
 		defer player.Close()
@@ -201,7 +201,7 @@ func playPCM(pcm []byte) {
 			duration = 1 * time.Second
 		}
 		time.Sleep(duration + 500*time.Millisecond)
-	}()
+	})
 }
 
 // 播放自定义文件（MP3/WAV）
@@ -251,7 +251,7 @@ func playCustomFile(filePath string) error {
 		filePath, sampleRate, channelCount, len(pcmData))
 
 	// 异步播放
-	go func() {
+	dsc.SafeGoroutine(func() {
 		player := globalCtx.NewPlayer(bytes.NewReader(pcmData))
 		defer player.Close()
 		player.Play()
@@ -265,7 +265,7 @@ func playCustomFile(filePath string) error {
 		}
 		time.Sleep(duration + 500*time.Millisecond)
 		log.Printf("✅ 播放完成: %s", filePath)
-	}()
+	})
 
 	return nil
 }
@@ -414,7 +414,7 @@ func main() {
 		} else if err := initGlobalAudio(); err != nil {
 			log.Printf("⚠️ 初始化音频失败（后续播放将不可用）: %v", err)
 		}
-		go playWorker()
+		dsc.SafeGoroutine(playWorker)
 		return nil
 	})
 	sdk.Serve()

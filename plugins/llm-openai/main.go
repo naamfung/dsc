@@ -320,7 +320,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message
 	}
 
 	ch := make(chan *core.ChatStreamResponse)
-	go func() {
+	dsc.SafeGoroutine(func() {
 		defer close(ch)
 
 		var textAccumulator strings.Builder
@@ -442,7 +442,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message
 				// 稍後由上方空 choices 分支收尾退出。
 			}
 		}
-	}()
+	})
 
 	return ch, nil
 }

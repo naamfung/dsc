@@ -91,8 +91,8 @@ func saveDefaultSrc(path string) error {
 	if old := loadDefaultSrc(); old == clean {
 		return nil
 	}
-	os.MkdirAll(filepath.Dir(file), 0o755)
-	return os.WriteFile(file, []byte(clean), 0o644)
+	_ = dsc.MkdirAll(filepath.Dir(file))
+	return dsc.WriteFile(file, []byte(clean))
 }
 
 // loadDefaultSrc 读取默认播放目录：环境变量优先，其次文件。
@@ -100,7 +100,7 @@ func loadDefaultSrc() string {
 	if env := strings.TrimSpace(os.Getenv("DSC_MUSICPLAYER_SRC")); env != "" {
 		return env
 	}
-	data, err := os.ReadFile(defaultSrcFile())
+	data, err := dsc.ReadFile(defaultSrcFile())
 	if err != nil {
 		return ""
 	}
@@ -175,7 +175,7 @@ func runLoop(ctx context.Context, files []string, loop string, volumePercent int
 	// prefetchCh 容量 1：后台预解码下一首，播放当前期间即完成解码
 	prefetchCh := make(chan decodedTrack, 1)
 	prefetch := func(idx int) {
-		go func() {
+		dsc.SafeGoroutine(func() {
 			if ctx.Err() != nil {
 				return
 			}
@@ -184,7 +184,7 @@ func runLoop(ctx context.Context, files []string, loop string, volumePercent int
 			case <-ctx.Done():
 			case prefetchCh <- decodedTrack{pcm: pcm, err: err}:
 			}
-		}()
+		})
 	}
 
 	// 第一首同步解码，保证立即开播
@@ -494,7 +494,7 @@ func main() {
 				src = fmt.Sprintf("%s（%d 首）", p.Path, len(files))
 			}
 			setPlayStat(func(s *playStatus) { s.src = src; s.shuffle = p.Shuffle })
-			go runLoop(ctx, files, p.Loop, volume)
+			dsc.SafeGoroutine(func() { runLoop(ctx, files, p.Loop, volume) })
 
 			volDesc := fmt.Sprintf("%d%%", volume)
 			if p.Volume != nil && *p.Volume == -1 {

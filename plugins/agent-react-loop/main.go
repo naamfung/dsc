@@ -150,14 +150,14 @@ func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, too
 
 	// 兩個 serviceID 一次性就緒後，立即建立連接（在 broker 的 5 秒超時前）
 	if llmServiceID != 0 && toolServiceID != 0 {
-		go func() {
+		dsc.SafeGoroutine(func() {
 			_, _, err := a.ensureConnected(llmServiceID, toolServiceID)
 			if err != nil {
 				fmt.Printf("[Agent Loop] eager connect failed: %v\n", err)
 			} else {
 				fmt.Printf("[Agent Loop] eager connect successful\n")
 			}
-		}()
+		})
 	}
 	return nil
 }
@@ -169,7 +169,7 @@ func (a *ReactLoopAgent) Run(ctx context.Context, input string, images []string)
 // RunStream 以流式方式执行循环：LLM 文本增量、工具调用提示以帧的形式发送到通道，关闭表示结束
 func (a *ReactLoopAgent) RunStream(ctx context.Context, input string, images []string) (<-chan *core.RunStreamResponse, error) {
 	ch := make(chan *core.RunStreamResponse)
-	go func() {
+	dsc.SafeGoroutine(func() {
 		defer close(ch)
 		var emittedErr bool
 		_, err := a.runLoop(ctx, input, images, func(item *core.RunStreamResponse) {
@@ -183,7 +183,7 @@ func (a *ReactLoopAgent) RunStream(ctx context.Context, input string, images []s
 		if err != nil && !emittedErr {
 			ch <- &core.RunStreamResponse{Status: "error", Error: err.Error()}
 		}
-	}()
+	})
 	return ch, nil
 }
 
@@ -1328,10 +1328,10 @@ func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 	// 2. 等待 Run 完成（非強制模式）
 	if !force {
 		done := make(chan struct{})
-		go func() {
+		dsc.SafeGoroutine(func() {
 			a.runWg.Wait()
 			close(done)
-		}()
+		})
 		select {
 		case <-done:
 			// 正常完成

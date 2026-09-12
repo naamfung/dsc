@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 
+	dsc "dsc-sdk"
+
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
@@ -61,7 +63,7 @@ func handleMergePDFs(ctx context.Context, args json.RawMessage) (string, error) 
 		return "", err
 	}
 	outPath := outAbs[0]
-	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+	if err := dsc.MkdirAll(filepath.Dir(outPath)); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -107,7 +109,7 @@ func handleSplitPDFs(ctx context.Context, args json.RawMessage) (string, error) 
 	if span <= 0 {
 		span = 1
 	}
-	if err := os.MkdirAll(outAbs[0], 0755); err != nil {
+	if err := dsc.MkdirAll(outAbs[0]); err != nil {
 		return "", fmt.Errorf("create out_dir: %w", err)
 	}
 
@@ -159,7 +161,7 @@ func handleExtractPagesTool(ctx context.Context, args json.RawMessage) (string, 
 	if err != nil {
 		return "", fmt.Errorf("invalid pages %q: %w", p.Pages, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+	if err := dsc.MkdirAll(filepath.Dir(outPath)); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -230,16 +232,13 @@ func listPDFs(dir string) []string {
 	return out
 }
 
-// copyFile 复制文件。
+// copyFile 复制文件（统一走 SDK 文件 IO 助手：一致错误包装与防御性 recover）。
 func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
+	data, err := dsc.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", src, err)
+		return err
 	}
-	if err := os.WriteFile(dst, data, 0644); err != nil {
-		return fmt.Errorf("write %s: %w", dst, err)
-	}
-	return nil
+	return dsc.WriteFile(dst, data)
 }
 
 // joinLines 把路径列表拼成带缩进的文本。

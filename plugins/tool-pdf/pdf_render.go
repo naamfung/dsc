@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	dsc "dsc-sdk"
 )
 
 // rasterizer 描述一个外部 PDF→PNG 渲染器的启动方式。
@@ -139,7 +141,7 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 	first, last := contiguousPages(selected)
 
 	if p.OutDir == "" {
-		p.OutDir = filepath.Join(workspaceRoot(), "pdf-images",
+		p.OutDir = filepath.Join(dsc.WorkspaceRoot(), "pdf-images",
 			strings.TrimSuffix(filepath.Base(p.FilePath), ".pdf"), "render")
 	}
 	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
@@ -151,7 +153,7 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("resolve out_dir: %w", err)
 	}
-	if err := os.MkdirAll(outAbs, 0755); err != nil {
+	if err := dsc.MkdirAll(outAbs); err != nil {
 		return "", fmt.Errorf("create out_dir: %w", err)
 	}
 

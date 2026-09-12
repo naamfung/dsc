@@ -75,7 +75,7 @@ func getExeDir() (string, error) {
 func cleanupOldBrowserData(exeDir string) error {
 	browserDataRoot := filepath.Join(exeDir, "temp", "browser-data")
 	// 確保根目錄存在
-	if err := os.MkdirAll(browserDataRoot, 0755); err != nil {
+	if err := dsc.MkdirAll(browserDataRoot); err != nil {
 		return err
 	}
 
@@ -163,7 +163,7 @@ func launchBrowserRod(sessionID string, userMode bool) (*rod.Browser, bool, erro
 	// 浏览器数据目录：程序可执行路径下的 temp/browser-data/<sessionID>
 	// 避免与 workspace 混雜，並通過 sessionID 區分不同實例
 	browserDataDir := filepath.Join(exeDir, "temp", "browser-data", sessionID)
-	if err := os.MkdirAll(browserDataDir, 0755); err != nil {
+	if err := dsc.MkdirAll(browserDataDir); err != nil {
 		return nil, false, fmt.Errorf("failed to create browser data directory: %w", err)
 	}
 
@@ -767,7 +767,7 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 
 	// 保存截圖到工作區目錄（沙箱限制寫入系統臨時目錄，如 %TEMP%，故存到 workspace 內）
 	downloadDir := filepath.Join(core.WorkspaceRoot, "screenshots")
-	if err := os.MkdirAll(downloadDir, 0755); err != nil {
+	if err := dsc.MkdirAll(downloadDir); err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"創建下載目錄失敗: %s"}`, err.Error()), nil
 	}
 
@@ -775,7 +775,7 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 	fileName := fmt.Sprintf("screenshot_%s.png", timestamp)
 	filePath := filepath.Join(downloadDir, fileName)
 
-	if err := os.WriteFile(filePath, screenshot, 0644); err != nil {
+	if err := dsc.WriteFile(filePath, screenshot); err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"保存截圖失敗: %s"}`, err.Error()), nil
 	}
 

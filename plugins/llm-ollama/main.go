@@ -229,7 +229,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []core.Message
 	}
 
 	ch := make(chan *core.ChatStreamResponse)
-	go func() {
+	dsc.SafeGoroutine(func() {
 		defer close(ch)
 
 		var textAccumulator strings.Builder
@@ -315,7 +315,7 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []core.Message
 		if streamErr != nil {
 			ch <- &core.ChatStreamResponse{Error: streamErr.Error()}
 		}
-	}()
+	})
 
 	return ch, nil
 }

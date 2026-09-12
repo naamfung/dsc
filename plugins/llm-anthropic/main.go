@@ -423,7 +423,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Mess
 	stream := p.client.Messages.NewStreaming(ctx, params, p.requestOptions(beta)...)
 
 	ch := make(chan *core.ChatStreamResponse)
-	go func() {
+	dsc.SafeGoroutine(func() {
 		defer close(ch)
 		acc := newStreamAccumulator()
 		prevLen := 0
@@ -462,7 +462,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Mess
 		// cache_read/cache_creation 直接对应）
 		resp.Usage = usageFromAnthropic(&acc.msg.Usage)
 		ch <- resp
-	}()
+	})
 	return ch, nil
 }
 

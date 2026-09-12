@@ -125,7 +125,7 @@ func safePath(base, reqPath string) (string, error) {
 	}
 	// 工作目錄（base）可能尚未創建（首次使用時），先確保它存在，
 	// 否則解析真實路徑會報 “The system cannot find the file specified”
-	if err := os.MkdirAll(absBase, 0755); err != nil {
+	if err := dsc.MkdirAll(absBase); err != nil {
 		return "", err
 	}
 	// 根也經 CanonicalPath 解析真實路徑（穿透 junction/符號鏈接）
@@ -211,7 +211,7 @@ func readFileForEdit(reqPath string) (string, error) {
 	if fi.IsDir() {
 		return "", fmt.Errorf("path is a directory, not a file: %s", filepath.ToSlash(reqPath))
 	}
-	content, err := os.ReadFile(reqPath)
+	content, err := dsc.ReadFile(reqPath)
 	if err != nil {
 		return "", slashErr(err)
 	}
@@ -254,10 +254,10 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("file_text is required for create command")
 		}
 		dir := filepath.Dir(reqPath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := dsc.MkdirAll(dir); err != nil {
 			return "", slashErr(err)
 		}
-		if err := os.WriteFile(reqPath, []byte(args.FileText), 0644); err != nil {
+		if err := dsc.WriteFile(reqPath, []byte(args.FileText)); err != nil {
 			return "", slashErr(err)
 		}
 		version := computeHash(args.FileText)
@@ -295,7 +295,7 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("str_replace failed: No replacement was performed, old_str %q did not appear verbatim in %s", args.OldStr, relPath)
 		}
 		newContentStr := strings.Replace(contentStr, args.OldStr, args.NewStr, 1)
-		if err := os.WriteFile(reqPath, []byte(newContentStr), 0644); err != nil {
+		if err := dsc.WriteFile(reqPath, []byte(newContentStr)); err != nil {
 			return "", slashErr(err)
 		}
 
@@ -342,7 +342,7 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			newLines = append(before, append([]string{args.NewStr}, after...)...)
 		}
 		newContent := strings.Join(newLines, "\n")
-		if err := os.WriteFile(reqPath, []byte(newContent), 0644); err != nil {
+		if err := dsc.WriteFile(reqPath, []byte(newContent)); err != nil {
 			return "", slashErr(err)
 		}
 

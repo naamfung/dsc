@@ -106,7 +106,7 @@ func runWithIdleTimeout(ctx context.Context, session *Session, run func(context.
 
 	const pollInterval = 500 * time.Millisecond
 	stop := make(chan struct{})
-	go func() {
+	dsc.SafeGoroutine(func() {
 		tick := time.NewTicker(pollInterval)
 		defer tick.Stop()
 		lastLen := 0
@@ -127,7 +127,7 @@ func runWithIdleTimeout(ctx context.Context, session *Session, run func(context.
 				}
 			}
 		}
-	}()
+	})
 
 	err := run(runCtx)
 	close(stop)

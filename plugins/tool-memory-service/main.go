@@ -68,7 +68,7 @@ func dbPath() string {
 
 // initDB 初始化数据库：常规表自动迁移 + FTS5 虚拟表与同步触发器。
 func initDB(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := dsc.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
 	}
 	var err error
