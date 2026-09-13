@@ -68,14 +68,15 @@ func posixHint(cmd string) string {
 
 // slashErr 把错误字符串里的路径归一为正斜杆（Windows 上 os.* 错误内嵌反斜杆
 // 路径，直接回显给模型/用户时与其余正斜杆路径风格不一致）。
-// 使用 strings.ReplaceAll 而非 filepath.ToSlash——后者只转换当前平台的路径分隔符，
-// 在 Linux 上 \ 不是分隔符所以不转换；但我们的策略是始终归一化为正斜杆
-// （跨平台一致性，对齐 DSC 的 POSIX shell 路径风格）。
+// 对齐 AGENTS.md 第 10 条：禁止使用 filepath.ToSlash，必须用两行连续替换。
 func slashErr(err error) string {
 	if err == nil {
 		return ""
 	}
-	return strings.ReplaceAll(err.Error(), "\\", "/")
+	s := err.Error()
+	s = strings.ReplaceAll(s, `\\`, "/")
+	s = strings.ReplaceAll(s, `\`, "/")
+	return s
 }
 
 // shellExecHandler 是 interp.ExecHandler 的入口：命中内部工具表走进程内实现，

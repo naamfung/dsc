@@ -191,16 +191,17 @@ func computeHash(content string) string {
 
 // slashErr 把文件系统错误里的原生路径归一为正斜杆（Windows 上 os.* 错误内嵌
 // 反斜杆路径，直接透传给模型/用户时与其余正斜杆路径风格不一致）。
-// 使用 strings.ReplaceAll 而非 filepath.ToSlash——后者只转换当前平台的路径分隔符，
-// 在 Linux 上 \ 不是分隔符所以不转换；但我们的策略是始终归一化为正斜杆
-// （跨平台一致性，对齐 DSC 的 POSIX shell 路径风格）。
+// 对齐 AGENTS.md 第 10 条：禁止使用 filepath.ToSlash，必须用两行连续替换。
 func slashErr(err error) error {
 	if err == nil {
 		return nil
 	}
 	var pe *os.PathError
 	if errors.As(err, &pe) {
-		return &os.PathError{Op: pe.Op, Path: strings.ReplaceAll(pe.Path, "\\", "/"), Err: pe.Err}
+		p := pe.Path
+		p = strings.ReplaceAll(p, `\\`, "/")
+		p = strings.ReplaceAll(p, `\`, "/")
+		return &os.PathError{Op: pe.Op, Path: p, Err: pe.Err}
 	}
 	return err
 }
