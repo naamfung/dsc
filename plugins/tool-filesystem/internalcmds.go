@@ -74,8 +74,8 @@ func slashErr(err error) string {
 		return ""
 	}
 	s := err.Error()
-	s = strings.ReplaceAll(s, `\\`, "/")
-	s = strings.ReplaceAll(s, `\`, "/")
+	s = strings.ReplaceAll(s, `\\`, "/") // 先：转义形式
+	s = strings.ReplaceAll(s, "\\", "/") // 后：原始形式
 	return s
 }
 

@@ -199,8 +199,8 @@ func slashErr(err error) error {
 	var pe *os.PathError
 	if errors.As(err, &pe) {
 		p := pe.Path
-		p = strings.ReplaceAll(p, `\\`, "/")
-		p = strings.ReplaceAll(p, `\`, "/")
+		p = strings.ReplaceAll(p, `\\`, "/") // 先：转义形式
+		p = strings.ReplaceAll(p, "\\", "/") // 后：原始形式
 		return &os.PathError{Op: pe.Op, Path: p, Err: pe.Err}
 	}
 	return err
