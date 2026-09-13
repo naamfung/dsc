@@ -12,7 +12,7 @@ import "syscall"
 //
 // 参见 server.go 信号处理段；对齐 AGENTS.md 第7条宿主侧 signal_unix.go 范式。
 var (
-	unixSigterm  = syscall.SIGTERM
-	unixSighup   = syscall.SIGHUP
-	unixSigquit  = syscall.SIGQUIT
+	unixSigterm = syscall.SIGTERM
+	unixSighup  = syscall.SIGHUP
+	unixSigquit = syscall.SIGQUIT
 )

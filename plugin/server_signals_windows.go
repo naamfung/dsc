@@ -14,7 +14,7 @@ import "os"
 // Windows 上插件优雅关闭由宿主侧 client.Close() 直接发 gRPC Shutdown RPC 触发
 // （见 grpc_controller.Shutdown → 异步 GracefulStop），不依赖信号。
 var (
-	unixSigterm  = os.Signal(nil)
-	unixSighup   = os.Signal(nil)
-	unixSigquit  = os.Signal(nil)
+	unixSigterm = os.Signal(nil)
+	unixSighup  = os.Signal(nil)
+	unixSigquit = os.Signal(nil)
 )
