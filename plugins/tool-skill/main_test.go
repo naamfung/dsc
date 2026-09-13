@@ -62,10 +62,10 @@ func TestScanAndInstall(t *testing.T) {
 		t.Fatal("no-desc skill should not be installed")
 	}
 
-	// 刷新存储后 read_skill 可读取，且作用域为外置
+	// 刷新存储后 skill 可读取，且作用域为外置
 	store.load()
 	if sk, ok := store.get("flat-skill"); !ok || sk.Body != "正文 B" || sk.Scope != ScopeInstalled {
-		t.Fatalf("read_skill lookup failed: ok=%v body=%q scope=%q", ok, sk.Body, sk.Scope)
+		t.Fatalf("skill lookup failed: ok=%v body=%q scope=%q", ok, sk.Body, sk.Scope)
 	}
 }
 

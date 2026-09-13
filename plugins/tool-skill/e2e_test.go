@@ -100,7 +100,7 @@ func TestE2EWithHostClient(t *testing.T) {
 			t.Fatalf("tool %s 缺 description/schema", tl.Name)
 		}
 	}
-	for _, want := range []string{"read_skill", "install_skill", "uninstall_skill"} {
+	for _, want := range []string{"skill", "install_skill", "uninstall_skill"} {
 		if !names[want] {
 			t.Fatalf("missing tool %s", want)
 		}
@@ -115,7 +115,7 @@ func TestE2EWithHostClient(t *testing.T) {
 		t.Fatalf("ListContext 应含技能索引: %q", lc.Content)
 	}
 
-	// 7. 工具执行：read_skill
+	// 7. 工具执行：skill（对齐 DSH 工具名）
 	execTool := func(name, args string) *proto.ExecuteToolResponse {
 		t.Helper()
 		resp, err := tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{ToolName: name, ArgumentsJson: args})
@@ -124,15 +124,15 @@ func TestE2EWithHostClient(t *testing.T) {
 		}
 		return resp
 	}
-	if resp := execTool("read_skill", `{"name":"flat-skill"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文 B") {
-		t.Fatalf("read_skill = %+v", resp)
+	if resp := execTool("skill", `{"name":"flat-skill"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文 B") {
+		t.Fatalf("skill = %+v", resp)
 	} else if v := assertView(t, resp); v.Kind != "plain" || v.Title != "Skill" || v.Badge == nil || v.Badge.Text != "flat-skill" || !strings.Contains(v.Body, "正文 B") {
-		t.Fatalf("read_skill view = %+v", v)
+		t.Fatalf("skill view = %+v", v)
 	}
-	if resp := execTool("read_skill", `{"name":"git-commit"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文内置") {
-		t.Fatalf("read_skill builtin = %+v", resp)
+	if resp := execTool("skill", `{"name":"git-commit"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文内置") {
+		t.Fatalf("skill builtin = %+v", resp)
 	} else if v := assertView(t, resp); v.Badge.Text != "git-commit" {
-		t.Fatalf("read_skill builtin view = %+v", v)
+		t.Fatalf("skill builtin view = %+v", v)
 	}
 
 	// 8. 安装新技能 → 立即可读，且技能索引动态更新（ContextFn 每调用重算）
@@ -141,8 +141,8 @@ func TestE2EWithHostClient(t *testing.T) {
 	} else if v := assertView(t, resp); v.Kind != "card" || v.Badge == nil || v.Badge.Text != "1 installed" || v.Fields[0].Value != "pkg-new" {
 		t.Fatalf("install_skill view = %+v", v)
 	}
-	if resp := execTool("read_skill", `{"name":"pkg-new"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文 C") {
-		t.Fatalf("read_skill pkg-new = %+v", resp)
+	if resp := execTool("skill", `{"name":"pkg-new"}`); resp.Error != "" || !strings.Contains(resp.Content, "正文 C") {
+		t.Fatalf("skill pkg-new = %+v", resp)
 	}
 	lc2, err := tc.ListContext(ctx, &proto.ListContextRequest{})
 	if err != nil || !strings.Contains(lc2.Content, "pkg-new") {

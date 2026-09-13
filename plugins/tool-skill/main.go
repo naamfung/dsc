@@ -148,15 +148,15 @@ func parseSkillFile(path, fallbackName string) (Skill, bool) {
 	return sk, true
 }
 
-// indexBlock 生成注入 system prompt 的技能索引（只含名字+描述，正文按需 read_skill 加载），防止撑爆上下文。
+// indexBlock 生成注入 system prompt 的技能索引（只含名字+描述，正文按需 skill 加载），防止撑爆上下文。
 func (s *SkillStore) indexBlock() string {
 	if len(s.skills) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("# Skills — 可调用的技能\n\n")
-	b.WriteString("开始非平凡任务前先浏览此索引：若某技能与本任务相关，先调用 read_skill 读取其正文，再按其指示执行。\n")
-	b.WriteString("调用方式：read_skill({ \"name\": \"<技能名>\" })\n\n")
+	b.WriteString("开始非平凡任务前先浏览此索引：若某技能与本任务相关，先调用 skill 读取其正文，再按其指示执行。\n")
+	b.WriteString("调用方式：skill({ \"name\": \"<技能名>\" })\n\n")
 	for _, sk := range s.skills {
 		desc := strings.TrimSpace(strings.ReplaceAll(sk.Description, "\n", " "))
 		if desc == "" {
@@ -176,12 +176,12 @@ type ReadSkillTool struct {
 	store *SkillStore
 }
 
-func (t *ReadSkillTool) Name() string { return "read_skill" }
+func (t *ReadSkillTool) Name() string { return "skill" }
 func (t *ReadSkillTool) Description() string {
-	return "读取一个技能（skill）的完整正文，按其指示执行；参数 name 为技能名。"
+	return "Load the full instructions for an available skill. Call this with the exact skill name from the session skill catalog before acting on a task that names or clearly matches that skill."
 }
 func (t *ReadSkillTool) ParametersSchema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"要读取的技能名"}},"required":["name"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"The exact skill name from the available skills list."}},"required":["name"]}`)
 }
 
 func (t *ReadSkillTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -276,14 +276,14 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args json.RawMessage) (s
 		}
 		installed = append(installed, c.Name)
 	}
-	// 安装后刷新技能存储，read_skill 与索引立即可用（system prompt 索引在重启后重建）
+	// 安装后刷新技能存储，skill 与索引立即可用（system prompt 索引在重启后重建）
 	t.store.load()
 
 	res, _ := json.Marshal(map[string]any{
 		"ok":           true,
 		"installed":    installed,
 		"installedDir": t.installedDir,
-		"note":         "已安装为外置技能，重启后出现在 /skills 命令与 system prompt 技能索引中；当前会话可用 read_skill 直接读取，可用 uninstall_skill 卸载。",
+		"note":         "已安装为外置技能，重启后出现在 /skills 命令与 system prompt 技能索引中；当前会话可用 skill 直接读取，可用 uninstall_skill 卸载。",
 	})
 	return string(res), nil
 }
@@ -448,7 +448,7 @@ func (t *UninstallSkillTool) Execute(ctx context.Context, args json.RawMessage) 
 	if err := t.store.removeInstalled(name); err != nil {
 		return "", err
 	}
-	// 卸载后刷新技能存储，read_skill 与索引立即生效
+	// 卸载后刷新技能存储，skill 与索引立即生效
 	t.store.load()
 
 	res, _ := json.Marshal(map[string]any{
@@ -459,7 +459,7 @@ func (t *UninstallSkillTool) Execute(ctx context.Context, args json.RawMessage) 
 	return string(res), nil
 }
 
-// readSkillView 构造 read_skill 结果的结构化视图（纯文本）：技能名作徽标、正文为 SKILL.md。
+// readSkillView 构造 skill 结果的结构化视图（纯文本）：技能名作徽标、正文为 SKILL.md。
 func readSkillView(args json.RawMessage, result string) (json.RawMessage, error) {
 	var p struct {
 		Name string `json:"name"`

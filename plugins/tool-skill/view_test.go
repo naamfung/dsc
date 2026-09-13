@@ -7,7 +7,7 @@ import (
 	"dsc-sdk"
 )
 
-// TestReadSkillView read_skill 视图：技能名徽标 + SKILL.md 正文。
+// TestReadSkillView skill 视图：技能名徽标 + SKILL.md 正文。
 func TestReadSkillView(t *testing.T) {
 	view, _ := readSkillView([]byte(`{"name":"code-audit"}`), "# Code Audit\n\n按此执行")
 	var v dsc.View
