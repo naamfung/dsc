@@ -78,7 +78,8 @@ func TestCreateView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("view failed: %v", err)
 	}
-	if res != "package main\nfunc main() {\n\tprintln(\"hi\")\n}\n" {
+	// view 返回带行号的内容（对齐 DSH cat -n 风格）
+	if !strings.Contains(res, "     1  package main") {
 		t.Fatalf("unexpected view result: %q", res)
 	}
 }
@@ -167,10 +168,12 @@ func TestInsert(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// insert_line=2 在 DSH 语义中是 0-based AFTER：在第 2 行之后插入
+	// 文件有 3 行：package main / 空行 / func main... 插入到第 2 行之后 = 空行之后
 	res, err := exec(t, state, map[string]interface{}{
 		"command":     "insert",
 		"path":        "/workspace/test/fib.go",
-		"insert_line": 2,
+		"insert_line": 1, // 0-based AFTER line 1 = 在第 1 行之后（空行之前）
 		"new_str":     "// inserted",
 	})
 	if err != nil {
@@ -185,6 +188,8 @@ func TestInsert(t *testing.T) {
 	}
 
 	content, _ := os.ReadFile(filepath.Join("workspace", "test", "fib.go"))
+	// insert_line=1 意为 AFTER line 1（0-based），即在第一行之后插入
+	// 文件内容：package main / 空 / func main... → 插入后：package main / // inserted / 空 / func main...
 	if string(content) != "package main\n// inserted\n\nfunc main() {\n}\n" {
 		t.Fatalf("unexpected content after insert: %q", string(content))
 	}

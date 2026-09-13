@@ -85,7 +85,8 @@ func TestE2EWithHostClient(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ws, "e2e.txt")); err != nil {
 		t.Fatalf("e2e.txt 未创建于 workspace 根: %v", err)
 	}
-	if resp := run(`{"command":"view","path":"/workspace/e2e.txt"}`); resp.Error != "" || resp.Content != "hello e2e" {
+	// view 返回带行号的内容（对齐 DSH cat -n 风格）
+	if resp := run(`{"command":"view","path":"/workspace/e2e.txt"}`); resp.Error != "" || !strings.Contains(resp.Content, "hello e2e") || !strings.Contains(resp.Content, "     1  ") {
 		t.Fatalf("view = %+v", resp)
 	}
 }

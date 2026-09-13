@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,6 +180,7 @@ type strReplaceEditorArgs struct {
 	OldStr     string `json:"old_str"`
 	NewStr     string `json:"new_str"`
 	InsertLine int    `json:"insert_line"`
+	ViewRange  []int  `json:"view_range"`
 }
 
 // computeHash 計算字符串的 sha256 hash
@@ -218,6 +220,113 @@ func readFileForEdit(reqPath string) (string, error) {
 	return string(content), nil
 }
 
+// formatFileView 对齐 DSH formatFileView：返回带 cat -n 风格行号的内容，
+// 支持 view_range 分段查看。1-based 行号，[-1] 表示到文件末尾。
+func formatFileView(path, content string, viewRange []int) string {
+	allLines := strings.Split(content, "\n")
+	lines := allLines
+	initialLine := 1
+	prompt := fmt.Sprintf("Here's the content of %s with line numbers (which has a total of %d lines)", path, len(allLines))
+
+	if len(viewRange) == 2 {
+		initialLine = viewRange[0]
+		finalLine := viewRange[1]
+		if initialLine < 1 || initialLine > len(allLines) {
+			return fmt.Sprintf("Invalid `view_range`: [%d, %d]. First element should be within [1, %d]", initialLine, finalLine, len(allLines))
+		}
+		if finalLine == -1 {
+			lines = allLines[initialLine-1:]
+			prompt += fmt.Sprintf(" with view_range=[%d, -1]", initialLine)
+		} else {
+			if finalLine > len(allLines) {
+				finalLine = len(allLines)
+			}
+			if finalLine < initialLine {
+				return fmt.Sprintf("Invalid `view_range`: [%d, %d]. Second element should be >= first", initialLine, finalLine)
+			}
+			lines = allLines[initialLine-1 : finalLine]
+			prompt += fmt.Sprintf(" with view_range=[%d, %d]", initialLine, finalLine)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(prompt + ":\n")
+	for i, line := range lines {
+		fmt.Fprintf(&b, "%6d  %s\n", initialLine+i, line)
+	}
+	return b.String()
+}
+
+// listDirectory 对齐 DSH listDirectory：列出目录下 2 层深度的文件/目录。
+func listDirectory(reqPath, relPath string) string {
+	var rows []string
+	rows = append(rows, fmt.Sprintf("d\t%s", relPath))
+	visitDir(reqPath, 1, &rows)
+	sort.Strings(rows)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Here're the files and directories up to 2 levels deep in %s, excluding hidden items:\n", relPath))
+	for _, row := range rows {
+		b.WriteString(row + "\n")
+	}
+	return b.String()
+}
+
+func visitDir(dirPath string, depth int, rows *[]string) {
+	if depth > 2 {
+		return
+	}
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || name == "node_modules" || name == "__pycache__" {
+			continue
+		}
+		typeChar := "f"
+		if e.IsDir() {
+			typeChar = "d"
+		}
+		fullPath := filepath.Join(dirPath, name)
+		relPath := filepath.ToSlash(strings.TrimPrefix(fullPath, filepath.Clean(core.WorkspaceRoot)+string(filepath.Separator)))
+		*rows = append(*rows, fmt.Sprintf("%s\t%s", typeChar, relPath))
+		if e.IsDir() {
+			visitDir(fullPath, depth+1, rows)
+		}
+	}
+}
+
+// matchOffsets 对齐 DSH matchOffsets：返回 content 中 search 的所有偏移量。
+func matchOffsets(content, search string) []int {
+	var offsets []int
+	offset := 0
+	for {
+		idx := strings.Index(content[offset:], search)
+		if idx < 0 {
+			break
+		}
+		offsets = append(offsets, offset+idx)
+		offset += idx + len(search)
+	}
+	return offsets
+}
+
+// lineNumbersAt 对齐 DSH lineNumbersAt：返回偏移量对应的 1-based 行号。
+func lineNumbersAt(content string, offsets []int) []string {
+	var result []string
+	for _, offset := range offsets {
+		line := 1
+		for i := 0; i < offset && i < len(content); i++ {
+			if content[i] == '\n' {
+				line++
+			}
+		}
+		result = append(result, fmt.Sprintf("%d", line))
+	}
+	return result
+}
+
 func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON json.RawMessage) (string, error) {
 	var args strReplaceEditorArgs
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
@@ -245,18 +354,30 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 
 	switch args.Command {
 	case "view":
+		// 对齐 DSH：view 返回带行号的内容（cat -n 风格），支持 view_range 分段查看
+		fi, err := os.Stat(reqPath)
+		if err != nil {
+			return "", slashErr(err)
+		}
+		if fi.IsDir() {
+			// 对齐 DSH：view 目录时列出 2 层深度的文件/目录
+			return listDirectory(reqPath, relPath), nil
+		}
 		contentStr, err := readFileForEdit(reqPath)
 		if err != nil {
 			return "", err
 		}
 		version := computeHash(contentStr)
-		// 更新觀測狀態
 		state.updateObservation(reqPath, "present", version, contentStr)
-		return contentStr, nil
+		return formatFileView(relPath, contentStr, args.ViewRange), nil
 
 	case "create":
 		if args.FileText == "" {
 			return "", fmt.Errorf("file_text is required for create command")
+		}
+		// 对齐 DSH：create 不能覆盖已存在的文件
+		if _, err := os.Stat(reqPath); err == nil {
+			return "", fmt.Errorf("File already exists at: %s. Cannot overwrite files using command `create`.", relPath)
 		}
 		dir := filepath.Dir(reqPath)
 		if err := dsc.MkdirAll(dir); err != nil {
@@ -294,12 +415,17 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("str_replace failed: file content has changed since last observation. Please use 'view' to get the latest content.")
 		}
 
-		// 与 DSH 语义对齐：old_str 确实未匹配时，不返回完整文件内容，
-		// 仅提示 old_str 未在文件中找到（避免大文件错误信息导致 TUI 花屏）
-		if !strings.Contains(contentStr, args.OldStr) {
-			return "", fmt.Errorf("str_replace failed: No replacement was performed, old_str %q did not appear verbatim in %s", args.OldStr, relPath)
+		// 对齐 DSH：检查 old_str 唯一性——多匹配报错
+		offsets := matchOffsets(contentStr, args.OldStr)
+		if len(offsets) == 0 {
+			return "", fmt.Errorf("No replacement was performed. old_str did not appear verbatim in %s", relPath)
 		}
-		newContentStr := strings.Replace(contentStr, args.OldStr, args.NewStr, 1)
+		if len(offsets) > 1 {
+			lineNums := lineNumbersAt(contentStr, offsets)
+			return "", fmt.Errorf("No replacement was performed. Multiple occurrences of old_str in lines [%s]. Please ensure it is unique", strings.Join(lineNums, ", "))
+		}
+		// 单一匹配：替换（对齐 DSH：new_str 可省略=删除匹配，Go 的空串等价）
+		newContentStr := contentStr[:offsets[0]] + args.NewStr + contentStr[offsets[0]+len(args.OldStr):]
 		if err := dsc.WriteFile(reqPath, []byte(newContentStr)); err != nil {
 			return "", slashErr(err)
 		}
@@ -314,8 +440,9 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		if args.NewStr == "" {
 			return "", fmt.Errorf("new_str is required for insert command")
 		}
-		if args.InsertLine <= 0 {
-			return "", fmt.Errorf("insert_line must be a positive integer for insert command")
+		// 对齐 DSH：insert_line 是 0-based AFTER 语义（0=文件开头，len(lines)=末尾）
+		if args.InsertLine < 0 {
+			return "", fmt.Errorf("Invalid `insert_line` parameter: %d. It should be within the range [0, line_count]", args.InsertLine)
 		}
 
 		// 檢查觀測狀態
@@ -335,17 +462,12 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		}
 
 		lines := strings.Split(contentStr, "\n")
-		// insert_line is 1-based
-		// If insert_line is greater than len(lines), append to the end
-		var newLines []string
+		// 对齐 DSH：insert_line 是 0-based AFTER 语义
+		// insertLine=0 → 在第一行前插入；insertLine=len(lines) → 在末尾追加
 		if args.InsertLine > len(lines) {
-			newLines = append(lines, args.NewStr)
-		} else {
-			// Insert before the line at index args.InsertLine-1
-			before := lines[:args.InsertLine-1]
-			after := lines[args.InsertLine-1:]
-			newLines = append(before, append([]string{args.NewStr}, after...)...)
+			args.InsertLine = len(lines)
 		}
+		newLines := append(append(append([]string{}, lines[:args.InsertLine]...), args.NewStr), lines[args.InsertLine:]...)
 		newContent := strings.Join(newLines, "\n")
 		if err := dsc.WriteFile(reqPath, []byte(newContent)); err != nil {
 			return "", slashErr(err)
@@ -410,11 +532,16 @@ func main() {
                         },
                         "new_str": {
                                 "type": "string",
-                                "description": "Required for 'str_replace' and 'insert' commands. The new string to replace with or insert."
+                                "description": "Optional string parameter of 'str_replace' command containing the new string (if omitted, no string will be added). Required string parameter of 'insert' command containing the string to insert."
                         },
                         "insert_line": {
                                 "type": "integer",
-                                "description": "Required for 'insert' command. The 1-based line number where the new_str should be inserted."
+                                "description": "Required integer parameter of 'insert' command. The new_str will be inserted AFTER the line insert_line of path. 0 means insert at the beginning of the file."
+                        },
+                        "view_range": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "Optional parameter of 'view' command when path points to a file. If omitted, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting [start_line, -1] shows all lines from start_line to the end of the file."
                         },
                         "sandbox_permissions": {
                                 "type": "string",
