@@ -1,6 +1,7 @@
 package main
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -41,6 +42,36 @@ func TestMapWorkspacePathInvalidPrefix(t *testing.T) {
 	}
 	if got := mapWorkspacePath("/my/workspace/x"); got != "/my/workspace/x" {
 		t.Fatalf("非前缀路径应原样: got %q", got)
+	}
+}
+
+// TestMapWorkspacePathWSLGating 验证 WSL/GIT BASH 风格路径 /mnt/<drive>/... 的映射严格按
+// 宿主 GOOS 分支：
+//   - Windows：/mnt/c/Users/... → C:/Users/...（mvdan POSIX 解释器非 WSL/GIT BASH，无法访问 /mnt/c/）
+//   - Linux/macOS：原样返回，/mnt/c/... 是合法 POSIX 路径（可能是真实挂载点），不得改写
+//
+// 这是 DSC 跨平台根本约束的具体落地：路径映射绝不可在能合法访问 /mnt/c/ 的系统上破坏真实路径。
+func TestMapWorkspacePathWSLGating(t *testing.T) {
+	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	cases := []struct{ in, want string }{
+		{"/mnt/c/Users/foo", "/mnt/c/Users/foo"},
+		{"/mnt/d/projects/x", "/mnt/d/projects/x"},
+		{"/mnt/c", "/mnt/c"},
+		{"/mnt/z/path/to/file", "/mnt/z/path/to/file"},
+	}
+	if runtime.GOOS == "windows" {
+		// Windows: WSL 习惯路径映射到 Windows 盘符
+		cases = []struct{ in, want string }{
+			{"/mnt/c/Users/foo", "C:/Users/foo"},
+			{"/mnt/d/projects/x", "D:/projects/x"},
+			{"/mnt/c", "C:/"},
+			{"/mnt/z/path/to/file", "Z:/path/to/file"},
+		}
+	}
+	for _, c := range cases {
+		if got := mapWorkspacePath(c.in); got != c.want {
+			t.Fatalf("mapWorkspacePath(%q) = %q, want %q (GOOS=%s)", c.in, got, c.want, runtime.GOOS)
+		}
 	}
 }
 

@@ -266,12 +266,15 @@ func workspaceRoot() string {
 // /workspace 正斜杆前缀，不涉及反斜杆。模型常先 `cd /workspace` 探索，原生命令
 // （cd/ls/cat 等）不认虚拟根会报 no such file or directory，这里在 AST 层统一映射。
 //
-// 同时映射 WSL 风格路径 /mnt/<drive>/... → <drive>:/...
-// 模型可能在 Windows 上使用 WSL 路径习惯（如 /mnt/c/Users/...），
-// 这里在 AST 层统一转换为 Windows 盘符路径（C:/Users/...）。
+// WSL 风格路径 /mnt/<drive>/... → <drive>:/... 仅在 Windows 宿主上生效：
+//   - Windows 上 DSC 的 shell 是 mvdan POSIX 解释器（非 WSL），无法访问真正的 /mnt/c/
+//     挂载点；模型若以 WSL 路径习惯（/mnt/c/Users/...）调用，统一转换为 Windows 盘符路径
+//     （C:/Users/...），与 pathAdvice 中对模型的指引保持一致。
+//   - Linux/macOS 上 /mnt/c/... 是合法的 POSIX 路径（可能是真实挂载点，也可能是用户目录），
+//     不得改写，否则会破坏可访问的真实路径。跨平台是 DSC 的根本约束，此处必须按 GOOS 分支。
 func mapWorkspacePath(p string) string {
-	// 1. WSL 路径映射：/mnt/c/... → C:/...，/mnt/d/... → D:/...
-	if strings.HasPrefix(p, "/mnt/") {
+	// 1. WSL 路径映射：/mnt/c/... → C:/...，/mnt/d/... → D:/...（仅 Windows）
+	if runtime.GOOS == "windows" && strings.HasPrefix(p, "/mnt/") {
 		rest := p[len("/mnt/"):]
 		if len(rest) >= 2 && rest[1] == '/' {
 			drive := string(rest[0])
@@ -287,7 +290,7 @@ func mapWorkspacePath(p string) string {
 			}
 		}
 	}
-	// 2. /workspace 虚拟根映射
+	// 2. /workspace 虚拟根映射（所有平台生效）
 	ws := workspaceRoot()
 	if ws == "" {
 		return p
