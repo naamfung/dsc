@@ -224,6 +224,11 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		return "", err
 	}
 
+	// 参数校验：command 必填（小模型可能传空对象 {}）
+	if args.Command == "" {
+		return "", fmt.Errorf("command is required (one of: view, create, str_replace, insert)")
+	}
+
 	// 使用安全路徑檢查；workspace 根統一來自 core.WorkspaceRoot
 	// （宿主按 config workspace_root 解析並經 DSC_WORKSPACE_ROOT 注入，對齊 DSH 單一策略歸屬）
 	workspaceRoot := core.WorkspaceRoot
