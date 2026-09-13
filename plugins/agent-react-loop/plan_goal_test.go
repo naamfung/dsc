@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
 	"dsc/core"
 	"dsc/proto"
 	"dsc/session"
+	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 )
 
@@ -30,6 +32,8 @@ func newTestAgent(t *testing.T) *ReactLoopAgent {
 		planSection:                   defaultPlanSection,
 		defaultMaxGoalRounds:          256,
 		blockedAfterConsecutiveRounds: 3,
+		// runner 日志丢弃（测试无需日志；生产 newAgent 会注入本地 hclog）
+		logger: hclog.New(&hclog.LoggerOptions{Output: io.Discard}),
 		// 与 newAgent 缺省一致：-1 = 不限制历史注入（0 会关闭压缩并禁用历史）
 		historyInjection: -1,
 	}

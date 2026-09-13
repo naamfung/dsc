@@ -18,10 +18,15 @@ import (
 	"dsc/core"
 	"dsc/proto"
 	"dsc/session"
+	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 )
 
 type ReactLoopAgent struct {
+	// logger 本地 hclog（写 os.Stderr，宿主经 SyncStderr 捕获入日志流，受 -log 门控）。
+	// 供 runLoop 等记录运行日志，避免散落 fmt.Fprintf(os.Stderr, …) 直写。
+	logger hclog.Logger
+
 	broker        *dsc.AgentBroker // SDK 隔离封装的宿主 broker（Dial 宿主 LLM/Tool/UserQuestions）
 	llmServiceID  uint32
 	toolServiceID uint32
@@ -483,8 +488,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				cr, err := s.Recv()
 				if err == io.EOF {
 					// 流正常结束——记录日志便于排查「模型停止」问题
-					fmt.Fprintf(os.Stderr, "[agent] stream ended (turn=%d step=%d toolCalls=%d contentLen=%d)\n",
-						turnNo, stepNo, len(toolCalls), len(content))
+					a.logger.Info("stream ended", "turn", turnNo, "step", stepNo, "toolCalls", len(toolCalls), "contentLen", len(content))
 					break
 				}
 				if err != nil {
@@ -544,10 +548,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// goal active+armed+预算未耗尽时，准入下一轮 goal-round 用户消息并继续循环。
 		// 单轮模式（-input 自动化）不自动续行；人类消息不消耗预算。
 		if len(toolCalls) == 0 {
-			fmt.Fprintf(os.Stderr, "[agent] no tool calls (turn=%d step=%d) — checking continuation drivers\n", turnNo, stepNo)
+			a.logger.Info("no tool calls, checking continuation drivers", "turn", turnNo, "step", stepNo)
 			if !a.singleTurn {
 				if g := session.FoldGoal(sess.Events()); goalRoundDriver(g, a.goalActivation, a.goalRounds) {
-					fmt.Fprintf(os.Stderr, "[agent] goal round: %d/%d turn=%d step=%d\n", a.goalRounds+1, g.MaxGoalRounds, turnNo, stepNo)
+					a.logger.Info("goal round", "round", a.goalRounds+1, "maxRounds", g.MaxGoalRounds, "turn", turnNo, "step", stepNo)
 					a.goalRounds++
 					sess.Append(session.UserMessage, &session.UserMessageData{
 						Content: goalRoundPrompt(g, a.goalRounds),
@@ -600,7 +604,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				}
 			}
 
-			fmt.Fprintf(os.Stderr, "[agent] turn completed: turn=%d steps=%d reason=completed\n", turnNo, stepNo)
+			a.logger.Info("turn completed", "turn", turnNo, "steps", stepNo, "reason", "completed")
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
@@ -649,7 +653,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			if emit != nil {
 				emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, Usage: a.usageSnapshot()})
 			}
-			fmt.Fprintf(os.Stderr, "[agent] tool call: turn=%d step=%d tool=%s args_len=%d\n", turnNo, stepNo, tc.Name, len(tc.ArgumentsJson))
+			a.logger.Info("tool call", "turn", turnNo, "step", stepNo, "tool", tc.Name, "argsLen", len(tc.ArgumentsJson))
 
 			// 宿主托管的 plan/goal 工具直接本地执行（状态读写会话事件日志），
 			// 其余工具经聚合 ToolService 转发到工具插件
@@ -678,7 +682,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				var err error
 				toolResp, err = toolClient.ExecuteTool(ctx, toolReq)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "[agent] tool RPC error: turn=%d step=%d tool=%s err=%v\n", turnNo, stepNo, tc.Name, err)
+					a.logger.Info("tool RPC error", "turn", turnNo, "step", stepNo, "tool", tc.Name, "error", err)
 					// 错误也作为 tool/result 记入（surface）
 					sess.Append(session.ToolResult, &session.ToolResultData{
 						Turn: turnNo, Step: stepNo, CallID: tc.Id,
@@ -689,7 +693,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				}
 			}
 			if toolResp != nil && toolResp.Error != "" {
-				fmt.Fprintf(os.Stderr, "[agent] tool error: turn=%d step=%d tool=%s err=%s\n", turnNo, stepNo, tc.Name, toolResp.Error)
+				a.logger.Info("tool error", "turn", turnNo, "step", stepNo, "tool", tc.Name, "error", toolResp.Error)
 				sess.Append(session.ToolResult, &session.ToolResultData{
 					Turn: turnNo, Step: stepNo, CallID: tc.Id,
 					Content: fmt.Sprintf("Tool error: %s", toolResp.Error),
@@ -704,7 +708,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 					emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error, Usage: a.usageSnapshot()})
 				}
 			} else {
-				fmt.Fprintf(os.Stderr, "[agent] tool result: turn=%d step=%d tool=%s content_len=%d\n", turnNo, stepNo, tc.Name, len(toolResp.Content))
+				a.logger.Info("tool result", "turn", turnNo, "step", stepNo, "tool", tc.Name, "contentLen", len(toolResp.Content))
 				sess.Append(session.ToolResult, &session.ToolResultData{
 					Turn: turnNo, Step: stepNo, CallID: tc.Id,
 					Content: toolResp.Content,
@@ -1382,6 +1386,13 @@ func (a *ReactLoopAgent) Shutdown(ctx context.Context, force bool) error {
 // broker 由 SDK 在 gRPC server 建立时经 AgentBroker 回调注入（仅该阶段可用）。
 func newAgent() (*ReactLoopAgent, error) {
 	agent := &ReactLoopAgent{}
+	// 本地 hclog：写 os.Stderr（宿主 go-plugin SyncStderr 捕获入日志流，受 -log 门控），
+	// 与其余运行日志统一经 logger 输出，而非散落直接写 stderr。
+	agent.logger = hclog.New(&hclog.LoggerOptions{
+		Name:   "agent-react-loop",
+		Level:  hclog.Info,
+		Output: os.Stderr,
+	})
 	// 讀取宿主傳入的上下文窗口容量（DSC_CONTEXT_WINDOW，token 數）
 	if v := os.Getenv("DSC_CONTEXT_WINDOW"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
