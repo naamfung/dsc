@@ -547,6 +547,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			fmt.Fprintf(os.Stderr, "[agent] no tool calls (turn=%d step=%d) — checking continuation drivers\n", turnNo, stepNo)
 			if !a.singleTurn {
 				if g := session.FoldGoal(sess.Events()); goalRoundDriver(g, a.goalActivation, a.goalRounds) {
+					fmt.Fprintf(os.Stderr, "[agent] goal round: %d/%d turn=%d step=%d\n", a.goalRounds+1, g.MaxGoalRounds, turnNo, stepNo)
 					a.goalRounds++
 					sess.Append(session.UserMessage, &session.UserMessageData{
 						Content: goalRoundPrompt(g, a.goalRounds),
@@ -599,6 +600,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				}
 			}
 
+			fmt.Fprintf(os.Stderr, "[agent] turn completed: turn=%d steps=%d reason=completed\n", turnNo, stepNo)
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
@@ -647,6 +649,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			if emit != nil {
 				emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[调用工具: %s]\n", tc.Name), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, Usage: a.usageSnapshot()})
 			}
+			fmt.Fprintf(os.Stderr, "[agent] tool call: turn=%d step=%d tool=%s args_len=%d\n", turnNo, stepNo, tc.Name, len(tc.ArgumentsJson))
 
 			// 宿主托管的 plan/goal 工具直接本地执行（状态读写会话事件日志），
 			// 其余工具经聚合 ToolService 转发到工具插件
@@ -675,6 +678,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				var err error
 				toolResp, err = toolClient.ExecuteTool(ctx, toolReq)
 				if err != nil {
+					fmt.Fprintf(os.Stderr, "[agent] tool RPC error: turn=%d step=%d tool=%s err=%v\n", turnNo, stepNo, tc.Name, err)
 					// 错误也作为 tool/result 记入（surface）
 					sess.Append(session.ToolResult, &session.ToolResultData{
 						Turn: turnNo, Step: stepNo, CallID: tc.Id,
@@ -684,7 +688,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 					continue
 				}
 			}
-			if toolResp.Error != "" {
+			if toolResp != nil && toolResp.Error != "" {
+				fmt.Fprintf(os.Stderr, "[agent] tool error: turn=%d step=%d tool=%s err=%s\n", turnNo, stepNo, tc.Name, toolResp.Error)
 				sess.Append(session.ToolResult, &session.ToolResultData{
 					Turn: turnNo, Step: stepNo, CallID: tc.Id,
 					Content: fmt.Sprintf("Tool error: %s", toolResp.Error),
@@ -699,6 +704,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 					emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s 错误] %s\n", tc.Name, toolResp.Error), Status: "tool", ToolName: tc.Name, ToolResult: toolResp.Error, Error: toolResp.Error, Usage: a.usageSnapshot()})
 				}
 			} else {
+				fmt.Fprintf(os.Stderr, "[agent] tool result: turn=%d step=%d tool=%s content_len=%d\n", turnNo, stepNo, tc.Name, len(toolResp.Content))
 				sess.Append(session.ToolResult, &session.ToolResultData{
 					Turn: turnNo, Step: stepNo, CallID: tc.Id,
 					Content: toolResp.Content,

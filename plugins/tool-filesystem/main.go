@@ -265,7 +265,29 @@ func workspaceRoot() string {
 // 之类按独立路径处理。shell 是 mvdan POSIX 解释器，路径统一为正斜杆，故只处理
 // /workspace 正斜杆前缀，不涉及反斜杆。模型常先 `cd /workspace` 探索，原生命令
 // （cd/ls/cat 等）不认虚拟根会报 no such file or directory，这里在 AST 层统一映射。
+//
+// 同时映射 WSL 风格路径 /mnt/<drive>/... → <drive>:/...
+// 模型可能在 Windows 上使用 WSL 路径习惯（如 /mnt/c/Users/...），
+// 这里在 AST 层统一转换为 Windows 盘符路径（C:/Users/...）。
 func mapWorkspacePath(p string) string {
+	// 1. WSL 路径映射：/mnt/c/... → C:/...，/mnt/d/... → D:/...
+	if strings.HasPrefix(p, "/mnt/") {
+		rest := p[len("/mnt/"):]
+		if len(rest) >= 2 && rest[1] == '/' {
+			drive := string(rest[0])
+			if drive >= "a" && drive <= "z" || drive >= "A" && drive <= "Z" {
+				return strings.ToUpper(drive) + ":/" + rest[2:]
+			}
+		}
+		// /mnt/c (no trailing slash) → C:/
+		if len(rest) == 1 {
+			drive := rest
+			if drive >= "a" && drive <= "z" || drive >= "A" && drive <= "Z" {
+				return strings.ToUpper(drive) + ":/"
+			}
+		}
+	}
+	// 2. /workspace 虚拟根映射
 	ws := workspaceRoot()
 	if ws == "" {
 		return p

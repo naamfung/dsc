@@ -606,6 +606,12 @@ func cmdGrep(ctx context.Context, hc interp.HandlerContext, args []string) error
 					lineNum = true
 				case 'c':
 					countOnly = true
+				case 'E':
+					// -E (extended regex) 对齐 POSIX grep -E
+					// 内置实现用 Go regexp（RE2），已支持 extended regex 语法
+				case 'e':
+					// -e <pattern> 后跟模式参数（对齐 POSIX grep -e）
+					// 简化处理：下一个参数作为 pattern
 				default:
 					ok = false
 				}
