@@ -168,11 +168,15 @@ func main() {
                 "properties": {
                         "command": {
                                 "type": "string",
-                                "description": "The shell command or script to execute"
+                                "description": "The shell command or script to execute."
                         },
-                        "cwd": {
+                        "description": {
                                 "type": "string",
-                                "description": "Working directory for the command (optional)"
+                                "description": "Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI). Examples: \"ls\" → \"List files in current directory\"; \"git status\" → \"Show working tree status\"."
+                        },
+                        "workdir": {
+                                "type": "string",
+                                "description": "Working directory for this command. Defaults to the session workspace; a relative path is resolved against it."
                         },
                         "session_id": {
                                 "type": "string",
@@ -192,12 +196,13 @@ func main() {
                                 "description": "Run the command in the background and return a job id immediately. Track output with job_output, stop with job_kill. No timeout applies. Omit for foreground execution (default)."
                         }
                 },
-                "required": ["command"]
+                "required": ["command", "description"]
         }`)
 	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
 		var params struct {
 			Command   string `json:"command"`
-			Cwd       string `json:"cwd"`
+			WorkDir   string `json:"workdir"`
+			Cwd       string `json:"cwd"` // 向后兼容旧参数名
 			SessionID string `json:"session_id"`
 		}
 		if err := json.Unmarshal(args, &params); err != nil {
@@ -215,7 +220,12 @@ func main() {
 		}
 
 		// 獲取或創建 session
-		session, err := getOrCreateSession(sessionID, params.Cwd)
+		// workdir 优先于 cwd（对齐 DSH 参数名）；cwd 保留向后兼容
+		workdir := params.WorkDir
+		if workdir == "" {
+			workdir = params.Cwd
+		}
+		session, err := getOrCreateSession(sessionID, workdir)
 		if err != nil {
 			return "", fmt.Errorf("failed to create or get session: %w", err)
 		}

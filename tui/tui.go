@@ -1583,6 +1583,7 @@ var toolArgKey = map[string]string{
 	"browser_type":       "selector",
 	"browser_screenshot": "url",
 	"read_skill":         "name",
+	"skill":              "name",
 	"install_skill":      "name",
 	"uninstall_skill":    "name",
 }
@@ -1642,6 +1643,7 @@ func clampToolArg(arg string, max int) string {
 
 // renderToolCall 以 REX 式卡片渲染工具调用：● Verb(arg)。
 // 动词加粗、括号与参数用暗色，主参截断到 60 列；无法结构化时返回空串。
+// 对齐 DSH：shell 工具若有 description 参数，在命令下方显示描述行。
 func renderToolCall(name, argsJSON string) string {
 	if strings.TrimSpace(name) == "" {
 		return ""
@@ -1700,7 +1702,30 @@ func renderToolCall(name, argsJSON string) string {
 			head += dimSty.Render("(" + clampToolArg(arg, 60) + ")")
 		}
 	}
-	return "  " + dot + " " + head
+	line := "  " + dot + " " + head
+
+	// 对齐 DSH：shell 工具若有 description 参数，在命令下方显示描述行
+	if desc := toolDescription(argsJSON); desc != "" {
+		line += "\n" + dimSty.Render("    "+clampToolArg(desc, 70))
+	}
+	return line
+}
+
+// toolDescription 从工具参数 JSON 中提取 description 字段（对齐 DSH bash 的 description 参数）。
+// DSH 在 terminal 卡片中显示命令标题 + description 描述行；DSC 同样在 ● Shell(command)
+// 下方显示 description。
+func toolDescription(argsJSON string) string {
+	if strings.TrimSpace(argsJSON) == "" {
+		return ""
+	}
+	var m map[string]interface{}
+	if json.Unmarshal([]byte(argsJSON), &m) != nil {
+		return ""
+	}
+	if desc, ok := m["description"].(string); ok {
+		return strings.TrimSpace(desc)
+	}
+	return ""
 }
 
 // connector 结果块首行的 gutter：2 空格 + └ + 1 空格 = 4 列，
