@@ -185,7 +185,7 @@ func cmdMkdir(ctx context.Context, hc interp.HandlerContext, args []string) erro
 // ---------- ls ----------
 
 func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
-	var showAll, long, listSelf bool
+	var showAll, long, listSelf, singleCol bool
 	var paths []string
 	for _, a := range args {
 		switch {
@@ -201,6 +201,8 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 				case 'd':
 					listSelf = true
 				case 'h':
+				case '1':
+					singleCol = true
 				default:
 					ok = false
 				}
@@ -236,7 +238,7 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 			fmt.Fprintln(hc.Stdout, p0+":")
 		}
 		if fi.IsDir() && !listSelf {
-			if err := lsDir(ctx, hc, p, showAll, long); err != nil {
+			if err := lsDir(ctx, hc, p, showAll, long, singleCol); err != nil {
 				return err
 			}
 		} else {
@@ -249,7 +251,7 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 	return nil
 }
 
-func lsDir(ctx context.Context, hc interp.HandlerContext, p string, showAll, long bool) error {
+func lsDir(ctx context.Context, hc interp.HandlerContext, p string, showAll, long, singleCol bool) error {
 	entries, err := os.ReadDir(p)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "ls: %v\n", err)
@@ -274,6 +276,13 @@ func lsDir(ctx context.Context, hc interp.HandlerContext, p string, showAll, lon
 				continue
 			}
 			lsEntry(hc, fi, name, true)
+		}
+	} else if singleCol {
+		for _, name := range names {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			fmt.Fprintln(hc.Stdout, name)
 		}
 	} else {
 		fmt.Fprintln(hc.Stdout, strings.Join(names, "  "))

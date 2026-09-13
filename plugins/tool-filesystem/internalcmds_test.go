@@ -83,6 +83,49 @@ func TestInternalMkdirLsSetup(t *testing.T) {
 	}
 }
 
+// TestInternalLsSingleColumn 验证 ls -1（每行一个条目）被支持：输出逐行、与默认
+// 空格分隔单行可区分，且可与 -a 等旗标组合。真实 POSIX 中 -1 极常用（脚本/管道），
+// 内置 ls 此前拒之，导致模型打出合法命令却被拒。
+func TestInternalLsSingleColumn(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := runShell(t, dir, "mkdir -p d && touch d/a.txt d/b.txt d/.hidden"); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	out, err := runShell(t, dir, "ls -1 d")
+	if exitCode(t, err) != 0 {
+		t.Fatalf("ls -1 失败: out=%q err=%v", out, err)
+	}
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 2 || lines[0] != "a.txt" || lines[1] != "b.txt" {
+		t.Errorf("ls -1 应每行一个条目（a.txt/b.txt，忽略 .hidden），got %q", out)
+	}
+
+	// 默认输出为单行（空格分隔、结尾换行），应与 -1 的逐行区分开
+	outDefault, err := runShell(t, dir, "ls d")
+	if exitCode(t, err) != 0 {
+		t.Fatalf("ls 失败: out=%q err=%v", outDefault, err)
+	}
+	if got := len(strings.Split(strings.TrimRight(outDefault, "\n"), "\n")); got != 1 {
+		t.Errorf("默认 ls 应为单行空格分隔，got %d 行: %q", got, outDefault)
+	}
+	if !strings.Contains(outDefault, "a.txt") || !strings.Contains(outDefault, "b.txt") {
+		t.Errorf("默认 ls 应包含 a.txt/b.txt，got %q", outDefault)
+	}
+
+	// 与 -a 组合：包含隐藏条目且仍逐行
+	outA, err := runShell(t, dir, "ls -1a d")
+	if exitCode(t, err) != 0 {
+		t.Fatalf("ls -1a 失败: out=%q err=%v", outA, err)
+	}
+	if !strings.Contains(outA, ".hidden") {
+		t.Errorf("ls -1a 应包含隐藏条目 .hidden，got %q", outA)
+	}
+	if got := len(strings.Split(strings.TrimRight(outA, "\n"), "\n")); got < 3 {
+		t.Errorf("ls -1a 应逐行输出 ≥3 条目（. / .. 或 .hidden），got %d 行", got)
+	}
+}
+
 // TestInternalFileFlow 空 PATH 下 touch/cat/echo 写读。
 func TestInternalFileFlow(t *testing.T) {
 	dir := t.TempDir()
