@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"dsc/jobs"
 	"dsc/proto"
 )
 
@@ -92,7 +93,18 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 // ExecuteToolWithView 与 ExecuteTool 语义相同，额外返回工具声明的结构化视图 spec
 // （ViewJson）：插件工具透传 Tool.ViewFn 产物（经 RemoteTool），宿主工具按需实现
 // ViewExecutor。聚合 Tool 服务（ToolGRPCServer）据此把视图一并回给调用方。
+//
+// run_in_background 支持（对齐 DSH bash run_in_background）：若工具参数中
+// run_in_background=true，宿主在 job 注册表中登记一个后台任务，异步执行完整
+// 流水线（pre-execute → execute → post-execute），立即返回 job_id。
+// 模型可用 job_output/job_list/job_kill 管理后台任务。
 func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, error) {
+	// 检测 run_in_background 参数（对齐 DSH：模型在参数中声明 run_in_background: true）
+	if isBackgroundRequest(argsJSON) && m.jobs != nil {
+		caller := CallerFromContext(ctx)
+		return m.startBackgroundTool(ctx, toolName, argsJSON, caller)
+	}
+
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON), SessionID: CallerFromContext(ctx), ApprovalPolicy: ApprovalPolicyFromContext(ctx)}
 
 	// pre-execute（waterfall）：守卫。不调 next 即 veto（阻止执行，execute 不运行）。
@@ -269,4 +281,112 @@ func isWriteTool(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+// isBackgroundRequest 检测工具参数 JSON 中是否声明 run_in_background: true。
+// 对齐 DSH bash 的 run_in_background 参数——任何工具都可以声明后台运行。
+func isBackgroundRequest(argsJSON json.RawMessage) bool {
+	var p struct {
+		RunInBackground bool `json:"run_in_background"`
+	}
+	if err := json.Unmarshal(argsJSON, &p); err != nil {
+		return false
+	}
+	return p.RunInBackground
+}
+
+// startBackgroundTool 在 job 注册表中登记一个后台任务，异步执行完整工具流水线，
+// 立即返回 job_id（对齐 DSH bash run_in_background）。
+// 模型可用 job_output/job_list/job_kill 管理后台任务。
+func (m *Manager) startBackgroundTool(ctx context.Context, toolName string, argsJSON json.RawMessage, caller string) (string, string, error) {
+	label := toolName
+	// 尝试从参数中提取 command 作为 label 更友好的展示
+	var p struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(argsJSON, &p) == nil && p.Command != "" {
+		label = fmt.Sprintf("%s: %s", toolName, truncateStr(p.Command, 60))
+	}
+
+	jobID, err := m.jobs.Start(jobs.StartSpec{
+		Kind:  toolName,
+		Label: label,
+		Owner: caller,
+		Start: func() (jobs.JobHooks, error) {
+			doneCh := make(chan jobs.JobOutcome, 1)
+			cancelCh := make(chan string, 1)
+
+			go func() {
+				// 异步执行完整流水线（pre-execute → execute → post-execute）
+				result, _, err := m.executeBackgroundPipeline(ctx, toolName, argsJSON)
+				if err != nil {
+					doneCh <- jobs.JobOutcome{Status: jobs.StatusFailed, Detail: err.Error(), Output: result}
+				} else {
+					doneCh <- jobs.JobOutcome{Status: jobs.StatusCompleted, Output: result}
+				}
+			}()
+
+			return jobs.JobHooks{
+				Cancel: func(reason string) {
+					select {
+					case cancelCh <- reason:
+					default:
+					}
+				},
+				Done:       doneCh,
+				ReadOutput: nil, // final-output 模式（完成后一次性返回全部输出）
+			}, nil
+		},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("start background job: %w", err)
+	}
+
+	result := fmt.Sprintf("Background job started: %s. Track it with job_output (job_id: %s). Stop with job_kill.", toolName, jobID)
+	return result, "", nil
+}
+
+// executeBackgroundPipeline 在后台执行完整工具流水线（不含 run_in_background 检测，
+// 避免递归）。供 startBackgroundTool 的 goroutine 调用。
+func (m *Manager) executeBackgroundPipeline(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, error) {
+	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON), SessionID: CallerFromContext(ctx), ApprovalPolicy: ApprovalPolicyFromContext(ctx)}
+
+	runErr := m.events.Waterfall(EventToolPreExecute, EventContext{Data: inv, Context: ctx}, func(EventContext) error {
+		if veto := m.runPluginBeforeTool(ctx, inv); veto != nil {
+			inv.Err = veto
+			return veto
+		}
+		return inv.Err
+	})
+	if inv.Err == nil && runErr != nil {
+		inv.Err = runErr
+	}
+
+	if inv.Err == nil {
+		execErr := m.events.Waterfall(EventToolExecute, EventContext{Data: inv}, func(EventContext) error {
+			return m.executeToolBody(ctx, inv, toolName)
+		})
+		if inv.Err == nil && execErr != nil {
+			inv.Err = execErr
+		}
+	}
+
+	if err := m.events.Waterfall(EventToolPostExecute, EventContext{Data: inv}, func(EventContext) error {
+		m.runPluginAfterTool(ctx, inv)
+		return inv.Err
+	}); err != nil {
+		m.emitToolResult(inv)
+		return "", "", err
+	}
+
+	m.emitToolResult(inv)
+	return inv.Result, inv.ViewJSON, inv.Err
+}
+
+// truncateStr 截断字符串到 max 字节（用于 job label 展示）。
+func truncateStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }

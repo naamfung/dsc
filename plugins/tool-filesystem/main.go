@@ -186,6 +186,10 @@ func main() {
                         "justification": {
                                 "type": "string",
                                 "description": "Required together with 'sandbox_permissions': a one-sentence reason shown to the user in the approval prompt."
+                        },
+                        "run_in_background": {
+                                "type": "boolean",
+                                "description": "Run the command in the background and return a job id immediately. Track output with job_output, stop with job_kill. No timeout applies. Omit for foreground execution (default)."
                         }
                 },
                 "required": ["command"]
