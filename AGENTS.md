@@ -172,8 +172,8 @@ DSC 的命令解析使用内置 POSIX shell 实现（mvdan/sh），所有路径�
 - **必须使用两行连续替换**，处理两种不同情况：
 
   ```go
-  s = strings.ReplaceAll(s, `\\`, "/")  // 先：转义形式
-  s = strings.ReplaceAll(s, "\\", "/")   // 后：原始形式
+  s = strings.ReplaceAll(s, `\\`, "/")  // 先：反引号
+  s = strings.ReplaceAll(s, "\\", "/")   // 后：双引号
   ```
 
   两行**必须先后同时出现**，顺序不可颠倒——先处理双反斜杆（避免被第 2 行拆成两个单反斜杆后再各自转换，产生多余的 `/`），再处理单反斜杆。
