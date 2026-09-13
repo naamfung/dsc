@@ -1725,6 +1725,13 @@ func (m *Manager) DefaultSessionID() string {
 	return session.SessionKeyForProject(WorkspaceRoot)
 }
 
+// HostLogger 返回宿主主 logger（受 -log 门控：未启用 -log 时 HCLog 输出为静默丢弃）。
+// TUI 等宿主主进程侧组件记录日志应经此通道，而非直接写 os.Stderr——直接写真实终端
+// stderr 既绕过 -log 开关，又会把文本叠到 alternate screen 画的 TUI 界面上（残影）。
+func (m *Manager) HostLogger() hclog.Logger {
+	return m.logger
+}
+
 // ListPlugins 返回所有已加載插件的列表，并携带运行时状态。
 // 除当前已注册/已加载的插件外，也会带上已卸载(disposed/failed)的终态插件，便于观测最近失败或下线的插件。
 func (m *Manager) ListPlugins() []PluginInfoSummary {

@@ -2316,8 +2316,15 @@ func scanSkillSection(dir string) []string {
 
 // runSlashCommand 处理斜杆命令；返回是否已处理以及要执行的命令。
 func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
-	// 记录斜杆命令调用（经 stderr 输出，宿主 SyncStderr 捕获到日志流）
-	fmt.Fprintf(os.Stderr, "slash command invoked: %s\n", cmd)
+	// 仅真正的斜杆命令（以 "/" 开头）才记录调用；普通消息不得被误判为斜杆命令，
+	// 否则直接写 stderr 会把「slash command invoked …」叠到 TUI 输入框上方造成残影。
+	if !strings.HasPrefix(cmd, "/") {
+		return false, nil
+	}
+	// 记录经宿主 logger（受 -log 门控，未开 -log 时静默丢弃），不直碰终端 stderr。
+	if m.manager != nil {
+		m.manager.HostLogger().Info("slash command invoked", "cmd", cmd)
+	}
 	switch cmd {
 	case "/help":
 		help := strings.Join([]string{
