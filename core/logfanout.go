@@ -26,6 +26,13 @@ func NewLogFanout(dst io.Writer) *LogFanout {
 // Write 实现 io.Writer：写原始目的地，并向每个订阅者广播当前行。
 // 广播使用非阻塞投递，避免慢消费者阻塞日志路径。
 func (f *LogFanout) Write(p []byte) (int, error) {
+	// nil 兜底：Manager 在 cfg.LogFanout 未注入时（如测试）会把 nil 型指针装进
+	// io.Writer 接口传给 go-plugin 的 SyncStderr，`config.SyncStderr == nil` 无法
+	// 识别「类型非空、值 nil」的 nil 指针。此处按 nil receiver 判空直接丢弃，
+	// 语义同 io.Discard，避免插件有 stderr 输出时触发空指针导致进程崩溃。
+	if f == nil {
+		return len(p), nil
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n, err := f.dst.Write(p)

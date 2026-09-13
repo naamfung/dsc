@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -112,3 +113,33 @@ func TestHostLoggerReachesLogFanoutSubscriber(t *testing.T) {
 type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
+
+// TestLogFanoutNilReceiverDiscards 守住「nil receiver 即丢弃」语义：
+// Manager 在 cfg.LogFanout 未注入（如测试）时会把 (*LogFanout)(nil) 装进 io.Writer
+// 接口传给 go-plugin 的 SyncStderr——接口判定非空，go-plugin 的 nil 检查失效，
+// 会直接调用 Write。Write 须按 nil receiver 判空丢弃：不 panic、报告成功、无输出。
+func TestLogFanoutNilReceiverDiscards(t *testing.T) {
+	var f *LogFanout // nil
+	var w io.Writer = f
+
+	n, err := w.Write([]byte("discard me"))
+	if err != nil {
+		t.Fatalf("nil LogFanout.Write 不应返回错误, got %v", err)
+	}
+	if n != 10 {
+		t.Fatalf("nil LogFanout.Write 应报告 len(p)=10, got %d", n)
+	}
+}
+
+// TestLogFanoutWriteBroadcasts 守住正常路径不被破坏：非 nil 实例写入原始目的地。
+func TestLogFanoutWriteBroadcasts(t *testing.T) {
+	dst := &bytes.Buffer{}
+	f := NewLogFanout(dst)
+
+	if _, err := f.Write([]byte("hello")); err != nil {
+		t.Fatalf("非 nil LogFanout.Write 应成功, got %v", err)
+	}
+	if got := dst.String(); got != "hello" {
+		t.Fatalf("应写入原始目的地 'hello', got %q", got)
+	}
+}
