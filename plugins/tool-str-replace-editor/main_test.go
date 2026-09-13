@@ -210,10 +210,7 @@ func TestNormalizeWorkspacePath(t *testing.T) {
 	}
 }
 
-// TestViewDirectoryRejected 回归：模型误把目录当文件 view（如把仓库目录整条传给 view）
-// 时，必须给出明确「是目录而非文件」的提示，且路径用正斜杆展示——Windows 上
-// os.ReadFile 读目录只报 "Incorrect function."（ERROR_INVALID_FUNCTION），模型无从
-// 判断是路径填错还是文件损坏，曾致真实运行中模型反复用目录路径重试。
+// TestViewDirectoryRejected 对齐 DSH：view 目录时列出 2 层深度的文件/目录（而非报错）。
 func TestViewDirectoryRejected(t *testing.T) {
 	state, dir := newTestState(t)
 	ws := filepath.Join(dir, "workspace")
@@ -222,14 +219,11 @@ func TestViewDirectoryRejected(t *testing.T) {
 		"command": "view",
 		"path":    ws,
 	})
-	if err == nil {
-		t.Fatalf("view on directory should fail, got result %q", res)
+	if err != nil {
+		t.Fatalf("view on directory should list contents (对齐 DSH), got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "is a directory, not a file") {
-		t.Fatalf("expected clear directory hint, got: %v", err)
-	}
-	if strings.Contains(err.Error(), "\\") {
-		t.Fatalf("error path should use forward slashes, got: %v", err)
+	if !strings.Contains(res, "files and directories") {
+		t.Fatalf("expected directory listing, got: %q", res)
 	}
 }
 
