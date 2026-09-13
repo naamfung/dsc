@@ -2316,6 +2316,8 @@ func scanSkillSection(dir string) []string {
 
 // runSlashCommand 处理斜杆命令；返回是否已处理以及要执行的命令。
 func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
+	// 记录斜杆命令调用（经 stderr 输出，宿主 SyncStderr 捕获到日志流）
+	fmt.Fprintf(os.Stderr, "slash command invoked: %s\n", cmd)
 	switch cmd {
 	case "/help":
 		help := strings.Join([]string{

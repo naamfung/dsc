@@ -482,6 +482,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			for {
 				cr, err := s.Recv()
 				if err == io.EOF {
+					// 流正常结束——记录日志便于排查「模型停止」问题
+					fmt.Fprintf(os.Stderr, "[agent] stream ended (turn=%d step=%d toolCalls=%d contentLen=%d)\n",
+						turnNo, stepNo, len(toolCalls), len(content))
 					break
 				}
 				if err != nil {
@@ -541,6 +544,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// goal active+armed+预算未耗尽时，准入下一轮 goal-round 用户消息并继续循环。
 		// 单轮模式（-input 自动化）不自动续行；人类消息不消耗预算。
 		if len(toolCalls) == 0 {
+			fmt.Fprintf(os.Stderr, "[agent] no tool calls (turn=%d step=%d) — checking continuation drivers\n", turnNo, stepNo)
 			if !a.singleTurn {
 				if g := session.FoldGoal(sess.Events()); goalRoundDriver(g, a.goalActivation, a.goalRounds) {
 					a.goalRounds++
