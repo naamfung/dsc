@@ -136,9 +136,6 @@ type ReactLoopAgent struct {
 	// todoNudgeUsed 标记当前会话是否已用过 TODO 追问（防重复追问）。
 	// 每次 turn/start 时重置为 false，使每轮自然停止时最多追问一次。
 	todoNudgeUsed bool
-	// truncNudgeUsed 标记当前 Run 是否已用过截断续行追问（防续行死循环）。
-	// 每次 turn/start 时重置为 false，使本轮被截断时最多自动续行一次。
-	truncNudgeUsed bool
 
 	// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链状态进程本地。
 	repeatChainName      string
@@ -323,8 +320,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 
 	// 轮次与用户输入作为会话事件记录（turn/start 为 log-only，user/message 进入 surface）
 	sess.Append(session.TurnStart, &session.TurnData{Turn: turnNo}, nil)
-	a.todoNudgeUsed = false  // 每轮重置追问标记
-	a.truncNudgeUsed = false // 每轮重置截断续行标记
+	a.todoNudgeUsed = false // 每轮重置追问标记
 	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user", Images: images}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
 	// cancelLoop 返回被取消的结果
@@ -538,6 +534,16 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		truncated := isTruncatedFinishReason(finishReason)
 		if truncated {
 			a.logger.Warn("response truncated", "finish_reason", finishReason, "turn", turnNo, "step", stepNo, "toolCalls", len(toolCalls))
+			// 截断告警帧：向 TUI 显式呈现截断事实，不自动续行——截断根因
+			// （LLM 插件默认携带 max_tokens）已从源头移除，「中断」是否彻底
+			// 消灭由真机观测确认；续行行为待根因确认后再引入，避免把
+			// 未确诊的中断掩盖成静默续写。
+			if emit != nil {
+				emit(&core.RunStreamResponse{
+					Output: fmt.Sprintf("\n[模型输出被截断: finish_reason=%s]\n", finishReason),
+					Status: "tool",
+				})
+			}
 		}
 
 		// 组装后的助手消息记入会话（surface；携带 usage 与工具调用，对齐 DSH assistant/message）
@@ -564,33 +570,6 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// 单轮模式（-input 自动化）不自动续行；人类消息不消耗预算。
 		if len(toolCalls) == 0 {
 			a.logger.Info("no tool calls, checking continuation drivers", "turn", turnNo, "step", stepNo)
-			// 截断防护（纯文本）：截断的无工具调用响应应向 TUI 告警并自动续行一次，
-			// 让模型从中断处继续，而非就此收轮把用户晾在半句答复上（被感知为
-			// 「无故中断连接」）。每轮最多自动续行一次（truncNudgeUsed 防死循环）。
-			if truncated && !a.singleTurn {
-				if emit != nil {
-					emit(&core.RunStreamResponse{
-						Output: fmt.Sprintf("\n[模型输出被截断: finish_reason=%s]\n", finishReason),
-						Status: "tool",
-					})
-				}
-				if !a.truncNudgeUsed {
-					a.truncNudgeUsed = true
-					nudgeMsg := buildTruncationNudgePrompt(finishReason)
-					sess.Append(session.UserMessage, &session.UserMessageData{
-						Content: nudgeMsg,
-						Source:  "trunc_nudge",
-					}, &session.SurfaceOp{Op: session.SurfaceAppend})
-					if emit != nil {
-						emit(&core.RunStreamResponse{
-							Output: nudgeMsg + "\n",
-							Status: "tool",
-						})
-					}
-					continue
-				}
-				// 本轮已自动续行过：不再续行，按自然收尾处理（截断告警帧已提示）
-			}
 			if !a.singleTurn {
 				if g := session.FoldGoal(sess.Events()); goalRoundDriver(g, a.goalActivation, a.goalRounds) {
 					a.logger.Info("goal round", "round", a.goalRounds+1, "maxRounds", g.MaxGoalRounds, "turn", turnNo, "step", stepNo)

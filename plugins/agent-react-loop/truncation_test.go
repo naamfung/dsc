@@ -13,11 +13,13 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// 本文件回归测试「LLM 输出被 max_tokens 截断导致轮次静默中断/空参工具调用」的修复：
-// 截断（finish_reason=max_tokens/length）此前全链路无人感知——无工具调用时轮次直接
-// 收尾（用户感知「无故中断」，模型答话悬着冒号戛然而止）；工具调用参数被拦腰切断时
-// 以残缺参数执行报错。修复后：截断显式告警 + 纯文本截断自动续行一次 + 残缺参数不执行
-// （落合成 tool/result 保持 tool_use/tool_result 配对）。
+// 本文件回归测试「LLM 输出被 max_tokens 截断」的防护行为：截断（
+// finish_reason=max_tokens/length）此前全链路无人感知——纯文本被拦腰切断时
+// 轮次静默收尾（用户感知「无故中断」），工具调用参数被切断时以残参执行报错。
+// 截断根因（LLM 插件默认携带 max_tokens 上限）已从源头移除；agent 侧防护为：
+// 截断显式告警（不自动续行——续行待「中断」根因经真机观测彻底确认后再引入，
+// 避免把未确诊的中断掩盖成静默续写）+ 残缺参数工具调用不执行（落合成
+// tool/result 保持 tool_use/tool_result 配对）。
 
 // truncMockLLM 第一轮流返回截断响应（可带残缺工具调用），后续轮次返回正常完成。
 type truncMockLLM struct {
@@ -112,10 +114,10 @@ func (m *recordingToolClient) ExecuteTool(ctx context.Context, in *proto.Execute
 	return &proto.ExecuteToolResponse{Content: "ok"}, nil
 }
 
-// TestTruncatedTextResponseAutoContinues 回归「话说一半静默收轮」（用户感知为
-// 「无故中断」）：截断的纯文本回复（无工具调用）应自动续行一次让模型从中断处
-// 继续，且 TUI 收到截断告警，而不是直接结束轮次把用户晾在半句答复上。
-func TestTruncatedTextResponseAutoContinues(t *testing.T) {
+// TestTruncatedTextResponseWarnsAndCompletes 回归「话说一半静默收轮」的可见性：
+// 截断的纯文本回复（无工具调用）不自动续行，但轮次收尾前 TUI 必须收到截断
+// 告警帧——「中断」不再静默，是否复现由真机观测判定，而非被续行行为掩盖。
+func TestTruncatedTextResponseWarnsAndCompletes(t *testing.T) {
 	a := newTestAgent(t)
 	a.llmServiceID = 1
 	a.toolServiceID = 1
@@ -143,36 +145,20 @@ func TestTruncatedTextResponseAutoContinues(t *testing.T) {
 		t.Fatalf("结果状态 = %s, 期望 success", res.Status)
 	}
 
-	// 1) 必须发生两次 LLM 调用（截断后自动续行，而非一轮收尾）
+	// 1) 仅一次 LLM 调用：截断后不自动续行，直接收轮（续行待根因确认后引入）
 	llm.mu.Lock()
 	calls := llm.calls
-	var secondMsgs []*proto.Message
-	if len(llm.streamMsgs) >= 2 {
-		secondMsgs = llm.streamMsgs[1]
-	}
 	llm.mu.Unlock()
-	if calls != 2 {
-		t.Fatalf("LLM 调用次数 = %d, 期望 2（截断续行应发起第二次请求）", calls)
+	if calls != 1 {
+		t.Fatalf("LLM 调用次数 = %d, 期望 1（截断不应自动续行）", calls)
 	}
 
-	// 2) 第二次请求历史必须包含截断续行提示
-	hasNudge := false
-	for _, m := range secondMsgs {
-		if m.Role == "user" && strings.Contains(m.Content, "max_tokens") && strings.Contains(m.Content, "截断") {
-			hasNudge = true
-			break
-		}
-	}
-	if !hasNudge {
-		t.Fatalf("第二次请求历史缺少截断续行提示")
+	// 2) 结果状态为 success（正常收轮），输出为被截断的半句原文
+	if !strings.Contains(res.Output, "已建立成功") {
+		t.Fatalf("结果输出 = %q, 期望为截断原文", res.Output)
 	}
 
-	// 3) 结果输出应为续行后的第二轮内容
-	if !strings.Contains(res.Output, "git status") {
-		t.Fatalf("结果输出 = %q, 期望包含续行后的第二轮回答", res.Output)
-	}
-
-	// 4) TUI 应收到截断告警帧
+	// 3) TUI 必须收到截断告警帧（中断不再静默）
 	mu.Lock()
 	defer mu.Unlock()
 	notified := false

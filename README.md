@@ -143,7 +143,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等）
 
-- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等）
+- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出最大化**：默认不携带 `max_tokens`，等模型自然结束、永不人为截断——与 `llm-openai` 行为对齐；仅 `ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置 >0 时才随请求携带（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送））
 
 - `llm-ollama`
 
@@ -183,7 +183,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Agent 插件
 
-- `agent-react-loop`（ReAct 主循环：流式消费聚合 LLM、执行聚合工具、事件溯源会话。**输出截断防护**：检测 `finish_reason=max_tokens`/`length`——纯文本被截断时向 TUI 告警并自动续行一次（每轮最多一次防死循环），避免「模型话说一半轮次静默停摆」被感知为无故中断；截断响应携带的工具调用若参数 JSON 残缺则拒绝执行，落合成 tool/result 保持 tool_use/tool_result 配对并请模型重发，消除「以空参/残参下发工具触发报错」的顽疾。TODO 追问、goal round、重复调用提醒等续行驱动齐备）
+- `agent-react-loop`（ReAct 主循环：流式消费聚合 LLM、执行聚合工具、事件溯源会话。**输出截断防护**：检测 `finish_reason=max_tokens`/`length`——纯文本被截断时向 TUI 告警（不自动续行：截断根因已从 LLM 插件源头移除，续行行为待「中断」根因经真机观测彻底确认后再引入，避免掩盖问题）；截断响应携带的工具调用若参数 JSON 残缺则拒绝执行，落合成 tool/result 保持 tool_use/tool_result 配对并请模型重发，消除「以空参/残参下发工具触发报错」的顽疾。TODO 追问、goal round、重复调用提醒等续行驱动齐备）
 
 ### Tool 插件
 
