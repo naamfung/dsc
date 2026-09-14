@@ -143,7 +143,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等）
 
-- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出最大化**：默认不携带 `max_tokens`，等模型自然结束、永不人为截断——与 `llm-openai` 行为对齐；仅 `ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置 >0 时才随请求携带（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送））
+- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出最大化**：默认不携带 `max_tokens`，等模型自然结束、永不人为截断——与 `llm-openai` 行为对齐；仅 `ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置 >0 时才随请求携带（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送）；思维链 stderr 调试打印默认关闭——reasoning 本就随流式帧送宿主/TUI，需排查插件本身时设 `DSC_LLM_DEBUG` 才输出）
 
 - `llm-ollama`
 

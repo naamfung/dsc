@@ -476,8 +476,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Mess
 			// 思考过程增量（thinking 块）
 			reason := concatReasoning(acc.msg.Content)
 			if len(reason) > prevReasonLen {
-				// [DEBUG] 打印 reasoning 帧
-				fmt.Fprintf(os.Stderr, "[LLM-ANTHROPIC-REASONING] %s\n", reason[prevReasonLen:])
+				// 思维链调试开关（默认关闭）：reasoning 已随流式帧送宿主/TUI，stderr
+				// 打印仅用于排查插件本身，且会整段混入宿主日志刷屏——设 DSC_LLM_DEBUG
+				// 后才输出。
+				if llmStreamDebug {
+					fmt.Fprintf(os.Stderr, "[LLM-ANTHROPIC-REASONING] %s\n", reason[prevReasonLen:])
+				}
 				ch <- &core.ChatStreamResponse{Reasoning: reason[prevReasonLen:]}
 				prevReasonLen = len(reason)
 			}
@@ -498,6 +502,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Mess
 	})
 	return ch, nil
 }
+
+// llmStreamDebug 思维链 stderr 调试开关（DSC_LLM_DEBUG），进程启动时读取一次。
+var llmStreamDebug = os.Getenv("DSC_LLM_DEBUG") != ""
 
 func (p *AnthropicProvider) Name(ctx context.Context) string {
 	return "anthropic"
