@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"dsc/core/agentclient"
 	"dsc/core/llmclient"
@@ -90,20 +91,35 @@ func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteT
 		if t.Name == req.ToolName {
 			res, err := t.Handler(ctx, json.RawMessage(req.ArgumentsJson))
 			if err != nil {
-				return &proto.ExecuteToolResponse{Error: err.Error()}, nil
+				return &proto.ExecuteToolResponse{Error: sanitizeUTF8(err.Error())}, nil
 			}
+			// proto string 字段强制合法 UTF-8：工具结果含非法字节（如 Windows 原生
+			// 控制台命令的 OEM 码页输出）会让整个 gRPC 响应 marshal 失败，模型只能
+			// 看到 marshal 错误而丢失全部输出。此处统一净化——非法字节退化为 U+FFFD，
+			// 结果仍可送达；源头还原（如 GBK 解码）由具体工具自行负责。
+			res = sanitizeUTF8(res)
 			resp := &proto.ExecuteToolResponse{Content: res}
 			// 可选结构化视图：插件基于参数与结果声明显示 spec，TUI 统一渲染（缺失/出错时回退）。
 			// ViewFn panic 也被外层 defer 统一捕获——视图生成不应中断工具执行。
 			if t.ViewFn != nil {
 				if v, verr := t.ViewFn(ctx, json.RawMessage(req.ArgumentsJson), res); verr == nil && len(v) > 0 {
-					resp.ViewJson = string(v)
+					resp.ViewJson = sanitizeUTF8(string(v))
 				}
 			}
 			return resp, nil
 		}
 	}
 	return &proto.ExecuteToolResponse{Error: fmt.Sprintf("tool not found: %s", req.ToolName)}, nil
+}
+
+// sanitizeUTF8 把可能含非法 UTF-8 的字符串净化为合法 UTF-8（非法字节序列替换为
+// U+FFFD）。已合法时零开销原样返回。凡进入 proto string 字段的插件侧动态内容
+// （工具结果、错误消息、视图 JSON）都应经此净化，避免整个 gRPC 响应被拒发。
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
 func (s *toolServiceServer) ListTools(ctx context.Context, req *proto.ListToolsRequest) (*proto.ListToolsResponse, error) {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"dsc/jobs"
 	"dsc/proto"
@@ -194,8 +196,22 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	if errors.Is(err, context.DeadlineExceeded) {
 		err = &ToolTimeoutError{Tool: toolName, Ms: timeoutMs}
 	}
-	inv.Result, inv.ViewJSON, inv.Err = result, viewJSON, err
+	// 结果净化：工具输出可能携带非法 UTF-8（如 Windows 原生命令的 OEM 码页输出、
+	// GBK 编码的文件内容），原样进入会话日志/LLM 请求后，proto string 字段会拒绝
+	// marshal（string field contains invalid UTF-8），整个工具结果与后续请求全部
+	// 丢失。此处与 SDK 层（sdk/tool.go）双重设防：SDK 覆盖插件工具，本层覆盖宿主
+	// 内置工具与一切绕过 SDK 的路径。非法字节退化为 U+FFFD，不中断会话。
+	inv.Result, inv.ViewJSON, inv.Err = sanitizeUTF8(result), sanitizeUTF8(viewJSON), err
 	return err
+}
+
+// sanitizeUTF8 把可能含非法 UTF-8 的字符串净化为合法 UTF-8（非法字节序列替换为
+// U+FFFD）。已合法时零开销原样返回。
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
 // ToolResultInfo tools/result 事件的载荷（对齐 DSH tools/result）。
@@ -208,9 +224,9 @@ type ToolResultInfo struct {
 
 // emitToolResult 广播工具执行结果事件（非拦截）。
 func (m *Manager) emitToolResult(inv *ToolInvocation) {
-	info := ToolResultInfo{ToolName: inv.ToolName, Result: inv.Result, ViewJSON: inv.ViewJSON}
+	info := ToolResultInfo{ToolName: inv.ToolName, Result: sanitizeUTF8(inv.Result), ViewJSON: sanitizeUTF8(inv.ViewJSON)}
 	if inv.Err != nil {
-		info.Error = inv.Err.Error()
+		info.Error = sanitizeUTF8(inv.Err.Error())
 	}
 	m.events.Emit(EventToolResult, EventContext{Data: info})
 }

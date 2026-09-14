@@ -476,7 +476,7 @@ func execSessionCommand(ctx context.Context, session *Session, command string) (
 	}
 
 	session.mu.Lock()
-	output := session.StdoutBuf.String() + session.StderrBuf.String()
+	output := ensureUTF8(session.StdoutBuf.String() + session.StderrBuf.String())
 	session.mu.Unlock()
 
 	if idleCancelled {
