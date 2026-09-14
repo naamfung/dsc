@@ -528,7 +528,7 @@ func main() {
 		Version: "1.0.0",
 		Type:    dsc.TypeTool,
 		Provides: map[string]string{
-			// 提供 "skill" 能力：含 read_skill/install_skill/uninstall_skill 工具
+			// 提供 "skill" 能力：含 skill/install_skill/uninstall_skill 工具
 			"skill": "true",
 		},
 	})

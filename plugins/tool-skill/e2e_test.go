@@ -155,8 +155,8 @@ func TestE2EWithHostClient(t *testing.T) {
 	} else if v := assertView(t, resp); v.Kind != "card" || v.Badge == nil || v.Badge.Text != "uninstalled" || v.Fields[0].Value != "pkg-new" {
 		t.Fatalf("uninstall_skill view = %+v", v)
 	}
-	if resp := execTool("read_skill", `{"name":"pkg-new"}`); resp.Error == "" {
-		t.Fatalf("卸载后 read_skill 应报错: %+v", resp)
+	if resp := execTool("skill", `{"name":"pkg-new"}`); resp.Error == "" {
+		t.Fatalf("卸载后 skill 应报错: %+v", resp)
 	}
 
 	// 10. 内置技能不可卸载
@@ -166,7 +166,7 @@ func TestE2EWithHostClient(t *testing.T) {
 
 	// 11. 钩子空实现：宿主调用无副作用（SDK 默认注册 PluginHookService）
 	hook := proto.NewPluginHookServiceClient(conn)
-	bt, err := hook.BeforeTool(ctx, &proto.BeforeToolRequest{ToolName: "read_skill", ArgumentsJson: `{"name":"flat-skill"}`})
+	bt, err := hook.BeforeTool(ctx, &proto.BeforeToolRequest{ToolName: "skill", ArgumentsJson: `{"name":"flat-skill"}`})
 	if err != nil || bt.Veto || bt.ArgumentsJson != `{"name":"flat-skill"}` {
 		t.Fatalf("BeforeTool(空钩子) = %+v, err %v", bt, err)
 	}

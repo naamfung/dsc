@@ -7,11 +7,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// TestToolDisplayName 工具名统一转换为 PascalCase：read_skill → ReadSkill、
+// TestToolDisplayName 工具名统一转换为 PascalCase：skill → Skill、
 // update_goal → UpdateGoal、shell → Shell，风格不再依赖手维护映射表。
 func TestToolDisplayName(t *testing.T) {
 	cases := map[string]string{
-		"read_skill":         "ReadSkill",
+		"skill":              "Skill",
 		"update_goal":        "UpdateGoal",
 		"create_goal":        "CreateGoal",
 		"get_goal":           "GetGoal",

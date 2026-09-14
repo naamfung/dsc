@@ -1582,14 +1582,13 @@ var toolArgKey = map[string]string{
 	"browser_click":      "selector",
 	"browser_type":       "selector",
 	"browser_screenshot": "url",
-	"read_skill":         "name",
 	"skill":              "name",
 	"install_skill":      "name",
 	"uninstall_skill":    "name",
 }
 
 // toolDisplayName 将内部原始工具名统一转换为卡片显示的 PascalCase 名称：
-// read_skill → ReadSkill、update_goal → UpdateGoal、shell → Shell。
+// skill → Skill、update_goal → UpdateGoal、shell → Shell。
 // 对下划线/连字符/点号分隔的各段逐段首字母大写，保证所有工具风格一致
 // （不再依赖手维护的映射表，避免新工具回退到原始蛇形名造成风格不一）。
 func toolDisplayName(name string) string {
