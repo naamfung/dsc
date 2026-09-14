@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -22,13 +23,14 @@ func TestProfileWatcherWatchFile(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	os.WriteFile(cfgPath, []byte("default_llm: test\nplugins: []\n"), 0644)
 
-	reloadCalled := false
+	// 回调在 watcher goroutine 中执行，须经原子变量与测试 goroutine 同步
+	var reloadCalled atomic.Bool
 	mgr := NewManager(&ManagerConfig{ExecDir: dir})
 	mgr.SetConfigPath(cfgPath)
 
 	// callback 返回 nil（不实际 reload，只验证回调被调用）
 	pw, err := NewProfileWatcher(mgr, func() (*Config, error) {
-		reloadCalled = true
+		reloadCalled.Store(true)
 		return nil, nil
 	}, mgr.logger)
 	if err != nil {
@@ -45,7 +47,7 @@ func TestProfileWatcherWatchFile(t *testing.T) {
 	// 等待防抖 + 延迟
 	time.Sleep(3 * time.Second)
 
-	if !reloadCalled {
+	if !reloadCalled.Load() {
 		t.Error("reload callback should have been called after file change")
 	}
 }
@@ -55,12 +57,12 @@ func TestProfileWatcherDebounce(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.yaml")
 	os.WriteFile(cfgPath, []byte("plugins: []\n"), 0644)
 
-	callCount := 0
+	var callCount atomic.Int32
 	mgr := NewManager(&ManagerConfig{ExecDir: dir})
 	mgr.SetConfigPath(cfgPath)
 
 	pw, err := NewProfileWatcher(mgr, func() (*Config, error) {
-		callCount++
+		callCount.Add(1)
 		return nil, nil
 	}, mgr.logger)
 	if err != nil {
@@ -82,8 +84,8 @@ func TestProfileWatcherDebounce(t *testing.T) {
 	time.Sleep(4 * time.Second)
 
 	// 因防抖，callCount 应远小于 5（理想情况为 1）
-	if callCount > 2 {
-		t.Errorf("debounce should limit calls to <=2, got %d", callCount)
+	if callCount.Load() > 2 {
+		t.Errorf("debounce should limit calls to <=2, got %d", callCount.Load())
 	}
 }
 
