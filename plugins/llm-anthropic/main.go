@@ -28,8 +28,10 @@ type AnthropicProvider struct {
 	// 支持并返回 thinking 块）；ANTHROPIC_THINKING=0 可关闭。
 	thinking       bool
 	thinkingBudget int64
-	// maxTokens 单轮输出上限。为「不应人为限制」起见默认取较大值，仅当显式配置时才收紧；
-	// 流式路径（TUI / -input）以该值为准，非流式 Chat 则在其 >0 时覆盖。
+	// maxTokens 单轮输出上限。默认 0 = 请求不携带 max_tokens（对齐 openai 行为，
+	// 等模型自然结束，永不人为截断）；仅当 ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置
+	// >0 时才随请求携带。零值由 omitZeroMaxTokens 中间件从请求体摘除（SDK 无
+	// omitempty，不摘则会上送 "max_tokens":0 被服务端拒绝）。
 	maxTokens int64
 	// vision 是否启用图像输入：默认按模型能力自动判断，DSC_NO_VISION=1 强制关闭。
 	vision bool
@@ -47,9 +49,39 @@ type AnthropicProvider struct {
 // 预留余量避免请求体逼近 48 MiB 上限；超出则走 Files API 上传）。
 const maxInlineImageBytes = 20 << 20 // 20 MiB
 
+// omitZeroMaxTokens 从请求体 JSON 中摘除值为 0 的 max_tokens 字段。
+// 本仓 anthropic SDK 的 MessageNewParams.MaxTokens 无 omitempty（协议标 required），
+// 零值会以 "max_tokens":0 上送——轻则参数错误，重则被理解为零输出。而「不人为
+// 限制输出」的语义必须是不携带该字段、等模型自然结束（对齐 llm-openai 行为：
+// 仅显式 >0 才携带）。故以中间件在 HTTP 层摘除零值，显式配置不受影响。
+func omitZeroMaxTokens(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	if req.Body == nil {
+		return next(req)
+	}
+	body, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read request body: %w", err)
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(body, &payload) == nil {
+		if raw, ok := payload["max_tokens"]; ok && string(bytes.TrimSpace(raw)) == "0" {
+			delete(payload, "max_tokens")
+			if rebuilt, merr := json.Marshal(payload); merr == nil {
+				body = rebuilt
+			}
+		}
+	}
+	newReq := req.Clone(req.Context())
+	newReq.Body = io.NopCloser(bytes.NewReader(body))
+	newReq.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	newReq.ContentLength = int64(len(body))
+	return next(newReq)
+}
+
 // buildMessageParams 构建 Anthropic 请求参数（消息、system、工具定义）。
-// maxTokens <= 0 表示使用服务端默认（不再人为限制）；>0 时才显式携带。
-// 第二个返回值标记本请求是否引用了 Files API 的 file_id（须带 anthropic-beta 头）。
+// maxTokens <= 0 表示不携带该字段（omitZeroMaxTokens 摘除零值，等模型自然结束）；
+// >0 时才显式携带。第二个返回值标记本请求是否引用了 Files API 的 file_id（须带 anthropic-beta 头）。
 func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []core.Tool, maxTokens int64) (anthropic.MessageNewParams, bool) {
 	// 1. 构建 Anthropic 消息
 	var systemMsg string
@@ -133,7 +165,8 @@ func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []
 		Model:    anthropic.Model(p.model),
 		Messages: userMessages,
 	}
-	// max_tokens：仅当显式给定 >0 时设置；否则交给服务端默认（不再有写死 1024 的人为截断）
+	// max_tokens：仅当显式给定 >0 时设置；零值由 omitZeroMaxTokens 从请求体
+	// 摘除——不携带即等模型自然结束，不再有任何人写死的人为截断
 	if maxTokens > 0 {
 		msgParams.MaxTokens = maxTokens
 	}
@@ -497,6 +530,7 @@ func main() {
 
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
+		option.WithMiddleware(omitZeroMaxTokens),
 	}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
@@ -513,11 +547,13 @@ func main() {
 			thinkingBudget = n
 		}
 	}
-	// 单轮输出上限：默认取较大值（32768）视为「不人为限制」；可用 ANTHROPIC_MAX_OUTPUT_TOKENS 收紧。
-	// 且不低于 thinking budget，避免扩展思考下 max_tokens 被预算吞掉导致生成过早停止。
-	maxTokens := int64(32768)
+	// 单轮输出上限：默认 0 = 请求不携带 max_tokens（对齐 llm-openai 行为，
+	// 等模型自然结束，永不人为截断）；零值字段由 omitZeroMaxTokens 中间件摘除。
+	// ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置 >0 时才随请求携带（部署方明知
+	// 上下文/输出上限时的收紧手段；按当前上下文长度收紧亦由此显式完成）。
+	maxTokens := int64(0)
 	if v := os.Getenv("ANTHROPIC_MAX_OUTPUT_TOKENS"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > thinkingBudget {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			maxTokens = n
 		}
 	}
