@@ -260,17 +260,30 @@ func workspaceRoot() string {
 	return os.Getenv("DSC_WORKSPACE_ROOT")
 }
 
-// mapWorkspacePath 把虚拟根前缀 /workspace 映射到真实工作区根，边界语义与
-// sandbox/str-replace-editor 一致：前綴後必須是分隔符或結尾，否则 /workspacefoo
-// 之类按独立路径处理。shell 是 mvdan POSIX 解释器，路径统一为正斜杆，故只处理
-// /workspace 正斜杆前缀，不涉及反斜杆。模型常先 `cd /workspace` 探索，原生命令
-// （cd/ls/cat 等）不认虚拟根会报 no such file or directory，这里在 AST 层统一映射。
+// mapWorkspacePath 把模型书写的路径映射到真实路径，覆盖三类别名（shell 是 mvdan
+// POSIX 解释器，路径统一正斜杆，不涉及反斜杆；AST 层对字面量词统一调用）：
 //
-// WSL 风格路径 /mnt/<drive>/... → <drive>:/... 仅在 Windows 宿主上生效：
-//   - Windows 上 DSC 的 shell 是 mvdan POSIX 解释器（非 WSL），无法访问真正的 /mnt/c/
+//  1. /workspace 虚拟根（所有平台）：模型常先 `cd /workspace` 探索，原生命令
+//     不认虚拟根会报 no such file or directory；边界语义与 sandbox/str-replace-editor
+//     一致——前綴後必須是分隔符或結尾，/workspacefoo 之类按独立路径处理。
+//
+//  2. Windows 裸 POSIX 绝对路径（/x、/ 等，仅 Windows）：Windows 上 "/" 并非
+//     真实的文件系统根——Go 的 filepath.IsAbs("/x") 为 false，内建工具把它当
+//     工作区相对路径（Join 后落在工作区内）；而 PATH 外部命令（MSYS find 等）
+//     却把 "/" 当当前盘符根，同一写法两套语义。真实案例：模型 `find /` 遍历了
+//     整个 D:\ 盘根（$RECYCLE.BIN、System Volume Information），既浪费上下文
+//     又越出工作区沙箱。统一虚拟根语义：裸 / 前缀路径一律锚定工作区根，与内建
+//     工具既有行为一致；要跨出工作区须显式用盘符路径（D:/...，见 pathAdvice）。
+//     例外：/dev/null 保持原样——mvdan DefaultOpenHandler 在 Windows 上把它
+//     特判重定向到 NUL 设备（2>/dev/null 等重定向依赖此行为）；// 开头的 UNC
+//     路径亦不改写。Linux/macOS 不启用：POSIX 系统上 / 是真实根，内建工具本就
+//     以真实根解析，改写反而破坏既有语义。
+//
+//  3. WSL 风格路径 /mnt/<drive>/... → <drive>:/...（仅 Windows）：
+//     - Windows 上 DSC 的 shell 是 mvdan POSIX 解释器（非 WSL），无法访问真正的 /mnt/c/
 //     挂载点；模型若以 WSL 路径习惯（/mnt/c/Users/...）调用，统一转换为 Windows 盘符路径
 //     （C:/Users/...），与 pathAdvice 中对模型的指引保持一致。
-//   - Linux/macOS 上 /mnt/c/... 是合法的 POSIX 路径（可能是真实挂载点，也可能是用户目录），
+//     - Linux/macOS 上 /mnt/c/... 是合法的 POSIX 路径（可能是真实挂载点，也可能是用户目录），
 //     不得改写，否则会破坏可访问的真实路径。跨平台是 DSC 的根本约束，此处必须按 GOOS 分支。
 func mapWorkspacePath(p string) string {
 	// 1. WSL 路径映射：/mnt/c/... → C:/...，/mnt/d/... → D:/...（仅 Windows）
@@ -290,26 +303,37 @@ func mapWorkspacePath(p string) string {
 			}
 		}
 	}
-	// 2. /workspace 虚拟根映射（所有平台生效）
 	ws := workspaceRoot()
 	if ws == "" {
 		return p
 	}
-	const prefix = "/workspace"
-	if !strings.HasPrefix(p, prefix) {
-		return p
-	}
-	rest := p[len(prefix):]
-	// 边界检查：前綴後必須是分隔符或結尾，否則 /workspacefoo 不當作 /workspace 別名
-	if rest != "" && !strings.HasPrefix(rest, "/") {
-		return p
-	}
 	root := strings.TrimRight(filepath.ToSlash(ws), "/")
-	sub := strings.TrimLeft(rest, "/")
-	if sub == "" {
-		return root
+
+	// 2. /workspace 虚拟根映射（所有平台生效；先于裸 / 判定，避免 Windows 上
+	//    /workspace/x 被下面的裸 / 规则吃掉而错映射）
+	const prefix = "/workspace"
+	if strings.HasPrefix(p, prefix) {
+		rest := p[len(prefix):]
+		// 边界检查：前綴後必須是分隔符或結尾，否則 /workspacefoo 不當作 /workspace 別名
+		if rest == "" || strings.HasPrefix(rest, "/") {
+			sub := strings.TrimLeft(rest, "/")
+			if sub == "" {
+				return root
+			}
+			return root + "/" + sub
+		}
 	}
-	return root + "/" + sub
+
+	// 3. Windows 裸 POSIX 绝对路径 → 工作区根（仅 Windows，虚拟根语义）
+	if runtime.GOOS == "windows" {
+		if p == "/" {
+			return root
+		}
+		if strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && p != "/dev/null" {
+			return root + p
+		}
+	}
+	return p
 }
 
 // mapWorkspacePaths 遍历 shell AST，把纯字面量词中的 /workspace 虚拟根前缀重写为真实路径。

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,14 +112,21 @@ var internalCommands = map[string]internalCommand{
 	"head":  cmdHead,
 	"tail":  cmdTail,
 	"wc":    cmdWc,
+	"tree":  cmdTree,
 }
 
 // ---------- 共享辅助 ----------
 
 // res 把参数里的路径解析为绝对路径（相对路径基于 hc.Dir，即 shell 当前工作目录）。
+// Windows 上 /dev/null 特判归一为 NUL 设备：mvdan 的 DefaultOpenHandler 对重定向
+// 目标做了同样特判（handler.go），但作为命令参数（如 cat /dev/null）不经该路径，
+// 而它又不是合法的文件路径（会被 Join 到工作区下报错），对齐特判使两种用法一致。
 func res(hc interp.HandlerContext, p string) string {
 	if p == "" {
 		return ""
+	}
+	if runtime.GOOS == "windows" && p == "/dev/null" {
+		return "NUL"
 	}
 	if filepath.IsAbs(p) {
 		return p
@@ -185,7 +193,7 @@ func cmdMkdir(ctx context.Context, hc interp.HandlerContext, args []string) erro
 // ---------- ls ----------
 
 func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
-	var showAll, long, listSelf, singleCol bool
+	var showAll, long, listSelf, singleCol, classify, byTime, bySize, reverse bool
 	var paths []string
 	for _, a := range args {
 		switch {
@@ -203,6 +211,18 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 				case 'h':
 				case '1':
 					singleCol = true
+				case 'F':
+					// -F 分类符：目录 /、可执行 *、符号链接 @、FIFO |、套接字 =
+					classify = true
+				case 't':
+					// -t 按修改时间排序（新在前）
+					byTime = true
+				case 'S':
+					// -S 按大小排序（大在前）
+					bySize = true
+				case 'r':
+					// -r 逆序
+					reverse = true
 				default:
 					ok = false
 				}
@@ -238,11 +258,11 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 			fmt.Fprintln(hc.Stdout, p0+":")
 		}
 		if fi.IsDir() && !listSelf {
-			if err := lsDir(ctx, hc, p, showAll, long, singleCol); err != nil {
+			if err := lsDir(ctx, hc, p, showAll, long, singleCol, classify, byTime, bySize, reverse); err != nil {
 				return err
 			}
 		} else {
-			lsEntry(hc, fi, p0, long)
+			lsEntry(hc, fi, p0, long, classify)
 		}
 	}
 	if exit != 0 {
@@ -251,52 +271,107 @@ func cmdLs(ctx context.Context, hc interp.HandlerContext, args []string) error {
 	return nil
 }
 
-func lsDir(ctx context.Context, hc interp.HandlerContext, p string, showAll, long, singleCol bool) error {
+// lsItem 单个目录项：名字 + stat（-t/-S/-F 均需要 FileInfo，故一次性取齐）。
+type lsItem struct {
+	name string
+	fi   os.FileInfo
+}
+
+// sortLsItems 对目录项排序：默认按名升序；-t 按修改时间新在前；-S 按大小大在前；
+// -r 整体逆序。Stable 保证同键（如同 mtime）时保持目录序，输出确定。
+func sortLsItems(items []lsItem, byTime, bySize, reverse bool) {
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		if reverse {
+			a, b = b, a
+		}
+		switch {
+		case byTime:
+			return a.fi.ModTime().After(b.fi.ModTime())
+		case bySize:
+			return a.fi.Size() > b.fi.Size()
+		default:
+			return a.name < b.name
+		}
+	})
+}
+
+// lsClassifySuffix 返回 -F 分类符（POSIX ls -F 语义）。
+func lsClassifySuffix(fi os.FileInfo) string {
+	m := fi.Mode()
+	switch {
+	case m&os.ModeSymlink != 0:
+		return "@"
+	case m&os.ModeNamedPipe != 0:
+		return "|"
+	case m&os.ModeSocket != 0:
+		return "="
+	case m.IsDir():
+		return "/"
+	case m.Perm()&0o111 != 0:
+		return "*"
+	}
+	return ""
+}
+
+// lsName 返回展示名：classify 时追加 -F 分类符。
+func lsName(name string, fi os.FileInfo, classify bool) string {
+	if classify {
+		return name + lsClassifySuffix(fi)
+	}
+	return name
+}
+
+func lsDir(ctx context.Context, hc interp.HandlerContext, p string, showAll, long, singleCol, classify, byTime, bySize, reverse bool) error {
 	entries, err := os.ReadDir(p)
 	if err != nil {
 		fmt.Fprintf(hc.Stderr, "ls: %v\n", err)
 		return interp.NewExitStatus(2)
 	}
-	names := make([]string, 0, len(entries))
+	items := make([]lsItem, 0, len(entries))
 	for _, e := range entries {
 		name := e.Name()
 		if !showAll && strings.HasPrefix(name, ".") {
 			continue
 		}
-		names = append(names, name)
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		items = append(items, lsItem{name: name, fi: fi})
 	}
-	sort.Strings(names)
+	sortLsItems(items, byTime, bySize, reverse)
 	if long {
-		for _, name := range names {
+		for _, it := range items {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			fi, err := os.Lstat(filepath.Join(p, name))
-			if err != nil {
-				continue
-			}
-			lsEntry(hc, fi, name, true)
+			lsEntry(hc, it.fi, it.name, true, classify)
 		}
 	} else if singleCol {
-		for _, name := range names {
+		for _, it := range items {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			fmt.Fprintln(hc.Stdout, name)
+			fmt.Fprintln(hc.Stdout, lsName(it.name, it.fi, classify))
 		}
 	} else {
+		names := make([]string, 0, len(items))
+		for _, it := range items {
+			names = append(names, lsName(it.name, it.fi, classify))
+		}
 		fmt.Fprintln(hc.Stdout, strings.Join(names, "  "))
 	}
 	return nil
 }
 
-func lsEntry(hc interp.HandlerContext, fi os.FileInfo, name string, long bool) {
+func lsEntry(hc interp.HandlerContext, fi os.FileInfo, name string, long, classify bool) {
 	if long {
 		sz := fi.Size()
 		t := fi.ModTime().Format("Jan _2 15:04")
-		fmt.Fprintf(hc.Stdout, "%s %8d %s %s\n", fi.Mode().String(), sz, t, name)
+		fmt.Fprintf(hc.Stdout, "%s %8d %s %s\n", fi.Mode().String(), sz, t, lsName(name, fi, classify))
 	} else {
-		fmt.Fprintln(hc.Stdout, name)
+		fmt.Fprintln(hc.Stdout, lsName(name, fi, classify))
 	}
 }
 
@@ -863,7 +938,12 @@ func cmdWc(ctx context.Context, hc interp.HandlerContext, args []string) error {
 		tl += l
 		tw += w
 		tc += c
-		printWc(hc, flags, l, w, c, f)
+		// 对齐 GNU wc：stdin（"-"）单文件时不回显名字（如 find ... | wc -l 只出计数）
+		displayName := f
+		if f == "-" && len(files) == 1 {
+			displayName = ""
+		}
+		printWc(hc, flags, l, w, c, displayName)
 		close()
 	}
 	if len(files) > 1 {
@@ -899,7 +979,11 @@ func countWc(r io.Reader) (lines, words, bytes int64) {
 
 func printWc(hc interp.HandlerContext, flags map[byte]bool, l, w, c int64, name string) {
 	if len(flags) == 0 {
-		fmt.Fprintf(hc.Stdout, " %7d %7d %7d %s\n", l, w, c, name)
+		if name == "" {
+			fmt.Fprintf(hc.Stdout, " %7d %7d %7d\n", l, w, c)
+		} else {
+			fmt.Fprintf(hc.Stdout, " %7d %7d %7d %s\n", l, w, c, name)
+		}
 		return
 	}
 	var parts []string
@@ -912,5 +996,158 @@ func printWc(hc interp.HandlerContext, flags map[byte]bool, l, w, c int64, name 
 	if flags['c'] {
 		parts = append(parts, strconv.FormatInt(c, 10))
 	}
-	fmt.Fprintf(hc.Stdout, " %s %s\n", strings.Join(parts, " "), name)
+	if name == "" {
+		fmt.Fprintf(hc.Stdout, " %s\n", strings.Join(parts, " "))
+	} else {
+		fmt.Fprintf(hc.Stdout, " %s %s\n", strings.Join(parts, " "), name)
+	}
+}
+
+// ---------- tree ----------
+
+// cmdTree 目录树输出（GNU tree 常用子集）：-L n 限制展开层数、-I pattern 排除
+// （| 分隔多模式，按 basename 匹配）、-a 含隐藏项、-d 仅目录。进程内实现的原因
+// 与其余内建一致：Windows 上 PATH 命中的往往是 C:\Windows\tree.com——不支持
+// -L/-I，输出还是系统 OEM 码页编码，且搜索不到文件内容；内建化后跨平台一致。
+func cmdTree(ctx context.Context, hc interp.HandlerContext, args []string) error {
+	depth := -1 // 无限制
+	var excludes []string
+	all, dirsOnly := false, false
+	rootArg := "."
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-a":
+			all = true
+		case a == "-d":
+			dirsOnly = true
+		case a == "--":
+		case a == "-L" && i+1 < len(args):
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n < 1 {
+				fmt.Fprintf(hc.Stderr, "tree: invalid level: %s\n", args[i+1])
+				return interp.NewExitStatus(2)
+			}
+			depth = n
+			i++
+		case strings.HasPrefix(a, "-L") && len(a) > 2:
+			n, err := strconv.Atoi(a[2:])
+			if err != nil || n < 1 {
+				fmt.Fprintf(hc.Stderr, "tree: invalid level: %s\n", a[2:])
+				return interp.NewExitStatus(2)
+			}
+			depth = n
+		case a == "-I" && i+1 < len(args):
+			for _, pat := range strings.Split(args[i+1], "|") {
+				if pat != "" {
+					excludes = append(excludes, pat)
+				}
+			}
+			i++
+		case strings.HasPrefix(a, "-") && a != "-":
+			fmt.Fprintf(hc.Stderr, "tree: unsupported option: %s\n", a)
+			return interp.NewExitStatus(2)
+		default:
+			rootArg = a
+		}
+	}
+	rootPath := res(hc, rootArg)
+	fi, err := os.Stat(rootPath)
+	if err != nil {
+		fmt.Fprintf(hc.Stderr, "tree: %s: %s\n", rootArg, slashErr(err))
+		return interp.NewExitStatus(2)
+	}
+	if !fi.IsDir() {
+		fmt.Fprintf(hc.Stderr, "tree: %s: Not a directory\n", rootArg)
+		return interp.NewExitStatus(2)
+	}
+	fmt.Fprintln(hc.Stdout, rootArg)
+	var dirs, files int64
+	if err := treeWalk(ctx, hc, rootPath, "", depth, 1, excludes, all, dirsOnly, &dirs, &files); err != nil {
+		return err
+	}
+	fmt.Fprintf(hc.Stdout, "\n%d director%s, %d file%s\n",
+		dirs, plural("y", "ies", dirs), files, plural("", "s", files))
+	return nil
+}
+
+// plural 单复数选词：n==1 取单数词尾，否则复数。
+func plural(singular, pluralSuffix string, n int64) string {
+	if n == 1 {
+		return singular
+	}
+	return pluralSuffix
+}
+
+// treeWalk 递归打印目录树。level 从 1 计（根的直接子项为 1），depth>0 时仅展开
+// level<=depth 的目录（更深的目录列出但不展开，对齐 GNU tree -L）。目录在前、
+// 按名升序，输出确定。返回 ctx 错误（取消）。
+func treeWalk(ctx context.Context, hc interp.HandlerContext, dir, prefix string, depth, level int, excludes []string, all, dirsOnly bool, dirs, files *int64) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintf(hc.Stdout, "%s[opendir %s]: %s\n", prefix, filepath.ToSlash(dir), slashErr(err))
+		return nil
+	}
+	type treeEntry struct {
+		name  string
+		isDir bool
+	}
+	var list []treeEntry
+	for _, e := range entries {
+		name := e.Name()
+		if !all && strings.HasPrefix(name, ".") {
+			continue
+		}
+		if matchAnyPattern(name, excludes) {
+			continue
+		}
+		isDir := e.IsDir()
+		if dirsOnly && !isDir {
+			continue
+		}
+		list = append(list, treeEntry{name: name, isDir: isDir})
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].isDir != list[j].isDir {
+			return list[i].isDir
+		}
+		return list[i].name < list[j].name
+	})
+	for i, it := range list {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		last := i == len(list)-1
+		branch := "├── "
+		if last {
+			branch = "└── "
+		}
+		fmt.Fprintln(hc.Stdout, prefix+branch+it.name)
+		if !it.isDir {
+			*files++
+			continue
+		}
+		*dirs++
+		if depth != -1 && level >= depth {
+			continue
+		}
+		child := prefix + "│   "
+		if last {
+			child = prefix + "    "
+		}
+		if err := treeWalk(ctx, hc, filepath.Join(dir, it.name), child, depth, level+1, excludes, all, dirsOnly, dirs, files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// matchAnyPattern basename 是否命中任一排除模式（GNU tree -I 语义，| 已拆分）。
+func matchAnyPattern(name string, patterns []string) bool {
+	for _, pat := range patterns {
+		if ok, _ := filepath.Match(pat, name); ok {
+			return true
+		}
+	}
+	return false
 }
