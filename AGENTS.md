@@ -116,13 +116,26 @@ LLM 请求的前缀（system prompt、工具目录、上下文片段等）参与
 
 - **先例**：`installShutdownSignals`（配套 `graceful_exit.go` / `signal_unix.go` / `signal_windows.go`）即为范例——Unix 用 `signal.Notify` 捕 SIGINT/SIGTERM/SIGHUP/SIGQUIT；Windows 用 `kernel32.SetConsoleCtrlHandler` 兜底点窗口的 console 关闭事件（`os/signal` 捕获不到），共享收尸逻辑抽在无 tag 的 `gracefulShutdown`。
 
-- **验证红线**：涉及上述能力的改动，提交前除本平台 `go build ./...` 外，必须对**定义的目标平台集**逐对 (GOOS, GOARCH) 各交叉编译一次，确认平台文件都能编过——PowerShell：`$env:GOOS='<goos>'; $env:GOARCH='<goarch>'; go build ./...`；Unix shell：`GOOS=<goos> GOARCH=<goarch> go build ./...`。平台 API/签名用错应在交叉编译期暴露，勿拖到真机。
+- **验证红线**：涉及上述能力的改动，提交前除本平台 `go build ./...` 外，必须对**定义的目标平台集**逐对 (GOOS, GOARCH) 各交叉编译一次，确认平台文件都能编过——优先使用**项目自带的 builder**（`builder/builder.go`）执行，而非手敲 `GOOS=... GOARCH=... go build`：
+
+  - **首选：用 builder**（覆盖七端，且封装了 `freebsd/amd64` 的 `purego fakecgo -std` 等平台特有构建标志，手敲会漏）：
+    ```bash
+    cd builder
+    go build -o builder builder.go        # 一次性构建 builder 自身
+    ./builder cross                       # 交叉编译并打包所有七端到 dist/dsc-for-<platform>/
+    ./builder cross --platforms linux-amd64,windows-amd64   # 仅校验指定子集
+    ```
+    完成后用 `./builder clean` 及 `bash clean.sh` 清掉 `dist/`目录，及源码目录开发期间的产物而不带入仓库。
+
+  - **次选：手敲逐平台**（仅当只改动主模块、无需走 builder 全量打包时）——PowerShell：`$env:GOOS='<goos>'; $env:GOARCH='<goarch>'; go build ./...`；Unix shell：`GOOS=<goos> GOARCH=<goarch> go build ./...`。**注意 `freebsd/amd64` 必须额外附 `-gcflags=github.com/ebitengine/purego/internal/fakecgo=-std`**，否则会编不过——这是优先用 builder 的核心理由。
+
+  - 平台 API/签名用错应在交叉编译期暴露，勿拖到真机。
 
 ## 真机测试验证流程
 
 真机（真实模型服务 + 真实工具进程的运行态）验证时，须按下述固定流程产出可运行产物并跑完测评后清理，避免把测得的运行时配置/临时产物带进仓库：
 
-1. **产出 dist**：先在 `builder` 目录内编译构建器（`go build -o builder.exe builder.go`），再直接在该目录内执行 `./builder` 产出 `dist/dsc-for-<platform>/`。勿用 `go run builder/builder.go`——它经临时缓存目录运行，会把仓库根错位到缓存路径，导致构建失败。
+1. **产出 dist**：先在 `builder` 目录内编译构建器（`go build -o builder builder.go`），再直接在该目录内执行 `./builder` 产出 `dist/dsc-for-<platform>/`。勿用 `go run builder/builder.go`——它经临时缓存目录运行，会把仓库根错位到缓存路径，导致构建失败。
 2. **写运行时配置**：切换进 dist 平台目录，从 `config/config.example.yaml` 复制出 `config/config.yaml`，按目标模型服务改写（LLM base_url / model / api_key 等）。
 3. **跑 agentic-bench 真机测评**：用随 dsc 主程序同级复制进 dist 的 `bench` 程序（或等价命令）启动，加载 `tool-agentic-bench` 插件逐项完成并汇总报告；若本次改动点未被已有用例覆盖，则先在该插件补用例、再重走 agentic-bench 验证。
 4. **清理**：测评完成后删除整个 `dist` 目录，临时配置与实际产物不得随本次提交带入仓库。
