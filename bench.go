@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 
+	"dsc/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -114,6 +115,8 @@ func main() {
 
 	// 7. 设置工作目录（等价于 cd 到 dsc 所在目录）
 	cmd.Dir = workDir
+	// Windows 上隐藏 dsc 测评子进程控制台，避免 TUI 中终端窗口闪烁
+	core.ConfigureChildProcessAttrs(cmd)
 
 	// 8. 标准输入为空字符串
 	cmd.Stdin = strings.NewReader("")

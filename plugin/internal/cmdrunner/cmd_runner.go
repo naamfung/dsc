@@ -50,6 +50,11 @@ type CmdRunner struct {
 // NewCmdRunner returns an implementation of runner.Runner for running a core
 // as a subprocess. It must be passed a cmd that hasn't yet been started.
 func NewCmdRunner(logger hclog.Logger, cmd *exec.Cmd) (*CmdRunner, error) {
+	// Windows 上隐藏插件子进程控制台（CREATE_NO_WINDOW），避免宿主继承不到
+	// 控制台时（GUI 拉起/计划任务/控制台分离）子进程新建可见终端窗口闪烁；
+	// 其余平台 no-op。此处统一覆盖所有经 go-plugin 的插件子进程启动。
+	hideChildConsole(cmd)
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

@@ -154,6 +154,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			cmd.Stdin = hc.Stdin
 			cmd.Stdout = hc.Stdout
 			cmd.Stderr = hc.Stderr
+			hideChildConsole(cmd)
 			if killTimeout > 0 && runtime.GOOS != "windows" {
 				// On cancellation, send an interrupt signal first, and let
 				// WaitDelay escalate to a kill signal if the process does not

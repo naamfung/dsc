@@ -170,6 +170,8 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 	cmdArgs := r.renderArgs(absIn, outPrefix, first, last, dpi)
 
 	cmd := exec.Command(r.abs, cmdArgs...)
+	// Windows 上隐藏外部渲染器子进程控制台，避免 TUI 中终端窗口闪烁
+	dsc.ConfigureChildProcessAttrs(cmd)
 	cmd.Stdout, cmd.Stderr = new(strings.Builder), new(strings.Builder)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("render via %s failed: %v\n%s", r.abs, err, cmd.Stderr.(*strings.Builder).String())

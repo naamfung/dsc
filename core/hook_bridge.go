@@ -159,6 +159,8 @@ func (h *HookBridge) execHook(ctx context.Context, command, toolName, argsJSON, 
 	inputJSON, _ := json.Marshal(input)
 
 	cmd := exec.CommandContext(ctx, command)
+	// Windows 上隐藏钩子命令子进程控制台，避免 TUI 中终端窗口闪烁
+	ConfigureChildProcessAttrs(cmd)
 	cmd.Stdin = strings.NewReader(string(inputJSON))
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

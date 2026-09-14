@@ -135,7 +135,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - **DSH 獨特**：內核級沙箱（真實 OS 邊界，不可信代碼經 `ctx.shell` 隔離）；跨能力族統一的可寫根集合（`writableRoots` 與 Seatbelt profile 共享，防止 fs 圍欄與 runner 漂移）；文件身份（dev/ino）圍欄回退；TokenMeter 精確計量；API 代理層（`api-proxy`：歷史分頁、子代理、投影）。
 
-- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
+- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；Windows 全部子進程（插件、LSP 服務器、外部鈎子、shell 外部命令、PDF 渲染器等）以 `CREATE_NO_WINDOW` 隱藏控制檯啟動，杜絕 TUI 中彈出新終端窗口；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
 
 ## 支持的插件
 
@@ -187,7 +187,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Tool 插件
 
-- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致。常用工具 `mkdir`/`ls`/`cat`/`touch`/`rm`/`cp`/`mv`/`grep`/`head`/`tail`/`wc` 已**进程内实现**（`interp.ExecHandler` 拦截，纯 Go 无外部依赖），因此即便在 Windows 且插件子进程 `PATH` 被宿主过滤时这些命令仍可用；未命中的命令仍回退默认 `PATH` 查找外部程序；提供 `filesystem` 能力）
+- `tool-filesystem`（shell：mvdan POSIX 解释器，默认以 `DSC_WORKSPACE_ROOT` 为工作目录，在 AST 层把模型传入的 `/workspace` 虚拟根前缀映射到真实工作区根——`cd /workspace`、`ls /workspace/x` 等初期探索不再报 no such file or directory，路径统一正斜杆；仅当 `/workspace` 后紧跟分隔符（`/` 或 `\`）或处于路径结尾时，才按其映射为工作区根，`/workspacefoo` 之类的路径不会误当作工作区根别名——该语义与 sandbox 的 `/workspace` 别名判定一致。常用工具 `mkdir`/`ls`/`cat`/`touch`/`rm`/`cp`/`mv`/`grep`/`head`/`tail`/`wc` 已**进程内实现**（`interp.ExecHandler` 拦截，纯 Go 无外部依赖），因此即便在 Windows 且插件子进程 `PATH` 被宿主过滤时这些命令仍可用；未命中的命令仍回退默认 `PATH` 查找外部程序（Windows 上以 `CREATE_NO_WINDOW` 隐藏控制台启动，避免 TUI 中弹出终端窗口）；提供 `filesystem` 能力）
 
 - `tool-pdf`（PDF 读取与创建。读取侧：`pdf_read_text` / `pdf_extract_tables`（列对齐表格网格输出）/ `pdf_info` / `pdf_outline` / `pdf_search` / `pdf_extract_images`，自写内容流解释器 + 字体解码（WinAnsi/MacRoman/Standard + ToUnicode CMap；CID 字体缺 ToUnicode 时回退解析内嵌 TrueType cmap 解码中文），按 y 聚合行、按横向间隙识别多栏（以制表符分隔）、依 `Tm` 旋转角把非横行单独分区输出，尽力还原阅读顺序。创建/整理侧：`pdf_create_text` / `pdf_images_to_pdf` / `pdf_append_text` / `pdf_merge_pdfs` / `pdf_split_pdfs` / `pdf_extract_pages`，支持标准 14 字体与自带 CJK 字体（Type0 嵌入子集、字符级折行与真实行距分页）。携带中文字体体积大不进公开仓库，需按插件 `fonts/字体下载.txt` 自行下载；go.mod module 名为 `tool-pdf`（与目录/二进制命名一致，直接 `go build` 产物即合规）。提供 `pdf` 能力）
 

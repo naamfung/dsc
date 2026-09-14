@@ -94,6 +94,8 @@ func (c *LSPClient) Start(ctx context.Context, command string, args ...string) e
 
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = c.rootPath
+	// Windows 上隐藏 LSP 服务器子进程控制台，避免 TUI 中终端窗口闪烁
+	ConfigureChildProcessAttrs(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("LSP start failed: %w", err)
