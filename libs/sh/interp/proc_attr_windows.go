@@ -3,8 +3,8 @@
 package interp
 
 import (
-        "os/exec"
-        "syscall"
+	"os/exec"
+	"syscall"
 )
 
 // createNoWindow 对齐 Windows SDK 的 PROCESS_CREATION_FLAGS（同 golang.org/x/sys/windows
@@ -18,8 +18,8 @@ const createNoWindow = 0x08000000
 // 子进程拿到不可见控制台，杜绝新终端弹出；仅影响控制台分配，不影响
 // stdin/stdout/stderr 管道，命令输出捕获行为不变。
 func hideChildConsole(cmd *exec.Cmd) {
-        cmd.SysProcAttr = &syscall.SysProcAttr{
-                HideWindow:    true,
-                CreationFlags: createNoWindow,
-        }
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+	}
 }

@@ -6,8 +6,8 @@
 package cmdrunner
 
 import (
-        "os/exec"
-        "syscall"
+	"os/exec"
+	"syscall"
 )
 
 // createNoWindow 对齐 Windows SDK 的 PROCESS_CREATION_FLAGS（同 golang.org/x/sys/windows
@@ -21,11 +21,11 @@ const createNoWindow = 0x08000000
 // CREATE_NO_WINDOW 令子进程拿到不可见控制台，杜绝窗口闪烁；仅影响控制台
 // 分配，不影响 stdio 管道，握手与 RPC 行为不变。
 func hideChildConsole(cmd *exec.Cmd) {
-        if cmd.SysProcAttr != nil {
-                return // 调用方已自定义进程属性，不覆盖
-        }
-        cmd.SysProcAttr = &syscall.SysProcAttr{
-                HideWindow:    true,
-                CreationFlags: createNoWindow,
-        }
+	if cmd.SysProcAttr != nil {
+		return // 调用方已自定义进程属性，不覆盖
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+	}
 }
