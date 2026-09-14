@@ -20,6 +20,8 @@ protoc_dir/
 *.txt
 
 plugins/tool-pdf/fonts/HarmonyOS-Sans/
+# 测试时 TestMain 自动下载的 CJK TrueType 字体（10MB+），不应提交仓库
+plugins/tool-pdf/fonts/*.ttf
 plugins/tool-harness-webui/webui/dist/
 plugins/tool-novelforge/
 plugins/tool-jyutzyun/
