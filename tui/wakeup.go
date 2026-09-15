@@ -50,6 +50,16 @@ func (m *Model) startTurn(text string, images []string, rendered string, warning
 	m.turnTokens = 0
 	m.cacheHit = 0
 	m.cacheMiss = 0
+	// 速率测量状态同步重置：新轮的 Turn/Step 编号从 1 重新递增，必须清掉上轮的
+	// 步追踪（lastSeenTurn/lastSeenStep）与打点，否则首帧会被误判为「编号未变化」
+	// 而丢失本步请求开始时刻；速率读数清零后由本轮首次结算重新填充。
+	m.lastSeenTurn = 0
+	m.lastSeenStep = 0
+	m.stepStart = time.Time{}
+	m.firstTokenAt = time.Time{}
+	m.stepSettled = false
+	m.decodeTPS = 0
+	m.startTPS = 0
 	m.syncInputHeight()
 	m.render()
 	m.pinnedToBottom = true // 新轮开始：重新钉在底部跟随新内容（对齐 REX 发送消息即重新钉住）

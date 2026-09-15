@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -227,6 +228,22 @@ type Model struct {
 	// 记录最后处理的 Usage 的 Turn/Step，用于避免同一 step 的 CompletionTokens 被 tool 调用/结果帧和 success 帧重复累加
 	lastUsageTurn int32
 	lastUsageStep int32
+
+	// LLM 速率测量（对齐 DSH turn-metrics 语义，帧驱动打点，全部 TUI 本地测量）：
+	// stepStart 为当前步请求开始（Turn/Step 编号变化即新步）；firstTokenAt 为当前步
+	// 首个流式内容帧（reasoning/streaming）到达，即 TTFT 终点；stepSettled 防同一
+	// step 的多帧重复结算。decodeTPS/startTPS 为最近一次结算快照（模式同
+	// cacheHit/cacheMiss 的「最近一次请求」）：decodeTPS = 输出词元 ÷ 解码时长
+	// （首 token → 结算，DSH tokensPerSecond 同口径）；startTPS = 输出词元 ÷ 全程
+	// 时长（步开始 → 结算，含首 token 延迟）——即「初速」：把 TTFT 折算为起步
+	// 速率，TTFT 越大初速越低于每秒值，两个读数的差距即首响等待的体感。
+	stepStart    time.Time
+	firstTokenAt time.Time
+	lastSeenTurn int32
+	lastSeenStep int32
+	stepSettled  bool
+	decodeTPS    float64
+	startTPS     float64
 
 	// 正文拖拽选区的实时状态与选中后的宽度对齐渲染行缓存
 	sel          selection
@@ -875,6 +892,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 跟踪 agent 发射的轮/步编号（对齐 DSH 定义），用于状态行实时显示。
 		// 帧携带的编号是权威值（含运行中注入的续步），本地不做推算。
 		if msg.frame != nil {
+			// Turn/Step 编号变化即新步开始：打点请求开始时刻，等待本步首个
+			// 内容帧测 TTFT；编号不变的后续帧（同步的调用/结果/success 帧）
+			// 不重置打点。
+			if msg.frame.Turn != m.lastSeenTurn || msg.frame.Step != m.lastSeenStep {
+				if msg.frame.Turn != 0 || msg.frame.Step != 0 {
+					m.lastSeenTurn = msg.frame.Turn
+					m.lastSeenStep = msg.frame.Step
+					m.stepStart = time.Now()
+					m.firstTokenAt = time.Time{}
+					m.stepSettled = false
+				}
+			}
 			if msg.frame.Turn != 0 {
 				m.curTurn = msg.frame.Turn
 			}
@@ -949,6 +978,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "reasoning":
 			// 思考过程增量：新建/追加助手块，以暗色渲染思考文本
+			if m.firstTokenAt.IsZero() {
+				m.firstTokenAt = time.Now() // 本步首 token：TTFT 终点（思考可见也算出字）
+			}
 			m.streaming = true
 			m.thinking = false
 			if !m.streamOpen {
@@ -975,6 +1007,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pumpStream(msg.input, msg.ch)
 		case "streaming":
 			m.toolCallOpen = false // 回到助手正文，打断「调用标题→结果」的连续布局
+			if m.firstTokenAt.IsZero() {
+				m.firstTokenAt = time.Now() // 本步首 token：TTFT 终点
+			}
 			m.streaming = true
 			m.thinking = false
 			if !m.streamOpen {
@@ -1004,6 +1039,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
 				m.trackTurnUsage(f.Usage, msg.frame.Turn, msg.frame.Step)
+				m.settleStepMetrics(f.Usage)
 			}
 			// 待办面板数据：todo_write 成功结果帧携带整表 ToolArgs（对齐 REX：
 			// 仅成功更新——调用帧（ToolResult 空）与失败帧（Error 非空）都不触碰，
@@ -1052,6 +1088,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.usedTokens = int(f.Usage.TotalTokens)
 				}
 				m.trackTurnUsage(f.Usage, f.Turn, f.Step)
+				m.settleStepMetrics(f.Usage)
 			}
 			if f.Status == "error" && f.Error != "" {
 				m.appendMessage(errorSty.Render("错误: ") + f.Error)
@@ -3186,11 +3223,20 @@ func (m *Model) composerView() string {
 	return composerBoxSty.Render(b.String())
 }
 
-// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次 + 步数 + 已用容量。
+// runInfoLine 渲染输入框与状态栏之间的会话指标行：轮次步数 + 速率 + 已用容量。
 // 填在两条平行线（输入框下边框与状态栏分隔线）之间，避免双线紧贴，参考 REX 的指标带布局。
-// 轮/步编号对齐 DSH 定义：轮为一次受理输入的排空，步为一次模型请求及其引发的工具执行。
+// 轮/步编号对齐 DSH 定义：轮为一次受理输入的排空，步为一次模型请求及其引发的工具执行；
+// 指标格式「N 轮 M 步 · 每秒 X 词元 · 初速 Y 词元」对齐 DSH「N turns M steps · X tok/s」。
 func (m *Model) runInfoLine() string {
-	info := fmt.Sprintf("轮次 %d · 步数 %d", m.curTurn, m.curStep)
+	info := fmt.Sprintf("%d 轮 %d 步", m.curTurn, m.curStep)
+	// LLM 速率（对齐 DSH turn-metrics）：每秒=解码吞吐（首 token→结算）；初速=含首
+	// token 延迟的起步速率——两个读数的差距即 TTFT 的体感，初速越接近每秒值首响越快。
+	if m.decodeTPS > 0 {
+		info += " · 每秒 " + formatTokensPerSecond(m.decodeTPS) + " 词元"
+		if m.startTPS > 0 {
+			info += " · 初速 " + formatTokensPerSecond(m.startTPS) + " 词元"
+		}
+	}
 	if m.usedTokens > 0 {
 		if m.contextWindow > 0 {
 			// 已知总容量时显示已用百分比；小于 1% 也至少显示 1，避免 0% 误导
@@ -3229,6 +3275,42 @@ func (m *Model) trackTurnUsage(u *core.Usage, turn, step int32) {
 		m.cacheHit = u.CacheReadInputTokens
 		m.cacheMiss = u.CacheCreationInputTokens
 	}
+}
+
+// settleStepMetrics 结算当前步的速率指标（每步首次见到携带 Usage 的帧时结算一次，
+// 此后本步的调用/结果/success 帧不再刷新——对齐 trackTurnUsage 的防重思路）。
+// decodeTPS = 输出词元 ÷ 解码时长（首 token → 结算，DSH tokensPerSecond 同口径）；
+// startTPS = 输出词元 ÷ 全程时长（步开始 → 结算，含首 token 延迟），即「初速」。
+// 无流式内容帧（firstToken 缺失）的步没有「出字速度」的体感意义（如纯工具调用步），
+// 跳过结算保持上一次读数。
+func (m *Model) settleStepMetrics(u *core.Usage) {
+	if u == nil || u.CompletionTokens <= 0 || m.stepSettled {
+		return
+	}
+	if m.stepStart.IsZero() || m.firstTokenAt.IsZero() {
+		return
+	}
+	decode := time.Since(m.firstTokenAt).Seconds()
+	total := time.Since(m.stepStart).Seconds()
+	if decode <= 0 || total <= 0 {
+		return
+	}
+	m.stepSettled = true
+	m.decodeTPS = float64(u.CompletionTokens) / decode
+	if total >= decode {
+		m.startTPS = float64(u.CompletionTokens) / total
+	} else {
+		m.startTPS = m.decodeTPS // 时钟异常时退化为解码吞吐
+	}
+}
+
+// formatTokensPerSecond 速率显示：≥10 取整，<10 保留一位小数并去掉尾零
+// （对齐 DSH formatTokensPerSecond 的 Math.round(x*10)/10 显示行为）。
+func formatTokensPerSecond(tps float64) string {
+	if tps >= 10 {
+		return fmt.Sprintf("%.0f", tps)
+	}
+	return strconv.FormatFloat(math.Round(tps*10)/10, 'f', -1, 64)
 }
 
 // elapsedTickMsg 每秒触发一次，驱动「思考中」行耗时刷新（对齐 REX elapsed tick）。
