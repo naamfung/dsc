@@ -129,6 +129,8 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - **部分對齊（同概念、異實現）**：沙箱從 DSH 的內核級（bwrap/Landlock）改為 DSC 的宿主工具級攔截（換取 Windows 兼容與可移植性，代價是「策略圍欄」而非「內核邊界」）；雖為工具級，但對已知寫路徑、Windows junction/symlink 穿越、以及不可定位寫路徑的解釋器逃逸，均已於工具流水線 pre-execute 階段 fail-closed 封堵（見下方「各自獨特實現」）；token 計量從 DSH 的 TokenMeter（本地精確 tokenizer）改為 DSC 的「服務端 usage + 字节级启发式估算回退」；技能注入從 DSH 的 provider registry 改為目錄掃描 + `ListContext` 索引。
 
+- **日誌跟蹤（對齊 DSH 觀測體系）**：兩層分工同構於 DSH——①**規範會話日誌**（`sessions/` JSONL，事件溯源、常駐落盤）承載診斷事件：`llm/attempt`（log-only，格式 v3 新增，對齊 DSH `llm/*`+`assistant/attempt` 的診斷定位）每次 LLM 調用結算必落一條——finish_reason、token 用量、耗時、錯誤文本與穩定錯誤碼（`context_window_exceeded`/`rate_limited`/`network_error`/`unknown`）、部分內容長度，截斷/provider 報錯/流中斷/上下文溢出/耗時一眼可查，無需審計代碼；回合閉合不變量（turn/end 恆以 completed/goal-concluded/max-iterations/error/cancelled 收口，step/start/end 恆配對），導出記錄不再出現懸空回合；②**宿主運行日誌**（`-log` 開啟，默認靜默零噪音）：hclog 分級（`DSC_LOG_LEVEL` 可調）全鏈路埋點——每次 LLM 嘗試（含 provider 切換與重試）、每次工具執行（計時與成敗）、workflow 生命週期、插件裝載、會話操作；插件子進程 stderr 經 go-plugin 轉發匯入同一日誌流，默認靜默時亦可經 ADMIN `/plugins/logs` SSE 按需觀察。
+
 - **DSC 擴展（DSH 沒有）**：`/settings history` 歷史注入條數限制（DSH 僅靠壓縮限界）+ 項目級會話隔離 + 配置持久化；提示緩存感知的容量計算（本地 llama.cpp 緩存命中時 `input_tokens` 僅含新增部分，須加回 `cache_read`）；`/sandbox` TUI 即時切換；`/approval` TUI 即時切換審批（`DSC_APPROVAL` 可配默認 ask/never）；多會話 TUI 管理（`/session new\|list\|switch\|delete`）；cron 定時任務；多 Agent workflow 後台運行（`background: true`）+ TUI `/jobs` 管理命令；`-input` 自動化多輪入口；`-headless` 精简单发模式；`-debugger` 管理 API 觀察端點；管理 API 的 `/plugins/domain-events` 與 `/plugins/logs` SSE 流實時觀測領域事件與宿主/插件日誌。
 
 ### 各自獨特實現
@@ -183,7 +185,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Agent 插件
 
-- `agent-react-loop`（ReAct 主循环：流式消费聚合 LLM、执行聚合工具、事件溯源会话。**输出截断防护**：检测 `finish_reason=max_tokens`/`length`——纯文本被截断时向 TUI 告警（不自动续行：截断根因已从 LLM 插件源头移除，续行行为待「中断」根因经真机观测彻底确认后再引入，避免掩盖问题）；截断响应携带的工具调用若参数 JSON 残缺则拒绝执行，落合成 tool/result 保持 tool_use/tool_result 配对并请模型重发，消除「以空参/残参下发工具触发报错」的顽疾。TODO 追问、goal round、重复调用提醒等续行驱动齐备）
+- `agent-react-loop`（ReAct 主循环：流式消费聚合 LLM、执行聚合工具、事件溯源会话。**LLM 调用全程留痕**：每次调用结算落 `llm/attempt`（log-only）——finish_reason/用量/耗时/错误与稳定错误码成败皆录；**回合闭合不变量**：turn/end 恒以某 reason 收口（异常/取消由 defer 兜底），杜绝悬空回合。**输出截断防护**：检测 `finish_reason=max_tokens`/`length`——纯文本被截断时向 TUI 告警（不自动续行：截断根因已从 LLM 插件源头移除，续行行为待「中断」根因经真机观测彻底确认后再引入，避免掩盖问题）；截断响应携带的工具调用若参数 JSON 残缺则拒绝执行，落合成 tool/result 保持 tool_use/tool_result 配对并请模型重发，消除「以空参/残参下发工具触发报错」的顽疾。TODO 追问、goal round、重复调用提醒等续行驱动齐备）
 
 ### Tool 插件
 
@@ -270,7 +272,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 | `-headless`                              | 精简单发模式（对齐 DSH harness headless）：仅执行 `-input` 指定的**单个任务**一次后退出，不启动后续 stdin 多轮；任务须非空白（否则 stderr 报错并以码 1 退出）；**不开** ADMIN API 端口、热重载 watcher 与 cron，专为 CI 脚本                                           |
 | `-admin <addr>`                          | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认回环 `127.0.0.1:9999`；需远程管理时用 `-admin :9999` 并配置 `DSC_ADMIN_TOKEN`）。未配置 `DSC_ADMIN_TOKEN` 不开认证                                                                |
 | `-debugger`                              | 开放 `/debugger` 观察路由（含完整会话历史，敏感，默认不开放）                                                                                                                                                               |
-| `-log [<file>]`                          | 日志：带文件名写文件；仅 `-log` 时输出到屏幕                                                                                                                                                                          |
+| `-log [<file>]`                          | 日志：带文件名写文件；仅 `-log` 时输出到屏幕。**默认不开启**（静默 `io.Discard`，零噪音）。开启即获 DSH 等价的分级全链路能力（hclog 分级：`llm request` 每次 LLM 尝试的 provider/尝试序号/时长/finish_reason/用量、`tool executed`/`tool execution failed` 每次工具调用计时与结果、workflow 生命周期、插件装载与会话操作）；级别经环境变量 `DSC_LOG_LEVEL` 控制（`debug\|info\|warn\|error`，默认 `info`）。插件子进程 stderr 经 go-plugin 转发汇入同一日志流；即使默认静默，也可经 ADMIN `/plugins/logs` SSE 按需实时观察 |
 
 ## 構建與運行
 

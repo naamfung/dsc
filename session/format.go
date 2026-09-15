@@ -20,7 +20,7 @@ import (
 //   - 向后兼容：无版本头的旧文件被视为 v0，自动迁移
 
 // SessionFormatVersion 当前会话格式版本。
-const SessionFormatVersion = 2
+const SessionFormatVersion = 3
 
 // FormatHeader 文件头（JSON 编码，独占文件首行）。
 type FormatHeader struct {
@@ -34,6 +34,7 @@ type SessionMigration func(events []*Event) ([]*Event, error)
 var migrationRegistry = map[int]SessionMigration{
 	0: migrateV0ToV1,
 	1: migrateV1ToV2,
+	2: migrateV2ToV3,
 }
 
 // migrateV0ToV1 从 v0（无版本头）迁移到 v1（加版本头）。
@@ -52,6 +53,13 @@ func migrateV1ToV2(events []*Event) ([]*Event, error) {
 			ev.Seq = i + 1
 		}
 	}
+	return events, nil
+}
+
+// migrateV2ToV3 从 v2 迁移到 v3。
+// v3 新增了诊断事件类型 llm/attempt（log-only：LLM 调用结算留痕，成败皆录）。
+// 旧文件中没有这类事件，无需变更事件内容（与 v1→v2 同款先例）。
+func migrateV2ToV3(events []*Event) ([]*Event, error) {
 	return events, nil
 }
 

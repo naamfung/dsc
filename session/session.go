@@ -55,6 +55,12 @@ const (
 	// ApprovalPolicy 审批策略（log-only：整值替换，最后一条生效，fold 恢复；缺省回退部署值）。
 	// 对齐 DSH approval/policy 会话态：per-session，resume/fork 后经事件日志折叠还原。
 	ApprovalPolicy EventType = "approval/policy"
+	// LLMAttempt 一次 LLM 调用的结算留痕（log-only，对齐 DSH llm/* 与
+	// assistant/attempt 的诊断定位：成败皆录，含 finish_reason/usage/时长/错误）。
+	// 每 step 至多一条（成功）或多条（失败重试前每次尝试各一条）。
+	// 该事件是排障一手证据：截断（finish_reason=max_tokens）、provider 报错、
+	// 上下文溢出、流中断、耗时与 token 消耗均在此一眼可查，无需审计代码。
+	LLMAttempt EventType = "llm/attempt"
 )
 
 // Surface op 取值。
@@ -113,6 +119,23 @@ type ToolCallData struct {
 type ToolResultData struct {
 	Turn, Step             int
 	CallID, Content, Error string
+}
+
+// LLMAttemptData llm/attempt 事件载荷（log-only）：一次 LLM 调用的结算留痕。
+// 成功路径：FinishReason 非空、Error 为空；失败路径：Error 非空（Code 为稳定
+// 错误码），FinishReason/Usage 可能为零值（请求未达服务端或流中途断）。流式
+// 中途失败时 ContentChars 记录已收到的部分内容长度（完整部分流见 assistant/chunk）。
+// Usage 仅流式路径可得（finish 分片携带）；非流式协议无用量回传，保持 nil。
+type LLMAttemptData struct {
+	Turn, Step   int          // 所属回合/步号
+	Streaming    bool         // 是否流式调用
+	FinishReason string       // 结束原因（stop/tool_calls/length/max_tokens…）
+	Usage        *proto.Usage // token 用量（流式 finish 分片；未知为 nil）
+	DurationMS   int64        // 本次调用墙钟时长（毫秒）
+	Error        string       // 失败原因文本（成功为空）
+	Code         string       // 稳定错误码（context_window_exceeded/rate_limited/network_error/unknown；成功为空）
+	ContentChars int          // 结算时累计内容字符数（截断/中断诊断）
+	ToolCalls    int          // 结算时累计工具调用数
 }
 type CompactionSummaryData struct{ Content string }
 

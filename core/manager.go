@@ -1534,6 +1534,7 @@ func (m *Manager) CreateSession() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create session: %w", err)
 	}
+	m.logger.Info("session created", "id", sess.ID())
 	return sess.ID(), nil
 }
 
@@ -1547,6 +1548,7 @@ func (m *Manager) DeleteSession(id string) error {
 	if err := st.Delete(id); err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
+	m.logger.Info("session deleted", "id", id)
 	return nil
 }
 
@@ -1578,6 +1580,7 @@ func (m *Manager) ExportSession(id string) (string, error) {
 	if err := os.WriteFile(path, []byte(sess.ExportTranscript()), 0644); err != nil {
 		return "", fmt.Errorf("export session: %w", err)
 	}
+	m.logger.Info("session exported", "id", id, "events", len(sess.Events()), "path", filepath.ToSlash(path))
 	return path, nil
 }
 

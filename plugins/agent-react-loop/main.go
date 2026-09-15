@@ -339,6 +339,25 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 	executedTools := false    // 記錄本輪是否執行了工具（單輪模式下視為正常完成）
 	executedToolsErr := false // 記錄本輪執行的工具是否出現錯誤（單輪模式下據此判定退出碼）
 	stepNo := 0
+	// 回合闭合不变量（对齐 DSH：turn/end 总以某 reason 闭合 turn/start，step 同理）：
+	// 正常收尾路径（completed/goal-concluded/max-iterations/单轮成败）自行闭合并
+	// 置 turnOpen=false；异常（LLM/压缩失败等）与取消路径由 defer 兜底闭合
+	//（reason=error/cancelled），杜绝日志中残留悬空 turn/start / step/start——
+	// 排障时 start/end 恒可配对（本 defer 注册晚于落盘 defer，先于其执行）。
+	turnOpen := true
+	stepOpen := false
+	defer func() {
+		if stepOpen {
+			sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+		}
+		if turnOpen {
+			reason := "error"
+			if ctx.Err() != nil {
+				reason = "cancelled"
+			}
+			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: reason}, nil)
+		}
+	}()
 	// 包装 emit：为每帧自动填充对齐 DSH 的轮/步编号（轮=一次受理输入的排空，
 	// 步=一次模型请求及其引发的工具执行），供 TUI 状态行实时显示当前进度。
 	// 闭包按引用捕获 turnNo/stepNo，故每次发射都取当前步。
@@ -366,6 +385,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		stepNo++
 		// 步骤边界（log-only）
 		sess.Append(session.StepStart, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+		stepOpen = true
 
 		// 请求历史由会话 surface 派生（system prompt 前置），不再依赖独立消息数组。
 		// 派生与注入计数快照在同一 sessMu 临界区内完成（与 InjectMessage 互斥），
@@ -472,9 +492,34 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		var content string
 		var toolCalls []*proto.ToolCall
 		var finishReason string
+		// llm/attempt 结算留痕（对齐 DSH llm/* + assistant/attempt 的诊断定位）：
+		// 无论成败，每次 LLM 调用结算时落一条 log-only 事件——finish_reason/usage/
+		// 时长/错误/产出规模一眼可查，截断、provider 报错、上下文溢出、流中断
+		// 从此无需审计代码。usage 仅流式协议回传，取本次调用帧内的值
+		//（不复用上一步残留，避免误归属）。
+		llmStart := time.Now()
+		var attemptUsage *proto.Usage
+		settleAttempt := func(finishReason string, llmErr error) {
+			errMsg := ""
+			if llmErr != nil {
+				errMsg = llmErr.Error()
+			}
+			sess.Append(session.LLMAttempt, &session.LLMAttemptData{
+				Turn: turnNo, Step: stepNo,
+				Streaming:    emit != nil,
+				FinishReason: finishReason,
+				Usage:        attemptUsage,
+				DurationMS:   time.Since(llmStart).Milliseconds(),
+				Error:        errMsg,
+				Code:         core.ClassifyLLMErrorCode(llmErr),
+				ContentChars: len(content),
+				ToolCalls:    len(toolCalls),
+			}, nil)
+		}
 		if emit == nil {
 			resp, err := llmClient.Chat(ctx, req)
 			if err != nil {
+				settleAttempt("", err)
 				return nil, fmt.Errorf("LLM chat failed: %w", err)
 			}
 			content = resp.Content
@@ -484,6 +529,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			s, err := llmClient.ChatStream(ctx, req)
 			if err != nil {
 				emit(&core.RunStreamResponse{Status: "error", Error: err.Error()})
+				settleAttempt("", err)
 				return nil, fmt.Errorf("LLM chat stream failed: %w", err)
 			}
 			for {
@@ -495,15 +541,18 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				}
 				if err != nil {
 					emit(&core.RunStreamResponse{Status: "error", Error: err.Error()})
+					settleAttempt(finishReason, err)
 					return nil, fmt.Errorf("LLM chat stream recv failed: %w", err)
 				}
 				if cr.Error != "" {
 					emit(&core.RunStreamResponse{Status: "error", Error: cr.Error})
+					settleAttempt(finishReason, fmt.Errorf("%s", cr.Error))
 					return nil, fmt.Errorf("LLM stream error: %s", cr.Error)
 				}
 				// 記錄 prompt 用量（≈ 當前上下文已用容量）；該值在 finish 分片由服務端返回
 				if cr.Usage != nil {
 					a.usageMu.Lock()
+					attemptUsage = cr.Usage
 					a.lastPromptTokens = cr.Usage.PromptTokens
 					a.lastUsage = core.UsageFromProto(cr.Usage)
 					a.usageMu.Unlock()
@@ -531,6 +580,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				}
 			}
 		}
+		settleAttempt(finishReason, nil)
 		truncated := isTruncatedFinishReason(finishReason)
 		if truncated {
 			a.logger.Warn("response truncated", "finish_reason", finishReason, "turn", turnNo, "step", stepNo, "toolCalls", len(toolCalls))
@@ -627,6 +677,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 
 			a.logger.Info("turn completed", "turn", turnNo, "steps", stepNo, "reason", "completed")
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
+			turnOpen = false
 			if emit != nil {
 				// success 幀攜帶當前已用容量，供 TUI 標題欄顯示「已用/總容量」
 				usage := &core.Usage{
@@ -772,6 +823,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		}
 		// 步骤结束（log-only）
 		sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+		stepOpen = false
 
 		// 工具执行后刷新工具列表：若本轮调用了 load_dsc_plugin / unload_dsc_plugin 等，
 		// 宿主工具注册表已更新，但 availableTools 仍是 RunStream 开始时的快照——
@@ -798,6 +850,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// 宿主 goal 工具标记 complete/blocked：物理轮次在本步骤后停止（对齐 DSH concludeTurn）
 		if concludeTurn {
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "goal-concluded"}, nil)
+			turnOpen = false
 			if emit != nil {
 				usage := &core.Usage{PromptTokens: a.lastPromptTokens}
 				if a.lastUsage != nil {
@@ -814,7 +867,17 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		}
 	}
 	// 超过最大迭代次数：轮次以 max-iterations 关闭（不再持久化独立消息数组，session 即历史）
-	sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "max-iterations"}, nil)
+	// 单轮模式按实际结果闭合轮次（先前无论成败一律标 max-iterations，导出记录难以如实判读）；
+	// 多轮模式循环耗尽才标 max-iterations。
+	turnReason := "max-iterations"
+	if a.singleTurn && executedTools {
+		turnReason = "completed"
+		if executedToolsErr {
+			turnReason = "error"
+		}
+	}
+	sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: turnReason}, nil)
+	turnOpen = false
 	// 單輪模式（-input）下，工具已在本輪執行完畢，視為正常完成（而非“達迭代上限”錯誤），
 	// 這樣一次工具調用測試成功後程序能以退出碼 0 自然結束；若工具報錯則以退出碼 1 結束
 	if a.singleTurn && executedTools {

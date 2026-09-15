@@ -161,8 +161,10 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	if toolName == runCodeToolName && !m.isPTC() {
 		return fmt.Errorf("tool %s is only available in PTC (programmatic tool composition) mode", runCodeToolName)
 	}
+	start := time.Now()
 	tool, ok := m.toolRegistry.Get(toolName)
 	if !ok {
+		m.logger.Warn("tool execution failed", "tool", toolName, "duration_ms", time.Since(start).Milliseconds(), "error", "tool not found")
 		return fmt.Errorf("tool not found: %s", toolName)
 	}
 	// timeout-policy：声明 timeoutMs 的工具设置协作式截止时间（对齐 DSH）
@@ -177,12 +179,14 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	}
 	// 通用 panic recover：任何工具执行 panic 都转为错误返回，避免宿主进程崩溃。
 	// 覆盖 host 内置工具（readSpillTool / runCodeTool 等）与 RemoteTool（虽插件 SDK
-	// 已 recover 一次，但若插件未用 SDK 或 RemoteTool 自身 gRPC 调用 panic 仍兜底）。
+	// 已 recover 一次，但若插件未用 SDK或 RemoteTool 自身 gRPC 调用 panic 仍兜底）。
 	defer func() {
 		if r := recover(); r != nil {
 			err := fmt.Errorf("tool %s panicked: %v", toolName, r)
 			inv.Result, inv.Err = "", err
 			errRet = err
+			m.logger.Error("tool panicked", "tool", toolName,
+				"duration_ms", time.Since(start).Milliseconds(), "panic", fmt.Sprint(r))
 		}
 	}()
 	var result string
@@ -202,6 +206,15 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	// 丢失。此处与 SDK 层（sdk/tool.go）双重设防：SDK 覆盖插件工具，本层覆盖宿主
 	// 内置工具与一切绕过 SDK 的路径。非法字节退化为 U+FFFD，不中断会话。
 	inv.Result, inv.ViewJSON, inv.Err = sanitizeUTF8(result), sanitizeUTF8(viewJSON), err
+	// 结算留痕（-log 启用时的全链路诊断能力）：每个模型请求的工具调用在此
+	// 统一计时——成功 Info、失败/超时 Warn，与 llm request 日志配套成完整链路。
+	if err != nil {
+		m.logger.Warn("tool execution failed", "tool", toolName,
+			"duration_ms", time.Since(start).Milliseconds(), "error", err.Error())
+	} else {
+		m.logger.Info("tool executed", "tool", toolName,
+			"duration_ms", time.Since(start).Milliseconds(), "result_chars", len(inv.Result))
+	}
 	return err
 }
 

@@ -8,6 +8,8 @@ import (
 
 	"dsc/jobs"
 	"dsc/workflow"
+
+	"github.com/hashicorp/go-hclog"
 )
 
 // workflowTool 宿主内置 workflow 工具（对齐 DSH tool-workflow）：
@@ -39,27 +41,27 @@ func (t *workflowTool) Description() string {
 
 func (t *workflowTool) ParametersSchema() json.RawMessage {
 	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"meta": {
-				"type": "object",
-				"properties": {
-					"name": {"type": "string", "description": "Short lower-kebab-case workflow name (required)."},
-					"description": {"type": "string", "description": "One-line description of what the workflow does (required)."},
-					"when_to_use": {"type": "string"},
-					"phases": {"type": "array", "items": {"type": "object", "properties": {
-						"title": {"type": "string"},
-						"detail": {"type": "string"}
-					}}}
-				},
-				"required": ["name", "description"]
-			},
-			"script": {"type": "string", "description": "The plain-Lua workflow script body (see tool description for conventions)."},
-			"args": {"type": "object", "description": "Optional JSON input exposed to the script as the 'args' global."},
-			"background": {"type": "boolean", "description": "Start as a background job and return its job id immediately; track it with job_output / job_kill."}
-		},
-		"required": ["meta", "script"]
-	}`)
+                "type": "object",
+                "properties": {
+                        "meta": {
+                                "type": "object",
+                                "properties": {
+                                        "name": {"type": "string", "description": "Short lower-kebab-case workflow name (required)."},
+                                        "description": {"type": "string", "description": "One-line description of what the workflow does (required)."},
+                                        "when_to_use": {"type": "string"},
+                                        "phases": {"type": "array", "items": {"type": "object", "properties": {
+                                                "title": {"type": "string"},
+                                                "detail": {"type": "string"}
+                                        }}}
+                                },
+                                "required": ["name", "description"]
+                        },
+                        "script": {"type": "string", "description": "The plain-Lua workflow script body (see tool description for conventions)."},
+                        "args": {"type": "object", "description": "Optional JSON input exposed to the script as the 'args' global."},
+                        "background": {"type": "boolean", "description": "Start as a background job and return its job id immediately; track it with job_output / job_kill."}
+                },
+                "required": ["meta", "script"]
+        }`)
 }
 
 func (t *workflowTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
@@ -174,25 +176,39 @@ func (s workflowEventSink) Emit(name EventName, data any) {
 }
 
 func (s workflowEventSink) OnStart(id string, meta workflow.Meta) {
+	s.m.logger.Info("workflow started", "run", id, "name", meta.Name)
 	s.Emit("workflow/start", map[string]any{"id": id, "meta": meta})
 }
 
 func (s workflowEventSink) OnPhase(id, title string) {
+	s.m.logger.Debug("workflow phase", "run", id, "title", title)
 	s.Emit("workflow/phase", map[string]any{"id": id, "title": title})
 }
 
 func (s workflowEventSink) OnLog(id, msg string) {
+	s.m.logger.Debug("workflow log", "run", id, "msg", msg)
 	s.Emit("workflow/log", map[string]any{"id": id, "msg": msg})
 }
 
 func (s workflowEventSink) OnAgentStart(id string, seq int, label string) {
+	s.m.logger.Info("workflow agent started", "run", id, "seq", seq, "label", label)
 	s.Emit("workflow/agent-start", map[string]any{"id": id, "seq": seq, "label": label})
 }
 
 func (s workflowEventSink) OnAgentEnd(id string, seq int, outcome string) {
+	level := hclog.Info
+	if outcome != "completed" {
+		level = hclog.Warn
+	}
+	s.m.logger.Log(level, "workflow agent settled", "run", id, "seq", seq, "outcome", outcome)
 	s.Emit("workflow/agent-end", map[string]any{"id": id, "seq": seq, "outcome": outcome})
 }
 
 func (s workflowEventSink) OnEnd(id string, r workflow.Result) {
+	level := hclog.Info
+	if r.StopReason != string(workflow.StopCompleted) {
+		level = hclog.Warn
+	}
+	s.m.logger.Log(level, "workflow ended", "run", id, "stop_reason", r.StopReason, "agents_started", r.AgentsStarted)
 	s.Emit("workflow/end", map[string]any{"id": id, "stop_reason": r.StopReason, "agents_started": r.AgentsStarted})
 }

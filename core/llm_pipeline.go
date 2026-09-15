@@ -18,7 +18,8 @@ import (
 // next 为实际调用；监听器不调 next 即 veto，或包裹 next 做重试/改写。
 const EventLLMRequest EventName = "llm/request"
 
-// LLMCall 一次 LLM 请求的瀑布上下文（共享指针，监听器可直接改写）。
+// LLMCall 一次 LLM 请求的瀑布上下文（共享指针，监听器可直接改写）；
+// 亦为一次 LLM 调用的观察载荷（llm/request 瀑布事件数据 + 运行日志留痕）。
 type LLMCall struct {
 	Provider string
 	Request  *proto.ChatRequest
@@ -27,6 +28,11 @@ type LLMCall struct {
 	Err      error
 	// StreamStarted 流式调用是否已发送过帧；已开始则重试不再安全（避免重复输出）。
 	StreamStarted bool
+	// 以下字段仅在流式调用中填充（由 chatStreamWithProvider 随帧累计），
+	// 供结算日志与诊断使用。
+	FinishReason string // 最后一个非空 finish_reason
+	ToolCalls    int    // 最后一次携带工具调用的帧的数量
+	Usage        *Usage // 最后一次携带用量的帧（finish 分片）
 }
 
 // LLMRetryListener 内建退避重试监听器：next 失败且未开始流式输出时按指数退避重试，

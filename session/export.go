@@ -59,7 +59,38 @@ func (s *Session) ExportTranscript() string {
 			if d, ok := ev.Data.(*CompactionSummaryData); ok {
 				fmt.Fprintf(&b, "**摘要（上下文压缩）**: %s\n\n", d.Content)
 			}
+		case LLMAttempt:
+			// LLM 调用结算留痕（log-only）：排障一手证据，紧凑单行。
+			if d, ok := ev.Data.(*LLMAttemptData); ok {
+				kind := "非流式"
+				if d.Streaming {
+					kind = "流式"
+				}
+				extra := ""
+				if d.Error != "" {
+					extra = fmt.Sprintf(" 错误=%s", d.Error)
+					if d.Code != "" && d.Code != "unknown" {
+						extra = fmt.Sprintf(" 错误=%s(%s)", d.Error, d.Code)
+					}
+				}
+				usage := ""
+				if d.Usage != nil {
+					usage = fmt.Sprintf(" tokens{%d/%d/%d}",
+						d.Usage.PromptTokens, d.Usage.CompletionTokens, d.Usage.TotalTokens)
+				}
+				fmt.Fprintf(&b, "  · LLM %s调用: finish=%s 时长=%dms 内容=%d字符 工具=%d%s%s\n\n",
+					kind, orDefault(d.FinishReason, "无"), d.DurationMS,
+					d.ContentChars, d.ToolCalls, usage, extra)
+			}
 		}
 	}
 	return b.String()
+}
+
+// orDefault 返回 s，为空时返回 fallback（导出渲染用的小助手）。
+func orDefault(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }

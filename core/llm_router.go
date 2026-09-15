@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"dsc/proto"
 	plugin "github.com/hashicorp/go-plugin"
@@ -40,6 +41,7 @@ func (s *llmAggregateServer) Chat(ctx context.Context, req *proto.ChatRequest) (
 		req = s.applyPreStepHook(ctx, req)
 		var lastErr error
 		for _, np := range s.m.llmRouteSnapshot() {
+			start := time.Now()
 			call := &LLMCall{Provider: np.name, Request: req}
 			err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
 				resp, err := chatWithProvider(np.p, ctx, req)
@@ -47,8 +49,24 @@ func (s *llmAggregateServer) Chat(ctx context.Context, req *proto.ChatRequest) (
 				return err
 			})
 			if err == nil {
+				// 逐次尝试结算留痕（-log 启用时的全链路诊断能力）：
+				// provider/尝试序号/时长/finish_reason/产出规模一眼可查
+				s.m.logger.Info("llm request settled",
+					"provider", np.name, "streaming", false, "attempt", attempt+1,
+					"duration_ms", time.Since(start).Milliseconds(),
+					"finish_reason", call.Response.FinishReason,
+					"content_chars", len(call.Response.Content),
+					"tool_calls", len(call.Response.ToolCalls))
 				return call.Response, nil
 			}
+			failErr := err
+			if call.Err != nil {
+				failErr = call.Err
+			}
+			s.m.logger.Warn("llm request failed",
+				"provider", np.name, "streaming", false, "attempt", attempt+1,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"error", failErr.Error(), "code", ClassifyLLMErrorCode(failErr))
 			if call.Err != nil {
 				lastErr = call.Err
 			} else {
@@ -83,14 +101,30 @@ func (s *llmAggregateServer) ChatStream(req *proto.ChatRequest, stream proto.LLM
 		var lastErr error
 		providerTried := false
 		for _, np := range s.m.llmRouteSnapshot() {
+			start := time.Now()
 			call := &LLMCall{Provider: np.name, Request: req}
 			err := s.m.events.Waterfall(EventLLMRequest, EventContext{Data: call}, func(EventContext) error {
 				return chatStreamWithProvider(np.p, req, stream, call)
 			})
 			if err == nil {
+				s.m.logger.Info("llm request settled",
+					"provider", np.name, "streaming", true, "attempt", attempt+1,
+					"duration_ms", time.Since(start).Milliseconds(),
+					"finish_reason", call.FinishReason,
+					"tool_calls", call.ToolCalls,
+					"usage", streamUsageSummary(call.Usage))
 				return nil
 			}
 			providerTried = true
+			failErr := err
+			if call.Err != nil {
+				failErr = call.Err
+			}
+			s.m.logger.Warn("llm request failed",
+				"provider", np.name, "streaming", true, "attempt", attempt+1,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"stream_started", call.StreamStarted,
+				"error", failErr.Error(), "code", ClassifyLLMErrorCode(failErr))
 			if call.StreamStarted {
 				// 已产生输出：不切换 provider，不重试，直接返回
 				if call.Err != nil {
@@ -216,6 +250,36 @@ func isContextWindowExceeded(err error) bool {
 	return containsAny(msg, "context length", "context window", "maximum context", "too long")
 }
 
+// ClassifyLLMErrorCode 把 LLM 调用错误归类为稳定错误码（对齐 DSH request-error
+// 的稳定词汇）：context_window_exceeded / rate_limited / network_error / unknown；
+// err 为 nil 返回空串。仅供日志与诊断留痕（llm/attempt 会话事件、宿主运行日志）——
+// 重试协议（agent/request-error）不受此分类影响，仍按 isContextWindowExceeded 判定，
+// 保证既有插件（如 billion-context）的重试决策路径零变化。
+func ClassifyLLMErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case containsAny(msg, "context length", "context window", "maximum context", "too long"):
+		return "context_window_exceeded"
+	case containsAny(msg, "rate limit", "rate_limit", "429", "too many requests", "quota"):
+		return "rate_limited"
+	case containsAny(msg, "connection", "timeout", "eof", "network", "dns", "refused", "reset by peer", "unavailable", "broken pipe"):
+		return "network_error"
+	default:
+		return "unknown"
+	}
+}
+
+// streamUsageSummary 把流式用量摘要为紧凑日志字符串（无用量时返回 "-"）。
+func streamUsageSummary(u *Usage) string {
+	if u == nil {
+		return "-"
+	}
+	return fmt.Sprintf("prompt=%d completion=%d total=%d", u.PromptTokens, u.CompletionTokens, u.TotalTokens)
+}
+
 // containsAny 报告 s 是否包含 any 子串。
 func containsAny(s string, subs ...string) bool {
 	for _, sub := range subs {
@@ -308,7 +372,8 @@ func chatWithProvider(provider LLMProvider, ctx context.Context, req *proto.Chat
 }
 
 // chatStreamWithProvider 以 provider 执行流式调用并逐帧转发；
-// 首个帧起标记 call.StreamStarted（此后失败不再切换/重试）。
+// 首个帧起标记 call.StreamStarted（此后失败不再切换/重试），
+// 并随帧累计 finish_reason/工具调用数/用量供结算日志。
 func chatStreamWithProvider(provider LLMProvider, req *proto.ChatRequest, stream proto.LLMService_ChatStreamServer, call *LLMCall) error {
 	messages, tools := protoMessagesToPlugin(req)
 	ch, err := provider.ChatStream(stream.Context(), messages, tools)
@@ -321,6 +386,15 @@ func chatStreamWithProvider(provider LLMProvider, req *proto.ChatRequest, stream
 		if item.Error != "" {
 			call.Err = fmt.Errorf("LLM stream error: %s", item.Error)
 			return call.Err
+		}
+		if item.FinishReason != "" {
+			call.FinishReason = item.FinishReason
+		}
+		if len(item.ToolCalls) > 0 {
+			call.ToolCalls = len(item.ToolCalls)
+		}
+		if item.Usage != nil {
+			call.Usage = item.Usage
 		}
 		toolCalls := make([]*proto.ToolCall, len(item.ToolCalls))
 		for i, tc := range item.ToolCalls {

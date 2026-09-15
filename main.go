@@ -285,6 +285,20 @@ func main() {
 	adminAddr := ""       // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
 	headless := false     // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
 
+	// DSC_LOG_LEVEL：宿主运行日志级别（debug|info|warn|error，默认 info）。
+	// 仅在 -log 启用（文件或屏幕）时有意义；无 -log 时默认静默（io.Discard）设计
+	// 不变——无日志需求时零噪音；开启后即获得 DSH 等价的分级全链路能力
+	//（llm request / tool execution / workflow / 插件生命周期 / 会话操作）。
+	logLevel := hclog.Info
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_LOG_LEVEL"))) {
+	case "debug":
+		logLevel = hclog.Debug
+	case "warn":
+		logLevel = hclog.Warn
+	case "error":
+		logLevel = hclog.Error
+	}
+
 	for i, arg := range os.Args {
 		if arg == "-log" {
 			if i+1 < len(os.Args) {
@@ -335,7 +349,7 @@ func main() {
 
 	logger := hclog.New(&hclog.LoggerOptions{
 		Name:   "dsc-host",
-		Level:  hclog.Info,
+		Level:  logLevel,
 		Output: os.Stderr,
 	})
 
@@ -351,24 +365,24 @@ func main() {
 			logOutput = os.Stderr
 			logger = hclog.New(&hclog.LoggerOptions{
 				Name:   "dsc-host",
-				Level:  hclog.Info,
+				Level:  logLevel,
 				Output: logOutput,
 			})
 			coreLogger = hclog.New(&hclog.LoggerOptions{
 				Name:   "core",
-				Level:  hclog.Info,
+				Level:  logLevel,
 				Output: logOutput,
 			})
 		} else {
 			logOutput = f
 			logger = hclog.New(&hclog.LoggerOptions{
 				Name:   "dsc-host",
-				Level:  hclog.Info,
+				Level:  logLevel,
 				Output: logOutput,
 			})
 			coreLogger = hclog.New(&hclog.LoggerOptions{
 				Name:   "core",
-				Level:  hclog.Info,
+				Level:  logLevel,
 				Output: logOutput,
 			})
 			// 確保在退出時關閉文件
@@ -379,12 +393,12 @@ func main() {
 		logOutput = os.Stderr
 		logger = hclog.New(&hclog.LoggerOptions{
 			Name:   "dsc-host",
-			Level:  hclog.Info,
+			Level:  logLevel,
 			Output: logOutput,
 		})
 		coreLogger = hclog.New(&hclog.LoggerOptions{
 			Name:   "core",
-			Level:  hclog.Info,
+			Level:  logLevel,
 			Output: logOutput,
 		})
 	} else {
@@ -409,12 +423,12 @@ func main() {
 	logFanout := core.NewLogFanout(logOutput)
 	logger = hclog.New(&hclog.LoggerOptions{
 		Name:   "dsc-host",
-		Level:  hclog.Info,
+		Level:  logLevel,
 		Output: logFanout,
 	})
 	coreLogger = hclog.New(&hclog.LoggerOptions{
 		Name:   "core",
-		Level:  hclog.Info,
+		Level:  logLevel,
 		Output: logFanout,
 	})
 

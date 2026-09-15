@@ -7,8 +7,9 @@ import (
 )
 
 func TestFormatVersion(t *testing.T) {
-	if SessionFormatVersion != 2 {
-		t.Errorf("SessionFormatVersion = %d, want 2", SessionFormatVersion)
+	// v3：新增 llm/attempt 诊断事件类型（log-only，LLM 调用结算留痕，成败皆录）。
+	if SessionFormatVersion != 3 {
+		t.Errorf("SessionFormatVersion = %d, want 3", SessionFormatVersion)
 	}
 }
 
