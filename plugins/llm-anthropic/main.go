@@ -28,10 +28,11 @@ type AnthropicProvider struct {
 	// 支持并返回 thinking 块）；ANTHROPIC_THINKING=0 可关闭。
 	thinking       bool
 	thinkingBudget int64
-	// maxTokens 单轮输出上限。默认 0 = 请求不携带 max_tokens（对齐 openai 行为，
-	// 等模型自然结束，永不人为截断）；仅当 ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置
-	// >0 时才随请求携带。零值由 omitZeroMaxTokens 中间件从请求体摘除（SDK 无
-	// omitempty，不摘则会上送 "max_tokens":0 被服务端拒绝）。
+	// maxTokens 单轮输出上限（插件级默认）。取值来源：显式 ANTHROPIC_MAX_OUTPUT_TOKENS
+	// > 宿主注入 DSC_MAX_OUTPUT_TOKENS（探测命中 LLAMACPP 家族端点时=上下文窗口值）
+	// > 0 = 不携带。请求级参数（压缩等场景的窗口净余值）经 resolveMaxTokens 优先于本值。
+	// 零值由 omitZeroMaxTokens 中间件从请求体摘除（SDK 无 omitempty，不摘则会上送
+	// "max_tokens":0 被服务端拒绝）。
 	maxTokens int64
 	// vision 是否启用图像输入：默认按模型能力自动判断，DSC_NO_VISION=1 强制关闭。
 	vision bool
@@ -425,8 +426,39 @@ func usageFromAnthropic(u *anthropic.Usage) *core.Usage {
 	}
 }
 
+// parsePositiveInt64 解析正整数 env 值；缺席/非法/非正返回 0。
+func parsePositiveInt64(v string) int64 {
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// maxTokensFromEnv 解析输出上限 env：显式 ANTHROPIC_MAX_OUTPUT_TOKENS 优先，
+// 其次宿主注入的 DSC_MAX_OUTPUT_TOKENS；均缺席或非法为 0（请求不携带）。
+func maxTokensFromEnv() int64 {
+	if n := parsePositiveInt64(os.Getenv("ANTHROPIC_MAX_OUTPUT_TOKENS")); n > 0 {
+		return n
+	}
+	return parsePositiveInt64(os.Getenv("DSC_MAX_OUTPUT_TOKENS"))
+}
+
+// resolveMaxTokens 计算本请求实际携带的 max_tokens：请求级参数（压缩等场景的
+// 窗口净余值）优先，其次插件级默认（显式 env > 宿主注入），<=0 表示不携带
+// （omitZeroMaxTokens 摘除零值，等模型自然结束）。
+func (p *AnthropicProvider) resolveMaxTokens(requestMaxTokens int64) int64 {
+	if requestMaxTokens > 0 {
+		return requestMaxTokens
+	}
+	return p.maxTokens
+}
+
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []core.Message, tools []core.Tool, maxTokens int) (*core.ChatResponse, error) {
-	params, beta := p.buildMessageParams(messages, tools, int64(maxTokens))
+	params, beta := p.buildMessageParams(messages, tools, p.resolveMaxTokens(int64(maxTokens)))
 	opts := p.requestOptions(beta)
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
@@ -452,7 +484,7 @@ func (p *AnthropicProvider) requestOptions(beta bool) []option.RequestOption {
 }
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []core.Message, tools []core.Tool) (<-chan *core.ChatStreamResponse, error) {
-	params, beta := p.buildMessageParams(messages, tools, p.maxTokens)
+	params, beta := p.buildMessageParams(messages, tools, p.resolveMaxTokens(0))
 	stream := p.client.Messages.NewStreaming(ctx, params, p.requestOptions(beta)...)
 
 	ch := make(chan *core.ChatStreamResponse)
@@ -554,16 +586,12 @@ func main() {
 			thinkingBudget = n
 		}
 	}
-	// 单轮输出上限：默认 0 = 请求不携带 max_tokens（对齐 llm-openai 行为，
+	// 单轮输出上限（插件级默认）：默认 0 = 请求不携带 max_tokens（对齐 llm-openai 行为，
 	// 等模型自然结束，永不人为截断）；零值字段由 omitZeroMaxTokens 中间件摘除。
-	// ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置 >0 时才随请求携带（部署方明知
-	// 上下文/输出上限时的收紧手段；按当前上下文长度收紧亦由此显式完成）。
-	maxTokens := int64(0)
-	if v := os.Getenv("ANTHROPIC_MAX_OUTPUT_TOKENS"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			maxTokens = n
-		}
-	}
+	// ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置 >0 时随请求携带（部署方明知上下文/输出上限
+	// 时的收紧手段）；DSC_MAX_OUTPUT_TOKENS 为宿主注入兑底（探测命中 LLAMACPP 家族
+	// 端点时=窗口值，对抗 anthropic 兼容口对缺席 max_tokens 自填 4096 类保守默认）。
+	maxTokens := maxTokensFromEnv()
 
 	provider := &AnthropicProvider{
 		client:         anthropic.NewClient(opts...),

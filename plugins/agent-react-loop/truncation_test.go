@@ -258,62 +258,88 @@ func TestTruncationContinuationBudget(t *testing.T) {
 	}
 }
 
-// todoThenStopLLM 第一轮返回 todo_write 差具调用（待办在本轮内写入，
-// FoldTodos 遇 turn/start 清空，故不能预置），后续轮次均自然收尾。
-type todoThenStopLLM struct {
+// scriptedStream 单帧脚本流：返回预置响应后 EOF（todo 持续追问测试用）。
+type scriptedStream struct {
+	resp *proto.ChatStreamResponse
+	recv int
+}
+
+func (s *scriptedStream) Recv() (*proto.ChatStreamResponse, error) {
+	s.recv++
+	if s.recv == 1 {
+		return s.resp, nil
+	}
+	return nil, io.EOF
+}
+func (s *scriptedStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *scriptedStream) Trailer() metadata.MD         { return nil }
+func (s *scriptedStream) CloseSend() error             { return nil }
+func (s *scriptedStream) Context() context.Context     { return context.Background() }
+func (s *scriptedStream) SendMsg(m any) error          { return nil }
+func (s *scriptedStream) RecvMsg(m any) error          { return nil }
+
+// todoPersistLLM 第 1 次调用登记两项待办（todo_write 完整列表、本轮内写入——
+// FoldTodos 遇 turn/start 清空，不能预置），第 2~6 次共 5 次带着未完成待办
+// 自然收尾（超过旧预算制上限 3），第 7 次把待办全部标记 completed，第 8 次收尾。
+type todoPersistLLM struct {
 	proto.LLMServiceClient
 
 	mu    sync.Mutex
 	calls int
 }
 
-func (m *todoThenStopLLM) chatResp(call int) (*proto.ChatResponse, error) {
-	if call == 1 {
+func (m *todoPersistLLM) resp(call int) *proto.ChatResponse {
+	switch {
+	case call == 1:
 		return &proto.ChatResponse{
 			Content:      "先登记待办清单。",
 			FinishReason: "tool_use",
 			ToolCalls:    []*proto.ToolCall{{Id: "t1", Name: "todo_write", ArgumentsJson: `{"todos":[{"content":"探索核心模块","status":"in_progress"},{"content":"撰写报告","status":"pending"}]}`}},
-		}, nil
+		}
+	case call >= 2 && call <= 6:
+		return &proto.ChatResponse{Content: "仍在推进。", FinishReason: "end_turn"}
+	case call == 7:
+		return &proto.ChatResponse{
+			Content:      "全部完成，更新清单。",
+			FinishReason: "tool_use",
+			ToolCalls:    []*proto.ToolCall{{Id: "t2", Name: "todo_write", ArgumentsJson: `{"todos":[{"content":"探索核心模块","status":"completed"},{"content":"撰写报告","status":"completed"}]}`}},
+		}
+	default:
+		return &proto.ChatResponse{Content: "任务已全部完成。", FinishReason: "end_turn"}
 	}
-	return &proto.ChatResponse{Content: "任务已完成。", FinishReason: "end_turn"}, nil
 }
 
-func (m *todoThenStopLLM) Chat(ctx context.Context, in *proto.ChatRequest, opts ...grpc.CallOption) (*proto.ChatResponse, error) {
+func (m *todoPersistLLM) Chat(ctx context.Context, in *proto.ChatRequest, opts ...grpc.CallOption) (*proto.ChatResponse, error) {
 	m.mu.Lock()
 	m.calls++
 	call := m.calls
 	m.mu.Unlock()
-	return m.chatResp(call)
+	return m.resp(call), nil
 }
 
-func (m *todoThenStopLLM) ChatStream(ctx context.Context, in *proto.ChatRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[proto.ChatStreamResponse], error) {
+func (m *todoPersistLLM) ChatStream(ctx context.Context, in *proto.ChatRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[proto.ChatStreamResponse], error) {
 	m.mu.Lock()
 	m.calls++
 	call := m.calls
 	m.mu.Unlock()
-	if call == 1 {
-		return &truncMockStream{parent: &truncMockLLM{
-			firstContent:   "先登记待办清单。",
-			firstFinish:    "tool_use",
-			firstToolCalls: []*proto.ToolCall{{Id: "t1", Name: "todo_write", ArgumentsJson: `{"todos":[{"content":"探索核心模块","status":"in_progress"},{"content":"撰写报告","status":"pending"}]}`}},
-		}, call: 1}, nil
-	}
-	return &truncMockStream{parent: &truncMockLLM{
-		firstContent: "任务已完成。",
-		firstFinish:  "end_turn",
-	}, call: 2}, nil
+	r := m.resp(call)
+	return &scriptedStream{resp: &proto.ChatStreamResponse{
+		Content:      r.Content,
+		FinishReason: r.FinishReason,
+		ToolCalls:    r.ToolCalls,
+	}}, nil
 }
 
-// TestTodoNudgeBudget 回归「待办监督预算」：待办未完成而模型反复自然收尾时，
-// 追问最多 maxTodoNudgesPerTurn 次（5 次调用 = 登记待办 1 次 + 收尾 1 次 + 追问 3 次），
-// 预算耗尽后放行收轮（防「永不收尾」死循环）。每次收尾（无论自然还是截断）
-// 都重新进入追问判定——修复旧 todoNudgeUsed 一次性标记导致「首次追问后，
-// 后续收尾（如 max_tokens 截断）不再过问待办」的监督空洞。
-func TestTodoNudgeBudget(t *testing.T) {
+// TestTodoNudgePersistent 回归「待办监督不设预算」（用户裁定：清单非空就持续
+// 追问直到处理完，无论完成还是取消）：模型连续 5 次带着未完成待办自然收尾，
+// 系统每次都注入追问驱动——旧预算制（maxTodoNudgesPerTurn=3）在第 3 次后放行
+// 收轮、待办滞留界面无人过问；新语义直到模型把各项标记 completed（第 7 次调用）
+// 后才允许自然收轮。每次收尾（无论自然还是截断预算耗尽）都重新进入追问判定。
+func TestTodoNudgePersistent(t *testing.T) {
 	a := newTestAgent(t)
 	a.llmServiceID = 1
 	a.toolServiceID = 1
-	llm := &todoThenStopLLM{}
+	llm := &todoPersistLLM{}
 	a.llmClient = llm
 	a.toolClient = &mockToolClient{}
 
@@ -328,19 +354,26 @@ func TestTodoNudgeBudget(t *testing.T) {
 	llm.mu.Lock()
 	calls := llm.calls
 	llm.mu.Unlock()
-	if want := 2 + maxTodoNudgesPerTurn; calls != want {
-		t.Fatalf("LLM 调用次数 = %d, 期望 %d（登记待办 1 次 + 收尾 1 次 + 追问预算 %d 次）", calls, want, maxTodoNudgesPerTurn)
+	if want := 8; calls != want {
+		t.Fatalf("LLM 调用次数 = %d, 期望 %d（登记待办 1 次 + 自然收尾 5 次 + 标记完成 1 次 + 收尾 1 次）", calls, want)
 	}
 
-	// 会话中恰好落 maxTodoNudgesPerTurn 条追问消息
+	// 每次带未完成待办的收尾都触发追问：恰好 5 条 todo_nudge
 	nudges := 0
 	for _, ev := range a.sess.Events() {
 		if d, ok := ev.Data.(*session.UserMessageData); ok && d.Source == "todo_nudge" {
 			nudges++
 		}
 	}
-	if nudges != maxTodoNudgesPerTurn {
-		t.Fatalf("todo_nudge 消息数 = %d, 期望 %d", nudges, maxTodoNudgesPerTurn)
+	if nudges != 5 {
+		t.Fatalf("todo_nudge 消息数 = %d, 期望 5（不设预算，清单非空必追问）", nudges)
+	}
+
+	// 收轮前提：清单已清空（全部 completed）
+	for _, td := range session.FoldTodos(a.sess.Events()) {
+		if td.Status == session.TodoPending || td.Status == session.TodoInProgress {
+			t.Fatalf("收轮时仍存在未完成待办: %+v", td)
+		}
 	}
 }
 

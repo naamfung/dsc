@@ -595,18 +595,26 @@ func main() {
 		fail("LLM binary not found for provider %q at %q", activeLLMName, activeLLMBinary)
 	}
 
-	// 上下文窗口容量（token 数）：配置值 → 探测 LLAMACPP /v1/models 的 n_ctx → 默认 128K×1024
+	// 上下文窗口容量（token 数）：配置值 → 探测 LLAMACPP /v1/models 的 n_ctx → 默认 128K×1024。
+	// 探测与配置解耦：探测命中（meta.n_ctx 为 LLAMACPP 特有字段）同时是「端点属 LLAMACPP
+	// 家族」的铁证，用于决定是否向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS（见 assembleMerged 后）。
+	probeWindow := 0
+	if baseURL := activeLLMEnv["OPENAI_BASE_URL"]; baseURL != "" {
+		probeWindow = probeContextWindow(baseURL)
+	} else if baseURL := activeLLMEnv["ANTHROPIC_BASE_URL"]; baseURL != "" {
+		// llm-anthropic 直连同一 LLAMACPP 端口（/v1/models 与 /v1/messages 同源），
+		// OPENAI_BASE_URL 缺席时回退探测 anthropic 端点。
+		probeWindow = probeContextWindow(baseURL)
+	}
+	if probeWindow > 0 {
+		logger.Info("context window probed from llm server", "window", probeWindow)
+	}
 	contextWindow := 0
 	if mainCfg != nil && mainCfg.ContextWindow > 0 {
 		contextWindow = mainCfg.ContextWindow
 	}
 	if contextWindow == 0 {
-		if baseURL := activeLLMEnv["OPENAI_BASE_URL"]; baseURL != "" {
-			contextWindow = probeContextWindow(baseURL)
-			if contextWindow > 0 {
-				logger.Info("context window probed from llm server", "window", contextWindow)
-			}
-		}
+		contextWindow = probeWindow
 	}
 	if contextWindow == 0 {
 		contextWindow = defaultContextWindow
@@ -623,6 +631,17 @@ func main() {
 	// 注入当前模式 + 工作根 + 沙箱档到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
 	// 「插件创造」仅在创造模式（creation）下允许。
 	injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
+
+	// LLAMACPP 家族端点（探测命中）向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS=窗口值：
+	// anthropic 兼容口把 max_tokens 视为 required，字段缺席时服务端自填保守默认
+	// （laamaafung server-chat.cpp 对缺席值填 4096），「不携带=等模型自然结束」在其上
+	// 退化为服务端默认截断；显式携带窗口值则被服务端上下文自然钳制（生成至 EOS 或
+	// 窗口满），无害。云端（DeepSeek/Anthropic 官方）无 meta.n_ctx，不注入——超模型
+	// 输出上限的 max_tokens 会被 400 拒绝，维持不携带语义。
+	if probeWindow > 0 {
+		injectMaxOutputTokens(merged, contextWindow)
+		logger.Info("max output tokens defaulted to context window for llamacpp-family endpoint", "max_tokens", contextWindow)
+	}
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
 	// 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
@@ -666,6 +685,9 @@ func main() {
 				}
 				core.ReportOrphanPlugins(pluginsDir, core.RequiredPluginDirBases(merged), logger)
 				injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
+				if probeWindow > 0 {
+					injectMaxOutputTokens(merged, contextWindow)
+				}
 				logger.Warn("启动加载失败，已还原最近正常配置并重试（降级模式）",
 					"cause", loadErr, "recovered", recovered, "badConfig", badCfg, "badPreset", badPreset)
 				if err := mgr.LoadFromConfig(merged); err != nil {

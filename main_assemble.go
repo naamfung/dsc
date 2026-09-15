@@ -138,3 +138,27 @@ func injectRuntimeEnv(merged *core.Config, mode, workspaceRoot, sandboxPolicy st
 		e.Env["DSC_APPROVAL_POLICY"] = approvalPolicy
 	}
 }
+
+// injectMaxOutputTokens 向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS（默认输出上限=上下文窗口值）。
+// 仅当宿主探测命中 LLAMACPP 家族端点（/v1/models 返回 meta.n_ctx——LLAMACPP 特有字段）时
+// 由调用方触发：anthropic 兼容口把 max_tokens 视为 required，字段缺席时服务端自填保守默认
+// （laamaafung server-chat.cpp 为 4096），「不携带=等模型自然结束」在其上退化为服务端默认
+// 截断；显式携带窗口值在 LLAMACPP 侧受上下文自然钳制（生成至 EOS 或窗口满），无害。
+// 云端端点探测不命中、不注入——超模型输出上限的 max_tokens 会被 400 拒绝，维持不携带语义。
+// 插件侧优先级：请求级参数（压缩等场景的窗口净余值）> 显式插件 env（ANTHROPIC_/
+// OPENAI_MAX_OUTPUT_TOKENS）> 本注入值 > 不携带。
+func injectMaxOutputTokens(merged *core.Config, maxTokens int) {
+	if maxTokens <= 0 {
+		return
+	}
+	for i := range merged.Plugins {
+		e := &merged.Plugins[i]
+		if e.Type != "llm" {
+			continue
+		}
+		if e.Env == nil {
+			e.Env = map[string]string{}
+		}
+		e.Env["DSC_MAX_OUTPUT_TOKENS"] = strconv.Itoa(maxTokens)
+	}
+}

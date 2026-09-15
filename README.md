@@ -143,9 +143,9 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 ### LLM 插件
 
-- `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等）
+- `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等。**输出上限三级语义**：默认不携带 `max_tokens`、等模型自然结束；`OPENAI_MAX_OUTPUT_TOKENS` 显式配置 >0 时随请求携带；宿主探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`）时自动注入 `DSC_MAX_OUTPUT_TOKENS`=上下文窗口值作插件级默认——对抗部分兼容端点对缺席字段的保守服务端默认；压缩等请求级参数优先于以上两者）
 
-- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出最大化**：默认不携带 `max_tokens`，等模型自然结束、永不人为截断——与 `llm-openai` 行为对齐；仅 `ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置 >0 时才随请求携带（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送）；思维链 stderr 调试打印默认关闭——reasoning 本就随流式帧送宿主/TUI，需排查插件本身时设 `DSC_LLM_DEBUG` 才输出）
+- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出上限三级语义**：默认不携带 `max_tokens`、等模型自然结束、永不人为截断；`ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置 >0 时随请求携带（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送）；宿主探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`——与 anthropic 口同端口）时自动注入 `DSC_MAX_OUTPUT_TOKENS`=上下文窗口值作插件级默认：anthropic 协议把 max_tokens 视为 required，llama.cpp 对缺席值自填保守默认（laamaafung 为 4096），显式携带窗口值在 llama.cpp 侧受上下文自然钳制、无害，而云端（无 `meta.n_ctx`）不注入——超模型输出上限的 max_tokens 会被 400 拒绝；压缩等请求级参数优先于以上两者。思维链 stderr 调试打印默认关闭——reasoning 本就随流式帧送宿主/TUI，需排查插件本身时设 `DSC_LLM_DEBUG` 才输出）
 
 - `llm-ollama`
 
@@ -185,7 +185,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Agent 插件
 
-- `agent-react-loop`（ReAct 主循环：流式消费聚合 LLM、执行聚合工具、事件溯源会话。**LLM 调用全程留痕**：每次调用结算落 `llm/attempt`（log-only）——finish_reason/用量/耗时/错误与稳定错误码成败皆录；**回合闭合不变量**：turn/end 恒以某 reason 收口（异常/取消由 defer 兜底），杜绝悬空回合。**输出截断防护**：检测 `finish_reason=max_tokens`/`length`——纯文本被截断时向 TUI 告警（不自动续行：截断根因已从 LLM 插件源头移除，续行行为待「中断」根因经真机观测彻底确认后再引入，避免掩盖问题）；截断响应携带的工具调用若参数 JSON 残缺则拒绝执行，落合成 tool/result 保持 tool_use/tool_result 配对并请模型重发，消除「以空参/残参下发工具触发报错」的顽疾。TODO 追问、goal round、重复调用提醒等续行驱动齐备）
+- `agent-react-loop`（ReAct 主循环：流式消费聚合 LLM、执行聚合工具、事件溯源会话。**LLM 调用全程留痕**：每次调用结算落 `llm/attempt`（log-only）——finish_reason/用量/耗时/错误与稳定错误码成败皆录；**回合闭合不变量**：turn/end 恒以某 reason 收口（异常/取消由 defer 兜底），杜绝悬空回合。**输出截断防护**：检测 `finish_reason=max_tokens`/`length`——纯文本被截断时向 TUI 告警（不自动续行：截断根因已从 LLM 插件源头移除，续行行为待「中断」根因经真机观测彻底确认后再引入，避免掩盖问题）；截断响应携带的工具调用若参数 JSON 残缺则拒绝执行，落合成 tool/result 保持 tool_use/tool_result 配对并请模型重发，消除「以空参/残参下发工具触发报错」的顽疾。TODO 追问（**不设预算**：清单非空就持续追问，驱动模型逐项处理完——完成或取消，直到清单清空才收轮；连续追问达 5 次升级 Warn 留痕防静默空转）、goal round、重复调用提醒等续行驱动齐备）
 
 ### Tool 插件
 

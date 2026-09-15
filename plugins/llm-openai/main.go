@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -19,6 +20,11 @@ import (
 type OpenAIProvider struct {
 	client *openai.Client
 	model  string
+	// maxTokens 单轮输出上限（插件级默认）：取值来源显式 OPENAI_MAX_OUTPUT_TOKENS >
+	// 宿主注入 DSC_MAX_OUTPUT_TOKENS（探测命中 LLAMACPP 家族端点时=上下文窗口值）
+	// > 0 = 不携带；请求级参数（压缩等场景）经 resolveMaxTokens 优先于本值。云端
+	// （DeepSeek 官方等）不注入、维持不携带，避免超模型输出上限被 400 拒绝。
+	maxTokens int
 	// vision 是否启用图像输入：默认按模型能力自动判断，DSC_NO_VISION=1 强制关闭。
 	vision bool
 	// filesAPI 是否可把超大图自动上传 DeepSeek Files API（base URL 为 deepseek.com 时启用）。
@@ -246,8 +252,10 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tool
 		Messages: openaiMessages,
 		Tools:    openaiTools,
 	}
-	if maxTokens > 0 {
-		req.MaxTokens = maxTokens
+	// max_tokens：请求级参数（压缩等场景的窗口净余值）优先，其次插件级默认
+	//（显式 env > 宿主注入）；<=0 不携带，等模型自然结束。
+	if mt := p.resolveMaxTokens(maxTokens); mt > 0 {
+		req.MaxTokens = mt
 	}
 
 	resp, err := p.client.CreateChatCompletion(ctx, req)
@@ -282,8 +290,38 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tool
 	return result, nil
 }
 
+// parsePositiveInt 解析正整数 env 值；缺席/非法/非正返回 0。
+func parsePositiveInt(v string) int {
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// maxTokensFromEnv 解析输出上限 env：显式 OPENAI_MAX_OUTPUT_TOKENS 优先，
+// 其次宿主注入的 DSC_MAX_OUTPUT_TOKENS；均缺席或非法为 0（请求不携带）。
+func maxTokensFromEnv() int {
+	if n := parsePositiveInt(os.Getenv("OPENAI_MAX_OUTPUT_TOKENS")); n > 0 {
+		return n
+	}
+	return parsePositiveInt(os.Getenv("DSC_MAX_OUTPUT_TOKENS"))
+}
+
+// resolveMaxTokens 计算本请求实际携带的 max_tokens：请求级参数（压缩等场景的
+// 窗口净余值）优先，其次插件级默认（显式 env > 宿主注入），<=0 表示不携带。
+func (p *OpenAIProvider) resolveMaxTokens(requestMaxTokens int) int {
+	if requestMaxTokens > 0 {
+		return requestMaxTokens
+	}
+	return p.maxTokens
+}
+
 func (p *OpenAIProvider) Name(ctx context.Context) string       { return "openai" }
-func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.1.0" } // 支持图像输入（视觉）
+func (p *OpenAIProvider) Version(ctx context.Context) string    { return "1.2.0" } // 支持图像输入（视觉）+ 插件级 max_tokens 默认
 func (p *OpenAIProvider) HealthCheck(ctx context.Context) error { return nil }
 func (p *OpenAIProvider) VisionEnabled() bool                   { return p.vision }
 
@@ -312,6 +350,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message
 		Stream:   true,
 		// 请求流式 usage：服务端（含 llama.cpp）会在最后一个分片返回整轮 token 统计
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+	}
+	// max_tokens：流式主路径此前从不携带——llama.cpp 等 OpenAI 兼容端点会把缺席
+	// 解释为服务端默认（n_predict=-1 无限，但 anthropic 兼容口同类场景自填 4096）。
+	// 宿主探测命中 LLAMACPP 家族端点时注入 DSC_MAX_OUTPUT_TOKENS，在此显式携带
+	// 窗口值（服务端受上下文自然钳制，无害）；云端无注入保持不携带。
+	if mt := p.resolveMaxTokens(0); mt > 0 {
+		req.MaxTokens = mt
 	}
 
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
@@ -469,6 +514,7 @@ func main() {
 	provider := &OpenAIProvider{
 		client:    openai.NewClientWithConfig(config),
 		model:     model,
+		maxTokens: maxTokensFromEnv(),
 		vision:    visionEnabled(baseURL, model),
 		filesAPI:  isDeepSeekEndpoint(baseURL),
 		fileCache: map[string]string{},
@@ -476,7 +522,7 @@ func main() {
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 复用宿主 core.LLMGRPCPlugin
 	// 自动提供 LLMService + 元数据（重写自旧的 plugin.Serve 样板）。
-	sdk := dsc.New(dsc.Config{Name: "openai", Version: "1.1.0", Type: dsc.TypeLLM})
+	sdk := dsc.New(dsc.Config{Name: "openai", Version: "1.2.0", Type: dsc.TypeLLM})
 	sdk.LLM(provider)
 	sdk.Serve()
 }
