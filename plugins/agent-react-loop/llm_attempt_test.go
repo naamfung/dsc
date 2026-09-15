@@ -169,7 +169,9 @@ func TestStreamMidFailureRecordsPartialContent(t *testing.T) {
 }
 
 // TestSuccessAttemptCarriesFinishReason 成功路径：留痕携带 finish_reason 与
-// 流式用量（finish 分片帧内值）。
+// 流式用量（finish 分片帧内值）。截断首轮不再直接收轮（预算内续行），
+// 故两次请求各落一条 attempt：首条 finish=max_tokens（截断留痕），
+// 续行轮 finish=stop（正常完成）。
 func TestSuccessAttemptCarriesFinishReason(t *testing.T) {
 	a := newTestAgent(t)
 	a.llmServiceID = 1
@@ -190,12 +192,16 @@ func TestSuccessAttemptCarriesFinishReason(t *testing.T) {
 		t.Fatalf("结果状态 = %s", res.Status)
 	}
 	attempts := collectAttempts(t, a)
-	if len(attempts) != 1 {
-		t.Fatalf("llm/attempt 事件数 = %d, 期望 1", len(attempts))
+	if len(attempts) != 2 {
+		t.Fatalf("llm/attempt 事件数 = %d, 期望 2（截断轮 + 续行轮）", len(attempts))
 	}
 	d := attempts[0]
 	if d.FinishReason != "max_tokens" || d.Error != "" || d.Code != "" {
-		t.Fatalf("成功留痕字段不符: %+v", d)
+		t.Fatalf("截断轮留痕字段不符: %+v", d)
+	}
+	d2 := attempts[1]
+	if d2.FinishReason != "stop" || d2.Error != "" || d2.Code != "" {
+		t.Fatalf("续行轮留痕字段不符: %+v", d2)
 	}
 	assertTurnClosed(t, a, "completed")
 }

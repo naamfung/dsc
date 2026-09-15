@@ -3292,12 +3292,24 @@ func (m *Model) trackTurnUsage(u *core.Usage, turn, step int32) {
 	}
 }
 
+// minReliableMetricWindow 速率结算的最小可信窗口。流式帧可能整批同刻到达
+// TUI（gRPC 批量投递、TUI 渲染阻塞后猛追、provider 侧缓冲后一次性吐出），
+// 此时「首个内容帧」与「结算帧」的处理间隔仅数毫秒——解码窗口塌缩，
+// 直接相除会得到每秒数十万的物理不可能读数（实测 846 词元 ÷ 2.07ms =
+// 每秒 408814）。低于该地板的窗口视为突发污染，不做解码口径结算。
+const minReliableMetricWindow = 250 * time.Millisecond
+
 // settleStepMetrics 结算当前步的速率指标（每步首次见到携带 Usage 的帧时结算一次，
 // 此后本步的调用/结果/success 帧不再刷新——对齐 trackTurnUsage 的防重思路）。
 // decodeTPS = 输出词元 ÷ 解码时长（首 token → 结算，DSH tokensPerSecond 同口径）；
 // startTPS = 输出词元 ÷ 全程时长（步开始 → 结算，含首 token 延迟），即「初速」。
 // 无流式内容帧（firstToken 缺失）的步没有「出字速度」的体感意义（如纯工具调用步），
 // 跳过结算保持上一次读数。
+// 突发防护（两级地板）：
+//   - 全程窗口 < 地板：整步帧都是同批突发，任何口径都不可信 → 跳过结算保持
+//     上次读数（后续帧到达时 total 已自然增长，仍有机会以可信窗口结算）；
+//   - 解码窗口 < 地板但全程可信：解码速度不可测 → 两读数一并退化为全程口径
+//     （含首响等待，保守低估远优于虚高爆炸）。
 func (m *Model) settleStepMetrics(u *core.Usage) {
 	if u == nil || u.CompletionTokens <= 0 || m.stepSettled {
 		return
@@ -3305,8 +3317,14 @@ func (m *Model) settleStepMetrics(u *core.Usage) {
 	if m.stepStart.IsZero() || m.firstTokenAt.IsZero() {
 		return
 	}
-	decode := time.Since(m.firstTokenAt).Seconds()
 	total := time.Since(m.stepStart).Seconds()
+	if total < minReliableMetricWindow.Seconds() {
+		return // 整步突发：测量不可信，保持上次读数
+	}
+	decode := time.Since(m.firstTokenAt).Seconds()
+	if decode < minReliableMetricWindow.Seconds() {
+		decode = total // 解码窗口塌缩：退化为全程口径
+	}
 	if decode <= 0 || total <= 0 {
 		return
 	}

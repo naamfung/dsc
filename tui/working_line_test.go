@@ -124,6 +124,11 @@ func TestStepStartFrameAnchorsTTFT(t *testing.T) {
 		t.Fatal("内容帧应打点 firstTokenAt")
 	}
 
+	// 模拟真实时序：帧驱动打点为墙钟时刻，测试内人为拉开窗口跨过
+	// minReliableMetricWindow 可信地板（250ms），否则结算会被突发防护跳过
+	m.stepStart = time.Now().Add(-2 * time.Second)
+	m.firstTokenAt = time.Now().Add(-500 * time.Millisecond)
+
 	// 结算帧（success 带 Usage）：算出每秒（纯解码）与初速（含首响等待）
 	m.Update(streamFrame{frame: &core.RunStreamResponse{
 		Status: "success", Turn: 1, Step: 1,
@@ -227,6 +232,49 @@ func TestSettleStepMetrics(t *testing.T) {
 	m.settleStepMetrics(&core.Usage{CompletionTokens: 500})
 	if math.Abs(m.decodeTPS-100) > 0.01 || math.Abs(m.startTPS-90) > 0.01 {
 		t.Fatalf("无首 token 的步不应结算: decodeTPS=%v startTPS=%v", m.decodeTPS, m.startTPS)
+	}
+}
+
+// TestSettleStepMetricsBurstGuard 回归「每秒 408814 词元」爆炸读数：流式帧整批
+// 同刻到达 TUI 时，首个内容帧与结算帧的处理间隔仅数毫秒（实测 846 词元 ÷
+// 2.07ms = 每秒 408814），解码窗口塌缩后直接相除得到物理不可能读数。
+// 防护两级：
+//   - 全程窗口 ≥ 地板但解码窗口 < 地板 → 两读数一并退化为全程口径（保守低估）；
+//   - 全程窗口 < 地板（整步皆突发）→ 跳过结算保持上次读数。
+func TestSettleStepMetricsBurstGuard(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
+
+	// 预置一次正常读数（后续突发步应保持它）
+	m.stepStart = time.Now().Add(-10 * time.Second)
+	m.firstTokenAt = time.Now().Add(-9 * time.Second)
+	m.settleStepMetrics(&core.Usage{CompletionTokens: 900})
+
+	// 突发步：846 词元，内容帧与结算帧同批到达（解码窗口 2ms），但步开始
+	// 帧 25s 前已到（全程窗口可信）→ 退化为全程口径：846/25 ≈ 33.8，
+	// 每秒与初速一致，不再出现 40 万级的爆炸读数。
+	m.stepSettled = false
+	m.stepStart = time.Now().Add(-25 * time.Second)
+	m.firstTokenAt = time.Now().Add(-2 * time.Millisecond)
+	m.settleStepMetrics(&core.Usage{CompletionTokens: 846})
+	if m.decodeTPS > 100 || m.startTPS > 100 {
+		t.Fatalf("突发步应退化为全程口径: decodeTPS=%v startTPS=%v", m.decodeTPS, m.startTPS)
+	}
+	if math.Abs(m.decodeTPS-m.startTPS) > 0.5 {
+		t.Fatalf("退化后两读数应一致: decodeTPS=%v startTPS=%v", m.decodeTPS, m.startTPS)
+	}
+
+	// 整步突发：步开始帧与结算帧也在同批（全程窗口 < 250ms）→ 跳过结算，
+	// 保持上一次读数（后续帧到达时全程窗口自然增长，仍可正常结算）
+	m.stepSettled = false
+	prevDecode, prevStart := m.decodeTPS, m.startTPS
+	m.stepStart = time.Now()
+	m.firstTokenAt = time.Now().Add(-1 * time.Millisecond)
+	m.settleStepMetrics(&core.Usage{CompletionTokens: 99999})
+	if m.decodeTPS != prevDecode || m.startTPS != prevStart {
+		t.Fatalf("整步突发应跳过结算: decodeTPS=%v startTPS=%v", m.decodeTPS, m.startTPS)
+	}
+	if m.stepSettled {
+		t.Fatalf("跳过结算时不应标记 stepSettled（后续帧仍可结算）")
 	}
 }
 

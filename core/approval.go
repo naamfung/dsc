@@ -150,7 +150,20 @@ func escalationSubject(toolName string) string {
 // parseEscalationTarget 解析模型请求的升级目标档（封闭目标词表：
 // workspace-write / danger-full-access；read-only 是地板，不可升到它）。
 func parseEscalationTarget(s string) (SandboxPolicy, bool) {
+	p, ok := parseSandboxModeName(s)
+	if !ok || p == SandboxReadOnly {
+		return 0, false
+	}
+	return p, true
+}
+
+// parseSandboxModeName 宽松识别沙盒档位名（含地板档 read-only），用于把
+// 「可识别但非加宽」的 sandbox_permissions 值（模型误当模式选择器传入）与
+// 纯畸形值区分开：前者按省略参数处理放行，后者维持 fail-closed 报错。
+func parseSandboxModeName(s string) (SandboxPolicy, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "read", "read-only", "readonly":
+		return SandboxReadOnly, true
 	case "workspace", "workspace-write":
 		return SandboxWorkspaceWrite, true
 	case "full", "full-access", "danger-full-access", "danger":
@@ -306,14 +319,29 @@ func (m *Manager) approvalEscalation() WaterfallListener {
 			return next(ev) // 非升级重试：交给沙箱正常判定
 		}
 		// 升级路径：严格校验 → 按策略审批 → 放行/拒绝（任何执行前）。
+		//
+		// 非严格加宽的请求（同档、更窄、地板档 read-only）在此 no-op 放行：
+		// 模型常把 sandbox_permissions 当常规模式选择器——首个只读 ls/tree
+		// 就携带 workspace-write 甚至 read-only（实测一轮子代理任务因此被
+		// 「not strictly wider / not a valid wider mode」硬拒 93 次、空转
+		// 40+ 迭代）。此类请求没有特权增益，与省略参数同义，交给沙箱以
+		// 当前档正常复审即可；仅真正加宽走校验+审批。fail-safe：任何路径
+		// 都不会越过当前会话沙盒档获得更高权限。
 		target, ok := parseEscalationTarget(perm)
 		if !ok {
-			return fmt.Errorf("sandbox escalation to %q is not a valid wider mode (workspace-write or danger-full-access)", perm)
+			if _, isMode := parseSandboxModeName(perm); isMode {
+				m.logger.Info("sandbox escalation ignored: requested mode is not a wider target; proceeding under current policy",
+					"requested", perm, "tool", inv.ToolName)
+				return next(ev)
+			}
+			return fmt.Errorf("sandbox escalation to %q is not a valid wider mode (workspace-write or danger-full-access); "+
+				"sandbox_permissions is only for retrying a call denied by the sandbox with a strictly wider mode - omit it for normal calls", perm)
 		}
 		effective := m.GetSandboxPolicy()
 		if !widenable(effective, target) {
-			return fmt.Errorf("sandbox escalation to %q is not strictly wider than this call's current %q mode",
-				sandboxModeString(target), sandboxModeString(effective))
+			m.logger.Info("sandbox escalation ignored: requested mode is not strictly wider; proceeding under current policy",
+				"requested", sandboxModeString(target), "current", sandboxModeString(effective), "tool", inv.ToolName)
+			return next(ev)
 		}
 		if err := validateEscalationArgs(perm, just); err != nil {
 			return err

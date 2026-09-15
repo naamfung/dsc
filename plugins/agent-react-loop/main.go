@@ -133,9 +133,13 @@ type ReactLoopAgent struct {
 	// todoAllowParallel 为 true 时允许多个任务同时 in_progress（DSC_TODO_ALLOW_PARALLEL，
 	// 缺省 false 强制单活跃项纪律）。
 	todoAllowParallel bool
-	// todoNudgeUsed 标记当前会话是否已用过 TODO 追问（防重复追问）。
-	// 每次 turn/start 时重置为 false，使每轮自然停止时最多追问一次。
-	todoNudgeUsed bool
+	// todoNudges 当前轮已用 TODO 追问次数；truncContinues 当前轮已用截断续行
+	// 次数。两者均为预算制（每次 turn/start 重置）：待办最多追问
+	// maxTodoNudgesPerTurn 次、截断最多续行 maxTruncContinuesPerTurn 次——
+	// 既有「未完成不放走 / 截断不弃任务」的监督语义，又不给退化模型
+	// 无限烧 token 的口子（预算耗尽后自然收轮）。
+	todoNudges     int
+	truncContinues int
 
 	// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链状态进程本地。
 	repeatChainName      string
@@ -146,6 +150,23 @@ type ReactLoopAgent struct {
 	repeatThresholds []int
 	repeatExclude    []string
 }
+
+// 收尾驱动器预算（每次 turn/start 重置）。
+//
+// 截断续行：finish_reason=max_tokens/length 且无工具调用时，注入「从中断处
+// 继续」用户消息再入循环——截断不弃任务（实测 33.8 万 ms 生成 6144 词元的
+// 架构报告被 provider 默认上限拦腰截断后整轮静默收尾，用户侧表现为任务
+// 中断）。上限 2 次：正常长报告一次续行即可完成；退化重复（模型复读机）
+// 最多白烧 2 段即止损。
+//
+// TODO 追问：模型收尾（无论自然 end_turn 还是截断）而待办仍有未完成项时，
+// 注入追问驱动模型继续——待办清单从「被动展示」升级为「主动监督」（用户
+// 裁定：阻止自然或非自然停止）。上限 3 次：给足补救机会，同时防「模型
+// 永远不主动结束」的死循环。
+const (
+	maxTruncContinuesPerTurn = 2
+	maxTodoNudgesPerTurn     = 3
+)
 
 func (a *ReactLoopAgent) RegisterServices(ctx context.Context, llmServiceID, toolServiceID uint32) error {
 	a.mu.Lock()
@@ -320,7 +341,8 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 
 	// 轮次与用户输入作为会话事件记录（turn/start 为 log-only，user/message 进入 surface）
 	sess.Append(session.TurnStart, &session.TurnData{Turn: turnNo}, nil)
-	a.todoNudgeUsed = false // 每轮重置追问标记
+	a.todoNudges = 0     // 每轮重置追问预算
+	a.truncContinues = 0 // 每轮重置截断续行预算
 	sess.Append(session.UserMessage, &session.UserMessageData{Content: input, Source: "user", Images: images}, &session.SurfaceOp{Op: session.SurfaceAppend})
 
 	// cancelLoop 返回被取消的结果
@@ -590,10 +612,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		truncated := isTruncatedFinishReason(finishReason)
 		if truncated {
 			a.logger.Warn("response truncated", "finish_reason", finishReason, "turn", turnNo, "step", stepNo, "toolCalls", len(toolCalls))
-			// 截断告警帧：向 TUI 显式呈现截断事实，不自动续行——截断根因
-			// （LLM 插件默认携带 max_tokens）已从源头移除，「中断」是否彻底
-			// 消灭由真机观测确认；续行行为待根因确认后再引入，避免把
-			// 未确诊的中断掩盖成静默续写。
+			// 截断告警帧：向 TUI 显式呈现截断事实。截断根因已确诊：
+			// LLM 插件默认 max_tokens 已从源头移除，残余截断来自
+			// provider 侧默认输出上限（实测 anthropic 兼容口把 6144
+			// 词元的长报告拦腰截断）。收尾侧的预算内自动续行见下方
+			// continuation drivers（截断不弃任务）。
 			if emit != nil {
 				emit(&core.RunStreamResponse{
 					Output: fmt.Sprintf("\n[模型输出被截断: finish_reason=%s]\n", finishReason),
@@ -640,6 +663,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 							Status: "tool",
 						})
 					}
+					// 步闭合：续行驱动器开新步前收口当前步（防悬空 step/start）
+					sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+					stepOpen = false
 					continue
 				}
 				// 竞态修复：模型最后一次输出期间 TUI 实时注入了新用户消息（尚未进入本轮
@@ -653,20 +679,53 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 							Status: "tool",
 						})
 					}
+					// 步闭合：续行驱动器开新步前收口当前步（防悬空 step/start）
+					sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+					stepOpen = false
+					continue
+				}
+				// 截断续行（截断不弃任务）：无工具调用的截断响应此前直接收轮——
+				// 实测 33.8 万 ms 生成的架构报告被 provider 默认上限拦腰截断后
+				// 整轮静默收尾（用户侧表现为任务中断，待办 0/5 无人过问）。预算内
+				// 注入「从中断处继续」用户消息再入循环；预算耗尽后放行收尾，
+				// 防退化复读机无限烧 token。排在待办追问之前：先把当前输出续完，
+				// 待办监督留给下一次收尾判定。
+				if truncated && a.truncContinues < maxTruncContinuesPerTurn {
+					a.truncContinues++
+					contMsg := fmt.Sprintf("上一条回复因 finish_reason=%s 在输出中途被截断（非自然结束）。"+
+						"请从中断处继续，不要重复已输出的内容；若确已无可补充，请明确说明。", finishReason)
+					a.logger.Info("truncation continue", "count", a.truncContinues, "max", maxTruncContinuesPerTurn,
+						"finish_reason", finishReason, "turn", turnNo, "step", stepNo)
+					sess.Append(session.UserMessage, &session.UserMessageData{
+						Content: contMsg,
+						Source:  "truncation_continue",
+					}, &session.SurfaceOp{Op: session.SurfaceAppend})
+					if emit != nil {
+						emit(&core.RunStreamResponse{
+							Output: fmt.Sprintf("\n[输出被截断，已请求模型继续（%d/%d）]\n", a.truncContinues, maxTruncContinuesPerTurn),
+							Status: "tool",
+						})
+					}
+					// 步闭合：续行驱动器开新步前收口当前步（防悬空 step/start）
+					sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+					stepOpen = false
 					continue
 				}
 			}
 
-			// TODO 未完成追问（对齐 DSH 的「模型自然停止后检查未完成 TODO」语义）：
-			// 模型自然停止（无工具调用）后，若 TODO 列表中有 pending/in_progress 项，
-			// 系统自动追加一条用户消息追问，驱动模型继续处理。
-			// 仅在非单轮模式（交互式 / -input 多轮）下触发；每轮最多追问一次
-			//（通过 todoNudgeTurn 标记防止重复追问）。
-			if !a.singleTurn && !a.todoNudgeUsed {
+			// TODO 未完成追问（对齐 DSH 的「模型自然停止后检查未完成 TODO」语义，
+			// 用户裁定升级为主动监督）：模型收尾（自然 end_turn 或截断预算耗尽）后，
+			// 若 TODO 列表中仍有 pending/in_progress 项，系统自动追加一条用户消息
+			// 追问，驱动模型继续处理或明确交代——阻止自然或非自然停止把半成品
+			// 任务静默带走。仅在非单轮模式下触发；预算制（每轮最多
+			// maxTodoNudgesPerTurn 次，防「永不收尾」死循环）。
+			if !a.singleTurn && a.todoNudges < maxTodoNudgesPerTurn {
 				todos := session.FoldTodos(sess.Events())
 				if hasPendingTodos(todos) {
-					a.todoNudgeUsed = true
+					a.todoNudges++
 					nudgeMsg := buildTodoNudgePrompt(todos)
+					a.logger.Info("todo nudge", "count", a.todoNudges, "max", maxTodoNudgesPerTurn,
+						"turn", turnNo, "step", stepNo)
 					sess.Append(session.UserMessage, &session.UserMessageData{
 						Content: nudgeMsg,
 						Source:  "todo_nudge",
@@ -677,11 +736,24 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 							Status: "tool",
 						})
 					}
+					// 步闭合：续行驱动器开新步前收口当前步（防悬空 step/start）
+					sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
+					stepOpen = false
 					continue
 				}
 			}
 
 			a.logger.Info("turn completed", "turn", turnNo, "steps", stepNo, "reason", "completed")
+			// 带着未完成待办收尾（预算已耗尽）留痕 Warn：日志排查「任务
+			// 为何半途而废」时一眼可见（用户裁定：待办须起监督作用）。
+			if !a.singleTurn {
+				if todos := session.FoldTodos(sess.Events()); hasPendingTodos(todos) {
+					a.logger.Warn("turn completed with pending todos (nudge budget exhausted)",
+						"turn", turnNo, "steps", stepNo,
+						"todoNudges", a.todoNudges, "maxTodoNudges", maxTodoNudgesPerTurn,
+						"truncContinues", a.truncContinues)
+				}
+			}
 			sess.Append(session.TurnEnd, &session.TurnData{Turn: turnNo, Reason: "completed"}, nil)
 			turnOpen = false
 			if emit != nil {

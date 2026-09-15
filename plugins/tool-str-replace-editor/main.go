@@ -550,7 +550,7 @@ func main() {
                         "sandbox_permissions": {
                                 "type": "string",
                                 "enum": ["workspace-write", "danger-full-access"],
-                                "description": "Optional sandbox escalation: if a prior write was denied under the current sandbox mode, retry this exact operation once with a strictly wider mode (read-only → workspace-write/danger-full-access; workspace-write → danger-full-access) to request user approval for this one call. Omit for a normal call."
+                                "description": "Optional sandbox escalation, ONLY for retrying a write that was denied by the sandbox. Do NOT set it on normal calls: requesting a mode that is not strictly wider than the current one is ignored and the call simply runs under the current mode. To genuinely widen (read-only → workspace-write/danger-full-access; workspace-write → danger-full-access), retry the exact operation once with this field plus 'justification' to request one-call user approval."
                         },
                         "justification": {
                                 "type": "string",

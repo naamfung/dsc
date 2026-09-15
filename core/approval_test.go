@@ -109,15 +109,85 @@ func TestEscalationAutoRejectUnderNever(t *testing.T) {
 	}
 }
 
-func TestEscalationRejectsNonWidening(t *testing.T) {
+func TestEscalationNonWideningIsNoOp(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
 	m := approvalTestManager(t, SandboxFullAccess, ApprovalAsk)
 	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
 
-	// full 已是顶档：升级任何更宽档都非严格加宽，执行前拒绝且不问人。
-	_, err := m.ExecuteTool(context.Background(), "str_replace_editor",
+	// full 已是顶档：升级任何档都非严格加宽 → 无特权增益，按省略参数
+	// no-op 放行（沙箱以当前 full 档正常复审），不再硬拒空转。
+	// 实测背景：模型习惯性携带该参数，一轮子代理任务被旧硬拒逻辑
+	// 「not strictly wider」拒绝 93 次、空转 40+ 迭代。
+	out, err := m.ExecuteTool(context.Background(), "str_replace_editor",
 		escArgs("danger-full-access", "need it"))
-	if err == nil || !strings.Contains(err.Error(), "not strictly wider") {
-		t.Fatalf("full 下升级应拒绝，got %v", err)
+	if err != nil {
+		t.Fatalf("顶档下同档升级应 no-op 放行，got %v", err)
+	}
+	if out != "mock-result" {
+		t.Fatalf("no-op 放行后应正常执行工具，got %q", out)
+	}
+}
+
+func TestEscalationEqualModeIsNoOp(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	m := approvalTestManager(t, SandboxWorkspaceWrite, ApprovalNever)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+
+	// 同档请求（ws 下请求 ws）与省略参数同义：no-op 放行，不走 never
+	// 自动拒路径（无特权增益即无审批必要）。
+	out, err := m.ExecuteTool(context.Background(), "str_replace_editor",
+		escArgs("workspace-write", "need it"))
+	if err != nil {
+		t.Fatalf("同档升级应 no-op 放行，got %v", err)
+	}
+	if out != "mock-result" {
+		t.Fatalf("no-op 放行后应正常执行工具，got %q", out)
+	}
+}
+
+func TestEscalationFloorModeIsNoOp(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	m := approvalTestManager(t, SandboxWorkspaceWrite, ApprovalNever)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+
+	// 地板档 read-only 不在升级词表：可识别的非加宽请求 → no-op 放行
+	//（实测模型会在只读 ls/tree 上携带 sandbox_permissions:"read-only"）。
+	args := map[string]any{
+		"command": "str_replace", "path": WorkspaceRoot + "/a.txt",
+		"old_str": "a", "new_str": "b", "sandbox_permissions": "read-only",
+	}
+	b, _ := json.Marshal(args)
+	out, err := m.ExecuteTool(context.Background(), "str_replace_editor", b)
+	if err != nil {
+		t.Fatalf("地板档请求应 no-op 放行，got %v", err)
+	}
+	if out != "mock-result" {
+		t.Fatalf("no-op 放行后应正常执行工具，got %q", out)
+	}
+}
+
+func TestEscalationMalformedTargetStillRejected(t *testing.T) {
+	orig := WorkspaceRoot
+	WorkspaceRoot = t.TempDir()
+	defer func() { WorkspaceRoot = orig }()
+	m := approvalTestManager(t, SandboxWorkspaceWrite, ApprovalAsk)
+	_ = m.toolRegistry.Register(&mockTool{name: "str_replace_editor"})
+
+	// 纯畸形值（参数泄漏拼接物）不可识别 → 维持 fail-closed 报错，
+	// 文案引导模型省略参数。
+	_, err := m.ExecuteTool(context.Background(), "str_replace_editor",
+		escArgs("workspace-write</parameter>", ""))
+	if err == nil || !strings.Contains(err.Error(), "not a valid wider mode") {
+		t.Fatalf("畸形升级目标应报错，got %v", err)
+	}
+	if !strings.Contains(err.Error(), "omit it for normal calls") {
+		t.Fatalf("报错文案应引导省略参数，got %v", err)
 	}
 }
 
