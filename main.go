@@ -241,6 +241,12 @@ func main() {
 		}
 	}()
 
+	// dsc version：输出版本信息后直接退出（不加载插件、不进 TUI）。
+	if isVersionCommand(os.Args[1:]) {
+		printVersion()
+		os.Exit(0)
+	}
+
 	// 獲取可執行文件所在目錄的絕對路徑
 	execDir, err := getExecutableDir()
 	if err != nil {
