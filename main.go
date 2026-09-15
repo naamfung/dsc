@@ -595,9 +595,10 @@ func main() {
 		fail("LLM binary not found for provider %q at %q", activeLLMName, activeLLMBinary)
 	}
 
-	// 上下文窗口容量（token 数）：配置值 → 探测 LLAMACPP /v1/models 的 n_ctx → 默认 128K×1024。
-	// 探测与配置解耦：探测命中（meta.n_ctx 为 LLAMACPP 特有字段）同时是「端点属 LLAMACPP
-	// 家族」的铁证，用于决定是否向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS（见 assembleMerged 后）。
+	// 上下文窗口容量（token 数）：配置 context_window 显式 → 探测 LLAMACPP /v1/models 的
+	// n_ctx → 默认 128K×1024。探测总是执行（OPENAI_BASE_URL 缺席回退 ANTHROPIC_BASE_URL，
+	// 同一 llama.cpp 端口 /v1/models 同源）：命中即取探测值（最准），未命中（云端）取配置
+	// 值或默认——窗口来源随端点自然切换，该值同时是注入 LLM 插件的默认输出上限（见后）。
 	probeWindow := 0
 	if baseURL := activeLLMEnv["OPENAI_BASE_URL"]; baseURL != "" {
 		probeWindow = probeContextWindow(baseURL)
@@ -610,16 +611,19 @@ func main() {
 		logger.Info("context window probed from llm server", "window", probeWindow)
 	}
 	contextWindow := 0
+	windowSource := "default"
 	if mainCfg != nil && mainCfg.ContextWindow > 0 {
 		contextWindow = mainCfg.ContextWindow
+		windowSource = "config"
 	}
-	if contextWindow == 0 {
+	if contextWindow == 0 && probeWindow > 0 {
 		contextWindow = probeWindow
+		windowSource = "probe"
 	}
 	if contextWindow == 0 {
 		contextWindow = defaultContextWindow
 	}
-	logger.Info("context window", "window", contextWindow)
+	logger.Info("context window", "window", contextWindow, "source", windowSource)
 	// 文本引用注入上限随上下文容量换算（TUI 与 -input 共用；窗口未知保持默认 1 MiB）
 	tui.SetTextRefContextWindow(contextWindow)
 
@@ -632,16 +636,17 @@ func main() {
 	// 「插件创造」仅在创造模式（creation）下允许。
 	injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
 
-	// LLAMACPP 家族端点（探测命中）向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS=窗口值：
-	// anthropic 兼容口把 max_tokens 视为 required，字段缺席时服务端自填保守默认
-	// （laamaafung server-chat.cpp 对缺席值填 4096），「不携带=等模型自然结束」在其上
-	// 退化为服务端默认截断；显式携带窗口值则被服务端上下文自然钳制（生成至 EOS 或
-	// 窗口满），无害。云端（DeepSeek/Anthropic 官方）无 meta.n_ctx，不注入——超模型
-	// 输出上限的 max_tokens 会被 400 拒绝，维持不携带语义。
-	if probeWindow > 0 {
-		injectMaxOutputTokens(merged, contextWindow)
-		logger.Info("max output tokens defaulted to context window for llamacpp-family endpoint", "max_tokens", contextWindow)
-	}
+	// 输出上限统一语义（不分本地/云端，行为一致）：向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS
+	// =有效上下文窗口值。探测命中（本地 LLAMACPP）注入探测窗口值；探测不命中（云端）注入
+	// 配置 context_window 值（含 128K 兜底默认）——窗口来源切换、注入行为不变，用户对
+	// context_window 的调整在任何端点都同样生效。anthropic 兼容口把 max_tokens 视为
+	// required，字段缺席时服务端自填保守默认（laamaafung server-chat.cpp 对缺席值填
+	// 4096），「不携带=等模型自然结束」在其上退化为服务端默认截断；显式携带窗口值在
+	// LLAMACPP 侧被服务端上下文自然钳制（生成至 EOS 或窗口满）。云端若模型输出上限低于
+	// 注入值而被 400 拒绝，属用户可显式调整的范围：下调 context_window，或设插件 env
+	// （ANTHROPIC_/OPENAI_MAX_OUTPUT_TOKENS=0）恢复不携带——可调整性优先于差异化默认。
+	injectMaxOutputTokens(merged, contextWindow)
+	logger.Info("max output tokens defaulted to effective context window", "max_tokens", contextWindow, "source", windowSource)
 
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
 	// 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
@@ -685,9 +690,7 @@ func main() {
 				}
 				core.ReportOrphanPlugins(pluginsDir, core.RequiredPluginDirBases(merged), logger)
 				injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
-				if probeWindow > 0 {
-					injectMaxOutputTokens(merged, contextWindow)
-				}
+				injectMaxOutputTokens(merged, contextWindow)
 				logger.Warn("启动加载失败，已还原最近正常配置并重试（降级模式）",
 					"cause", loadErr, "recovered", recovered, "badConfig", badCfg, "badPreset", badPreset)
 				if err := mgr.LoadFromConfig(merged); err != nil {

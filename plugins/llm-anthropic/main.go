@@ -29,10 +29,10 @@ type AnthropicProvider struct {
 	thinking       bool
 	thinkingBudget int64
 	// maxTokens 单轮输出上限（插件级默认）。取值来源：显式 ANTHROPIC_MAX_OUTPUT_TOKENS
-	// > 宿主注入 DSC_MAX_OUTPUT_TOKENS（探测命中 LLAMACPP 家族端点时=上下文窗口值）
-	// > 0 = 不携带。请求级参数（压缩等场景的窗口净余值）经 resolveMaxTokens 优先于本值。
-	// 零值由 omitZeroMaxTokens 中间件从请求体摘除（SDK 无 omitempty，不摘则会上送
-	// "max_tokens":0 被服务端拒绝）。
+	// > 宿主注入 DSC_MAX_OUTPUT_TOKENS（一律注入=有效上下文窗口值：探测命中 LLAMACPP
+	// 时=探测窗口，云端=配置 context_window）> 0 = 不携带。请求级参数（压缩等场景的
+	// 窗口净余值）经 resolveMaxTokens 优先于本值。零值由 omitZeroMaxTokens 中间件从
+	// 请求体摘除（SDK 无 omitempty，不摘则会上送 "max_tokens":0 被服务端拒绝）。
 	maxTokens int64
 	// vision 是否启用图像输入：默认按模型能力自动判断，DSC_NO_VISION=1 强制关闭。
 	vision bool
@@ -586,11 +586,11 @@ func main() {
 			thinkingBudget = n
 		}
 	}
-	// 单轮输出上限（插件级默认）：默认 0 = 请求不携带 max_tokens（对齐 llm-openai 行为，
-	// 等模型自然结束，永不人为截断）；零值字段由 omitZeroMaxTokens 中间件摘除。
-	// ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置 >0 时随请求携带（部署方明知上下文/输出上限
-	// 时的收紧手段）；DSC_MAX_OUTPUT_TOKENS 为宿主注入兑底（探测命中 LLAMACPP 家族
-	// 端点时=窗口值，对抗 anthropic 兼容口对缺席 max_tokens 自填 4096 类保守默认）。
+	// 单轮输出上限（插件级默认）：宿主注入 DSC_MAX_OUTPUT_TOKENS=有效上下文窗口值
+	// （一律注入，不分本地/云端——探测命中 LLAMACPP 时=探测窗口，云端=配置
+	// context_window），对抗 anthropic 兼容口对缺席 max_tokens 自填 4096 类保守默认；
+	// ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置优先（部署方收紧/放宽的手段，显式 0=不
+	// 携带）；均缺席时 0 = 请求不携带，零值字段由 omitZeroMaxTokens 中间件摘除。
 	maxTokens := maxTokensFromEnv()
 
 	provider := &AnthropicProvider{

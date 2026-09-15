@@ -21,9 +21,9 @@ type OpenAIProvider struct {
 	client *openai.Client
 	model  string
 	// maxTokens 单轮输出上限（插件级默认）：取值来源显式 OPENAI_MAX_OUTPUT_TOKENS >
-	// 宿主注入 DSC_MAX_OUTPUT_TOKENS（探测命中 LLAMACPP 家族端点时=上下文窗口值）
-	// > 0 = 不携带；请求级参数（压缩等场景）经 resolveMaxTokens 优先于本值。云端
-	// （DeepSeek 官方等）不注入、维持不携带，避免超模型输出上限被 400 拒绝。
+	// 宿主注入 DSC_MAX_OUTPUT_TOKENS（一律注入=有效上下文窗口值：探测命中 LLAMACPP
+	// 时=探测窗口，云端=配置 context_window）> 0 = 不携带；请求级参数（压缩等场景）
+	// 经 resolveMaxTokens 优先于本值。
 	maxTokens int
 	// vision 是否启用图像输入：默认按模型能力自动判断，DSC_NO_VISION=1 强制关闭。
 	vision bool
@@ -351,10 +351,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message
 		// 请求流式 usage：服务端（含 llama.cpp）会在最后一个分片返回整轮 token 统计
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
-	// max_tokens：流式主路径此前从不携带——llama.cpp 等 OpenAI 兼容端点会把缺席
-	// 解释为服务端默认（n_predict=-1 无限，但 anthropic 兼容口同类场景自填 4096）。
-	// 宿主探测命中 LLAMACPP 家族端点时注入 DSC_MAX_OUTPUT_TOKENS，在此显式携带
-	// 窗口值（服务端受上下文自然钳制，无害）；云端无注入保持不携带。
+		// max_tokens：流式主路径此前从不携带——llama.cpp 等 OpenAI 兼容端点会把缺席
+		// 解释为服务端默认（n_predict=-1 无限，但 anthropic 兼容口同类场景自填 4096）。
+		// 宿主一律注入 DSC_MAX_OUTPUT_TOKENS=有效上下文窗口值（不分本地/云端），在此
+		// 显式携带（LLAMACPP 侧受上下文自然钳制，无害；云端值可经 context_window 或
+		// 插件 env 调整）。
 	if mt := p.resolveMaxTokens(0); mt > 0 {
 		req.MaxTokens = mt
 	}

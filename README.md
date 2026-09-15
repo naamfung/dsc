@@ -143,9 +143,9 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 ### LLM 插件
 
-- `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等。**输出上限三级语义**：默认不携带 `max_tokens`、等模型自然结束；`OPENAI_MAX_OUTPUT_TOKENS` 显式配置 >0 时随请求携带；宿主探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`）时自动注入 `DSC_MAX_OUTPUT_TOKENS`=上下文窗口值作插件级默认——对抗部分兼容端点对缺席字段的保守服务端默认；压缩等请求级参数优先于以上两者）
+- `llm-openai`（OpenAI 兼容端点：DeepSeek API / llama.cpp server 等。**输出上限=有效上下文窗口**：宿主一律注入 `DSC_MAX_OUTPUT_TOKENS`=有效上下文窗口值——探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`）取探测窗口值，探测不到（云端）取配置 `context_window` 值（不正确可随时再设），不分本地/云端、行为一致；`OPENAI_MAX_OUTPUT_TOKENS` 显式配置优先（>0 随请求携带，显式 0=不携带）；压缩等请求级参数优先于以上两者）
 
-- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出上限三级语义**：默认不携带 `max_tokens`、等模型自然结束、永不人为截断；`ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置 >0 时随请求携带（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送）；宿主探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`——与 anthropic 口同端口）时自动注入 `DSC_MAX_OUTPUT_TOKENS`=上下文窗口值作插件级默认：anthropic 协议把 max_tokens 视为 required，llama.cpp 对缺席值自填保守默认（laamaafung 为 4096），显式携带窗口值在 llama.cpp 侧受上下文自然钳制、无害，而云端（无 `meta.n_ctx`）不注入——超模型输出上限的 max_tokens 会被 400 拒绝；压缩等请求级参数优先于以上两者。思维链 stderr 调试打印默认关闭——reasoning 本就随流式帧送宿主/TUI，需排查插件本身时设 `DSC_LLM_DEBUG` 才输出）
+- `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出上限=有效上下文窗口**：宿主一律注入 `DSC_MAX_OUTPUT_TOKENS`=有效上下文窗口值——探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`，与 anthropic 口同端口）取探测窗口值，探测不到（云端）取配置 `context_window` 值（不正确可随时再设），不分本地/云端、行为一致；anthropic 协议把 max_tokens 视为 required，显式携带窗口值在 llama.cpp 侧受上下文自然钳制、无害，并对抗其对缺席值自填的保守默认（laamaafung 为 4096）；`ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置优先（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送）；压缩等请求级参数优先于以上两者。思维链 stderr 调试打印默认关闭——reasoning 本就随流式帧送宿主/TUI，需排查插件本身时设 `DSC_LLM_DEBUG` 才输出）
 
 - `llm-ollama`
 
