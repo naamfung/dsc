@@ -59,7 +59,7 @@ func TestElapsedTickIncrements(t *testing.T) {
 	}
 }
 
-// TestRunInfoLineCacheRate 服务端报告缓存字段时显示命中率；否则不显示。
+// TestRunInfoLineCacheRate 服务端报告缓存字段时显示命中率（两位小数精度）；否则不显示。
 func TestRunInfoLineCacheRate(t *testing.T) {
 	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
@@ -69,11 +69,71 @@ func TestRunInfoLineCacheRate(t *testing.T) {
 		t.Fatalf("无缓存数据时不应显示缓存命中: %q", m.runInfoLine())
 	}
 
-	// 有缓存字段：显示命中率
+	// 有缓存字段：显示命中率（两位小数）
 	m.cacheHit = 90
 	m.cacheMiss = 10
-	if !strings.Contains(m.runInfoLine(), "缓存命中 90%") {
-		t.Fatalf("runInfoLine 应显示缓存命中 90%%: %q", m.runInfoLine())
+	if !strings.Contains(m.runInfoLine(), "缓存命中 90.00%") {
+		t.Fatalf("runInfoLine 应显示缓存命中 90.00%%: %q", m.runInfoLine())
+	}
+
+	// 非整值：909/1000 → 90.90%
+	m.cacheHit = 909
+	m.cacheMiss = 91
+	if !strings.Contains(m.runInfoLine(), "缓存命中 90.90%") {
+		t.Fatalf("runInfoLine 应显示缓存命中 90.90%%: %q", m.runInfoLine())
+	}
+}
+
+// TestRunInfoLineUsedPercent 已用容量百分比两位小数精度（小于 0.01% 时保底显示）。
+func TestRunInfoLineUsedPercent(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// 12.5%：两位小数精确显示（131072 容量、16384 已用）
+	m.usedTokens = 16384
+	if !strings.Contains(m.runInfoLine(), "已用 12.50%") {
+		t.Fatalf("runInfoLine 应显示已用 12.50%%: %q", m.runInfoLine())
+	}
+
+	// 极小占比：保底 0.01%
+	m.usedTokens = 1
+	if !strings.Contains(m.runInfoLine(), "已用 0.01%") {
+		t.Fatalf("极小占比应保底显示 0.01%%: %q", m.runInfoLine())
+	}
+}
+
+// TestStepStartFrameAnchorsTTFT step_start 帧：以请求发出时刻打点（晚于打点时
+// 到达的内容帧不再重置），随后内容帧测得 TTFT、结算帧算出每秒/初速。
+func TestStepStartFrameAnchorsTTFT(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "Agentic-Turbo-Coder", "minimal", 131072)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// 步开始帧（Turn=1, Step=1）：打点请求发出时刻
+	m.Update(streamFrame{frame: &core.RunStreamResponse{Status: "step_start", Turn: 1, Step: 1}})
+	if m.stepStart.IsZero() || !m.firstTokenAt.IsZero() {
+		t.Fatalf("step_start 帧应打点 stepStart 并重置 firstTokenAt")
+	}
+	anchor := m.stepStart
+
+	// 同编号内容帧：不得触发「编号变化」误重置（打点保持 step_start 时刻）
+	m.Update(streamFrame{frame: &core.RunStreamResponse{Status: "reasoning", Reasoning: "思考", Turn: 1, Step: 1}})
+	if !m.stepStart.Equal(anchor) {
+		t.Fatal("内容帧不应重置 stepStart（step_start 帧已同步 lastSeen 编号）")
+	}
+	if m.firstTokenAt.IsZero() {
+		t.Fatal("内容帧应打点 firstTokenAt")
+	}
+
+	// 结算帧（success 带 Usage）：算出每秒（纯解码）与初速（含首响等待）
+	m.Update(streamFrame{frame: &core.RunStreamResponse{
+		Status: "success", Turn: 1, Step: 1,
+		Usage: &core.Usage{PromptTokens: 100, CompletionTokens: 500},
+	}})
+	if m.decodeTPS <= 0 || m.startTPS <= 0 {
+		t.Fatalf("success 帧应结算速率: decode=%v start=%v", m.decodeTPS, m.startTPS)
+	}
+	if m.startTPS >= m.decodeTPS {
+		t.Fatalf("初速（含首响等待）应低于每秒（纯解码）: start=%v decode=%v", m.startTPS, m.decodeTPS)
 	}
 }
 

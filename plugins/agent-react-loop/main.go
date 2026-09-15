@@ -489,6 +489,12 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			Messages: msgs,
 			Tools:    availableTools,
 		}
+		// 步开始信号帧：在 LLM 请求真实发出前发射（emit 包装器自动携带
+		// Turn/Step 编号），TUI 以此时刻测 TTFT/初速——覆盖 prompt 处理
+		// 与排队等待；仅靠首个内容帧打点会把这部分首响等待低估为零。
+		if emit != nil {
+			emit(&core.RunStreamResponse{Status: "step_start"})
+		}
 		var content string
 		var toolCalls []*proto.ToolCall
 		var finishReason string

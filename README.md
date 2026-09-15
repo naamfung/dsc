@@ -137,7 +137,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - **DSH 獨特**：內核級沙箱（真實 OS 邊界，不可信代碼經 `ctx.shell` 隔離）；跨能力族統一的可寫根集合（`writableRoots` 與 Seatbelt profile 共享，防止 fs 圍欄與 runner 漂移）；文件身份（dev/ino）圍欄回退；TokenMeter 精確計量；API 代理層（`api-proxy`：歷史分頁、子代理、投影）。
 
-- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行輪/步/容量）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；Windows 全部子進程（插件、LSP 服務器、外部鈎子、shell 外部命令、PDF 渲染器等）以 `CREATE_NO_WINDOW` 隱藏控制檯啟動，杜絕 TUI 中彈出新終端窗口；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
+- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行「N 輪 M 步 · 每秒 X 詞元 · 初速 Y 詞元 · 已用 N% · 緩存命中 N%」實時指標帶，速率語義對齊 DSH turn-metrics：每秒=解碼吞吐、初速=含首響等待的起步速率，兩讀數差距即 TTFT 體感）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；外部腳本鉤子（`-hooks`：嚴格 LUA 由本地 go-lua 進程內解釋或原生可執行文件直接 exec，BeforeTool/AfterTool 可 veto/改寫，對齊 DSH hooks 橋接且規避視窗腳本引擎碎片問題）；Windows 全部子進程（插件、LSP 服務器、外部鉤子、shell 外部命令、PDF 渲染器等）以 `CREATE_NO_WINDOW` 隱藏控制檯啟動，杜絕 TUI 中彈出新終端窗口；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
 
 ## 支持的插件
 
@@ -273,6 +273,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 | `-admin <addr>`                          | 管理 API 监听地址（缺省取环境变量 `DSC_ADMIN_ADDR`，再默认回环 `127.0.0.1:9999`；需远程管理时用 `-admin :9999` 并配置 `DSC_ADMIN_TOKEN`）。未配置 `DSC_ADMIN_TOKEN` 不开认证                                                                |
 | `-debugger`                              | 开放 `/debugger` 观察路由（含完整会话历史，敏感，默认不开放）                                                                                                                                                               |
 | `-log [<file>]`                          | 日志：带文件名写文件；仅 `-log` 时输出到屏幕。**默认不开启**（静默 `io.Discard`，零噪音）。开启即获 DSH 等价的分级全链路能力（hclog 分级：`llm request` 每次 LLM 尝试的 provider/尝试序号/时长/finish_reason/用量、`tool executed`/`tool execution failed` 每次工具调用计时与结果、workflow 生命周期、插件装载与会话操作）；级别经环境变量 `DSC_LOG_LEVEL` 控制（`debug\|info\|warn\|error`，默认 `info`）。插件子进程 stderr 经 go-plugin 转发汇入同一日志流；即使默认静默，也可经 ADMIN `/plugins/logs` SSE 按需实时观察 |
+| `-hooks <file>`                          | 外部脚本钩子配置（hooks.json，对齐 DSH hooks-claude-code/codex 的 Claude Code 生态复用）：在工具流水线 BeforeTool/AfterTool 阶段参与裁定（veto 阻止 / 改写参数 / 改写结果）。**平台策略——只允许两种形态**：`"lua"` 严格 LUA 脚本（本地 go-lua 进程内解释，与 workflow 同引擎同白名单，零外部进程天然跨平台）与 `"exec"` 原生可执行文件（直接 exec 不经 shell，Windows 仅 `.exe/.com` 且复用 `CREATE_NO_WINDOW` 隐藏控制台）；`.sh/.bat/.py` 等脚本一律拒绝（视窗下脚本引擎差异的根源），此类诉求请改写为 LUA 钩子。脚本契约：输入全局（lua）/stdin JSON（exec）为 `hook_phase/tool_name/tool_args/tool_result/tool_error`，返回 `{veto,message}`（before 阻止）、`{args}`（before 改写参数）、`{result}` 或 `{error}`（after）；lua 侧另配 `json_decode/json_encode` 全局函数。单钩子默认超时 10s（`timeout_sec` 可调），单个钩子失败不阻止主流程（contain，`-log` 留痕）。与插件 gRPC 钩子（HookService，对内服务）串联：插件先行、外部脚本随后 |
 
 ## 構建與運行
 

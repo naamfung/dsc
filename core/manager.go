@@ -109,6 +109,12 @@ type Manager struct {
 	// policyOff policy 桥接监听器的移除函数（按插件名），卸载时一并撤销。
 	policyOff map[string][]func()
 
+	// luaHooks 外部脚本钩子桥（LuaHookBridge，对齐 DSH hooks-claude-code/codex）：
+	// 严格 LUA 脚本（go-lua 进程内解释）或原生可执行文件（直接 exec 不经 shell），
+	// 由 -hooks 配置文件声明，在工具流水线 BeforeTool/AfterTool 阶段参与裁定。
+	// 与插件 gRPC HookService（对内服务）命名区分：本桥为「对外脚本钩子」。
+	luaHooks *LuaHookBridge
+
 	// sandboxPolicyVal 运行时沙箱策略（atomic，支持 TUI /sandbox 命令动态切换）。
 	sandboxPolicyVal atomic.Int32
 

@@ -970,6 +970,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		f := msg.frame
 		switch f.Status {
+		case "step_start":
+			// 步开始信号帧（agent 在本步 LLM 请求发出前发射）：以请求真实
+			// 发出时刻打点，测得的 TTFT/初速才包含 prompt 处理与排队等待
+			//（仅靠编号变化检测会晚到首个内容帧，把首响等待低估为零——
+			// 表现为初速与每秒相等、TPS 虚高）。同步 lastSeen 编号，避免
+			// 后续同编号内容帧再次触发「编号变化」误重置打点。
+			if msg.frame.Turn != 0 || msg.frame.Step != 0 {
+				m.lastSeenTurn = msg.frame.Turn
+				m.lastSeenStep = msg.frame.Step
+			}
+			m.stepStart = time.Now()
+			m.firstTokenAt = time.Time{}
+			m.stepSettled = false
+			return m, m.pumpStream(msg.input, msg.ch)
 		case "todo":
 			// 待办投影帧（对齐 DSH FoldTodos）：新一轮 turn/start 使旧计划失效，
 			// 清空面板（ToolArgs 为空即清除）；面板内容由 todo_write 成功结果帧驱动。
@@ -3239,19 +3253,20 @@ func (m *Model) runInfoLine() string {
 	}
 	if m.usedTokens > 0 {
 		if m.contextWindow > 0 {
-			// 已知总容量时显示已用百分比；小于 1% 也至少显示 1，避免 0% 误导
-			pct := m.usedTokens * 100 / m.contextWindow
-			if pct < 1 {
-				pct = 1
+			// 已知总容量时显示已用百分比（两位小数精度）；极小占比也至少
+			// 显示 0.01%，避免 0.00% 误导
+			pct := float64(m.usedTokens) * 100 / float64(m.contextWindow)
+			if pct < 0.01 {
+				pct = 0.01
 			}
-			info += fmt.Sprintf(" · 已用 %d%%", pct)
+			info += fmt.Sprintf(" · 已用 %.2f%%", pct)
 		} else {
 			info += " · 已用 " + shortTokens(m.usedTokens)
 		}
 	}
 	// prompt 缓存命中率（对齐 REX cacheTag）：仅当服务端报告了缓存字段时显示
 	if hit, miss := int64(m.cacheHit), int64(m.cacheMiss); hit+miss > 0 {
-		info += fmt.Sprintf(" · 缓存命中 %d%%", hit*100/(hit+miss))
+		info += fmt.Sprintf(" · 缓存命中 %.2f%%", float64(hit)*100/float64(hit+miss))
 	}
 	return "  " + dimSty.Render(info)
 }

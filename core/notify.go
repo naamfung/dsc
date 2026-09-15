@@ -82,8 +82,25 @@ func (m *Manager) hookClientsSnapshot() []proto.PluginHookServiceClient {
 	return out
 }
 
+// LoadLuaHooks 加载外部脚本钩子配置（-hooks 指定的 hooks.json；路径不存在为
+// 无配置静默）。加载成功后，外部钩子在工具流水线 BeforeTool/AfterTool 阶段
+// 参与裁定（veto/改写），与插件 gRPC 钩子串联（插件先行，外部脚本随后）。
+func (m *Manager) LoadLuaHooks(path string) error {
+	b := NewLuaHookBridge()
+	if err := b.LoadConfig(path); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.luaHooks = b
+	m.mu.Unlock()
+	m.logger.Info("lua hooks loaded", "path", path)
+	return nil
+}
+
 // runPluginBeforeTool 调用所有插件 BeforeTool 钩子（按加载顺序）：任一 veto
 // 阻止执行；参数可被改写（后续用新参数）。插件不可用（UNIMPLEMENTED 等）跳过。
+// 插件 gRPC 钩子之后串联外部脚本钩子（LuaHookBridge：严格 LUA / 直接 exec），
+// 每次调用结算留痕（-log 启用时的钩子诊断能力：谁被调、耗时、veto/改写、失败原因）。
 func (m *Manager) runPluginBeforeTool(ctx context.Context, inv *ToolInvocation) error {
 	for _, c := range m.hookClientsSnapshot() {
 		if c == nil {
@@ -105,10 +122,33 @@ func (m *Manager) runPluginBeforeTool(ctx context.Context, inv *ToolInvocation) 
 			inv.ArgumentsJSON = resp.GetArgumentsJson()
 		}
 	}
+	// 外部脚本钩子（严格 LUA / 直接 exec）：veto 语义与插件钩子一致，失败 contain。
+	m.mu.RLock()
+	hooks := m.luaHooks
+	m.mu.RUnlock()
+	if hooks != nil {
+		start := time.Now()
+		rewritten, err := hooks.RunBeforeTool(ctx, inv.ToolName, inv.ArgumentsJSON, inv.CallID)
+		elapsed := time.Since(start).Milliseconds()
+		if err != nil {
+			// veto：模型可见的阻止原因（对齐 DSH「用模型可见消息阻止工具调用」）
+			m.logger.Warn("lua hook vetoed tool", "tool", inv.ToolName,
+				"duration_ms", elapsed, "error", err.Error())
+			return err
+		}
+		if rewritten != inv.ArgumentsJSON {
+			m.logger.Info("lua hook rewrote args", "tool", inv.ToolName,
+				"duration_ms", elapsed, "args_len", len(rewritten))
+			inv.ArgumentsJSON = rewritten
+		} else {
+			m.logger.Info("lua hook passed", "tool", inv.ToolName, "duration_ms", elapsed)
+		}
+	}
 	return nil
 }
 
-// runPluginAfterTool 调用所有插件 AfterTool 钩子：可改写结果/错误。
+// runPluginAfterTool 调用所有插件 AfterTool 钩子：可改写结果/错误。随后串联
+// 外部脚本钩子（LuaHookBridge），调用结算留痕同 BeforeTool。
 func (m *Manager) runPluginAfterTool(ctx context.Context, inv *ToolInvocation) {
 	for _, c := range m.hookClientsSnapshot() {
 		if c == nil {
@@ -126,6 +166,29 @@ func (m *Manager) runPluginAfterTool(ctx context.Context, inv *ToolInvocation) {
 		} else if resp.GetResult() != "" {
 			inv.Result = resp.GetResult()
 			inv.Err = nil
+		}
+	}
+	// 外部脚本钩子（严格 LUA / 直接 exec）：改写结果/置错，失败 contain。
+	m.mu.RLock()
+	hooks := m.luaHooks
+	m.mu.RUnlock()
+	if hooks != nil {
+		start := time.Now()
+		result, toolErr := hooks.RunAfterTool(ctx, inv.ToolName, inv.ArgumentsJSON,
+			inv.Result, errString(inv.Err), inv.CallID)
+		elapsed := time.Since(start).Milliseconds()
+		switch {
+		case toolErr != "" && (inv.Err == nil || toolErr != inv.Err.Error()):
+			m.logger.Warn("lua hook set tool error", "tool", inv.ToolName,
+				"duration_ms", elapsed, "error", toolErr)
+			inv.Err = fmt.Errorf("%s", toolErr)
+		case result != inv.Result:
+			m.logger.Info("lua hook rewrote result", "tool", inv.ToolName,
+				"duration_ms", elapsed, "result_chars", len(result))
+			inv.Result = result
+			inv.Err = nil
+		default:
+			m.logger.Info("lua hook passed", "tool", inv.ToolName, "duration_ms", elapsed, "phase", "after")
 		}
 	}
 }

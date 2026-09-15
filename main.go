@@ -284,6 +284,7 @@ func main() {
 	debuggerOpen := false // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
 	adminAddr := ""       // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
 	headless := false     // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
+	hooksPath := ""       // -hooks：外部脚本钩子配置（hooks.json：严格 LUA / 原生可执行）
 
 	// DSC_LOG_LEVEL：宿主运行日志级别（debug|info|warn|error，默认 info）。
 	// 仅在 -log 启用（文件或屏幕）时有意义；无 -log 时默认静默（io.Discard）设计
@@ -334,6 +335,10 @@ func main() {
 		} else if arg == "-admin" {
 			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 				adminAddr = os.Args[i+1]
+			}
+		} else if arg == "-hooks" {
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				hooksPath = os.Args[i+1]
 			}
 		}
 	}
@@ -498,6 +503,15 @@ func main() {
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
 	// 使运行期增删的插件在进程重启后依旧保留
 	mgr.SetConfigPath(filepath.Join(execDir, "config", "config.yaml"))
+
+	// 外部脚本钩子（-hooks hooks.json）：严格 LUA 脚本（go-lua 进程内解释）或
+	// 原生可执行文件（直接 exec 不经 shell），在工具流水线 BeforeTool/AfterTool
+	// 参与裁定。加载失败不致命（配置错误即无钩子），日志留痕便于排查。
+	if hooksPath != "" {
+		if err := mgr.LoadLuaHooks(hooksPath); err != nil {
+			logger.Warn("lua hooks load failed; continuing without hooks", "path", hooksPath, "error", err.Error())
+		}
+	}
 
 	// fail 記錄錯誤後先清理已加載的插件子進程再退出，避免 os.Exit 跳過 defer 導致殘留孤兒進程
 	fail := func(format string, args ...interface{}) {
