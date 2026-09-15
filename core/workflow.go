@@ -11,7 +11,7 @@ import (
 )
 
 // workflowTool 宿主内置 workflow 工具（对齐 DSH tool-workflow）：
-// 运行模型编写的 JS 编排脚本，可扇出 subagent，返回脚本最终值。
+// 运行模型编写的 Lua 编排脚本，可扇出 subagent，返回脚本最终值。
 // agent() 钩子经 RunSubagent 执行（宿主侧 LLM+工具流水线，不占用主 agent 会话）。
 type workflowTool struct{ m *Manager }
 
@@ -54,7 +54,7 @@ func (t *workflowTool) ParametersSchema() json.RawMessage {
 				},
 				"required": ["name", "description"]
 			},
-			"script": {"type": "string", "description": "The plain-JavaScript workflow script body (see tool description for conventions)."},
+			"script": {"type": "string", "description": "The plain-Lua workflow script body (see tool description for conventions)."},
 			"args": {"type": "object", "description": "Optional JSON input exposed to the script as the 'args' global."},
 			"background": {"type": "boolean", "description": "Start as a background job and return its job id immediately; track it with job_output / job_kill."}
 		},

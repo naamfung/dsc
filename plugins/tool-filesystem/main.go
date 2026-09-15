@@ -142,7 +142,7 @@ func runWithIdleTimeout(ctx context.Context, session *Session, run func(context.
 // ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
 func main() {
 	// 定義 shell 工具描述
-	baseDescription := "Execute a shell command or script using mvdan/sh interpreter internally (POSIX shell standard). Supports persistent sessions via session_id."
+	baseDescription := "Execute a shell command or script using mvdan/sh interpreter internally (POSIX shell standard). Each call without a reused session_id runs in a fresh shell: no state (cwd, variables, functions) persists between calls — pass `workdir` instead of using `cd`. A consistent session_id maintains state (cwd, environment variables) across calls."
 
 	var pathAdvice string
 	var extraAdvice string

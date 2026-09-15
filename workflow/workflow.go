@@ -7,9 +7,10 @@
 //   - agent() 每次调用归属一个 subagent，计数 agentsStarted
 //   - 事件仅供观察，携带 run id + meta，不暴露取消/释放权限
 //
-// 脚本为 async 模型（对齐 DSH）：agent() 返回 Promise，脚本需 await；
-// parallel(thunks) 在并发上限内扇出 thunk，pipeline(items, ...stages) 无跨阶段
-// 屏障地逐项跑 stage 链（stage 签名 (previous, item, index)，item 间并发）。
+// 脚本为 Lua 同步模型（协程排程在引擎内部完成，脚本无需 await）：agent() 直接
+// 返回结果文本（失败为 nil）；parallel(thunks) 在并发上限内扇出 thunk，pipeline
+// (items, ...stages) 无跨阶段屏障地逐项跑 stage 链（stage 签名 (previous, item,
+// index)，item 间并发）。
 // 子 agent 真并发，受 MaxConcurrentAgents 并发上限与 MaxTotalAgents 总量上限
 // 双约束。致命错误（INVALID_ARGUMENT / AGENT_CAP / ITEM_CAP 等）逸出组合器，
 // 普通子 agent 失败与普通 stage 错误在脚本侧可见 null。

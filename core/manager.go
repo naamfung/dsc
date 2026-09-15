@@ -239,7 +239,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 	// 後續可註冊更多工具
 	// 内建 subagent 工具（宿主侧子代理，委派任务给独立小循环）
 	_ = m.toolRegistry.Register(&subagentTool{m: m})
-	// 内建 workflow 工具（宿主侧 JS 编排脚本，可扇出 subagent；支持后台运行）
+	// 内建 workflow 工具（宿主侧 Lua 编排脚本，可扇出 subagent；支持后台运行）
 	_ = m.toolRegistry.Register(&workflowTool{m: m})
 	// 内建 run_code 工具（宿主侧 Lua 程序组合多步工具调用，PTC code-runtime 载体）
 	_ = m.toolRegistry.Register(&runCodeTool{m: m})
