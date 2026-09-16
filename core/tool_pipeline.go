@@ -47,8 +47,9 @@ type ToolInvocation struct {
 	Result        string // post-execute 阶段：执行结果
 	Err           error  // 执行错误或 pre 阶段 veto 原因
 	ViewJSON      string // 工具声明的结构化视图 spec（可选，见 ViewExecutor）
-	// Images 工具结果图像附件（data URL，可选，见 ViewImageExecutor）：随工具结果
-	// 消息送回视觉模型；executeBackgroundPipeline 后台路径不携带。
+	// Images 工具结果图像引用（dsc-shot:// / dsc-img://，可选，见 ViewImageExecutor）：
+	// 插件回传的 data URL 在入库口（admitToolImages）折算为内容寻址引用后才进入
+	// 本字段与会话历史；executeBackgroundPipeline 后台路径不携带。
 	Images []string
 	// SessionID 调用方会话标识（来自 ExecuteToolWithView 的 ctx，agent 每次调用都会带）；
 	// 供 per-session 审批策略（approvalPolicyFor）与审计事件归属使用。
@@ -214,7 +215,7 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	// 丢失。此处与 SDK 层（sdk/tool.go）双重设防：SDK 覆盖插件工具，本层覆盖宿主
 	// 内置工具与一切绕过 SDK 的路径。非法字节退化为 U+FFFD，不中断会话。
 	inv.Result, inv.ViewJSON, inv.Err = sanitizeUTF8(result), sanitizeUTF8(viewJSON), err
-	inv.Images = sanitizeUTF8All(images)
+	inv.Images = m.admitToolImages(sanitizeUTF8All(images))
 	// 结算留痕（-log 启用时的全链路诊断能力）：每个模型请求的工具调用在此
 	// 统一计时——成功 Info、失败/超时 Warn，与 llm request 日志配套成完整链路。
 	if err != nil {
@@ -254,7 +255,7 @@ type ToolResultInfo struct {
 	Result   string `json:"result"`
 	Error    string `json:"error,omitempty"`
 	ViewJSON string `json:"view_json,omitempty"`
-	// Images 工具结果图像附件（data URL，可选，见 ViewImageExecutor）。
+	// Images 工具结果图像引用（dsc-shot:// / dsc-img://，内容寻址，见 admitToolImages）。
 	Images []string `json:"images,omitempty"`
 }
 

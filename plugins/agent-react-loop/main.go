@@ -507,9 +507,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			return availableTools[i].Name < availableTools[j].Name
 		})
 
-		// 调用 LLM（流式或非流式）
+		// 调用 LLM（流式或非流式）；请求前对图像引用做预算卸载（最旧优先
+		// 退役为占位文本，瞬态投影不改会话存储，见 image_offload.go）
 		req := &proto.ChatRequest{
-			Messages: msgs,
+			Messages: offloadRequestImages(msgs, maxRequestImages()),
 			Tools:    availableTools,
 		}
 		// 步开始信号帧：在 LLM 请求真实发出前发射（emit 包装器自动携带

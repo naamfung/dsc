@@ -151,9 +151,10 @@ func (p *OpenAIProvider) toOpenAIMessages(messages []core.Message) []openai.Chat
 }
 
 // fileContentBlocks 构造用户消息的多模态 content：文本块 + 文件附件块。
-// 图像引用（dsc-img:// 或 data URL）先解析为 base64 data URL，单图解码后不超过
-// 内联上限时用 image_url、超限且 DeepSeek Files API 可用时自动上传并以 file 块
-// 引用 file_id（避免请求体超限）；图像仅当视觉开启（p.vision）时嵌入。
+// 图像引用（dsc-img:// 持久附件 / dsc-shot:// 操作截图）按路由策略投影（超限
+// 缩放重编码）为 base64 data URL，单图解码后不超过内联上限时用 image_url、
+// 超限且 DeepSeek Files API 可用时自动上传并以 file 块引用 file_id（避免请求体
+// 超限）；图像仅当视觉开启（p.vision）时嵌入；引用失效降级为占位文本 part。
 // 文本引用（dsc-txt://）读取内容作为纯文本块注入，不受视觉限制。
 func (p *OpenAIProvider) fileContentBlocks(text string, refs []string) []openai.ChatMessagePart {
 	parts := make([]openai.ChatMessagePart, 0, len(refs)+1)
@@ -173,9 +174,12 @@ func (p *OpenAIProvider) fileContentBlocks(text string, refs []string) []openai.
 		if !p.vision {
 			continue // 视觉关闭：跳过图像引用
 		}
-		url, err := core.ResolveImageRef(ref)
+		url, err := core.ProjectImageRef(ref, core.DefaultProjectionMaxSide)
 		if err != nil {
-			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
+			// 引用失效（截图过期/附件缺失）：占位文本留痕而非静默丢弃——
+			// 模型须知道该处曾有图（对齐 DSH offloadedImageText 语义）
+			log.Printf("⚠️ 图像引用投影失败: %v", err)
+			parts = append(parts, openai.ChatMessagePart{Type: openai.ChatMessagePartTypeText, Text: imageUnavailableText(ref)})
 			continue
 		}
 		part := openai.ChatMessagePart{
@@ -193,6 +197,13 @@ func (p *OpenAIProvider) fileContentBlocks(text string, refs []string) []openai.
 		parts = append(parts, part)
 	}
 	return parts
+}
+
+// imageUnavailableText 图像引用失效（截图过期/附件缺失）时的模型可见占位文本：
+// 身份留痕——引用写进占位，模型可据此重新截图或请用户重新提供（对齐 DSH
+// offloadedImageText/textOnlyImageText 的稳定占位语义，与 llm-anthropic 同文案）。
+func imageUnavailableText(ref string) string {
+	return "[image unavailable: attachment expired or missing; " + ref + "]"
 }
 
 // dataURLSize 返回 data URL 解码后的近似字节数（按 base64 长度估算；非 data URL 返回 0）。

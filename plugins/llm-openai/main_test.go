@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,12 +16,31 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// TestImageContentPartsInline 视觉开启、非 DeepSeek 端点时：文本 + 每图一个
-// image_url 块（base64 data URL 原样内联）。
-func TestImageContentPartsInline(t *testing.T) {
+// testPNGRef 生成一张 2×2 真实可解码 PNG 入库为持久附件引用（图像引用经
+// ProjectImageRef 投影，截断/伪魔数字节无法通过解码，测试一律用真图）。
+func testPNGRef(t *testing.T) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.SetRGBA(1, 1, color.RGBA{R: 10, G: 200, B: 40, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
+	t.Setenv("DSC_TEMP_DIR", t.TempDir())
+	ref, err := core.SaveImageAttachment(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+// TestImageContentPartsRef 内容寻址引用（dsc-img://）投影为文本 + image_url 块；
+// 投影产物为 base64 data URL，未超限时字节透传零重编码。
+func TestImageContentPartsRef(t *testing.T) {
+	ref := testPNGRef(t)
 	p := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
-	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("hello"))
-	parts := p.fileContentBlocks("描述一下", []string{url})
+	parts := p.fileContentBlocks("描述一下", []string{ref})
 
 	if len(parts) != 2 {
 		t.Fatalf("want text + image parts, got %d", len(parts))
@@ -25,37 +48,21 @@ func TestImageContentPartsInline(t *testing.T) {
 	if parts[0].Type != openai.ChatMessagePartTypeText || parts[0].Text != "描述一下" {
 		t.Fatalf("first part should be text, got %+v", parts[0])
 	}
-	if parts[1].Type != openai.ChatMessagePartTypeImageURL || parts[1].ImageURL.URL != url {
+	if parts[1].Type != openai.ChatMessagePartTypeImageURL {
 		t.Fatalf("second part should be image_url, got %+v", parts[1])
 	}
-}
-
-// TestImageContentPartsRef 内容寻址引用（dsc-img://）被解析为 image_url 块。
-func TestImageContentPartsRef(t *testing.T) {
-	t.Setenv("DSC_ATTACHMENT_DIR", t.TempDir())
-	// PNG 魔数字节：解析时由字节嗅探出 image/png
-	png := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3}
-	ref, err := core.SaveImageAttachment(png)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
-	parts := p.fileContentBlocks("", []string{ref})
-	if len(parts) != 1 || parts[0].Type != openai.ChatMessagePartTypeImageURL {
-		t.Fatalf("ref should resolve to image_url, got %+v", parts)
-	}
-	if !strings.HasPrefix(parts[0].ImageURL.URL, "data:image/png;base64,") {
-		t.Fatalf("resolved url = %q", parts[0].ImageURL.URL)
+	if !strings.HasPrefix(parts[1].ImageURL.URL, "data:image/png;base64,") {
+		t.Fatalf("projected url = %q", parts[1].ImageURL.URL)
 	}
 }
 
 // TestToOpenAIMessagesVisionGating 视觉关闭时图像引用被跳过（仅留文本块）；视觉
 // 开启时才构造含图像的完整多模态 content 数组。文本引用（dsc-txt）不受视觉门控。
 func TestToOpenAIMessagesVisionGating(t *testing.T) {
-	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("x"))
+	ref := testPNGRef(t)
 
 	off := &OpenAIProvider{vision: false}
-	msgs := off.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "hi", Images: []string{url}}})
+	msgs := off.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "hi", Images: []string{ref}}})
 	if len(msgs[0].MultiContent) != 1 || msgs[0].MultiContent[0].Text != "hi" {
 		t.Fatalf("vision off should keep text block (image skipped), got %+v", msgs[0])
 	}
@@ -64,7 +71,7 @@ func TestToOpenAIMessagesVisionGating(t *testing.T) {
 	}
 
 	on := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
-	msgs = on.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "hi", Images: []string{url}}})
+	msgs = on.toOpenAIMessages([]core.Message{core.Message{Role: "user", Content: "hi", Images: []string{ref}}})
 	if len(msgs[0].MultiContent) != 2 {
 		t.Fatalf("vision on should build multimodal content, got %+v", msgs[0])
 	}
@@ -166,15 +173,15 @@ func TestChatCompletionMessageFilePartMarshal(t *testing.T) {
 	}
 }
 
-// TestToOpenAIMessagesToolImages 工具消息图像：段末补发一条 user 图像消息；
+// TestToOpenAIMessagesToolImages 工具消息图像引用：段末补发一条 user 图像消息；
 // tool 消息本体回带 tool_call_id（OpenAI 协议关联要求）。
 func TestToOpenAIMessagesToolImages(t *testing.T) {
-	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+	ref := testPNGRef(t)
 
 	on := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
 	msgs := on.toOpenAIMessages([]core.Message{
 		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "c1", Name: "computer_use_screen"}}},
-		{Role: "tool", Content: "ok", ToolCallID: "c1", Images: []string{url}},
+		{Role: "tool", Content: "ok", ToolCallID: "c1", Images: []string{ref}},
 		{Role: "user", Content: "看到什么了？"},
 	})
 	if len(msgs) != 4 {
@@ -199,10 +206,10 @@ func TestToOpenAIMessagesToolImages(t *testing.T) {
 
 // TestToOpenAIMessagesToolImagesVisionOff 视觉关闭：不补发图像消息。
 func TestToOpenAIMessagesToolImagesVisionOff(t *testing.T) {
-	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+	ref := testPNGRef(t)
 	off := &OpenAIProvider{vision: false, filesAPI: false, fileCache: map[string]string{}}
 	msgs := off.toOpenAIMessages([]core.Message{
-		{Role: "tool", Content: "ok", ToolCallID: "c1", Images: []string{url}},
+		{Role: "tool", Content: "ok", ToolCallID: "c1", Images: []string{ref}},
 	})
 	if len(msgs) != 1 || msgs[0].ToolCallID != "c1" {
 		t.Fatalf("视觉关闭应仅 tool 消息本体, got %+v", msgs)

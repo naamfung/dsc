@@ -144,7 +144,7 @@ func TestEnvMaxDim(t *testing.T) {
 }
 
 func TestScreenResultJSON(t *testing.T) {
-	r := screenResult{baseResult: baseResult{Success: true, Tool: "computer_use_screen"}, SavedFile: "/tmp/x.png", Width: 1280, Height: 800, Scale: 1, Bytes: 10, ScreenW: 1280, ScreenH: 800}
+	r := screenResult{baseResult: baseResult{Success: true, Tool: "computer_use_screen"}, Width: 1280, Height: 800, Scale: 1, Bytes: 10, ScreenW: 1280, ScreenH: 800}
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
@@ -153,11 +153,11 @@ func TestScreenResultJSON(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back.SavedFile != r.SavedFile || back.Width != r.Width || back.Success != true {
+	if back.Width != r.Width || back.Success != true {
 		t.Fatalf("JSON 往返失配: %+v", back)
 	}
-	// ImageFile/Cursor 为 omitempty：零值不出现
-	if bytes.Contains(b, []byte("image_file")) || bytes.Contains(b, []byte("cursor")) {
+	// Cursor 为 omitempty：零值不出现
+	if bytes.Contains(b, []byte("cursor")) {
 		t.Fatalf("omitempty 字段不应出现: %s", b)
 	}
 }
@@ -265,7 +265,6 @@ func TestXKeyTapNoError(t *testing.T) {
 
 func TestXScreenHandlerEnvelope(t *testing.T) {
 	requireDisplay(t)
-	t.Setenv("DSC_WORKSPACE_ROOT", t.TempDir())
 	args := json.RawMessage(`{"show_grid": true}`)
 	out, err := screenHandler(context.Background(), args)
 	if err != nil {
@@ -278,11 +277,13 @@ func TestXScreenHandlerEnvelope(t *testing.T) {
 	if !r.Success || r.Tool != "computer_use_screen" || r.Width != 1280 || r.Height != 800 {
 		t.Fatalf("信封字段异常: %+v", r)
 	}
-	if r.SavedFile == "" || r.Bytes == 0 {
-		t.Fatalf("存档字段缺失: %+v", r)
+	if r.Bytes == 0 {
+		t.Fatalf("字节数缺失: %+v", r)
 	}
-	if fi, err := os.Stat(r.SavedFile); err != nil || fi.Size() == 0 {
-		t.Fatalf("截图未落盘: %v", err)
+	// 插件不落盘：结果信封不含任何文件路径字段（截图字节只经 data URL 回传，
+	// 落盘由宿主入库口按内容寻址管理）
+	if strings.Contains(out, "saved_file") || strings.Contains(out, "image_file") {
+		t.Fatalf("信封不应含落盘字段: %s", out)
 	}
 	imgs := screenImages(context.Background(), args, out)
 	if len(imgs) != 1 || !strings.HasPrefix(imgs[0], "data:image/png;base64,") {

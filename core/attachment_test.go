@@ -110,9 +110,9 @@ func TestSaveAttachmentRewritesCorruptFile(t *testing.T) {
 	}
 }
 
-// TestResolveImageRefExtensionIrrelevant 同内容改后缀不影响命中（去重不受扩展名
-// 影响）：对同一引用追加假后缀仍按纯哈希读到同一文件。
-func TestResolveImageRefExtensionIrrelevant(t *testing.T) {
+// TestResolveImageRefRejectsSuffixedRef 引用只认纯哈希：带后缀的旧式引用
+// （dsc-img://<sha256>.png）一律拒绝，不保留后缀回退兼容分支。
+func TestResolveImageRefRejectsSuffixedRef(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DSC_ATTACHMENT_DIR", dir)
 
@@ -123,43 +123,24 @@ func TestResolveImageRefExtensionIrrelevant(t *testing.T) {
 	}
 	name := strings.TrimPrefix(ref, "dsc-img://")
 
-	// 随便加个假后缀的旧式引用，仍应命中同一纯哈希文件
-	url, err := ResolveImageRef("dsc-img://" + name + ".png")
+	if _, err := ResolveImageRef("dsc-img://" + name + ".png"); err == nil {
+		t.Fatal("suffixed ref should be rejected")
+	}
+	// 纯哈希引用照常解析，MIME 由字节嗅探（JPEG 魔数 → image/jpeg）
+	url, err := ResolveImageRef(ref)
 	if err != nil {
-		t.Fatalf("ref with fake extension should still resolve: %v", err)
+		t.Fatalf("ResolveImageRef: %v", err)
 	}
 	if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
 		t.Fatalf("resolved mime should come from bytes (jpeg), got %q", url)
 	}
 }
 
-// TestResolveImageRefLegacyExtension 兼容早期版本：文件名带后缀的遗留附件
-// （<sha256>.jpg）仍能被旧式引用解析。
-func TestResolveImageRefLegacyExtension(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("DSC_ATTACHMENT_DIR", dir)
-
-	jpg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 7, 8, 9}
-	sum := sha256SumHex(jpg)
-	// 模拟旧版落盘文件名 <sha256>.jpg
-	if err := os.WriteFile(filepath.Join(dir, sum+".jpg"), jpg, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// 旧式引用 dsc-img://<sha256>.jpg 可解析
-	url, err := ResolveImageRef("dsc-img://" + sum + ".jpg")
-	if err != nil {
-		t.Fatalf("legacy ref should resolve: %v", err)
-	}
-	if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
-		t.Fatalf("legacy resolved mime should be jpeg, got %q", url)
-	}
-}
-
-// TestResolveImageRefInlineAndErrors 已内联 data URL 原样返回；缺失/非法引用报错。
-func TestResolveImageRefInlineAndErrors(t *testing.T) {
-	inline := "data:image/jpeg;base64,QUJD"
-	if got, _ := ResolveImageRef(inline); got != inline {
-		t.Fatalf("inline data URL should pass through, got %q", got)
+// TestResolveImageRefRejectsInlineAndErrors 内联 data URL 不再是合法引用形态
+// （会话历史只存内容寻址引用，data URL 与其它前缀一律拒绝）；缺失/非法引用报错。
+func TestResolveImageRefRejectsInlineAndErrors(t *testing.T) {
+	if _, err := ResolveImageRef("data:image/jpeg;base64,QUJD"); err == nil {
+		t.Fatal("inline data URL should be rejected (refs only)")
 	}
 	if _, err := ResolveImageRef("dsc-img://deadbeef"); err == nil {
 		t.Fatal("missing attachment should error")

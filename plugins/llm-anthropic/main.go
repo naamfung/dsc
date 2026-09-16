@@ -47,8 +47,9 @@ type AnthropicProvider struct {
 }
 
 // maxInlineImageBytes 内联 base64 单图大小上限（对齐 DeepSeek 32 MiB 内联限制，
-// 预留余量避免请求体逼近 48 MiB 上限；超出则走 Files API 上传）。
-const maxInlineImageBytes = 20 << 20 // 20 MiB
+// 预留余量避免请求体逼近 48 MiB 上限；超出则走 Files API 上传）。包级变量以便
+// Files API 阈值测试注入小阈值。
+var maxInlineImageBytes = 20 << 20 // 20 MiB
 
 // omitZeroMaxTokens 从请求体 JSON 中摘除值为 0 的 max_tokens 字段。
 // 本仓 anthropic SDK 的 MessageNewParams.MaxTokens 无 omitempty（协议标 required），
@@ -223,10 +224,10 @@ func isDeepSeekEndpoint(baseURL string) bool {
 
 // fileContentBlocks 构造用户消息的多模态内容块：文本块 + 文件附件块。
 // 文本引用（dsc-txt://）读取内容作为纯文本块注入，不受视觉限制；图像引用
-// （dsc-img:// 或 data URL）先解析为 base64 data URL，单图解码后不超过内联上限
-// 时用 base64 源、超限且 DeepSeek Files API 可用时自动上传并以 file 源引用 file_id
-// （请求需带 anthropic-beta 头）；图像仅当视觉开启（p.vision）。返回内容块与
-// 是否使用了 file 源。
+// （dsc-img:// 持久附件 / dsc-shot:// 操作截图）按路由策略投影（超限缩放重编码）
+// 为 base64 data URL，单图解码后不超过内联上限时用 base64 源、超限且 DeepSeek
+// Files API 可用时自动上传并以 file 源引用 file_id（请求需带 anthropic-beta 头）；
+// 图像仅当视觉开启（p.vision）。返回内容块与是否使用了 file 源。
 func (p *AnthropicProvider) fileContentBlocks(text string, refs []string) ([]anthropic.ContentBlockParamUnion, bool) {
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(refs)+1)
 	usesFile := false
@@ -246,9 +247,12 @@ func (p *AnthropicProvider) fileContentBlocks(text string, refs []string) ([]ant
 		if !p.vision {
 			continue // 视觉关闭：跳过图像引用
 		}
-		url, err := core.ResolveImageRef(ref)
+		url, err := core.ProjectImageRef(ref, core.DefaultProjectionMaxSide)
 		if err != nil {
-			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
+			// 引用失效（截图过期/附件缺失）：占位文本留痕而非静默丢弃——
+			// 模型须知道该处曾有图（对齐 DSH offloadedImageText 语义）
+			log.Printf("⚠️ 图像引用投影失败: %v", err)
+			blocks = append(blocks, anthropic.NewTextBlock(imageUnavailableText(ref)))
 			continue
 		}
 		mime, b64, ok := splitDataURL(url)
@@ -271,8 +275,9 @@ func (p *AnthropicProvider) fileContentBlocks(text string, refs []string) ([]ant
 }
 
 // toolResultContentBlocks 构造 tool_result 内容块：文本块 + 图像块（vision 门控）。
-// 图像 data URL 单图不超内联上限时内联 base64；超限且 Files API 可用时上传后以
-// file 块引用（与用户消息图像同一套判定），usesFile 标记请求须带 anthropic-beta 头。
+// 图像引用按路由策略投影（超限缩放重编码）为 data URL，单图不超内联上限时内联
+// base64；超限且 Files API 可用时上传后以 file 块引用（与用户消息图像同一套判定），
+// usesFile 标记请求须带 anthropic-beta 头；引用失效降级为占位文本块。
 func (p *AnthropicProvider) toolResultContentBlocks(text string, refs []string) ([]anthropic.ToolResultBlockParamContentUnion, bool) {
 	blocks := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(refs)+1)
 	usesFile := false
@@ -283,9 +288,12 @@ func (p *AnthropicProvider) toolResultContentBlocks(text string, refs []string) 
 		if !p.vision {
 			continue // 视觉关闭：跳过图像引用
 		}
-		url, err := core.ResolveImageRef(ref)
+		url, err := core.ProjectImageRef(ref, core.DefaultProjectionMaxSide)
 		if err != nil {
-			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
+			log.Printf("⚠️ 图像引用投影失败: %v", err)
+			blocks = append(blocks, anthropic.ToolResultBlockParamContentUnion{
+				OfText: &anthropic.TextBlockParam{Text: imageUnavailableText(ref)},
+			})
 			continue
 		}
 		mime, b64, ok := splitDataURL(url)
@@ -320,6 +328,13 @@ func (p *AnthropicProvider) toolResultContentBlocks(text string, refs []string) 
 		})
 	}
 	return blocks, usesFile
+}
+
+// imageUnavailableText 图像引用失效（截图过期/附件缺失）时的模型可见占位文本：
+// 身份留痕——引用写进占位，模型可据此重新截图或请用户重新提供（对齐 DSH
+// offloadedImageText/textOnlyImageText 的稳定占位语义）。
+func imageUnavailableText(ref string) string {
+	return "[image unavailable: attachment expired or missing; " + ref + "]"
 }
 
 // splitDataURL 解析 data:image/<mime>;base64,<b64> 为 (mime, base64 负载)。

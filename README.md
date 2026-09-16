@@ -155,14 +155,26 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 `deepseek-v4-flash-vision-exp`；llamacpp server 的 OpenAI/Anthropic 兼容端点同样
 接受该格式）：
 
-- 图像**只在用户消息**携带；图片字节以**内容寻址附件库**存储
-  （可执行目录下 `attachments/<sha256>`，文件名只取内容哈希不带后缀，对齐 DSH 与
-  `sessions/` 等目录旧例——同内容无论声明/改写什么扩展名都落同一文件、去重不受后缀
-  影响），会话历史只保存引用（`dsc-img://<sha256>`），不随历史膨胀；上下文
-  窗口内后续轮次模型仍可见；
+- 图像以**内容寻址引用**随会话历史保存（用户消息 `dsc-img://<sha256>`；工具结果
+  截图 `dsc-shot://<sha256>`），不随历史膨胀；上下文窗口内后续轮次模型仍可见；
 
-- LLM 请求时把引用解析为 base64 嵌入（OpenAI 端点为 `image_url` 块，Anthropic
-  端点为 `image` 块）；
+- 图像字节按生命周期分库：用户 `@` 引用的图片写入持久附件库（可执行目录下
+  `attachments/<sha256>`，文件名只取内容哈希不带后缀，对齐 DSH 与 `sessions/`
+  等目录旧例——同内容无论声明/改写什么扩展名都落同一文件）；工具产生的操作截图
+  （computer-use 等）由宿主入库口统一折算为 `dsc-shot://` 引用，字节写入
+  `temp/screenshots/`，**24 小时后随 temp/ 目录清理过期**——操作截图只有短期
+  观察价值，不进持久附件库、不写用户 workspace，插件回传的 data URL 绝不进入
+  会话日志；
+
+- LLM 请求时把引用投影为 base64 嵌入（OpenAI 端点为 `image_url` 块，Anthropic
+  端点为 `image` 块）：最长边超过路由上限（1568，对齐 Anthropic 视觉最优分辨率）
+  时等比降采样——不透明图重编码为 JPEG、带透明度保留 PNG；未超限原样透传；
+  引用失效（截图过期/附件缺失）降级为稳定占位文本，模型由此知道该处曾有图；
+
+- 请求面图像预算卸载（对齐 DSH RequestImageOffloadPolicy）：历史中的图像引用数
+  超过单请求上限（默认 12，`DSC_MAX_REQUEST_IMAGES` 覆盖，`0`=不限制）时按
+  最旧优先退役为占位文本——最新观察永远在场，token 与费用不随 CU 截图轮次
+  线性膨胀；卸载是纯瞬态投影，会话日志原样保留；
 
 - 单图超过约 20 MiB 且端点指向 DeepSeek 时自动上传 Files API（`purpose=user_data`）
   并以 `file_id` 引用（Anthropic 端点自动附带 `anthropic-beta: files-api-2025-04-14` 头）；
@@ -197,7 +209,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 - `tool-browser-use`（无头浏览器工具：`web_fetch` / `web_search` / `browser_click` / `browser_type` / `browser_screenshot`；提供 `browser` 能力）
 
-- `tool-computer-use`（桌面观察与操作：`computer_use_screen` 截图随工具结果回传视觉模型 + `computer_use_click/move/drag/scroll/type/key/paste/cursor_position/screen_size/check`；基于 robotgo，坐标纪律=截图即坐标系；Linux 需 X11 开发头文件（libx11-dev/libxtst-dev/libxi-dev）与 DISPLAY，仅本机平台随发布包（CGO 插件不交叉编译）；提供 `computer-use` 能力）
+- `tool-computer-use`（桌面观察与操作：`computer_use_screen` 截图随工具结果回传视觉模型（经宿主入库为 `dsc-shot://` 引用，temp 24 小时生命周期，不落用户 workspace） + `computer_use_click/move/drag/scroll/type/key/paste/cursor_position/screen_size/check`；基于 robotgo，坐标纪律=截图即坐标系；Linux 需 X11 开发头文件（libx11-dev/libxtst-dev/libxi-dev）与 DISPLAY，仅本机平台随发布包（CGO 插件不交叉编译）；提供 `computer-use` 能力）
 
 - `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱；提供 `lisp-eval` 能力）
 

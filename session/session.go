@@ -93,8 +93,8 @@ type TurnData struct {
 type StepData struct{ Turn, Step int }
 
 // UserMessageData 用户消息事件载荷。
-// Images 为该消息附带的图像 data URL（data:image/...;base64,...），随事件日志持久化，
-// 上下文窗口内后续轮次派生历史仍会携带（对齐 rex：图片随消息保留）。
+// Images 为该消息附带的图像内容寻址引用（dsc-img://<sha256>，字节持久附件库），
+// 随事件日志持久化，上下文窗口内后续轮次派生历史仍会携带（对齐 rex：图片随消息保留）。
 type UserMessageData struct {
 	Content string
 	Source  string
@@ -119,8 +119,10 @@ type ToolCallData struct {
 type ToolResultData struct {
 	Turn, Step             int
 	CallID, Content, Error string
-	// Images 工具结果图像附件（data:image/...;base64,... 数据 URL）。随事件日志持久化，
-	// 投影为模型历史 tool 消息的图像（proto.Message.Images；视觉模型可见）。
+	// Images 工具结果图像引用（dsc-shot://<sha256> 操作截图 / dsc-img://<sha256>
+	// 持久附件）。入库口（core.admitToolImages）把插件回传的 data URL 折算为引用后
+	// 才进入本字段——事件日志只存引用不存字节；投影为模型历史 tool 消息的图像
+	//（proto.Message.Images；视觉模型可见，dsc-shot 引用过期后降级为占位文本）。
 	Images []string
 }
 

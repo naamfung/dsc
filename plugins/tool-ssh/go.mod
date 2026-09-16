@@ -11,12 +11,13 @@ replace github.com/hashicorp/go-plugin => ../../plugin
 replace github.com/toon-format/toon-go => ../../libs/toon-go
 
 require (
+	dsc v0.0.0
 	dsc-sdk v0.0.0
+	github.com/hashicorp/go-plugin v1.8.0
 	golang.org/x/crypto v0.55.0
 )
 
 require (
-	dsc v0.0.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
@@ -25,7 +26,6 @@ require (
 	github.com/go-playground/validator/v10 v10.30.3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
-	github.com/hashicorp/go-plugin v1.8.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
@@ -37,6 +37,7 @@ require (
 	github.com/toon-format/toon-go v0.0.0 // indirect
 	github.com/wippyai/go-lua v1.5.17 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
+	golang.org/x/image v0.44.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

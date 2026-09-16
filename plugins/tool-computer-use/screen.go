@@ -58,8 +58,9 @@ func captureAndAnnotate(p screenArgs, sw, sh int) (pngBytes []byte, w, h int, sc
 	bounds := img.Bounds()
 	w, h = bounds.Dx(), bounds.Dy()
 
-	// 降采样：最长边超过上限时等比缩小（坐标纪律：scale 随结果回传）
-	maxDim := defaultMaxDimension
+	// 降采样：最长边超过上限时等比缩小（坐标纪律：scale 随结果回传）。
+	// 上限来源：env（DSC_COMPUTER_USE_MAX_DIMENSION）为默认，参数显式给定时优先。
+	maxDim := envMaxDim()
 	if p.MaxDimension != nil {
 		maxDim = *p.MaxDimension
 	}

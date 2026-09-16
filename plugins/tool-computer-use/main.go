@@ -3,10 +3,11 @@
 // 工具面（computer_use_ 前缀）：screen（截图）、click、move、drag、scroll、
 // type、key、paste、cursor_position、screen_size、check（可用性自检）。
 //
-// 截图回传双通道：经 dsc.Tool.ImagesFn 产出 data URL，随 ExecuteToolResponse.images
-// 送回宿主，agent 循环将其附加到工具结果消息（Anthropic 内嵌 tool_result 图像块；
-// OpenAI 在工具消息段后接 user 图像消息），视觉模型可直接观察；同时 PNG 存档到
-// workspace/screenshots/ 供 TUI 与用户查看。
+// 截图回传：经 dsc.Tool.ImagesFn 产出 data URL，随 ExecuteToolResponse.images
+// 送回宿主；宿主入库口将其折算为内容寻址引用（dsc-shot://，字节存宿主
+// temp/screenshots/，24 小时过期）后进会话历史并投影给视觉模型（Anthropic 内嵌
+// tool_result 图像块；OpenAI 在工具消息段后接 user 图像消息）。插件不自行落盘，
+// 不在用户 workspace 留任何产物。
 //
 // 坐标纪律（对齐上游 computer-use 实践）：截图即坐标系——工具参数 x/y 一律取自
 // 最近一次 computer_use_screen 返回的截图（像素、左上原点）；结果 JSON 携带 scale，
@@ -23,10 +24,8 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	dsc "dsc-sdk"
 	"github.com/go-vgo/robotgo"
@@ -56,10 +55,11 @@ var (
 // dragPressDelayMS 拖拽按下后与移动前的停顿（让目标应用吃住按下态）。
 const dragPressDelayMS = 120
 
-// defaultMaxDimension 截图默认最长边上限（0=不限）。4K 全屏 PNG 可达数 MB，
-// 内联 base64 后体积膨胀 4/3 倍，超过多数端点单图上限；默认 2000 覆盖
-// 1080p/1440p 原样直出，更大屏幕等比降采样并由结果 JSON 携带 scale 供换算。
-const defaultMaxDimension = 2000
+// defaultMaxDimension 截图默认最长边上限（0=不限）。与宿主投影上限
+// （core.DefaultProjectionMaxSide）对齐：Anthropic 视觉最优分辨率——更大的图
+// 先等比降采样到最长边 1568 再进模型，token 与延迟双优；插件侧一次降采样后
+// 投影链路零二次缩放（坐标纪律：scale 随结果回传，模型坐标 ÷ scale = 屏幕像素）。
+const defaultMaxDimension = 1568
 
 // envMaxDimension 环境变量名：覆盖截图最长边（"0" 表示禁用降采样）。
 const envMaxDimension = "DSC_COMPUTER_USE_MAX_DIMENSION"
@@ -196,7 +196,7 @@ const screenSchema = `{
     "show_cursor": {"type": "boolean", "description": "Draw a red crosshair at the cursor position (default true)"},
     "show_grid": {"type": "boolean", "description": "Overlay a coordinate grid with labels (default false)"},
     "grid_size": {"type": "integer", "description": "Grid spacing in pixels (default 100, used with show_grid)"},
-    "max_dimension": {"type": "integer", "description": "Downscale so the longest edge fits this many pixels; 0 disables (default 2000 via DSC_COMPUTER_USE_MAX_DIMENSION)"}
+    "max_dimension": {"type": "integer", "description": "Downscale so the longest edge fits this many pixels; 0 disables (default 1568 via DSC_COMPUTER_USE_MAX_DIMENSION)"}
   }
 }`
 
@@ -282,15 +282,13 @@ type baseResult struct {
 
 type screenResult struct {
 	baseResult
-	SavedFile string  `json:"saved_file"`
-	Width     int     `json:"width"`
-	Height    int     `json:"height"`
-	Scale     float64 `json:"scale"`
-	Bytes     int     `json:"bytes"`
-	ScreenW   int     `json:"screen_width"`
-	ScreenH   int     `json:"screen_height"`
-	Cursor    *cursor `json:"cursor,omitempty"`
-	ImageFile string  `json:"image_file,omitempty"`
+	Width   int     `json:"width"`
+	Height  int     `json:"height"`
+	Scale   float64 `json:"scale"`
+	Bytes   int     `json:"bytes"`
+	ScreenW int     `json:"screen_width"`
+	ScreenH int     `json:"screen_height"`
+	Cursor  *cursor `json:"cursor,omitempty"`
 }
 
 type cursor struct {
@@ -349,20 +347,9 @@ func screenHandler(ctx context.Context, args json.RawMessage) (string, error) {
 	res.Width, res.Height, res.Scale, res.Cursor = w, h, scale, cur
 	res.Bytes = len(pngBytes)
 
-	// 存档到 workspace/screenshots/（browser-use 截图同款落盘约定：沙箱可能
-	// 拒绝写系统临时目录，workspace 内路径由宿主保证可写）
-	dir := filepath.Join(dsc.WorkspaceRoot(), "screenshots")
-	if err := dsc.MkdirAll(dir); err != nil {
-		return "", fmt.Errorf("create screenshots dir: %w", err)
-	}
-	res.SavedFile = filepath.Join(dir, "cu_"+time.Now().Format("20060102_150405")+".png")
-	if err := dsc.WriteFile(res.SavedFile, pngBytes); err != nil {
-		return "", fmt.Errorf("save screenshot: %w", err)
-	}
-
-	// 双通道之图像通道：data URL 随 ExecuteToolResponse.images 回传视觉模型
+	// 图像通道：data URL 随 ExecuteToolResponse.images 回传；宿主入库口
+	// 折算为 dsc-shot:// 内容寻址引用后进会话历史与视觉模型投影。
 	screenDataURL = "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
-	res.ImageFile = filepath.Base(res.SavedFile)
 
 	out, err := json.Marshal(res)
 	if err != nil {
@@ -386,8 +373,8 @@ func screenView(result string) (json.RawMessage, error) {
 	if err := json.Unmarshal([]byte(result), &r); err != nil {
 		return nil, nil
 	}
-	body := fmt.Sprintf("saved: %s\nsize: %dx%d (screen %dx%d, scale %.3f)\nbytes: %d",
-		r.SavedFile, r.Width, r.Height, r.ScreenW, r.ScreenH, r.Scale, r.Bytes)
+	body := fmt.Sprintf("size: %dx%d (screen %dx%d, scale %.3f)\nbytes: %d",
+		r.Width, r.Height, r.ScreenW, r.ScreenH, r.Scale, r.Bytes)
 	if r.Cursor != nil {
 		body += fmt.Sprintf("\ncursor: (%d,%d)", r.Cursor.X, r.Cursor.Y)
 	}
@@ -663,7 +650,7 @@ func envelope(v interface{}) (string, error) {
 	return string(out), nil
 }
 
-// envMaxDim 读取截图最长边配置：环境变量优先（"0"=禁用），否则默认 2000。
+// envMaxDim 读取截图最长边配置：环境变量优先（"0"=禁用），否则默认 1568。
 func envMaxDim() int {
 	if v := strings.TrimSpace(os.Getenv(envMaxDimension)); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {

@@ -261,6 +261,13 @@ func main() {
 		os.Setenv("DSC_ATTACHMENT_DIR", filepath.Join(execDir, "attachments"))
 	}
 
+	// 临时目录（操作截图等 24 小时生命周期的工具产物，宿主启动时对 temp/
+	// 内超时子目录统一清理，见 core/manager.go cleanupOldTempDirs）：未显式
+	// 配置 DSC_TEMP_DIR 时注入 <ExecDir>/temp，插件进程继承后引用解析路径一致。
+	if os.Getenv("DSC_TEMP_DIR") == "" {
+		os.Setenv("DSC_TEMP_DIR", filepath.Join(execDir, "temp"))
+	}
+
 	// dsc setup：交互式配置向导（不加载插件，直接读写 config.yaml）。
 	// 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
 	if isSetupCommand(os.Args[1:]) {

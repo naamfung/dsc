@@ -488,7 +488,7 @@ func (x *HealthCheckResponse) GetMessage() string {
 type RunRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Input         string                 `protobuf:"bytes,1,opt,name=input,proto3" json:"input,omitempty"`
-	Images        []string               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"` // 本轮附带的图像 data URL（仅 user 输入；模型可见）
+	Images        []string               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"` // 本轮附带的图像引用（dsc-img:// 等，仅 user 输入；模型可见）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -858,7 +858,7 @@ type Message struct {
 	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
 	ToolCallId    string                 `protobuf:"bytes,3,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"` // 用于 tool 角色关联
 	ToolCalls     []*ToolCall            `protobuf:"bytes,4,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`      // 用于 assistant 角色回传工具调用（OpenAI 格式必需）
-	Images        []string               `protobuf:"bytes,5,rep,name=images,proto3" json:"images,omitempty"`                             // 图像附件（data:image/...;base64,... 数据 URL；仅 user 消息）
+	Images        []string               `protobuf:"bytes,5,rep,name=images,proto3" json:"images,omitempty"`                             // 图像内容寻址引用（dsc-img:// 持久附件 / dsc-shot:// 操作截图；user 消息与工具结果消息承载）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1677,7 +1677,7 @@ func (x *SetUserQuestionsServiceResponse) GetMessage() string {
 type InjectMessageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"` // 注入的用户消息文本
-	Images        []string               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"`   // 注入消息附带的图像 data URL
+	Images        []string               `protobuf:"bytes,2,rep,name=images,proto3" json:"images,omitempty"`   // 注入消息附带的图像引用（dsc-img:// 等）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3012,9 +3012,10 @@ type ExecuteToolResponse struct {
 	Content  string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	Error    string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 	ViewJson string                 `protobuf:"bytes,3,opt,name=view_json,json=viewJson,proto3" json:"view_json,omitempty"` // 可选：结构化视图 spec（JSON，对齐 DSH 显示契约）；供 TUI 统一渲染，缺失时回退到通用展示
-	// 工具结果图像附件（data:image/...;base64,... 数据 URL）。宿主将其随 tool 结果消息
-	// 送回模型：Anthropic 内嵌 tool_result content blocks；OpenAI 在工具消息后接 user
-	// 图像消息。视觉能力未开启的端点由 LLM 插件按既有 vision 门控降级跳过。
+	// 工具结果图像附件：插件以 data URL 单跳传输回宿主；宿主入库口（core
+	// admitToolImages）把字节写入内容寻址截图库（temp/screenshots/，24 小时过期）
+	// 并以 dsc-shot:// 引用进入会话历史与模型投影。视觉能力未开启的端点由 LLM
+	// 插件按既有 vision 门控降级跳过。
 	Images        []string `protobuf:"bytes,4,rep,name=images,proto3" json:"images,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

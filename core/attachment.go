@@ -18,6 +18,12 @@ import (
 // 引用 file_id）。
 const imageRefPrefix = "dsc-img://"
 
+// 操作截图引用前缀（dsc-shot://<sha256>）：computer-use 等工具产生的操作截图。
+// 与 dsc-img:// 同为内容寻址，但字节存可执行目录 temp/screenshots/——操作截图
+// 只有短期观察价值（24 小时后随 temp/ 目录清理一并过期，见 manager.go
+// cleanupOldTempDirs），不得混入持久附件库，也不得写入用户 workspace。
+const shotRefPrefix = "dsc-shot://"
+
 // TextRefPrefix 文本附件的引用前缀（与 @ 补全的图片引用平行：文件字节写入内容
 // 寻址附件库，会话/LLM 以 dsc-txt://<sha256> 引用读取内容，对齐图像 dsc-img://）。
 const TextRefPrefix = "dsc-txt://"
@@ -43,15 +49,14 @@ func AttachmentDir() string {
 	return "attachments"
 }
 
-// saveAttachment 把字节以内容寻址方式写入附件库并返回引用（纯哈希文件名）；
+// saveAttachment 把字节以内容寻址方式写入 dir 并返回引用（纯哈希文件名）；
 // 同内容已存在时直接返回既有引用（去重不受扩展名影响）。已存在分支校验文件大小，
 // 大小与数据不符视为坏文件（如先前写入中断残留的部分文件）删除后重写，避免坏文件
 // 被内容寻址去重永久复用导致后续读到损坏内容。
-func saveAttachment(prefix string, data []byte) (string, error) {
+func saveAttachment(dir, prefix string, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	name := hex.EncodeToString(sum[:])
 	ref := prefix + name
-	dir := AttachmentDir()
 	path := filepath.Join(dir, name)
 	if fi, err := os.Stat(path); err == nil {
 		if fi.Size() == int64(len(data)) {
@@ -71,74 +76,76 @@ func saveAttachment(prefix string, data []byte) (string, error) {
 	return ref, nil
 }
 
+// ScreenshotDir 返回操作截图存根目录：<可执行目录>/temp/screenshots（DSC_TEMP_DIR
+// 覆盖，宿主启动时注入 <ExecDir>/temp，各插件进程继承环境路径一致；未设置时回退
+// 可执行文件所在目录的 temp/）。目录内超 24 小时未被整体触碰即由宿主启动时的
+// cleanupOldTempDirs 移除——截图引用随之失效，LLM 投影时降级为占位文本。
+func ScreenshotDir() string {
+	temp := strings.TrimSpace(os.Getenv("DSC_TEMP_DIR"))
+	if temp == "" {
+		if exe, err := os.Executable(); err == nil {
+			temp = filepath.Join(filepath.Dir(exe), "temp")
+		} else {
+			temp = "temp"
+		}
+	}
+	return filepath.Join(temp, "screenshots")
+}
+
 // SaveImageAttachment 把图片字节以内容寻址方式写入附件库并返回引用
 // （dsc-img://<sha256>，文件名纯哈希不带后缀）；同内容已存在时直接返回既有引用
 // （去重不受扩展名影响）。
 func SaveImageAttachment(data []byte) (string, error) {
-	return saveAttachment(imageRefPrefix, data)
+	return saveAttachment(AttachmentDir(), imageRefPrefix, data)
+}
+
+// SaveScreenshotAttachment 把操作截图字节以内容寻址方式写入 temp/screenshots/
+// 并返回 dsc-shot://<sha256> 引用；同内容去重同上。截图不进持久附件库（生命周期
+// 归 temp 清理管），会话日志与 LLM 投影只见引用。
+func SaveScreenshotAttachment(data []byte) (string, error) {
+	return saveAttachment(ScreenshotDir(), shotRefPrefix, data)
 }
 
 // SaveTextAttachment 把文本字节以内容寻址方式写入附件库并返回 dsc-txt://<sha256>
 // 引用（同内容去重）；供 @文本文件 引用注入模型读取。
 func SaveTextAttachment(data []byte) (string, error) {
-	return saveAttachment(TextRefPrefix, data)
+	return saveAttachment(AttachmentDir(), TextRefPrefix, data)
 }
 
 // ResolveImageRef 把图像引用解析为 data:image/<mime>;base64,... 数据 URL。
-// 兼容三种形态：
-//   - 新引用 dsc-img://<sha256>（纯哈希文件名）；
-//   - 旧引用 dsc-img://<sha256>.<ext>（早期版本把后缀编进文件名/引用，解析时
-//     剥离后缀仍按纯哈希读取，兼容旧会话历史）；
-//   - 已内联的 data URL（原样返回，兼容更早版本直接存 base64 的消息）。
-//
+// 支持两种内容寻址引用：dsc-img://<sha256>（持久附件库 attachments/，@图片 等用户
+// 显式引用）与 dsc-shot://<sha256>（temp/screenshots/ 操作截图，24 小时过期）。
+// 引用是图像进入会话历史的唯一形态——data URL 与带后缀旧引用一律拒绝，不保留
+// 兼容分支；引用失效（截图过期、附件缺失）由调用方降级为占位文本。
 // MIME 由附件字节嗅探，不依赖声明/文件名后缀。
 func ResolveImageRef(ref string) (string, error) {
-	if strings.HasPrefix(ref, "data:") {
-		return ref, nil
-	}
-	if !strings.HasPrefix(ref, imageRefPrefix) {
+	var dir string
+	switch {
+	case strings.HasPrefix(ref, imageRefPrefix):
+		dir = AttachmentDir()
+		ref = strings.TrimPrefix(ref, imageRefPrefix)
+	case strings.HasPrefix(ref, shotRefPrefix):
+		dir = ScreenshotDir()
+		ref = strings.TrimPrefix(ref, shotRefPrefix)
+	default:
 		return "", fmt.Errorf("不支持的图像引用: %s", ref)
 	}
-	name := strings.TrimPrefix(ref, imageRefPrefix)
-	// 剥离旧版后缀：文件名只认纯哈希；带后缀时先按纯哈希读、读不到再回退旧文件名
-	sha := name
-	if i := strings.IndexByte(sha, '.'); i > 0 {
-		sha = sha[:i]
-	}
-	data, err := readAttachment(sha, name)
+	data, err := os.ReadFile(filepath.Join(dir, ref))
 	if err != nil {
-		return "", fmt.Errorf("读取图像附件 %s 失败: %w", sha, err)
+		return "", fmt.Errorf("读取图像附件 %s 失败: %w", ref, err)
 	}
 	mime := sniffImageMime(data)
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
-// readAttachment 读取附件字节：优先纯哈希文件名，读不到再回退带后缀的旧文件名
-// （旧版 <sha256>.<ext> 遗留文件，历史兼容）。
-func readAttachment(sha, legacy string) ([]byte, error) {
-	if data, err := os.ReadFile(filepath.Join(AttachmentDir(), sha)); err == nil {
-		return data, nil
-	}
-	if legacy != sha {
-		if data, err := os.ReadFile(filepath.Join(AttachmentDir(), legacy)); err == nil {
-			return data, nil
-		}
-	}
-	return nil, os.ErrNotExist
-}
-
-// ResolveTextRef 把文本附件引用（dsc-txt://<sha256>，兼容旧版带后缀）解析为文本
-// 内容字符串，供 LLM 插件把 @文本文件 内容注入请求。
+// ResolveTextRef 把文本附件引用（dsc-txt://<sha256>）解析为文本内容字符串，
+// 供 LLM 插件把 @文本文件 内容注入请求。
 func ResolveTextRef(ref string) (string, error) {
 	if !strings.HasPrefix(ref, TextRefPrefix) {
 		return "", fmt.Errorf("不支持的文本引用: %s", ref)
 	}
-	name := strings.TrimPrefix(ref, TextRefPrefix)
-	sha := name
-	if i := strings.IndexByte(sha, '.'); i > 0 {
-		sha = sha[:i]
-	}
-	data, err := readAttachment(sha, name)
+	sha := strings.TrimPrefix(ref, TextRefPrefix)
+	data, err := os.ReadFile(filepath.Join(AttachmentDir(), sha))
 	if err != nil {
 		return "", fmt.Errorf("读取文本附件 %s 失败: %w", sha, err)
 	}

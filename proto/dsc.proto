@@ -90,7 +90,7 @@ message HealthCheckResponse {
 
 message RunRequest {
   string input = 1;
-  repeated string images = 2; // 本轮附带的图像 data URL（仅 user 输入；模型可见）
+  repeated string images = 2; // 本轮附带的图像引用（dsc-img:// 等，仅 user 输入；模型可见）
 }
 
 message RunResponse {
@@ -134,7 +134,7 @@ message Message {
   string content = 2;
   string tool_call_id = 3;   // 用于 tool 角色关联
   repeated ToolCall tool_calls = 4;  // 用于 assistant 角色回传工具调用（OpenAI 格式必需）
-  repeated string images = 5;  // 图像附件（data:image/...;base64,... 数据 URL；user 消息与工具结果消息承载）
+  repeated string images = 5;  // 图像内容寻址引用（dsc-img:// 持久附件 / dsc-shot:// 操作截图；user 消息与工具结果消息承载）
 }
 
 message Tool {
@@ -213,7 +213,7 @@ message SetUserQuestionsServiceResponse {
 
 message InjectMessageRequest {
   string content = 1; // 注入的用户消息文本
-  repeated string images = 2; // 注入消息附带的图像 data URL
+  repeated string images = 2; // 注入消息附带的图像引用（dsc-img:// 等）
 }
 
 message InjectMessageResponse {}
@@ -394,9 +394,10 @@ message ExecuteToolResponse {
   string content = 1;
   string error = 2;
   string view_json = 3; // 可选：结构化视图 spec（JSON，对齐 DSH 显示契约）；供 TUI 统一渲染，缺失时回退到通用展示
-  // 工具结果图像附件（data:image/...;base64,... 数据 URL）。宿主将其随 tool 结果消息
-  // 送回模型：Anthropic 内嵌 tool_result content blocks；OpenAI 在工具消息后接 user
-  // 图像消息。视觉能力未开启的端点由 LLM 插件按既有 vision 门控降级跳过。
+  // 工具结果图像附件：插件以 data URL 单跳传输回宿主；宿主入库口（core
+  // admitToolImages）把字节写入内容寻址截图库（temp/screenshots/，24 小时过期）
+  // 并以 dsc-shot:// 引用进入会话历史与模型投影。视觉能力未开启的端点由 LLM
+  // 插件按既有 vision 门控降级跳过。
   repeated string images = 4;
 }
 
