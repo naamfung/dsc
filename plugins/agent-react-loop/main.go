@@ -139,15 +139,6 @@ type ReactLoopAgent struct {
 	// maxTruncContinuesPerTurn 次）——防退化复读机无限烧 token。
 	todoNudges     int
 	truncContinues int
-
-	// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链状态进程本地。
-	repeatChainName      string
-	repeatChainCanonical string
-	repeatChainCount     int
-	// 配置：阈值（DSC_REPEAT_THRESHOLDS，缺省 3,5,8）与排除工具（DSC_REPEAT_EXCLUDE，
-	// 缺省 todo_write——记录类工具穿插不掩盖循环）。
-	repeatThresholds []int
-	repeatExclude    []string
 }
 
 // 收尾驱动器预算（每次 turn/start 重置）。
@@ -397,6 +388,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		emit(&core.RunStreamResponse{Status: "todo"})
 	}
 	// maxIterations == 0 表示不設上限，僅靠 ctx 取消（用戶 Ctrl+C / Shutdown）與模型自然收尾結束
+	// pre-step 会话归属追踪：firstRequest 标记回合首个请求（开场输入必为新用户
+	// 输入）；seenInjects 为上一请求派生时的注入计数快照（增量 = 运行中插话）。
+	firstRequest := true
+	seenInjects := 0
 	for i := 0; maxIterations == 0 || i < maxIterations; i++ {
 		// 检查 ctx.Done()
 		select {
@@ -509,10 +504,21 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 
 		// 调用 LLM（流式或非流式）；请求前对图像引用做预算卸载（最旧优先
 		// 退役为占位文本，瞬态投影不改会话存储，见 image_offload.go）
+		//
+		// 会话归属与新用户输入标记随请求透传（宿主在 agent/pre-step 事件载荷
+		// 中转发，对齐 DSH agent/pre-step 的 inbox claim 语义）：回合开场输入
+		// 与运行中注入都算「新用户输入」，goal/truncation/todo 等续行驱动消息
+		// 不算——循环检测类插件据此归属会话并重置循环链（用户插话改变了
+		// 上下文，跨插话的重复不是循环）。
+		newUserInput := firstRequest || iterPendingInjects > seenInjects
 		req := &proto.ChatRequest{
-			Messages: offloadRequestImages(msgs, maxRequestImages()),
-			Tools:    availableTools,
+			Messages:     offloadRequestImages(msgs, maxRequestImages()),
+			Tools:        availableTools,
+			SessionId:    sess.ID(),
+			NewUserInput: newUserInput,
 		}
+		seenInjects = iterPendingInjects
+		firstRequest = false
 		// 步开始信号帧：在 LLM 请求真实发出前发射（emit 包装器自动携带
 		// Turn/Step 编号），TUI 以此时刻测 TTFT/初速——覆盖 prompt 处理
 		// 与排队等待；仅靠首个内容帧打点会把这部分首响等待低估为零。
@@ -896,11 +902,16 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 					emit(&core.RunStreamResponse{Output: fmt.Sprintf("\n[工具结果: %s]\n%s\n", tc.Name, toolResp.Content), Status: "tool", ToolName: tc.Name, ToolArgs: tc.ArgumentsJson, ToolResult: toolResp.Content, ToolView: toolResp.ViewJson, Usage: a.usageSnapshot()})
 				}
 			}
-			// 重复工具调用提醒（对齐 DSH repeat-tool-reminder）：链检测在每次调用后，
-			// 达阈值时在工具结果之后注入合成 user message（source guard）
-			if reminder := a.repeatGuardTrack(tc.Name, canonicalArgs(tc.ArgumentsJson)); reminder != "" {
+			// 策略 advisory 上下文（对齐 DSH additionalContexts）：宿主从策略裁决
+			// 机械收集（如 dsc-system 的重复调用提醒），在工具结果之后以合成
+			// user message 投喂模型（source guard）；被拦截/失败的调用同样携带
+			//——循环恰恰最常发生在反复重试的被拒调用上。
+			for _, n := range toolResp.GetNotices() {
+				if n == "" {
+					continue
+				}
 				sess.Append(session.UserMessage, &session.UserMessageData{
-					Content: reminder, Source: "guard",
+					Content: n, Source: "guard",
 				}, &session.SurfaceOp{Op: session.SurfaceAppend})
 			}
 		}
@@ -1406,7 +1417,7 @@ func (a *ReactLoopAgent) ensureConnected(llmID, toolID uint32) (proto.LLMService
 }
 
 func (a *ReactLoopAgent) Name(ctx context.Context) string    { return "react-agent" }
-func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.1.0" } // 消息支持图像附件
+func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.2.0" } // 重复提醒外置 dsc-system；pre-step 会话归属与新用户输入标记
 
 // InjectMessage 将一条用户消息实时注入到当前运行中会话的历史末端。
 // 运行中的 runLoop 每步都从会话 surface 重新派生请求历史（DeriveMessages），
@@ -1644,25 +1655,6 @@ func newAgent() (*ReactLoopAgent, error) {
 	// todo 任务清单并行开关（DSC_TODO_ALLOW_PARALLEL，缺省 false：最多一个 in_progress）
 	if v := os.Getenv("DSC_TODO_ALLOW_PARALLEL"); v == "1" || strings.EqualFold(v, "true") {
 		agent.todoAllowParallel = true
-	}
-	// 重复工具提醒阈值（DSC_REPEAT_THRESHOLDS，逗号分隔升序，缺省 3,5,8）
-	agent.repeatThresholds = []int{3, 5, 8}
-	if v := os.Getenv("DSC_REPEAT_THRESHOLDS"); v != "" {
-		var ts []int
-		for _, part := range strings.Split(v, ",") {
-			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil && n >= 2 {
-				ts = append(ts, n)
-			}
-		}
-		if len(ts) > 0 {
-			sort.Ints(ts)
-			agent.repeatThresholds = ts
-		}
-	}
-	// 重复提醒排除工具（DSC_REPEAT_EXCLUDE，逗号分隔，缺省 todo_write）
-	agent.repeatExclude = []string{"todo_write"}
-	if v := os.Getenv("DSC_REPEAT_EXCLUDE"); v != "" {
-		agent.repeatExclude = strings.Split(v, ",")
 	}
 	// 多会话事件日志存储（DSC_SESSION_DIR，缺省落在插件工作目录下的 sessions/）
 	dir := os.Getenv("DSC_SESSION_DIR")

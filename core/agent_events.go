@@ -66,10 +66,15 @@ type AgentErrorEvent struct {
 // listener 在 waterfall 模式下可改写此字段并经 result_json 返回改写后的列表。
 type AgentPreStepEvent struct {
 	Agent        string `json:"agent"`         // agent 插件名
+	Session      string `json:"session"`       // 调用方会话标识（ChatRequest.session_id 透传；空 = 内部调用无法归属）
 	Turn         int    `json:"turn"`          // 当前回合号（1-based）
 	Step         int    `json:"step"`          // 当前步号（1-based，回合内递增）
 	MessagesJSON string `json:"messages_json"` // 本步消息列表 JSON（proto.Message 数组序列化）
 	TokenCount   int    `json:"token_count"`   // 估算的当前上下文 token 数（供 nudge 决策）
+	// UserInput 自上一请求以来有新用户输入进入会话（回合开场输入或运行中注入）。
+	// 对齐 DSH agent/pre-step 的 inbox claim 语义：循环检测类插件据此重置
+	// per-session 循环链（用户插话改变了上下文，跨插话的重复不是循环）。
+	UserInput bool `json:"user_input"`
 }
 
 // AgentRequestErrorEvent agent/request-error 事件的载荷（对齐 DSH agent/request-error）。

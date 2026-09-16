@@ -2453,6 +2453,16 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
 	m.clients[name] = client
 	m.typeMap[name] = "dsc"
 	m.coreMetadata[name] = info
+	// 服务正交桥接（对齐 DSH/Cordis「插件类型与服务正交」）：通用（dsc）类型插件
+	// 在 PluginInfo.services 中声明实际暴露的服务，宿主据此机械桥接——声明 "policy"
+	// 即把通用策略服务（PolicyService）接入工具流水线（与 policy 类型同一桥：
+	// pre/execute 拦截、post-execute replace/notice 收集，策略逻辑与状态全归插件）。
+	// 旧插件未填充 services 时不桥接，行为与历史一致。
+	if hasService(info, "policy") {
+		pc := proto.NewPolicyServiceClient(grpcClient.Conn)
+		m.policyOff[name] = m.bridgePolicyToPipeline(name, pc)
+		m.logger.Info("dsc core policy service bridged to tool pipeline", "name", name)
+	}
 	// 探测插件是否暴露工具（SDK 的 dscGRPCPlugin 始终注册 ToolServiceServer，
 	// 即便工具集为空）：若 ListTools 返回非空，经 stageToolPlugin 完成互通握手
 	// 与 host broker 挂载，再 commitDscToolPluginLocked 把工具写入注册表。

@@ -127,6 +127,14 @@ message ChatRequest {
   repeated Message messages = 1;
   repeated Tool tools = 2;
   int32 max_tokens = 3; // 生成 token 上限（0 = 使用服务端默认；压缩等场景设置真实净余值）
+  // 调用方会话标识：宿主在 agent/pre-step 事件载荷中透传，供订阅插件把
+  // pre-step 观测与其余工具流水线事件（PolicyEvent.session）归到同一会话属主。
+  // 缺省（子代理等内部调用）时订阅方无法归属，应跳过会话级状态操作。
+  string session_id = 4;
+  // 自上一请求以来有新的用户输入进入会话（回合开场输入或运行中注入；
+  // goal/truncation/todo 等续行驱动消息不算）。对齐 DSH agent/pre-step 的
+  // inbox claim 语义：订阅插件据此判断「上下文已变化，循环状态应重置」。
+  bool new_user_input = 5;
 }
 
 message Message {
@@ -399,6 +407,11 @@ message ExecuteToolResponse {
   // 并以 dsc-shot:// 引用进入会话历史与模型投影。视觉能力未开启的端点由 LLM
   // 插件按既有 vision 门控降级跳过。
   repeated string images = 4;
+  // 策略插件本次调用产出的 advisory 上下文（对齐 DSH additionalContexts）：
+  // 宿主从 PolicyDecision.notice 机械收集，调用方在工具结果之后以合成用户消息
+  // 投喂模型（不改写工具结果本身）；执行失败/被拦截的调用同样携带——循环
+  // 恰恰最常发生在反复重试的被拒调用上。
+  repeated string notices = 5;
 }
 
 message ListToolsRequest {
@@ -453,4 +466,8 @@ message PolicyDecision {
   string reason = 2; // deny 时的模型可见文案（如读前改写指引）
   string result = 3; // replace 时的替换结果文本（仅 tool/post-execute）
   TimeoutSpec timeout = 4; // 执行超时语义（仅 tool/execute 槽；allow 时可附）
+  // advisory 上下文（不占决策槽）：策略建议模型看到的补充信息（如重复调用
+  // 提醒），随裁决一并返回；宿主机械收集透传（ExecuteToolResponse.notices），
+  // 不解读、不改写工具结果——advisory 形态的策略（guard）只产出本字段。
+  string notice = 5;
 }

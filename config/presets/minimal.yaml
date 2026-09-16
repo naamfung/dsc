@@ -14,6 +14,12 @@ plugins:
   - name: policy-spill
     type: policy
     enabled: true
+  # 重复工具调用提醒（advisory 决策插件，dsc-system 驻留）：连续同参重复调用
+  # 达阈值时注入提醒（DSC_REPEAT_THRESHOLDS 缺省 3,5,8 / DSC_REPEAT_EXCLUDE
+  # 缺省 todo_write）；不否决不改写，用户插话自动重置
+  - name: dsc-system
+    type: dsc
+    enabled: true
   - name: tool-str-replace-editor
     type: tool
     enabled: true

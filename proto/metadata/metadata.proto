@@ -11,7 +11,7 @@ service PluginMetadata {
 message Empty {}
 
 message PluginInfo {
-  string type = 1;      // "llm", "agent", "tool", "dsc"
+  string type = 1;      // 声明类型："llm", "agent", "tool", "policy", "dsc"（dsc 为通用类型）
   string name = 2;
   string version = 3;
   // 可選擴展字段，如支持的API版本
@@ -19,4 +19,9 @@ message PluginInfo {
   // 插件能力集合：键为能力名，值为字符串形式（如 supports_images: "true"/"false"）。
   // 宿主经 GetInfo 读取后用于向模型/TUI 暴露插件能力。
   map<string, string> capabilities = 5;
+  // 本插件进程实际暴露的服务清单（对齐 DSH/Cordis「插件类型与服务正交」）：
+  // 取值与 gRPC 服务对应——"llm" | "agent" | "tool" | "policy" | "hook"。
+  // 宿主对通用（dsc）类型按此声明桥接对应服务（如 "policy" → PolicyService
+  // 桥接到工具流水线），无需副作用探测。旧插件未填充时宿主保持既有探测行为。
+  repeated string services = 6;
 }

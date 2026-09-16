@@ -53,6 +53,10 @@ type ToolInvocation struct {
 	// 插件回传的 data URL 在入库口（admitToolImages）折算为内容寻址引用后才进入
 	// 本字段与会话历史；executeBackgroundPipeline 后台路径不携带。
 	Images []string
+	// Notices 策略插件本次调用产出的 advisory 上下文（对齐 DSH additionalContexts）：
+	// post-execute 桥从 PolicyDecision.notice 机械收集，随返回值透传给调用方
+	//（agent 在工具结果之后以合成用户消息投喂模型）；执行失败/被拦截的调用同样携带。
+	Notices []string
 	// SessionID 调用方会话标识（来自 ExecuteToolWithView 的 ctx，agent 每次调用都会带）；
 	// 供 per-session 审批策略（approvalPolicyFor）与审计事件归属使用。
 	SessionID string
@@ -92,24 +96,24 @@ func (e *ToolTimeoutError) Error() string {
 // 声明 TimeoutProvider 的工具在 execute 阶段获得协作式单次调用截止时间（timeout-policy）。
 // 视图信息（插件 ViewJson / 宿主 ViewExecutor）不在此返回，见 ExecuteToolWithView。
 func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, error) {
-	result, _, _, err := m.ExecuteToolWithView(ctx, toolName, argsJSON)
+	result, _, _, _, err := m.ExecuteToolWithView(ctx, toolName, argsJSON)
 	return result, err
 }
 
 // ExecuteToolWithView 与 ExecuteTool 语义相同，额外返回工具声明的结构化视图 spec
 // （ViewJson）：插件工具透传 Tool.ViewFn 产物（经 RemoteTool），宿主工具按需实现
-// ViewExecutor。聚合 Tool 服务（ToolGRPCServer）据此把视图一并回给调用方。
+// ViewExecutor。聚合 Tool 服务（ToolGRPCServer）据此把视图与策略 notices 一并回给调用方。
 //
 // run_in_background 支持（对齐 DSH bash run_in_background）：若工具参数中
 // run_in_background=true，宿主在 job 注册表中登记一个后台任务，异步执行完整
 // 流水线（pre-execute → execute → post-execute），立即返回 job_id。
 // 模型可用 job_output/job_list/job_kill 管理后台任务。
-func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, []string, error) {
+func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, []string, []string, error) {
 	// 检测 run_in_background 参数（对齐 DSH：模型在参数中声明 run_in_background: true）
 	if isBackgroundRequest(argsJSON) && m.jobs != nil {
 		caller := CallerFromContext(ctx)
 		res, view, err := m.startBackgroundTool(ctx, toolName, argsJSON, caller)
-		return res, view, nil, err // 后台路径立即返回 job_id，图像不适用
+		return res, view, nil, nil, err // 后台路径立即返回 job_id，图像与 notices 不适用
 	}
 
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON), SessionID: CallerFromContext(ctx), ApprovalPolicy: ApprovalPolicyFromContext(ctx)}
@@ -151,12 +155,12 @@ func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, args
 		return inv.Err
 	}); err != nil {
 		m.emitToolResult(inv)
-		return "", "", nil, err
+		return "", "", nil, inv.Notices, err
 	}
 
 	// result（emit）：结果广播（非拦截），对齐 DSH tools/result。
 	m.emitToolResult(inv)
-	return inv.Result, inv.ViewJSON, inv.Images, inv.Err
+	return inv.Result, inv.ViewJSON, inv.Images, inv.Notices, inv.Err
 }
 
 // executeToolBody 实际执行工具（可被 tools/execute 的 waterfall 监听器改写/包围）。
@@ -385,6 +389,11 @@ func (m *Manager) bridgePolicyToPipeline(name string, pc proto.PolicyServiceClie
 		if err != nil {
 			m.logger.Warn("policy post-execute forward failed", "policy", name, "tool", inv.ToolName, "err", err)
 			return runErr
+		}
+		// advisory 上下文机械收集：不占决策槽，成功与失败（含被拦截）调用同样透传
+		//（对齐 DSH additionalContexts 折叠到 block 与非 block 两种决策的语义）。
+		if n := dec.GetNotice(); n != "" {
+			inv.Notices = append(inv.Notices, n)
 		}
 		if dec.GetAction() == policyDecisionReplace && dec.GetResult() != "" {
 			inv.Result = dec.GetResult()

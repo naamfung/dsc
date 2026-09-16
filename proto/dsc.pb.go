@@ -793,10 +793,18 @@ func (x *Usage) GetCacheCreationInputTokens() int32 {
 
 // --- LLM Service 消息定義 ---
 type ChatRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Messages      []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
-	Tools         []*Tool                `protobuf:"bytes,2,rep,name=tools,proto3" json:"tools,omitempty"`
-	MaxTokens     int32                  `protobuf:"varint,3,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"` // 生成 token 上限（0 = 使用服务端默认；压缩等场景设置真实净余值）
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Messages  []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	Tools     []*Tool                `protobuf:"bytes,2,rep,name=tools,proto3" json:"tools,omitempty"`
+	MaxTokens int32                  `protobuf:"varint,3,opt,name=max_tokens,json=maxTokens,proto3" json:"max_tokens,omitempty"` // 生成 token 上限（0 = 使用服务端默认；压缩等场景设置真实净余值）
+	// 调用方会话标识：宿主在 agent/pre-step 事件载荷中透传，供订阅插件把
+	// pre-step 观测与其余工具流水线事件（PolicyEvent.session）归到同一会话属主。
+	// 缺省（子代理等内部调用）时订阅方无法归属，应跳过会话级状态操作。
+	SessionId string `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// 自上一请求以来有新的用户输入进入会话（回合开场输入或运行中注入；
+	// goal/truncation/todo 等续行驱动消息不算）。对齐 DSH agent/pre-step 的
+	// inbox claim 语义：订阅插件据此判断「上下文已变化，循环状态应重置」。
+	NewUserInput  bool `protobuf:"varint,5,opt,name=new_user_input,json=newUserInput,proto3" json:"new_user_input,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -850,6 +858,20 @@ func (x *ChatRequest) GetMaxTokens() int32 {
 		return x.MaxTokens
 	}
 	return 0
+}
+
+func (x *ChatRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ChatRequest) GetNewUserInput() bool {
+	if x != nil {
+		return x.NewUserInput
+	}
+	return false
 }
 
 type Message struct {
@@ -3016,7 +3038,12 @@ type ExecuteToolResponse struct {
 	// admitToolImages）把字节写入内容寻址截图库（temp/screenshots/，24 小时过期）
 	// 并以 dsc-shot:// 引用进入会话历史与模型投影。视觉能力未开启的端点由 LLM
 	// 插件按既有 vision 门控降级跳过。
-	Images        []string `protobuf:"bytes,4,rep,name=images,proto3" json:"images,omitempty"`
+	Images []string `protobuf:"bytes,4,rep,name=images,proto3" json:"images,omitempty"`
+	// 策略插件本次调用产出的 advisory 上下文（对齐 DSH additionalContexts）：
+	// 宿主从 PolicyDecision.notice 机械收集，调用方在工具结果之后以合成用户消息
+	// 投喂模型（不改写工具结果本身）；执行失败/被拦截的调用同样携带——循环
+	// 恰恰最常发生在反复重试的被拒调用上。
+	Notices       []string `protobuf:"bytes,5,rep,name=notices,proto3" json:"notices,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3075,6 +3102,13 @@ func (x *ExecuteToolResponse) GetViewJson() string {
 func (x *ExecuteToolResponse) GetImages() []string {
 	if x != nil {
 		return x.Images
+	}
+	return nil
+}
+
+func (x *ExecuteToolResponse) GetNotices() []string {
+	if x != nil {
+		return x.Notices
 	}
 	return nil
 }
@@ -3388,11 +3422,15 @@ func (x *TimeoutSpec) GetMessage() string {
 // PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre/execute
 // 阶段阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
 type PolicyDecision struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`   // "allow"（默认）| "deny" | "replace"
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`   // deny 时的模型可见文案（如读前改写指引）
-	Result        string                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`   // replace 时的替换结果文本（仅 tool/post-execute）
-	Timeout       *TimeoutSpec           `protobuf:"bytes,4,opt,name=timeout,proto3" json:"timeout,omitempty"` // 执行超时语义（仅 tool/execute 槽；allow 时可附）
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Action  string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`   // "allow"（默认）| "deny" | "replace"
+	Reason  string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`   // deny 时的模型可见文案（如读前改写指引）
+	Result  string                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`   // replace 时的替换结果文本（仅 tool/post-execute）
+	Timeout *TimeoutSpec           `protobuf:"bytes,4,opt,name=timeout,proto3" json:"timeout,omitempty"` // 执行超时语义（仅 tool/execute 槽；allow 时可附）
+	// advisory 上下文（不占决策槽）：策略建议模型看到的补充信息（如重复调用
+	// 提醒），随裁决一并返回；宿主机械收集透传（ExecuteToolResponse.notices），
+	// 不解读、不改写工具结果——advisory 形态的策略（guard）只产出本字段。
+	Notice        string `protobuf:"bytes,5,opt,name=notice,proto3" json:"notice,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3455,6 +3493,13 @@ func (x *PolicyDecision) GetTimeout() *TimeoutSpec {
 	return nil
 }
 
+func (x *PolicyDecision) GetNotice() string {
+	if x != nil {
+		return x.Notice
+	}
+	return ""
+}
+
 var File_proto_dsc_proto protoreflect.FileDescriptor
 
 const file_proto_dsc_proto_rawDesc = "" +
@@ -3513,12 +3558,15 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\x12!\n" +
 	"\ftotal_tokens\x18\x03 \x01(\x05R\vtotalTokens\x125\n" +
 	"\x17cache_read_input_tokens\x18\x04 \x01(\x05R\x14cacheReadInputTokens\x12=\n" +
-	"\x1bcache_creation_input_tokens\x18\x05 \x01(\x05R\x18cacheCreationInputTokens\"w\n" +
+	"\x1bcache_creation_input_tokens\x18\x05 \x01(\x05R\x18cacheCreationInputTokens\"\xbc\x01\n" +
 	"\vChatRequest\x12(\n" +
 	"\bmessages\x18\x01 \x03(\v2\f.dsc.MessageR\bmessages\x12\x1f\n" +
 	"\x05tools\x18\x02 \x03(\v2\t.dsc.ToolR\x05tools\x12\x1d\n" +
 	"\n" +
-	"max_tokens\x18\x03 \x01(\x05R\tmaxTokens\"\x9f\x01\n" +
+	"max_tokens\x18\x03 \x01(\x05R\tmaxTokens\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\x12$\n" +
+	"\x0enew_user_input\x18\x05 \x01(\bR\fnewUserInput\"\x9f\x01\n" +
 	"\aMessage\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12 \n" +
@@ -3670,12 +3718,13 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"toolCallId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x04 \x01(\tR\tsessionId\x12'\n" +
-	"\x0fapproval_policy\x18\x05 \x01(\tR\x0eapprovalPolicy\"z\n" +
+	"\x0fapproval_policy\x18\x05 \x01(\tR\x0eapprovalPolicy\"\x94\x01\n" +
 	"\x13ExecuteToolResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1b\n" +
 	"\tview_json\x18\x03 \x01(\tR\bviewJson\x12\x16\n" +
-	"\x06images\x18\x04 \x03(\tR\x06images\"\x12\n" +
+	"\x06images\x18\x04 \x03(\tR\x06images\x12\x18\n" +
+	"\anotices\x18\x05 \x03(\tR\anotices\"\x12\n" +
 	"\x10ListToolsRequest\"4\n" +
 	"\x11ListToolsResponse\x12\x1f\n" +
 	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools\"\x14\n" +
@@ -3691,12 +3740,13 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"\asession\x18\x06 \x01(\tR\asession\"@\n" +
 	"\vTimeoutSpec\x12\x17\n" +
 	"\aidle_ms\x18\x01 \x01(\x03R\x06idleMs\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x84\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x9c\x01\n" +
 	"\x0ePolicyDecision\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x16\n" +
 	"\x06result\x18\x03 \x01(\tR\x06result\x12*\n" +
-	"\atimeout\x18\x04 \x01(\v2\x10.dsc.TimeoutSpecR\atimeout2\xed\x01\n" +
+	"\atimeout\x18\x04 \x01(\v2\x10.dsc.TimeoutSpecR\atimeout\x12\x16\n" +
+	"\x06notice\x18\x05 \x01(\tR\x06notice2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +

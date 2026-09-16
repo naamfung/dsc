@@ -175,8 +175,10 @@ func (s *llmAggregateServer) applyPreStepHook(ctx context.Context, req *proto.Ch
 	}
 	result, err := s.m.dispatchEventToPlugins(EventAgentPreStep, AgentPreStepEvent{
 		Agent:        s.m.GetMainAgentName(),
+		Session:      req.GetSessionId(),
 		MessagesJSON: string(msgsJSON),
 		TokenCount:   tokenCount,
+		UserInput:    req.GetNewUserInput(),
 	})
 	if err != nil {
 		s.m.logger.Warn("agent/pre-step hook vetoed request", "error", err.Error())
@@ -199,11 +201,14 @@ func (s *llmAggregateServer) applyPreStepHook(ctx context.Context, req *proto.Ch
 	if err := json.Unmarshal(newMsgsJSON, &newMsgs); err != nil || len(newMsgs) == 0 {
 		return req
 	}
-	// 返回改写后的请求（不修改原 req，避免影响重试路径的原始数据）
+	// 返回改写后的请求（不修改原 req，避免影响重试路径的原始数据）。
+	// 会话归属与新用户输入标记随写复制：重试路径再次分发 pre-step 时语义不变。
 	rewritten := &proto.ChatRequest{
-		Messages:  newMsgs,
-		Tools:     req.Tools,
-		MaxTokens: req.MaxTokens,
+		Messages:     newMsgs,
+		Tools:        req.Tools,
+		MaxTokens:    req.MaxTokens,
+		SessionId:    req.SessionId,
+		NewUserInput: req.NewUserInput,
 	}
 	return rewritten
 }

@@ -139,7 +139,7 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 			tc.Id = callID
 			m.logger.Info("subagent executing tool",
 				"iteration", iteration, "tool", tc.Name, "call_id", callID)
-			result, err := m.ExecuteTool(toolCtx, tc.Name, json.RawMessage(tc.ArgumentsJson))
+			result, _, _, notices, err := m.ExecuteToolWithView(toolCtx, tc.Name, json.RawMessage(tc.ArgumentsJson))
 			TouchActivity(ctx) // 工具执行完成也算活动
 			resultStr := result
 			if err != nil {
@@ -148,6 +148,14 @@ func (m *Manager) RunSubagent(ctx context.Context, req *SubagentRequest) (string
 					"iteration", iteration, "tool", tc.Name, "error", err.Error())
 			}
 			msgs = append(msgs, &proto.Message{Role: "tool", Content: resultStr, ToolCallId: callID})
+			// 策略 advisory 上下文（对齐 DSH additionalContexts）：被拦截/失败的调用
+			// 同样携带——子代理反复重试同一被拒调用正是需要打断的循环。
+			for _, n := range notices {
+				if n == "" {
+					continue
+				}
+				msgs = append(msgs, &proto.Message{Role: "user", Content: n})
+			}
 		}
 		iteration++
 	}

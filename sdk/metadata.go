@@ -11,6 +11,10 @@ import (
 type metadataServer struct {
 	metadata.UnimplementedPluginMetadataServer
 	cfg Config
+	// services 本插件进程实际暴露的服务清单（PluginInfo.services）。
+	// 对齐 DSH/Cordis「插件类型与服务正交」：宿主对通用（dsc）类型按此声明
+	// 机械桥接对应服务（如 "policy" → PolicyService 接入工具流水线）。
+	services []string
 }
 
 // requiresCapabilityKeyPrefix 是声明式依赖在 PluginInfo.Capabilities 中的编码前缀。
@@ -45,6 +49,7 @@ func (s *metadataServer) GetInfo(ctx context.Context, _ *metadata.Empty) (*metad
 		Version:      s.cfg.Version,
 		ApiVersion:   s.cfg.APIVersion,
 		Capabilities: caps,
+		Services:     s.services,
 	}, nil
 }
 

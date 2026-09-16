@@ -30,11 +30,11 @@ const (
 	// TypePolicy 策略插件：注册通用策略服务（PolicyService——宿主转发工具流水线
 	// 事件，插件裁决 allow/deny/replace）；宿主经主连接直接取对应 proto 客户端。
 	TypePolicy Type = "policy"
-	// TypeDsc 通用插件：不注册 llm/agent/policy 服务，仅提供元数据与可选 Hook
-	// （OnEvent 订阅宿主事件等）；可声明工具（sdk.Tool/ToolProvider），宿主经
-	// ListTools 探测并登记为 tool provider（工具集为空时跳过登记，零行为变化）。
-	// 作为「纯后台/程序性」插件的通用类型，宿主加载它时同样登记 hook client，
-	// 使其能接收宿主事件广播。目录前缀 dsc-。
+	// TypeDsc 通用插件：不注册 llm/agent 服务，可按需叠加 policy 服务与工具、
+	// 可选 Hook（OnEvent 订阅宿主事件等）。对齐 DSH/Cordis「插件类型与服务正交」：
+	// 通用类型经 sdk.Policy(...) 声明策略服务（宿主按 PluginInfo.services 中的
+	// "policy" 声明机械桥接工具流水线）、经 sdk.Tool 声明工具（宿主经 ListTools
+	// 探测并登记为 tool provider），作为「不确定前缀时」的通用形态——目录前缀 dsc-。
 	TypeDsc Type = "dsc"
 )
 
@@ -160,10 +160,12 @@ func (s *SDK) Agent(impl core.Agent) *SDK {
 	return s
 }
 
-// Policy 注册策略服务实现（仅 policy 类型插件；实现 proto.PolicyServiceServer，
-// 宿主经主连接直接取对应 proto 客户端并桥接到工具流水线：pre-execute deny 拦截、
-// execute 槽 deny 拦截与 TimeoutSpec 裁决（宿主机械安装活跃续命执行域）、
-// post-execute replace 改写，策略逻辑与状态全部在插件侧）。
+// Policy 注册策略服务实现（policy 类型插件必填；通用 dsc 类型插件可选叠加）。
+// 实现 proto.PolicyServiceServer，宿主经主连接直接取对应 proto 客户端并桥接到
+// 工具流水线：pre-execute deny 拦截、execute 槽 deny 拦截与 TimeoutSpec 裁决
+// （宿主机械安装活跃续命执行域）、post-execute replace 改写与 notice 收集，
+// 策略逻辑与状态全部在插件侧。dsc 通用类型声明后，宿主按 PluginInfo.services
+// 中的 "policy" 声明完成同一桥接（对齐 DSH/Cordis「插件类型与服务正交」）。
 func (s *SDK) Policy(impl proto.PolicyServiceServer) *SDK {
 	s.policy = impl
 	return s
@@ -328,10 +330,11 @@ func (s *SDK) validate() error {
 			return fmt.Errorf("policy 类型插件必须注册策略服务（调用 sdk.Policy(...)）")
 		}
 	case TypeDsc:
-		// 通用类型：可同时声明 hook + tools + 自定义能力（Provides）。
-		// 工具非强制；声明了工具时宿主侧 case "dsc" 会探测 ListTools 并登记为
-		// tool provider（对齐 DSH/Cordis 的「插件类型与服务正交」模型）。
-		// 校验工具字段（若有）：保证 Name + Handler 完整，与 TypeTool 同款约束。
+		// 通用类型：可同时声明 policy 服务 + hook + tools + 自定义能力（Provides）。
+		// 声明了 policy 时宿主侧 case "dsc" 按 services 声明桥接策略流水线；
+		// 声明了工具时宿主探测 ListTools 并登记为 tool provider（对齐 DSH/Cordis
+		// 的「插件类型与服务正交」模型）。校验工具字段（若有）：保证 Name + Handler
+		// 完整，与 TypeTool 同款约束。
 		for i, t := range s.tools {
 			if t.Name == "" {
 				return fmt.Errorf("tools[%d].Name 不能为空", i)
@@ -344,6 +347,26 @@ func (s *SDK) validate() error {
 		return fmt.Errorf("不支持的插件类型 %q（tool | llm | agent | policy | dsc）", s.cfg.Type)
 	}
 	return nil
+}
+
+// declaredServices 计算本插件实际暴露的服务清单（PluginInfo.services）。
+// 对齐 DSH/Cordis「插件类型与服务正交」：清单与 gRPC server 实际注册的服务一致，
+// 宿主对通用（dsc）类型按声明机械桥接（policy → 工具流水线；tool → ListTools 探测）。
+func (s *SDK) declaredServices() []string {
+	switch s.cfg.Type {
+	case TypeTool:
+		return []string{"tool", "hook"}
+	case TypePolicy:
+		return []string{"policy", "hook"}
+	case TypeDsc:
+		services := []string{"tool", "hook"}
+		if s.policy != nil {
+			services = append(services, "policy")
+		}
+		return services
+	default:
+		return nil
+	}
 }
 
 // plugins 组装 go-core 注册表（key 与宿主侧客户端无关紧要，metadata 决定类型）。

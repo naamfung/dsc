@@ -29,11 +29,13 @@ func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteTool
 		ctx = WithApprovalPolicy(ctx, p)
 	}
 	var args json.RawMessage = []byte(req.ArgumentsJson)
-	result, viewJSON, images, err := s.mgr.ExecuteToolWithView(ctx, req.ToolName, args)
+	// advisory 上下文与结果一并透传：执行失败（err != nil）同样携带——
+	// 策略提醒恰恰最需要发生在反复重试的被拒/失败调用上（对齐 DSH）。
+	result, viewJSON, images, notices, err := s.mgr.ExecuteToolWithView(ctx, req.ToolName, args)
 	if err != nil {
-		return &proto.ExecuteToolResponse{Error: err.Error()}, nil
+		return &proto.ExecuteToolResponse{Error: err.Error(), Notices: notices}, nil
 	}
-	return &proto.ExecuteToolResponse{Content: result, ViewJson: viewJSON, Images: images}, nil
+	return &proto.ExecuteToolResponse{Content: result, ViewJson: viewJSON, Images: images, Notices: notices}, nil
 }
 
 // ListTools 返回当前 presentation mode 下模型可直接调用的工具目录。

@@ -61,7 +61,7 @@ type toolGRPCPlugin struct {
 func (p *toolGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
 	srv := &toolServiceServer{sdk: p.sdk, broker: broker}
 	proto.RegisterToolServiceServer(s, srv)
-	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg})
+	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg, services: p.sdk.declaredServices()})
 	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})
 	return nil
 }

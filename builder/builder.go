@@ -68,6 +68,7 @@ var publicPlugins = []string{
 	"policy-fs-observation",
 	"policy-timeout",
 	"policy-spill",
+	"dsc-system",
 	"tool-ssh",
 	"tool-musicplayer",
 	"tool-harness-webui",
