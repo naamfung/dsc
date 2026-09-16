@@ -16,9 +16,9 @@ func longText(n int) string {
 	return strings.Repeat(block, n/1000+1)[:n]
 }
 
-// newTestServer 建立以 t.TempDir() 为外置根的策略服务（显式覆盖 DSC_SPILL_DIR，
+// newSpillTestServer 建立以 t.TempDir() 为外置根的策略服务（显式覆盖 DSC_SPILL_DIR，
 // 不依赖进程工作目录）。
-func newTestServer(t *testing.T) *spillServer {
+func newSpillTestServer(t *testing.T) *spillServer {
 	t.Helper()
 	t.Setenv(spillEnvDir, t.TempDir())
 	return newSpillServer()
@@ -60,9 +60,9 @@ func TestThresholdCharsByEnv(t *testing.T) {
 	}
 }
 
-// TestOnEventDisabledByZero 验证 env 显式 0 禁用：超长结果也不外置（no-op）。
-func TestOnEventDisabledByZero(t *testing.T) {
-	s := newTestServer(t)
+// TestSpillDisabledByZero 验证 env 显式 0 禁用：超长结果也不外置（no-op）。
+func TestSpillDisabledByZero(t *testing.T) {
+	s := newSpillTestServer(t)
 	t.Setenv(spillEnvThreshold, "0")
 	dec, err := s.OnEvent(context.Background(), postEvent("shell", `{}`, longText(9000), "", "s1"))
 	if err != nil || dec.GetAction() != "" {
@@ -73,7 +73,7 @@ func TestOnEventDisabledByZero(t *testing.T) {
 // TestOnEventSpillsOversizedResult 验证核心语义：超长结果 → replace 裁决，
 // 全文落盘、定位符即文件路径、预览含头尾且不含全文。
 func TestOnEventSpillsOversizedResult(t *testing.T) {
-	s := newTestServer(t)
+	s := newSpillTestServer(t)
 	content := longText(9000)
 	dec, err := s.OnEvent(context.Background(), postEvent("shell", `{"command":"cat big.log"}`, content, "", "s1"))
 	if err != nil {
@@ -119,7 +119,7 @@ func TestOnEventSpillsOversizedResult(t *testing.T) {
 
 // TestOnEventKeepsShortResult 未达阈值放行（空裁决）。
 func TestOnEventKeepsShortResult(t *testing.T) {
-	s := newTestServer(t)
+	s := newSpillTestServer(t)
 	dec, err := s.OnEvent(context.Background(), postEvent("shell", `{}`, "short", "", "s1"))
 	if err != nil || dec.GetAction() != "" || dec.GetResult() != "" {
 		t.Fatalf("短结果应放行: dec=%+v err=%v", dec, err)
@@ -129,7 +129,7 @@ func TestOnEventKeepsShortResult(t *testing.T) {
 // TestOnEventExemptsViewCommand 取回路径豁免（对齐 DSH 豁免 read）：编辑器
 // view 命令的超长结果不外置——否则「取回外置内容 → 又被外置」死循环。
 func TestOnEventExemptsViewCommand(t *testing.T) {
-	s := newTestServer(t)
+	s := newSpillTestServer(t)
 	content := longText(9000)
 	dec, err := s.OnEvent(context.Background(), postEvent("str_replace_editor", `{"command":"view","path":"/workspace/big.txt"}`, content, "", "s1"))
 	if err != nil || dec.GetAction() != "" {
@@ -144,7 +144,7 @@ func TestOnEventExemptsViewCommand(t *testing.T) {
 // TestOnEventSkipsFailedResults 失败结果不外置（错误是权威观察，外置只塑造
 // 被接受的成功结果——对齐 DSH block pass-through）。
 func TestOnEventSkipsFailedResults(t *testing.T) {
-	s := newTestServer(t)
+	s := newSpillTestServer(t)
 	dec, err := s.OnEvent(context.Background(), postEvent("shell", `{}`, longText(9000), "no such file", "s1"))
 	if err != nil || dec.GetAction() != "" {
 		t.Fatalf("失败结果应放行: dec=%+v err=%v", dec, err)
@@ -153,7 +153,7 @@ func TestOnEventSkipsFailedResults(t *testing.T) {
 
 // TestOnEventSkipsNonPostExecute 非本槽事件一律放行（策略只在自己的领域发声）。
 func TestOnEventSkipsNonPostExecute(t *testing.T) {
-	s := newTestServer(t)
+	s := newSpillTestServer(t)
 	for _, kind := range []string{"tool/pre-execute", "tool/execute"} {
 		dec, err := s.OnEvent(context.Background(), &proto.PolicyEvent{Kind: kind, Tool: "shell", Result: longText(9000)})
 		if err != nil || dec.GetAction() != "" {
@@ -183,7 +183,7 @@ func TestReplacementWithinThresholdInvariant(t *testing.T) {
 // TestTinyThresholdKeepsInline 阈值小到告示单独就放不下：不产生阈内替换，
 // 保留内联（外置文件成为无害孤儿——对齐 DSH no within-cap replacement）。
 func TestTinyThresholdKeepsInline(t *testing.T) {
-	s := newTestServer(t)
+	s := newSpillTestServer(t)
 	t.Setenv(spillEnvThreshold, "50")
 	dec, err := s.OnEvent(context.Background(), postEvent("shell", `{}`, longText(9000), "", "s1"))
 	if err != nil || dec.GetAction() != "" {

@@ -247,3 +247,94 @@ func TestFsObservationE2E(t *testing.T) {
 		t.Fatalf("观察后删除应 deny: dec=%+v err=%v", dec, err)
 	}
 }
+
+// TestSpillE2E 端到端验证 spill 外置策略驻留（自 plugins/policy-spill 迁入）：
+// spawn dsc-system exe（env 注入 DSC_SPILL_DIR），经 gRPC 覆盖超长结果外置
+// （replace + 全文落盘 + 定位符即路径）、取回豁免、失败放行与阈值禁用。
+func TestSpillE2E(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "dsc-system.exe")
+	if out, err := exec.Command("go", "build", "-o", exe, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	spillDir := filepath.Join(dir, "spill")
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), "DSC_SPILL_DIR="+spillDir)
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  core.Handshake,
+		Plugins:          map[string]plugin.Plugin{},
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Cmd:              cmd,
+	})
+	defer client.Kill()
+
+	rpcClient, err := client.Client()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		t.Fatalf("unexpected client type %T", rpcClient)
+	}
+	conn := grpcClient.Conn
+	ctx := context.Background()
+
+	// 元数据：混合体 type=dsc（服务正交——policy 桥接对 spill 同样生效）
+	meta := metadata.NewPluginMetadataClient(conn)
+	info, err := meta.GetInfo(ctx, &metadata.Empty{})
+	if err != nil || info.Type != "dsc" || info.Name != "dsc-system" {
+		t.Fatalf("GetInfo = %+v, err %v", info, err)
+	}
+
+	pc := proto.NewPolicyServiceClient(conn)
+	content := longText(9000)
+
+	// 1. 超长结果 → replace；全文落盘；定位符为绝对路径且内容逐字一致
+	dec, err := pc.OnEvent(ctx, &proto.PolicyEvent{
+		Kind: kindPostExecute, Tool: "shell", ArgumentsJson: `{"command":"cat big.log"}`,
+		Result: content, Session: "s1",
+	})
+	if err != nil || dec.GetAction() != actionReplace || dec.GetResult() == "" {
+		t.Fatalf("超长结果应 replace: dec=%+v err=%v", dec, err)
+	}
+	start := strings.Index(dec.GetResult(), "[内容已外置: ") + len("[内容已外置: ")
+	locator := dec.GetResult()[start : strings.Index(dec.GetResult()[start:], "]")+start]
+	if !filepath.IsAbs(locator) {
+		t.Fatalf("定位符应为绝对路径: %q", locator)
+	}
+	got, err := os.ReadFile(locator)
+	if err != nil || string(got) != content {
+		t.Fatalf("外置文件应逐字保真: err=%v len=%d", err, len(got))
+	}
+	if strings.Contains(dec.GetResult(), content) {
+		t.Fatal("完整内容不应残留于替换体")
+	}
+
+	// 2. 未达阈值 → 放行（空裁决）
+	if dec, err = pc.OnEvent(ctx, &proto.PolicyEvent{Kind: kindPostExecute, Tool: "shell", Result: "short", Session: "s1"}); err != nil || dec.GetAction() != "" {
+		t.Fatalf("短结果应放行: dec=%+v err=%v", dec, err)
+	}
+
+	// 3. 取回路径豁免：view 命令超长结果不外置（防取回死循环）
+	if dec, err = pc.OnEvent(ctx, &proto.PolicyEvent{
+		Kind: kindPostExecute, Tool: "str_replace_editor",
+		ArgumentsJson: `{"command":"view","path":"/workspace/big.txt"}`,
+		Result:        content, Session: "s1",
+	}); err != nil || dec.GetAction() != "" {
+		t.Fatalf("view 命令应豁免: dec=%+v err=%v", dec, err)
+	}
+
+	// 4. 失败结果放行（错误是权威观察；外置只塑造被接受的成功结果）
+	if dec, err = pc.OnEvent(ctx, &proto.PolicyEvent{
+		Kind: kindPostExecute, Tool: "shell", Result: content,
+		Error: "no such file", Session: "s1",
+	}); err != nil || dec.GetAction() != "" {
+		t.Fatalf("失败结果应放行: dec=%+v err=%v", dec, err)
+	}
+
+	// 5. 非 post-execute 槽一律放行（策略只在自己的领域发声）
+	if dec, err = pc.OnEvent(ctx, &proto.PolicyEvent{Kind: "tool/pre-execute", Tool: "shell"}); err != nil || dec.GetAction() != "" {
+		t.Fatalf("pre 槽应放行: dec=%+v err=%v", dec, err)
+	}
+}

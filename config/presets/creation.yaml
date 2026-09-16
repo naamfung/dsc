@@ -4,15 +4,13 @@ persona: "You are an AI agent powered by DSC, running in CREATION mode. When you
 plan_section: "You are in creation mode. When a task needs a new capability, first design a Lua plugin: decide which tools to register, which dsc.* services (llm/tool/notify/store/hook/job) they will use, and the parameter schemas. Present the complete design through exit_plan_mode before writing the script. Read the lua-plugin-creator skill first if you haven't."
 plugins:
   # ===== 继承标准模式（standard）的全部插件 =====
-  # 外置决策插件：超长工具结果外置为文件（阈值 DSC_SPILL_THRESHOLD 字符，0 禁用；取回走 view）
-  - name: policy-spill
-    type: policy
-    enabled: true
   # 核心插件混合体（dsc-system 驻留）：
   #   - fs-observation 读前改写策略：str_replace/insert 前必须有本会话内先读
   #     记录，文件被外部修改后拦截（sha256 新鲜度校验）
   #   - timeout 超时决策：shell/subagent 活跃续命空闲预算
   #     （DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT，0s 禁用）
+  #   - spill 外置决策：超长工具结果全文落盘，模型侧只见头尾预览 + 定位符
+  #     + 取回指引（阈值 DSC_SPILL_THRESHOLD 字符，0 禁用；取回走 view）
   #   - 重复工具调用提醒（advisory）：连续同参重复调用达阈值时注入提醒
   #     （DSC_REPEAT_THRESHOLDS 缺省 3,5,8 / DSC_REPEAT_EXCLUDE
   #     缺省 todo_write）；不否决不改写，用户插话自动重置

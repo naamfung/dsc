@@ -10,21 +10,14 @@ import (
 	"strconv"
 	"sync"
 
-	"dsc-sdk"
 	"dsc/proto"
 )
 
-// 工具流水线事件种类与裁决动作（与宿主 core 的 PolicyService 字符串约定一致，
-// 对应 proto PolicyEvent.kind / PolicyDecision.action）。
-const (
-	kindPostExecute = "tool/post-execute"
-	actionReplace   = "replace"
-)
-
 // spill-policy 外置策略（第三实例，对齐 DSH spill-policy 的 tools/post-execute
-// 结果变换器形态）：超长纯文本工具结果不进模型上下文——全文保存到本插件管理的
-// 外置存储，模型侧只见「头尾预览 + 定位符 + 取回指引」，需要完整内容时用标准
-// view 工具按定位符（文件路径）读取。
+// 结果变换器形态，自 plugins/policy-spill 迁入的核心插件混合体驻留）：超长纯
+// 文本工具结果不进模型上下文——全文保存到本插件管理的外置存储，模型侧只见
+// 「头尾预览 + 定位符 + 取回指引」，需要完整内容时用标准 view 工具按定位符
+//（文件路径）读取。
 //
 // 设计对齐（DSH spill-policy / spill-local）：
 //   - locator 即文件路径（DSH spill-local：locator 为路径、retrievalHint 指引
@@ -106,9 +99,9 @@ type sessionStore struct {
 	next int64
 }
 
-// spillServer 外置策略服务。状态仅限编号续接的存储句柄（无模型可见语义），
-// 按 PolicyEvent.session 的会话属主隔离目录（per-session owner，对齐 DSH
-// SpillOwner.sessionId——后端按产出会话归组存储）。
+// spillServer 外置策略服务（dsc-system 驻留）。状态仅限编号续接的存储句柄
+// （无模型可见语义），按 PolicyEvent.session 的会话属主隔离目录（per-session
+// owner，对齐 DSH SpillOwner.sessionId——后端按产出会话归组存储）。
 type spillServer struct {
 	proto.UnimplementedPolicyServiceServer
 	mu      sync.Mutex
@@ -262,20 +255,4 @@ func spillReplacement(content, locator string, threshold int) (string, bool) {
 func spillNotice(locator string, omitted int) string {
 	return fmt.Sprintf("...(中间省略 %d 字符。完整内容已存于 %s：用 str_replace_editor 的 view 命令读取该文件（可配 view_range 分段），或用 shell grep 在该文件中搜索。不要重复调用原工具——重复调用只会返回相同结果并生成新的外置文件)",
 		omitted, locator)
-}
-
-// main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 PolicyService 与
-// PluginMetadata 的 go-core 组装。阈值、豁免、存储与文案全部在本插件——
-// 宿主不保留任何外置语义（对齐「policy 插件持有策略，宿主只派发与执行裁决」）。
-func main() {
-	sdk := dsc.New(dsc.Config{
-		Name:    "spill-policy",
-		Version: "1.0.0",
-		Type:    dsc.TypePolicy,
-		// 声明提供 "spill-policy" 能力：其他插件若需依赖此策略可经
-		// Requires 声明，宿主据此按能力匹配（对齐 DSH/Cordis 的 provide+inject）。
-		Provides: map[string]string{"spill-policy": "true"},
-	})
-	sdk.Policy(newSpillServer())
-	sdk.Serve()
 }

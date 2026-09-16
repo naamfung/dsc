@@ -14,6 +14,8 @@
 //     fs-observation-policy：deny 拦截 + sha256 新鲜度）
 //   - timeout.go        超时决策（自 policy-timeout 迁入，对齐 DSH timeout-policy：
 //     tool/execute 槽裁决活跃续命执行域）
+//   - spill.go          外置决策（自 policy-spill 迁入，对齐 DSH spill-policy：
+//     tool/post-execute 槽超长结果外置为文件 + replace 预览替换）
 //   - reminder.go       重复工具调用提醒（对齐 DSH guard/repeat-tool-reminder，
 //     advisory 形态：只产出 notice，不否决/不改写）
 package main
@@ -29,6 +31,7 @@ import (
 func main() {
 	fsObs := newFsObservationServer()
 	timeout := newTimeoutServer()
+	spill := newSpillServer()
 	reminder, err := newReminderServer()
 	if err != nil {
 		// fail-loud（对齐 DSH 插件装载校验）：配置非法启动即退出，绝不静默回退
@@ -38,13 +41,13 @@ func main() {
 
 	sdk := dsc.New(dsc.Config{
 		Name:    "dsc-system",
-		Version: "1.2.0",
+		Version: "1.3.0",
 		Type:    dsc.TypeDsc,
 	})
 	// 通用类型叠加 policy 服务：宿主按 PluginInfo.services 的 "policy" 声明，
 	// 把内部策略瀑布（多驻留扇出合并）桥接到工具流水线——与独立 policy 插件同一桥。
 	// 驻留顺序对齐原 preset 中独立插件的声明顺序（瀑布语义同构）。
-	sdk.Policy(&policyPipeline{residents: []proto.PolicyServiceServer{fsObs, timeout, reminder}})
+	sdk.Policy(&policyPipeline{residents: []proto.PolicyServiceServer{fsObs, timeout, spill, reminder}})
 	// hook 订阅宿主事件：agent/pre-step 的「新用户输入」重置重复链
 	//（对齐 DSH repeat-tool-reminder 的 agent/pre-step reset hook——用户插话
 	// 改变了上下文，跨插话的重复不是循环）。

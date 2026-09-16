@@ -65,7 +65,6 @@ var publicPlugins = []string{
         "dsc-notify",
         "tool-lua-host",
         "tool-agentic-bench",
-        "policy-spill",
         "dsc-system",
         "tool-ssh",
         "tool-musicplayer",

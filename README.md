@@ -24,7 +24,7 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **工具調用超時（活躍續命，策略插件化）**：`dsc-system` 驻留超时策略（自 `policy-timeout` 迁入）在工具流水线 `tool/execute` 槽裁决「哪个工具、多大空闲预算、超时模型可见文案」（对齐 DSH timeout-policy 占位）：`shell` 預算由 `DSC_SHELL_TIMEOUT`（默认 10 分钟）、`subagent` 由 `DSC_SUBAGENT_IDLE_TIMEOUT`（默认 10 分钟）可调，设 `0s` 禁用；宿主机械安装执行域（看门狗 + 活动信号通道），执行方每次输出/帧到达即续命，仅对「长时间完全无活动」才判定超时，避免一刀切固定时长误杀仍在产出的长编译/测试与慢速本地模型；cron 任务与 workflow 子代理亦经同一 `subagent` 工具裁决路径，无旁路。
 
-- **超长结果外置（spill，策略插件化）**：外置决策插件 `policy-spill` 在工具流水线 `tool/post-execute` 槽裁决「超长纯文本工具结果何时外置」（对齐 DSH spill-policy 的结果变换器占位）：超过 `DSC_SPILL_THRESHOLD`（默认 4000 字符，设 `0` 禁用）的结果全文保存到外置存储（`DSC_SPILL_DIR` 显式覆盖，缺省 exe 目录 `temp/spill/<session>`，宿主 24 小时清理覆盖），模型侧只见「头尾预览 + 定位符 + 取回指引」；定位符即文件路径，取回走标准 `str_replace_editor` view 命令（支持 `view_range` 分段）或 `shell` grep 搜索（view 命令豁免外置，防「取回 → 又被外置」死循环）；替换体永不超阈值（告示成本在阈值内预留）；尽力而为：存储失败/阈内容不下替换体一律保留内联，绝不把成功调用变成失败。
+- **超长结果外置（spill，策略插件化）**：`dsc-system` 驻留外置策略（自 `policy-spill` 迁入）在工具流水线 `tool/post-execute` 槽裁决「超长纯文本工具结果何时外置」（对齐 DSH spill-policy 的结果变换器占位）：超过 `DSC_SPILL_THRESHOLD`（默认 4000 字符，设 `0` 禁用）的结果全文保存到外置存储（`DSC_SPILL_DIR` 显式覆盖，缺省 exe 目录 `temp/spill/<session>`，宿主 24 小时清理覆盖），模型侧只见「头尾预览 + 定位符 + 取回指引」；定位符即文件路径，取回走标准 `str_replace_editor` view 命令（支持 `view_range` 分段）或 `shell` grep 搜索（view 命令豁免外置，防「取回 → 又被外置」死循环）；替换体永不超阈值（告示成本在阈值内预留）；尽力而为：存储失败/阈内容不下替换体一律保留内联，绝不把成功调用变成失败。
 
 - **重複調用提醒（advisory，策略插件化）**：核心插件混合体 `dsc-system` 的驻留策略在工具流水线 `tool/post-execute` 槽观察每次调用（对齐 DSH repeat-tool-reminder 的 advisory 形态）：以完全相同的规范化参数连续调用同一工具的次数达到阈值（`DSC_REPEAT_THRESHOLDS`，默认 `3,5,8`，首个阈值为简短提醒、后续为列出工具/连击次数/参数预览的详细提醒，`DSC_REPEAT_PREVIEW_CHARS` 默认 500 限预览长度）时，经裁决的 advisory 通道（notice）注入提醒——不否决、不改写工具结果，提醒在结果之后以合成用户消息投喂模型；被拒绝/失败的调用同样计数（反复硬敲被拒调用正是最值得打断的循环），`DSC_REPEAT_EXCLUDE`（默认 `todo_write`）对链透明，用户插话（回合新输入或运行中注入）自动重置循环链。多个策略可共驻 `dsc-system` 单一程序（`plugins/dsc-system`，服务正交声明 `PluginInfo.services`），后续核心插件将逐步迁移至此。
 
@@ -233,8 +233,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Policy 插件
 
-- `policy-spill`（外置决策插件：在 `tool/post-execute` 槽把超阈值的纯文本结果全文外置为文件，replace 裁决返回「头尾预览 + 文件路径定位符 + view 取回指引」；`str_replace_editor` 的 view 命令豁免（取回路径防死循环）；存储按会话属主分目录、编号跨重启续接不覆盖；尽力而为——存储失败或阈内容不下替换体时保留内联。提供 `spill-policy` 能力）
-- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）timeout 超时决策（自 `policy-timeout` 迁入，对齐 DSH timeout-policy：tool/execute 槽为 shell/subagent 裁决「活跃续命」执行域——空闲预算 DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT 可调、0s 禁用，宿主机械安装看门狗与活动信号通道，无状态）与重复工具调用提醒（advisory 形态，见特性条目）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
+- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）timeout 超时决策（自 `policy-timeout` 迁入，对齐 DSH timeout-policy：tool/execute 槽为 shell/subagent 裁决「活跃续命」执行域——空闲预算 DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT 可调、0s 禁用，宿主机械安装看门狗与活动信号通道，无状态）spill 外置决策（自 `policy-spill` 迁入，对齐 DSH spill-policy：tool/post-execute 槽把超阈值纯文本结果全文外置为文件并 replace 为「头尾预览 + 定位符 + view 取回指引」，阈值 DSC_SPILL_THRESHOLD 可调、0 禁用，存储按会话分目录、编号跨重启续接，尽力而为不把成功调用变失败）与重复工具调用提醒（advisory 形态，见特性条目）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
 
 ### DSC 通用插件
 
