@@ -3242,6 +3242,8 @@ func (x *ListContextResponse) GetContent() string {
 // PolicyEvent 工具流水线事件载荷。kind 取值：
 //
 //	"tool/pre-execute"  —— 工具即将执行（result/error 为空）；deny 阻止执行
+//	"tool/execute"      —— 执行槽（真正分发的洋葱包裹位）：allow 可附 timeout
+//	                       （执行超时语义，宿主机械安装）；deny 同样阻止执行
 //	"tool/post-execute" —— 工具已执行完毕；replace 可改写模型可见结果
 type PolicyEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3327,20 +3329,77 @@ func (x *PolicyEvent) GetSession() string {
 	return ""
 }
 
-// PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre 阶段
-// 阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
+// TimeoutSpec 执行超时语义（「活跃续命」）：超时决策插件在 tool/execute 槽裁决，
+// 宿主机械执行——以 idle_ms 为空闲预算安装看门狗，执行方每次活动（输出帧、
+// 进度信号）重置计时；持续无活动达预算即取消执行，message 作为模型可见错误
+// 文案（对齐 deny reason 的透传语义：裁决原文归插件，宿主不 crafting 领域文案）。
+type TimeoutSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IdleMs        int64                  `protobuf:"varint,1,opt,name=idle_ms,json=idleMs,proto3" json:"idle_ms,omitempty"` // 空闲预算（毫秒）：持续无活动的最长时间；每次活动重置
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`              // 超时触发的模型可见文案；空则宿主给通用文案
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TimeoutSpec) Reset() {
+	*x = TimeoutSpec{}
+	mi := &file_proto_dsc_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TimeoutSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TimeoutSpec) ProtoMessage() {}
+
+func (x *TimeoutSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_dsc_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TimeoutSpec.ProtoReflect.Descriptor instead.
+func (*TimeoutSpec) Descriptor() ([]byte, []int) {
+	return file_proto_dsc_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *TimeoutSpec) GetIdleMs() int64 {
+	if x != nil {
+		return x.IdleMs
+	}
+	return 0
+}
+
+func (x *TimeoutSpec) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+// PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre/execute
+// 阶段阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
 type PolicyDecision struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"` // "allow"（默认）| "deny" | "replace"
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"` // deny 时的模型可见文案（如读前改写指引）
-	Result        string                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"` // replace 时的替换结果文本（仅 tool/post-execute）
+	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`   // "allow"（默认）| "deny" | "replace"
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`   // deny 时的模型可见文案（如读前改写指引）
+	Result        string                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`   // replace 时的替换结果文本（仅 tool/post-execute）
+	Timeout       *TimeoutSpec           `protobuf:"bytes,4,opt,name=timeout,proto3" json:"timeout,omitempty"` // 执行超时语义（仅 tool/execute 槽；allow 时可附）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicyDecision) Reset() {
 	*x = PolicyDecision{}
-	mi := &file_proto_dsc_proto_msgTypes[59]
+	mi := &file_proto_dsc_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3352,7 +3411,7 @@ func (x *PolicyDecision) String() string {
 func (*PolicyDecision) ProtoMessage() {}
 
 func (x *PolicyDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_dsc_proto_msgTypes[59]
+	mi := &file_proto_dsc_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3365,7 +3424,7 @@ func (x *PolicyDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyDecision.ProtoReflect.Descriptor instead.
 func (*PolicyDecision) Descriptor() ([]byte, []int) {
-	return file_proto_dsc_proto_rawDescGZIP(), []int{59}
+	return file_proto_dsc_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *PolicyDecision) GetAction() string {
@@ -3387,6 +3446,13 @@ func (x *PolicyDecision) GetResult() string {
 		return x.Result
 	}
 	return ""
+}
+
+func (x *PolicyDecision) GetTimeout() *TimeoutSpec {
+	if x != nil {
+		return x.Timeout
+	}
+	return nil
 }
 
 var File_proto_dsc_proto protoreflect.FileDescriptor
@@ -3622,11 +3688,15 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\x12\x16\n" +
 	"\x06result\x18\x04 \x01(\tR\x06result\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x12\x18\n" +
-	"\asession\x18\x06 \x01(\tR\asession\"X\n" +
+	"\asession\x18\x06 \x01(\tR\asession\"@\n" +
+	"\vTimeoutSpec\x12\x17\n" +
+	"\aidle_ms\x18\x01 \x01(\x03R\x06idleMs\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x84\x01\n" +
 	"\x0ePolicyDecision\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x16\n" +
-	"\x06result\x18\x03 \x01(\tR\x06result2\xed\x01\n" +
+	"\x06result\x18\x03 \x01(\tR\x06result\x12*\n" +
+	"\atimeout\x18\x04 \x01(\v2\x10.dsc.TimeoutSpecR\atimeout2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +
@@ -3683,7 +3753,7 @@ func file_proto_dsc_proto_rawDescGZIP() []byte {
 	return file_proto_dsc_proto_rawDescData
 }
 
-var file_proto_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 61)
+var file_proto_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 62)
 var file_proto_dsc_proto_goTypes = []any{
 	(*InterconnectRequest)(nil),             // 0: dsc.InterconnectRequest
 	(*InterconnectResponse)(nil),            // 1: dsc.InterconnectResponse
@@ -3744,11 +3814,12 @@ var file_proto_dsc_proto_goTypes = []any{
 	(*ListContextRequest)(nil),              // 56: dsc.ListContextRequest
 	(*ListContextResponse)(nil),             // 57: dsc.ListContextResponse
 	(*PolicyEvent)(nil),                     // 58: dsc.PolicyEvent
-	(*PolicyDecision)(nil),                  // 59: dsc.PolicyDecision
-	nil,                                     // 60: dsc.ExecuteRequest.ParamsEntry
+	(*TimeoutSpec)(nil),                     // 59: dsc.TimeoutSpec
+	(*PolicyDecision)(nil),                  // 60: dsc.PolicyDecision
+	nil,                                     // 61: dsc.ExecuteRequest.ParamsEntry
 }
 var file_proto_dsc_proto_depIdxs = []int32{
-	60, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	61, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	13, // 1: dsc.RunStreamResponse.usage:type_name -> dsc.Usage
 	15, // 2: dsc.ChatRequest.messages:type_name -> dsc.Message
 	16, // 3: dsc.ChatRequest.tools:type_name -> dsc.Tool
@@ -3763,75 +3834,76 @@ var file_proto_dsc_proto_depIdxs = []int32{
 	47, // 12: dsc.AskQuestion.intent:type_name -> dsc.AskIntent
 	49, // 13: dsc.AskResponse.answers:type_name -> dsc.AskAnswer
 	16, // 14: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
-	2,  // 15: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
-	4,  // 16: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
-	6,  // 17: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
-	8,  // 18: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	10, // 19: dsc.AgentService.Run:input_type -> dsc.RunRequest
-	10, // 20: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
-	2,  // 21: dsc.AgentService.Name:input_type -> dsc.NameRequest
-	4,  // 22: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	20, // 23: dsc.AgentService.RegisterServices:input_type -> dsc.RegisterServicesRequest
-	22, // 24: dsc.AgentService.SwitchSession:input_type -> dsc.SwitchSessionRequest
-	24, // 25: dsc.AgentService.SetPlanMode:input_type -> dsc.SetPlanModeRequest
-	26, // 26: dsc.AgentService.SetHistoryInjection:input_type -> dsc.SetHistoryInjectionRequest
-	28, // 27: dsc.AgentService.SetUserQuestionsService:input_type -> dsc.SetUserQuestionsServiceRequest
-	50, // 28: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
-	30, // 29: dsc.AgentService.InjectMessage:input_type -> dsc.InjectMessageRequest
-	32, // 30: dsc.AgentService.DebugSnapshot:input_type -> dsc.DebugSnapshotRequest
-	14, // 31: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	14, // 32: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
-	2,  // 33: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	4,  // 34: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	8,  // 35: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	52, // 36: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
-	54, // 37: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
-	56, // 38: dsc.ToolService.ListContext:input_type -> dsc.ListContextRequest
-	0,  // 39: dsc.ToolService.SetInterconnect:input_type -> dsc.InterconnectRequest
-	44, // 40: dsc.UserQuestionsService.Ask:input_type -> dsc.AskRequest
-	36, // 41: dsc.PluginNotifyService.Notify:input_type -> dsc.NotifyRequest
-	38, // 42: dsc.PluginHookService.BeforeTool:input_type -> dsc.BeforeToolRequest
-	40, // 43: dsc.PluginHookService.AfterTool:input_type -> dsc.AfterToolRequest
-	42, // 44: dsc.PluginHookService.OnEvent:input_type -> dsc.OnEventRequest
-	56, // 45: dsc.PluginHookService.ListContext:input_type -> dsc.ListContextRequest
-	58, // 46: dsc.PolicyService.OnEvent:input_type -> dsc.PolicyEvent
-	3,  // 47: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	5,  // 48: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	7,  // 49: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	9,  // 50: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	11, // 51: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	12, // 52: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
-	3,  // 53: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	5,  // 54: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	21, // 55: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
-	23, // 56: dsc.AgentService.SwitchSession:output_type -> dsc.SwitchSessionResponse
-	25, // 57: dsc.AgentService.SetPlanMode:output_type -> dsc.SetPlanModeResponse
-	27, // 58: dsc.AgentService.SetHistoryInjection:output_type -> dsc.SetHistoryInjectionResponse
-	29, // 59: dsc.AgentService.SetUserQuestionsService:output_type -> dsc.SetUserQuestionsServiceResponse
-	51, // 60: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	31, // 61: dsc.AgentService.InjectMessage:output_type -> dsc.InjectMessageResponse
-	34, // 62: dsc.AgentService.DebugSnapshot:output_type -> dsc.DebugSnapshotResponse
-	17, // 63: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	18, // 64: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
-	3,  // 65: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	5,  // 66: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	9,  // 67: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	53, // 68: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	55, // 69: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	57, // 70: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
-	1,  // 71: dsc.ToolService.SetInterconnect:output_type -> dsc.InterconnectResponse
-	48, // 72: dsc.UserQuestionsService.Ask:output_type -> dsc.AskResponse
-	37, // 73: dsc.PluginNotifyService.Notify:output_type -> dsc.NotifyResponse
-	39, // 74: dsc.PluginHookService.BeforeTool:output_type -> dsc.BeforeToolResponse
-	41, // 75: dsc.PluginHookService.AfterTool:output_type -> dsc.AfterToolResponse
-	43, // 76: dsc.PluginHookService.OnEvent:output_type -> dsc.OnEventResponse
-	57, // 77: dsc.PluginHookService.ListContext:output_type -> dsc.ListContextResponse
-	59, // 78: dsc.PolicyService.OnEvent:output_type -> dsc.PolicyDecision
-	47, // [47:79] is the sub-list for method output_type
-	15, // [15:47] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	59, // 15: dsc.PolicyDecision.timeout:type_name -> dsc.TimeoutSpec
+	2,  // 16: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
+	4,  // 17: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
+	6,  // 18: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
+	8,  // 19: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	10, // 20: dsc.AgentService.Run:input_type -> dsc.RunRequest
+	10, // 21: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
+	2,  // 22: dsc.AgentService.Name:input_type -> dsc.NameRequest
+	4,  // 23: dsc.AgentService.Version:input_type -> dsc.VersionRequest
+	20, // 24: dsc.AgentService.RegisterServices:input_type -> dsc.RegisterServicesRequest
+	22, // 25: dsc.AgentService.SwitchSession:input_type -> dsc.SwitchSessionRequest
+	24, // 26: dsc.AgentService.SetPlanMode:input_type -> dsc.SetPlanModeRequest
+	26, // 27: dsc.AgentService.SetHistoryInjection:input_type -> dsc.SetHistoryInjectionRequest
+	28, // 28: dsc.AgentService.SetUserQuestionsService:input_type -> dsc.SetUserQuestionsServiceRequest
+	50, // 29: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
+	30, // 30: dsc.AgentService.InjectMessage:input_type -> dsc.InjectMessageRequest
+	32, // 31: dsc.AgentService.DebugSnapshot:input_type -> dsc.DebugSnapshotRequest
+	14, // 32: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	14, // 33: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
+	2,  // 34: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	4,  // 35: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	8,  // 36: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	52, // 37: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	54, // 38: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	56, // 39: dsc.ToolService.ListContext:input_type -> dsc.ListContextRequest
+	0,  // 40: dsc.ToolService.SetInterconnect:input_type -> dsc.InterconnectRequest
+	44, // 41: dsc.UserQuestionsService.Ask:input_type -> dsc.AskRequest
+	36, // 42: dsc.PluginNotifyService.Notify:input_type -> dsc.NotifyRequest
+	38, // 43: dsc.PluginHookService.BeforeTool:input_type -> dsc.BeforeToolRequest
+	40, // 44: dsc.PluginHookService.AfterTool:input_type -> dsc.AfterToolRequest
+	42, // 45: dsc.PluginHookService.OnEvent:input_type -> dsc.OnEventRequest
+	56, // 46: dsc.PluginHookService.ListContext:input_type -> dsc.ListContextRequest
+	58, // 47: dsc.PolicyService.OnEvent:input_type -> dsc.PolicyEvent
+	3,  // 48: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	5,  // 49: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	7,  // 50: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	9,  // 51: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	11, // 52: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	12, // 53: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
+	3,  // 54: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	5,  // 55: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	21, // 56: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
+	23, // 57: dsc.AgentService.SwitchSession:output_type -> dsc.SwitchSessionResponse
+	25, // 58: dsc.AgentService.SetPlanMode:output_type -> dsc.SetPlanModeResponse
+	27, // 59: dsc.AgentService.SetHistoryInjection:output_type -> dsc.SetHistoryInjectionResponse
+	29, // 60: dsc.AgentService.SetUserQuestionsService:output_type -> dsc.SetUserQuestionsServiceResponse
+	51, // 61: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	31, // 62: dsc.AgentService.InjectMessage:output_type -> dsc.InjectMessageResponse
+	34, // 63: dsc.AgentService.DebugSnapshot:output_type -> dsc.DebugSnapshotResponse
+	17, // 64: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	18, // 65: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
+	3,  // 66: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	5,  // 67: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	9,  // 68: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	53, // 69: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	55, // 70: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	57, // 71: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
+	1,  // 72: dsc.ToolService.SetInterconnect:output_type -> dsc.InterconnectResponse
+	48, // 73: dsc.UserQuestionsService.Ask:output_type -> dsc.AskResponse
+	37, // 74: dsc.PluginNotifyService.Notify:output_type -> dsc.NotifyResponse
+	39, // 75: dsc.PluginHookService.BeforeTool:output_type -> dsc.BeforeToolResponse
+	41, // 76: dsc.PluginHookService.AfterTool:output_type -> dsc.AfterToolResponse
+	43, // 77: dsc.PluginHookService.OnEvent:output_type -> dsc.OnEventResponse
+	57, // 78: dsc.PluginHookService.ListContext:output_type -> dsc.ListContextResponse
+	60, // 79: dsc.PolicyService.OnEvent:output_type -> dsc.PolicyDecision
+	48, // [48:80] is the sub-list for method output_type
+	16, // [16:48] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_proto_dsc_proto_init() }
@@ -3845,7 +3917,7 @@ func file_proto_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_dsc_proto_rawDesc), len(file_proto_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   61,
+			NumMessages:   62,
 			NumExtensions: 0,
 			NumServices:   8,
 		},

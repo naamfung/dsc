@@ -162,6 +162,7 @@ func (s *SDK) Agent(impl core.Agent) *SDK {
 
 // Policy 注册策略服务实现（仅 policy 类型插件；实现 proto.PolicyServiceServer，
 // 宿主经主连接直接取对应 proto 客户端并桥接到工具流水线：pre-execute deny 拦截、
+// execute 槽 deny 拦截与 TimeoutSpec 裁决（宿主机械安装活跃续命执行域）、
 // post-execute replace 改写，策略逻辑与状态全部在插件侧）。
 func (s *SDK) Policy(impl proto.PolicyServiceServer) *SDK {
 	s.policy = impl

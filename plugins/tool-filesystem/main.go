@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"dsc-sdk"
+	"dsc/core"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -27,11 +28,16 @@ type Session struct {
 	Runner    *interp.Runner
 	StdoutBuf *syncedBuilder
 	StderrBuf *syncedBuilder
-	mu        sync.Mutex
+	// stdoutSignal / stderrSignal 活动信号 writer：包在对应缓冲外（interp 经
+	// StdIO 写入它们），每次输出写入即向活跃续命执行域上报活动。随 session
+	// 持久存在，回调在每次命令执行时换绑（见 execSessionCommand）。
+	stdoutSignal *activityWriter
+	stderrSignal *activityWriter
+	mu           sync.Mutex
 }
 
-// syncedBuilder 是線程安全的輸出累加緩衝：Runner 向其寫入（interp 可能在後台
-// 並發寫 stdout/stderr），idle 探測 goroutine 由 Len() 讀長度以偵測活躍，故須加鎖。
+// syncedBuilder 是線程安全的輸出累加緩衝：Runner 經 activityWriter 向其寫入
+// （interp 可能在後台並發寫 stdout/stderr），讀寫並發安全。
 type syncedBuilder struct {
 	mu sync.Mutex
 	b  strings.Builder
@@ -74,67 +80,36 @@ var globalSessionManager = &SessionManager{
 // maxSessions 上限：防持久 shell 会话 map 无限增长。
 const maxSessions = 64
 
-// shell 前台命令超时采用「十分鐘起步、活躍續命」方式（對齊 rex shell）：
-// 起步 10 分鐘預算，只要 stdout/stderr 持續有新輸出就不斷重新計時（續命），
-// 只有「長時間完全冇輸出」先會超時。避免一刀切固定時長誤殺長耗時但仍在產出嘅編譯/測試。
-var (
-	// shellIdleInitial 超時起步預算（可 DSC_SHELL_TIMEOUT 覆盖，默认 10 分钟）。
-	// 只要 stdout/stderr 持續有輸出就不斷重新計時；只有長時間完全無輸出先超時。
-	shellIdleInitial = durEnv("DSC_SHELL_TIMEOUT", 10*time.Minute)
-)
-
-// errShellIdleTimeout 標記空闲超时（執行被 idle 管理 ctx 取消的 cause）。
-var errShellIdleTimeout = errors.New("shell idle timeout")
-
-// durEnv 读环境变量为时长；空/非法回退默认值。
-func durEnv(key string, def time.Duration) time.Duration {
-	if s := os.Getenv(key); s != "" {
-		if d, err := time.ParseDuration(s); err == nil && d > 0 {
-			return d
-		}
-	}
-	return def
+// activityWriter 活动信号 writer：包装会话输出缓冲，每次写入（输出到达）即向
+// 当前调用的活跃续命执行域上报活动（core.TouchActivity）。超时预算与看门狗由
+// timeout-policy 插件经宿主裁决安装（tool/execute 槽），本工具只供给活动信号——
+// 输出到达即活动，不感知预算与策略。回调随每次命令执行换绑；未换绑
+// （无进行中的命令）时 no-op。
+type activityWriter struct {
+	mu    sync.Mutex
+	w     io.Writer
+	touch func()
 }
 
-// runWithIdleTimeout 以「十分鐘起步、活躍續命」方式執行 run（對齊 rex shell）：
-// 啟動 shellIdleInitial 預算，只要 stdout/stderr 有新增輸出就重新計時（延長），
-// 只有持續 shellIdleInitial 完全無任何新輸出才取消執行並返回 errShellIdleTimeout。
-// 緩衝以 syncedBuilder 提供線程安全的 Len()，故輪詢讀長度與 Runner 寫入不衝突。
-func runWithIdleTimeout(ctx context.Context, session *Session, run func(context.Context) error) error {
-	runCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-
-	const pollInterval = 500 * time.Millisecond
-	stop := make(chan struct{})
-	dsc.SafeGoroutine(func() {
-		tick := time.NewTicker(pollInterval)
-		defer tick.Stop()
-		lastLen := 0
-		lastActive := time.Now()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-tick.C:
-				cur := session.StdoutBuf.Len() + session.StderrBuf.Len()
-				now := time.Now()
-				if cur != lastLen {
-					lastLen = cur
-					lastActive = now
-				} else if now.Sub(lastActive) > shellIdleInitial {
-					cancel(errShellIdleTimeout)
-					return
-				}
-			}
-		}
-	})
-
-	err := run(runCtx)
-	close(stop)
-	if context.Cause(runCtx) == errShellIdleTimeout {
-		return errShellIdleTimeout
+func (a *activityWriter) Write(p []byte) (int, error) {
+	a.mu.Lock()
+	f, w := a.touch, a.w
+	a.mu.Unlock()
+	if f != nil {
+		f()
 	}
-	return err
+	return w.Write(p)
+}
+
+// bind 把活动回调换绑到本次调用的 ctx；run 结束后以 bind(nil) 解绑。
+func (a *activityWriter) bind(ctx context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ctx == nil {
+		a.touch = nil
+		return
+	}
+	a.touch = func() { core.TouchActivity(ctx) }
 }
 
 // main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
@@ -422,11 +397,15 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 
 	stdoutBuf := &syncedBuilder{}
 	stderrBuf := &syncedBuilder{}
+	// 活动信号 writer 包在缓冲外：输出写入即向活跃续命执行域上报活动
+	//（core.TouchActivity）；执行域由 timeout-policy 插件经宿主裁决安装。
+	stdoutSignal := &activityWriter{w: stdoutBuf}
+	stderrSignal := &activityWriter{w: stderrBuf}
 
 	runnerOpts := []interp.RunnerOption{
 		interp.Env(initialEnv),
 		interp.Dir(cwd),
-		interp.StdIO(nil, stdoutBuf, stderrBuf),
+		interp.StdIO(nil, stdoutSignal, stderrSignal),
 		// 内建式常用 POSIX 工具（mkdir/ls/cat/touch/rm/cp/mv/grep/head/tail/wc）进程内
 		// 实现，不依赖外部 PATH；未命中的命令仍回退默认 PATH 外部执行（见 internalcmds.go）。
 		interp.ExecHandler(shellExecHandler),
@@ -438,11 +417,13 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 	}
 
 	session = &Session{
-		SessionID: sessionID,
-		Cwd:       cwd,
-		Runner:    runner,
-		StdoutBuf: stdoutBuf,
-		StderrBuf: stderrBuf,
+		SessionID:    sessionID,
+		Cwd:          cwd,
+		Runner:       runner,
+		StdoutBuf:    stdoutBuf,
+		StderrBuf:    stderrBuf,
+		stdoutSignal: stdoutSignal,
+		stderrSignal: stderrSignal,
 	}
 
 	globalSessionManager.mu.Lock()
@@ -460,9 +441,9 @@ func getOrCreateSession(sessionID, cwd string) (*Session, error) {
 }
 
 // execSessionCommand 在 session 中執行命令，返回輸出和退出碼。
-// ctx 用于传播调用方取消；並用「十分鐘起步、活躍續命」idle 超時防止命令掛死
-// （對齊 rex shell）：只要 stdout/stderr 持續有輸出就續命，只有長時間
-// 完全無輸出先超時，避免誤殺仍然活躍嘅長編譯/測試。
+// ctx 用于传播调用方取消与活跃续命执行域（若有）：命令輸出每次寫入都經
+// activityWriter 上報活動（core.TouchActivity），看門狗與預算由 timeout-policy
+// 插件經宿主裁決安裝——持續無輸出達預算才取消，避免誤殺仍在產出的長編譯/測試。
 func execSessionCommand(ctx context.Context, session *Session, command string) (string, int32, error) {
 	session.mu.Lock()
 	session.StdoutBuf.Reset()
@@ -484,14 +465,20 @@ func execSessionCommand(ctx context.Context, session *Session, command string) (
 	// `ls /workspace/x` 等探索不再报 no such file or directory（对齐 sandbox 语义）。
 	mapWorkspacePaths(file)
 
-	// 活躍續命超時：持續有輸出就續命，只有長時間完全無輸出先超時（對齊 rex shell）。
-	err = runWithIdleTimeout(ctx, session, func(runCtx context.Context) error {
-		return session.Runner.Run(runCtx, file)
-	})
-	idleCancelled := errors.Is(err, errShellIdleTimeout)
+	// 活动信号换绑到本次调用 ctx：输出到达 → core.TouchActivity（活跃续命）。
+	// 看门狗与预算由 timeout-policy 插件经宿主裁决安装（tool/execute 槽），
+	// 本工具只供给活动信号；ctx 未携带执行域时 TouchActivity 为 no-op。
+	session.stdoutSignal.bind(ctx)
+	session.stderrSignal.bind(ctx)
+	defer func() {
+		session.stdoutSignal.bind(nil)
+		session.stderrSignal.bind(nil)
+	}()
+
+	err = session.Runner.Run(ctx, file)
 
 	exitCode := int32(0)
-	if err != nil && !idleCancelled {
+	if err != nil {
 		if exitErr, ok := err.(interp.ExitStatus); ok {
 			exitCode = int32(exitErr)
 		} else {
@@ -503,8 +490,11 @@ func execSessionCommand(ctx context.Context, session *Session, command string) (
 	output := ensureUTF8(session.StdoutBuf.String() + session.StderrBuf.String())
 	session.mu.Unlock()
 
-	if idleCancelled {
-		return output, exitCode, fmt.Errorf("command idle timeout (no output for > %s)", shellIdleInitial)
+	// 活跃续命看门狗触发：上抛取消错误，由工具流水线桥替换为裁决文案
+	//（timeout-policy 的 message）。其余路径保持既有语义：解释器错误计入
+	// 退出码、结果照常返回（非零退出不是 Go 错误），用户中断不在此上抛。
+	if err != nil && core.IdleDeadlineExceeded(ctx) {
+		return output, exitCode, err
 	}
 	return output, exitCode, nil
 }

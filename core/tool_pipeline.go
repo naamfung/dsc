@@ -26,8 +26,10 @@ const (
 	// EventToolPreExecute 工具执行前拦截（waterfall）：veto 返回错误即阻止执行。
 	EventToolPreExecute EventName = "tools/pre-execute"
 	// EventToolExecute 工具执行（waterfall）：对齐 DSH tools/execute——监听器可改写
-	// 执行方式/参数/超时策略（timeout-policy）；不调 next 即 veto。DSC 现有实现把
-	// 实际执行纳入 pre-execute 的 next 闭包，此处约束为显式事件以便插件订阅。
+	// 执行方式/参数/超时策略（timeout-policy）；不调 next 即 veto。policy 插件经
+	// bridgePolicyToPipeline 在此槽获得事件转发：超时裁决的 TimeoutSpec 由宿主
+	// 机械安装为活跃续命执行域（WithIdleDeadline），执行 ctx 经 EventContext
+	// 回读传播到实际执行体。
 	EventToolExecute EventName = "tools/execute"
 	// EventToolPostExecute 工具执行后处理（waterfall）：可观测或改写结果。
 	EventToolPostExecute EventName = "tools/post-execute"
@@ -69,6 +71,7 @@ type ToolInvocation struct {
 // 与 proto PolicyEvent.kind / PolicyDecision.action 对应）。
 const (
 	policyEventPreExecute  = "tool/pre-execute"
+	policyEventExecute     = "tool/execute"
 	policyEventPostExecute = "tool/post-execute"
 	policyDecisionDeny     = "deny"
 	policyDecisionReplace  = "replace"
@@ -126,9 +129,15 @@ func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, args
 	}
 
 	// execute（waterfall）：真正执行 + 超时策略。对齐 DSH tools/execute dispatch body。
+	// 执行 ctx 从 EventContext 回读：监听器（如 policy 桥的超时裁决）可换装
+	// 执行域（活跃续命看门狗），未换装时用调用方原始 ctx。
 	if inv.Err == nil {
-		execErr := m.events.Waterfall(EventToolExecute, EventContext{Data: inv}, func(EventContext) error {
-			return m.executeToolBody(ctx, inv, toolName)
+		execErr := m.events.Waterfall(EventToolExecute, EventContext{Data: inv, Context: ctx}, func(evtCtx EventContext) error {
+			execCtx := evtCtx.Context
+			if execCtx == nil {
+				execCtx = ctx
+			}
+			return m.executeToolBody(execCtx, inv, toolName)
 		})
 		if inv.Err == nil && execErr != nil {
 			inv.Err = execErr
@@ -267,7 +276,9 @@ func (m *Manager) emitToolResult(inv *ToolInvocation) {
 
 // bridgePolicyToPipeline 把已加载的 policy 插件通用策略服务桥接为工具流水线监听器：
 // pre-execute 转发事件，deny 即占槽拦截（reason 原文透传模型，对齐 DSH 单决策槽
-// veto 语义）；post-execute 转发事件，replace 即改写模型可见结果。宿主不解读任何
+// veto 语义）；execute 转发事件，deny 同样拦截，TimeoutSpec 裁决由宿主机械安装为
+// 活跃续命执行域（WithIdleDeadline + TouchActivity，预算与文案全在插件）；
+// post-execute 转发事件，replace 即改写模型可见结果。宿主不解读任何
 // 领域语义——参数提取、工具类别判断、观察状态全部在插件侧（对齐 DSH「policy
 // 插件持有策略，宿主只派发与执行裁决」）。策略服务不可用时不阻塞执行（best-effort：
 // 策略缺失降级为无策略，而非工具不可用）。返回监听器的移除函数（卸载 policy 时调用）。
@@ -297,6 +308,58 @@ func (m *Manager) bridgePolicyToPipeline(name string, pc proto.PolicyServiceClie
 			return errors.New(reason)
 		}
 		return next(ctx)
+	}))
+	// execute 槽：deny 同占槽拦截；TimeoutSpec 裁决由宿主机械安装为活跃续命
+	// 执行域（WithIdleDeadline）：换装执行 ctx 经 EventContext 传播到实际执行体，
+	// 执行方（工具实现/子代理循环）以 TouchActivity 上报活动；看门狗触发
+	// （cause=ErrIdleDeadline）时以裁决文案替换执行错误（对齐 deny reason 的
+	// 透传语义：超时预算与模型可见文案全部在插件，宿主只负责执行裁决）。
+	off = append(off, m.events.OnWaterfall(EventToolExecute, func(ctx EventContext, next func(EventContext) error) error {
+		inv, _ := ctx.Data.(*ToolInvocation)
+		if inv == nil {
+			return next(ctx)
+		}
+		dec, err := pc.OnEvent(context.Background(), &proto.PolicyEvent{
+			Kind:          policyEventExecute,
+			Tool:          inv.ToolName,
+			ArgumentsJson: inv.ArgumentsJSON,
+			Session:       inv.SessionID,
+		})
+		if err != nil {
+			m.logger.Warn("policy execute forward failed; allowing", "policy", name, "tool", inv.ToolName, "err", err)
+			return next(ctx)
+		}
+		if dec.GetAction() == policyDecisionDeny {
+			reason := dec.GetReason()
+			if reason == "" {
+				reason = fmt.Sprintf("tool call denied by policy %s", name)
+			}
+			m.logger.Info("policy denied tool call at execute", "policy", name, "tool", inv.ToolName, "reason", reason)
+			return errors.New(reason)
+		}
+		spec := dec.GetTimeout()
+		if spec == nil || spec.GetIdleMs() <= 0 {
+			return next(ctx)
+		}
+		base := ctx.Context
+		if base == nil {
+			base = context.Background()
+		}
+		idle := time.Duration(spec.GetIdleMs()) * time.Millisecond
+		execCtx, cancel := WithIdleDeadline(base, idle)
+		defer cancel()
+		ctx.Context = execCtx
+		err = next(ctx)
+		if err != nil && IdleDeadlineExceeded(execCtx) {
+			msg := spec.GetMessage()
+			if msg == "" {
+				msg = fmt.Sprintf("tool call idle timeout (no activity for > %s)", idle)
+			}
+			m.logger.Warn("tool idle timeout", "policy", name, "tool", inv.ToolName, "idle", idle.String())
+			err = errors.New(msg)
+			inv.Err = err
+		}
+		return err
 	}))
 	off = append(off, m.events.OnWaterfall(EventToolPostExecute, func(ctx EventContext, next func(EventContext) error) error {
 		inv, _ := ctx.Data.(*ToolInvocation)
@@ -411,8 +474,14 @@ func (m *Manager) executeBackgroundPipeline(ctx context.Context, toolName string
 	}
 
 	if inv.Err == nil {
-		execErr := m.events.Waterfall(EventToolExecute, EventContext{Data: inv}, func(EventContext) error {
-			return m.executeToolBody(ctx, inv, toolName)
+		execErr := m.events.Waterfall(EventToolExecute, EventContext{Data: inv, Context: ctx}, func(evtCtx EventContext) error {
+			// 执行 ctx 从 EventContext 回读：policy 桥的超时裁决可换装
+			// 活跃续命执行域，未换装时保持调用方原始 ctx。
+			execCtx := evtCtx.Context
+			if execCtx == nil {
+				execCtx = ctx
+			}
+			return m.executeToolBody(execCtx, inv, toolName)
 		})
 		if inv.Err == nil && execErr != nil {
 			inv.Err = execErr

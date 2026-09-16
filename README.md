@@ -22,7 +22,7 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **工具調用與插件化**：支持通過 Tool 插件擴展工具集，內置文件操作與 shell 執行能力。沙箱策略三檔（对齐 DSH sandbox mode）：`read-only`（拒绝一切文件写）、`workspace-write`（仅允许在 workspace 根內写，默认）、`full-access`（整个文件系统皆可写）；TUI 内经 `/sandbox read-only | workspace | full-access` 运行时切换，workspace 根默认为启动 dsc 的目录（也可经 `workspace_root` 绝对路径覆盖）。各档下相对路径写始终以 workspace 为根（防止 `../` 路径穿越），绝对路径写 workspace 之外由沙箱策略统一管控；`read-only` 同时会禁用「命令无法从参数判定是否只读」的解释器/执行器（如 shell），防止 `echo x > /anywhere` 绕开只读档。
 
-- **工具調用超時（活躍續命）**：shell 与命令型工具采用「十分鐘起步、活躍續命」超时（对齐 rex shell）——启动 10 分钟预算（`DSC_SHELL_TIMEOUT` 可覆盖），只要 stdout/stderr 持续有新输出就不间断续命，仅对「长时间完全无新输出」才判定超时，避免一刀切固定时长方误杀仍在产出嘅长编译/测试。
+- **工具調用超時（活躍續命，策略插件化）**：超时决策插件 `policy-timeout` 在工具流水线 `tool/execute` 槽裁决「哪个工具、多大空闲预算、超时模型可见文案」（对齐 DSH timeout-policy 占位）：`shell` 預算由 `DSC_SHELL_TIMEOUT`（默认 10 分钟）、`subagent` 由 `DSC_SUBAGENT_IDLE_TIMEOUT`（默认 10 分钟）可调，设 `0s` 禁用；宿主机械安装执行域（看门狗 + 活动信号通道），执行方每次输出/帧到达即续命，仅对「长时间完全无活动」才判定超时，避免一刀切固定时长误杀仍在产出的长编译/测试与慢速本地模型；cron 任务与 workflow 子代理亦经同一 `subagent` 工具裁决路径，无旁路。
 
 - **凭据隔离**：插件子进程 env 白名单化——仅 LLM 插件放行凭据类键（`*_API_KEY`/`*_TOKEN`/`*_SECRET` 等），其余 tool/policy/agent 插件一律滤除（`DSC_*` 宿主配置保留），防止 API key 经 shell 等工具进程被模型读进会话历史。
 

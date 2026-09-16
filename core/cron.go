@@ -2,14 +2,16 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
 	"dsc/cron"
 )
 
-// StartCron 启动 cron 定时任务调度器。任务执行经 RunSubagent（宿主侧 LLM + 工具
-// 流水线），不占用主 agent 的交互会话；任务定义持久化于 ExecDir/cron/cron.json。
+// StartCron 启动 cron 定时任务调度器。任务执行经 subagent 工具走宿主工具流水线
+// （沙箱/审批门/策略插件裁决含 timeout-policy 的活跃续命超时），不占用主 agent
+// 的交互会话；任务定义持久化于 ExecDir/cron/cron.json。
 func (m *Manager) StartCron() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -44,9 +46,18 @@ func (m *Manager) stopCronLocked() {
 	}
 }
 
-// runCronJob 任务执行器：把任务的 prompt 交给 RunSubagent 执行。
+// runCronJob 任务执行器：把任务的 prompt 经 subagent 工具走宿主工具流水线执行——
+// 与模型发起的 subagent 调用同一裁决路径（含 timeout-policy 的活跃续命超时），
+// 无旁路。子代理内部工具调用照旧携带 ApprovalPolicy=never。
 func (m *Manager) runCronJob(ctx context.Context, job *cron.Job) (string, error) {
-	return m.RunSubagent(ctx, &SubagentRequest{Prompt: job.Prompt, MaxIterations: job.MaxIterations})
+	args, err := json.Marshal(struct {
+		Prompt        string `json:"prompt"`
+		MaxIterations int    `json:"max_iterations,omitempty"`
+	}{Prompt: job.Prompt, MaxIterations: job.MaxIterations})
+	if err != nil {
+		return "", fmt.Errorf("cron: marshal subagent args: %w", err)
+	}
+	return m.ExecuteTool(ctx, "subagent", args)
 }
 
 // AddCronJob 新增定时任务。

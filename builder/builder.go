@@ -66,6 +66,7 @@ var publicPlugins = []string{
 	"tool-lua-host",
 	"tool-agentic-bench",
 	"policy-fs-observation",
+	"policy-timeout",
 	"tool-ssh",
 	"tool-musicplayer",
 	"tool-harness-webui",

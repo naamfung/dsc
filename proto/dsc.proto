@@ -425,6 +425,8 @@ service PolicyService {
 
 // PolicyEvent 工具流水线事件载荷。kind 取值：
 //   "tool/pre-execute"  —— 工具即将执行（result/error 为空）；deny 阻止执行
+//   "tool/execute"      —— 执行槽（真正分发的洋葱包裹位）：allow 可附 timeout
+//                          （执行超时语义，宿主机械安装）；deny 同样阻止执行
 //   "tool/post-execute" —— 工具已执行完毕；replace 可改写模型可见结果
 message PolicyEvent {
   string kind = 1;           // 事件种类（见上）
@@ -435,10 +437,20 @@ message PolicyEvent {
   string session = 6;        // 调用方会话标识（策略状态的属主，对齐 DSH per-session owner）
 }
 
-// PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre 阶段
-// 阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
+// TimeoutSpec 执行超时语义（「活跃续命」）：超时决策插件在 tool/execute 槽裁决，
+// 宿主机械执行——以 idle_ms 为空闲预算安装看门狗，执行方每次活动（输出帧、
+// 进度信号）重置计时；持续无活动达预算即取消执行，message 作为模型可见错误
+// 文案（对齐 deny reason 的透传语义：裁决原文归插件，宿主不 crafting 领域文案）。
+message TimeoutSpec {
+  int64 idle_ms = 1;  // 空闲预算（毫秒）：持续无活动的最长时间；每次活动重置
+  string message = 2; // 超时触发的模型可见文案；空则宿主给通用文案
+}
+
+// PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre/execute
+// 阶段阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
 message PolicyDecision {
   string action = 1; // "allow"（默认）| "deny" | "replace"
   string reason = 2; // deny 时的模型可见文案（如读前改写指引）
   string result = 3; // replace 时的替换结果文本（仅 tool/post-execute）
+  TimeoutSpec timeout = 4; // 执行超时语义（仅 tool/execute 槽；allow 时可附）
 }

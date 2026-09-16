@@ -1,13 +1,13 @@
-module dsc-sdk
+module dsc-plugin-policy-timeout
 
 go 1.26.0
 
 require (
 	dsc v0.0.0
-	github.com/hashicorp/go-plugin v1.8.0
-	google.golang.org/grpc v1.83.0
-	google.golang.org/protobuf v1.36.12
+	dsc-sdk v0.0.0
 )
+
+require github.com/wippyai/go-lua v1.5.17 // indirect
 
 require (
 	github.com/fatih/color v1.18.0 // indirect
@@ -18,6 +18,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
+	github.com/hashicorp/go-plugin v1.8.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
@@ -27,7 +28,6 @@ require (
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/toon-format/toon-go v0.0.0 // indirect
-	github.com/wippyai/go-lua v1.5.17 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/image v0.44.0 // indirect
@@ -36,23 +36,17 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/grpc v1.83.0 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace dsc => ../
+replace dsc-sdk => ../../sdk
 
-replace github.com/hashicorp/go-plugin => ../plugin
+replace dsc => ../..
 
-// 与根模块一致的本地维护 replace（dsc 自身的 replace 不向本模块继承，
-// sdk 作为独立主模块须自行声明，否则离线构建会缺 go.sum 条目）
-replace github.com/anthropics/anthropic-sdk-go => ../libs/anthropic-sdk-go
+replace github.com/hashicorp/go-plugin => ../../plugin
 
-replace github.com/sashabaranov/go-openai => ../libs/go-openai
+replace github.com/toon-format/toon-go => ../../libs/toon-go
 
-replace github.com/robfig/cron/v3 => ../libs/cron
-
-replace github.com/toon-format/toon-go => ../libs/toon-go
-
-replace github.com/valyala/fasttemplate => ../libs/fasttemplate
-
-replace github.com/valyala/bytebufferpool => ../libs/bytebufferpool
+replace github.com/wippyai/go-lua => ../../libs/go-lua

@@ -161,11 +161,19 @@ func renderWorkflowResult(name string, r workflow.Result) (string, error) {
 	return sb.String(), nil
 }
 
-// workflowAgentRunner agent() 钩子的子 agent 执行器：走宿主 RunSubagent。
+// workflowAgentRunner agent() 钩子的子 agent 执行器：经 subagent 工具走宿主
+// 工具流水线——与模型发起的 subagent 调用同一裁决路径（沙箱门、策略插件、
+// timeout-policy 活跃续命超时），无旁路。
 type workflowAgentRunner struct{ m *Manager }
 
 func (r workflowAgentRunner) RunAgent(ctx context.Context, prompt string) (string, error) {
-	return r.m.RunSubagent(ctx, &SubagentRequest{Prompt: prompt})
+	args, err := json.Marshal(struct {
+		Prompt string `json:"prompt"`
+	}{Prompt: prompt})
+	if err != nil {
+		return "", fmt.Errorf("workflow: marshal subagent args: %w", err)
+	}
+	return r.m.ExecuteTool(ctx, "subagent", args)
 }
 
 // workflowEventSink 把工作流观测事件投递到宿主事件总线（仅供观察）。

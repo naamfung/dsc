@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"dsc/proto"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -307,44 +308,75 @@ func TestSubagentApprovalNever(t *testing.T) {
 	_ = err
 }
 
-// TestSubagentIdleTimeout 保护性回归：DSC_SUBAGENT_IDLE_TIMEOUT 设很短时，
-// provider 不产生任何输出会让子代理超时退出（而非永久阻塞）。
-// 不影响持续生成的路径——脚本化 LLM 总会立即发帧，故正常路径不会触发。
-func TestSubagentIdleTimeout(t *testing.T) {
+// TestSubagentIdleTimeoutViaPolicy 保护性回归：timeout-policy 对 subagent 裁决
+// 很短的空闲预算时，provider 不产生任何输出会让子代理超时退出（而非永久阻塞），
+// 模型可见错误 = 裁决 message 原文（tool/execute 槽裁决 → 宿主桥机械安装执行域
+// → 触发后以文案替换）。不影响持续生成的路径——脚本化 LLM 总会立即发帧。
+func TestSubagentIdleTimeoutViaPolicy(t *testing.T) {
 	// 用一个永远不返回任何帧的 LLM 模拟 provider 挂起
 	m := newSubagentManager()
 	m.llms["p"] = &hungLLM{}
 	m.llmOrder = []string{"p"}
 	m.agentLLMName = "p"
 
-	// 设很短的 idle 超时（200ms），让测试快速通过
-	prev := subagentIdleTimeout
-	subagentIdleTimeout = 200 * time.Millisecond
-	defer func() { subagentIdleTimeout = prev }()
+	// timeout-policy 裁决：subagent 200ms 空闲预算 + 模型可见文案
+	pc := newMockPolicyClient()
+	pc.decide = func(ev *proto.PolicyEvent) *proto.PolicyDecision {
+		if ev.GetKind() == policyEventExecute && ev.GetTool() == "subagent" {
+			return &proto.PolicyDecision{Action: "allow", Timeout: &proto.TimeoutSpec{
+				IdleMs:  200,
+				Message: "subagent idle timeout (no activity for 200ms; set DSC_SUBAGENT_IDLE_TIMEOUT to adjust)",
+			}}
+		}
+		return &proto.PolicyDecision{}
+	}
+	m.bridgePolicyToPipeline("timeout-policy", pc)
 
 	start := time.Now()
-	_, err := m.RunSubagent(context.Background(), &SubagentRequest{Prompt: "do it"})
+	_, err := m.ExecuteTool(context.Background(), "subagent", json.RawMessage(`{"prompt":"do it"}`))
 	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("RunSubagent with hung LLM should fail with idle timeout")
+	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("err = %v, want idle timeout 裁决文案", err)
 	}
-	if !strings.Contains(err.Error(), "idle timeout") {
-		t.Fatalf("err = %v, want idle timeout", err)
-	}
-	// 应在 1 秒内超时（200ms 预算 + 500ms 轮询间隔 + 余量）
+	// 应在 1 秒内超时（200ms 预算 + 余量）
 	if elapsed > 2*time.Second {
 		t.Fatalf("idle timeout took too long: %v (want <2s)", elapsed)
 	}
 }
 
-// TestSubagentIdleTimeoutDisabled 验证 DSC_SUBAGENT_IDLE_TIMEOUT=0 时禁用超时——
-// 子代理不会因 idle watcher 提前取消（但 hung provider 仍会让 RunSubagent 永久阻塞，
-// 此测试只验证「未触发 idle 取消」而非「能完成」）。
-func TestSubagentIdleTimeoutDisabled(t *testing.T) {
-	prev := subagentIdleTimeout
-	subagentIdleTimeout = 0
-	defer func() { subagentIdleTimeout = prev }()
+// TestSubagentIdleTouchKeepsAlive 活动续命保护性回归：LLM 持续生成（每 80ms
+// 一帧，总 ~640ms）远超空闲预算（200ms）也不误杀——每帧 TouchActivity 续命，
+// 本地慢速模型长生成不会被看门狗打断。
+func TestSubagentIdleTouchKeepsAlive(t *testing.T) {
+	m := newSubagentManager()
+	m.llms["p"] = &slowStreamLLM{}
+	m.llmOrder = []string{"p"}
+	m.agentLLMName = "p"
 
+	pc := newMockPolicyClient()
+	pc.decide = func(ev *proto.PolicyEvent) *proto.PolicyDecision {
+		if ev.GetKind() == policyEventExecute && ev.GetTool() == "subagent" {
+			return &proto.PolicyDecision{Action: "allow", Timeout: &proto.TimeoutSpec{
+				IdleMs:  200,
+				Message: "subagent idle timeout",
+			}}
+		}
+		return &proto.PolicyDecision{}
+	}
+	m.bridgePolicyToPipeline("timeout-policy", pc)
+
+	res, err := m.ExecuteTool(context.Background(), "subagent", json.RawMessage(`{"prompt":"do it"}`))
+	if err != nil {
+		t.Fatalf("持续生成的子代理不应被看门狗误杀: %v", err)
+	}
+	if res != strings.Repeat("x", 8) {
+		t.Fatalf("result = %q, want 8 帧 content 聚合", res)
+	}
+}
+
+// TestSubagentNoSpecNoWatchdog 无 spec（策略表外工具 / env 禁用）不安装执行域：
+// TouchActivity no-op，正常 LLM 路径不受影响。
+func TestSubagentNoSpecNoWatchdog(t *testing.T) {
 	m := newSubagentManager()
 	llm := &scriptedLLM{steps: []*ChatResponse{
 		{Content: "done", FinishReason: "stop"},
@@ -353,15 +385,51 @@ func TestSubagentIdleTimeoutDisabled(t *testing.T) {
 	m.llmOrder = []string{"p"}
 	m.agentLLMName = "p"
 
-	// 禁用超时后正常 LLM 仍能完成（不会因 idle watcher 干扰）
-	res, err := m.RunSubagent(context.Background(), &SubagentRequest{Prompt: "do it"})
+	pc := newMockPolicyClient() // 空裁决：无 spec
+	m.bridgePolicyToPipeline("timeout-policy", pc)
+
+	res, err := m.ExecuteTool(context.Background(), "subagent", json.RawMessage(`{"prompt":"do it"}`))
 	if err != nil {
-		t.Fatalf("RunSubagent with idle timeout disabled should complete: %v", err)
+		t.Fatalf("无 spec 不应影响子代理执行: %v", err)
 	}
 	if res != "done" {
 		t.Fatalf("result = %q, want done", res)
 	}
 }
+
+// slowStreamLLM 每 80ms 发一帧、共 8 帧（总 ~640ms）：模拟本地慢速模型的
+// 持续生成（帧间隔小于测试预算，从不沉默到触发看门狗）。
+type slowStreamLLM struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *slowStreamLLM) ChatStream(ctx context.Context, _ []Message, _ []Tool) (<-chan *ChatStreamResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	ch := make(chan *ChatStreamResponse)
+	go func() {
+		defer close(ch)
+		for i := 0; i < 8; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(80 * time.Millisecond):
+			}
+			ch <- &ChatStreamResponse{Content: "x"}
+		}
+	}()
+	return ch, nil
+}
+
+func (p *slowStreamLLM) Chat(_ context.Context, _ []Message, _ []Tool, _ int) (*ChatResponse, error) {
+	return &ChatResponse{Content: "final", FinishReason: "stop"}, nil
+}
+func (p *slowStreamLLM) Name(context.Context) string       { return "slow-stream" }
+func (p *slowStreamLLM) Version(context.Context) string    { return "1.0.0" }
+func (p *slowStreamLLM) VisionEnabled() bool               { return false }
+func (p *slowStreamLLM) HealthCheck(context.Context) error { return nil }
 
 // TestSubagentExcludesSelfFromTools 验证子代理工具目录排除 subagent 自身——
 // 防止递归调用导致栈深爆/无限递归（本地模型容易这样）。
