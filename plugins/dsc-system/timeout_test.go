@@ -9,11 +9,11 @@ import (
 	"dsc/proto"
 )
 
-// TestOnEventShellspecByEnv 验证 shell 裁决：env 覆盖生效，spec 携带空闲预算
+// TestOnEventShellSpecByEnv 验证 shell 裁决：env 覆盖生效，spec 携带空闲预算
 // 与模型可见文案（超时文案归插件，宿主透传）。
-func TestOnEventShellspecByEnv(t *testing.T) {
+func TestOnEventShellSpecByEnv(t *testing.T) {
 	t.Setenv("DSC_SHELL_TIMEOUT", "250ms")
-	s := newPolicyServer()
+	s := newTimeoutServer()
 	dec, err := s.OnEvent(context.Background(), &proto.PolicyEvent{
 		Kind:          "tool/execute",
 		Tool:          "shell",
@@ -37,7 +37,7 @@ func TestOnEventShellspecByEnv(t *testing.T) {
 // 文案携带可调提示（对齐旧 DSC_SUBAGENT_IDLE_TIMEOUT 语义）。
 func TestOnEventSubagentDefaultBudget(t *testing.T) {
 	t.Setenv("DSC_SUBAGENT_IDLE_TIMEOUT", "")
-	s := newPolicyServer()
+	s := newTimeoutServer()
 	dec, err := s.OnEvent(context.Background(), &proto.PolicyEvent{Kind: "tool/execute", Tool: "subagent"})
 	if err != nil {
 		t.Fatalf("OnEvent: %v", err)
@@ -50,10 +50,10 @@ func TestOnEventSubagentDefaultBudget(t *testing.T) {
 	}
 }
 
-// TestOnEventDisabledByZero 验证 env 显式 0s 禁用：不附 spec（无执行域）。
-func TestOnEventDisabledByZero(t *testing.T) {
+// TestTimeoutDisabledByZero 验证 env 显式 0s 禁用：不附 spec（无执行域）。
+func TestTimeoutDisabledByZero(t *testing.T) {
 	t.Setenv("DSC_SHELL_TIMEOUT", "0s")
-	s := newPolicyServer()
+	s := newTimeoutServer()
 	dec, err := s.OnEvent(context.Background(), &proto.PolicyEvent{Kind: "tool/execute", Tool: "shell"})
 	if err != nil {
 		t.Fatalf("OnEvent: %v", err)
@@ -66,7 +66,7 @@ func TestOnEventDisabledByZero(t *testing.T) {
 // TestOnEventUnknownToolAllowed 表外工具与非 execute 槽一律放行（空裁决）：
 // 策略只在自己的领域（执行超时）发声，不干预 pre/post 槽的其他策略。
 func TestOnEventUnknownToolAllowed(t *testing.T) {
-	s := newPolicyServer()
+	s := newTimeoutServer()
 	for _, ev := range []*proto.PolicyEvent{
 		{Kind: "tool/execute", Tool: "str_replace_editor"},
 		{Kind: "tool/pre-execute", Tool: "shell"},

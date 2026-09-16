@@ -6,15 +6,11 @@ import (
 	"os"
 	"time"
 
-	"dsc-sdk"
 	"dsc/proto"
 )
 
-// 工具流水线执行槽事件种类（与宿主 core 的 PolicyService 字符串约定一致，
-// 对应 proto PolicyEvent.kind / PolicyDecision.action）。
-const kindExecute = "tool/execute"
-
-// budget 单工具的超时策略条目：空闲预算来源（env 可调）与超时触发的
+// timeout 超时决策插件（第二实例，自 plugins/policy-timeout 迁入的核心插件
+// 混合体驻留）：单工具的超时策略条目——空闲预算来源（env 可调）与超时触发的
 // 模型可见文案。超时语义固定为「活跃续命」：执行方每次活动（shell 的每段
 // 输出、subagent 的每个 LLM 帧与工具结果）经 TouchActivity 重置计时；
 // 只有持续无活动达预算才触发。
@@ -54,19 +50,19 @@ func (b budget) idleBudget() time.Duration {
 	return b.defaultVal
 }
 
-// policyServer 活跃续命超时策略：在 tool/execute 槽为策略表内的工具裁决
-// TimeoutSpec（空闲预算 + 超时文案），宿主机械安装为执行域（看门狗 +
-// TouchActivity 活动通道）。无状态：超时是执行语义而非观察语义，每次调用
-// 独立裁决，无需会话属主状态。
-type policyServer struct {
+// timeoutServer 活跃续命超时策略服务（dsc-system 驻留）：在 tool/execute 槽
+// 为策略表内的工具裁决 TimeoutSpec（空闲预算 + 超时文案），宿主机械安装为
+// 执行域（看门狗 + TouchActivity 活动通道）。无状态：超时是执行语义而非观察
+// 语义，每次调用独立裁决，无需会话属主状态。
+type timeoutServer struct {
 	proto.UnimplementedPolicyServiceServer
 }
 
-func newPolicyServer() *policyServer { return &policyServer{} }
+func newTimeoutServer() *timeoutServer { return &timeoutServer{} }
 
 // OnEvent 实现 proto.PolicyServiceServer：仅 tool/execute 槽参与裁决；
 // 其他槽（pre/post）与表外工具一律放行（空裁决）。
-func (s *policyServer) OnEvent(_ context.Context, ev *proto.PolicyEvent) (*proto.PolicyDecision, error) {
+func (s *timeoutServer) OnEvent(_ context.Context, ev *proto.PolicyEvent) (*proto.PolicyDecision, error) {
 	if ev.GetKind() != kindExecute {
 		return &proto.PolicyDecision{}, nil
 	}
@@ -86,21 +82,4 @@ func (s *policyServer) OnEvent(_ context.Context, ev *proto.PolicyEvent) (*proto
 			Message: b.message(idle),
 		},
 	}, nil
-}
-
-// main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 PolicyService 与
-// PluginMetadata 的 go-core 组装。超时预算与文案全部在本插件——宿主只
-// 机械安装执行域与转发活动信号（对齐「policy 插件持有策略，宿主只派发
-// 与执行裁决」）。
-func main() {
-	sdk := dsc.New(dsc.Config{
-		Name:    "timeout-policy",
-		Version: "1.0.0",
-		Type:    dsc.TypePolicy,
-		// 声明提供 "timeout-policy" 能力：其他插件若需依赖此策略可经
-		// Requires 声明，宿主据此按能力匹配（对齐 DSH/Cordis 的 provide+inject）。
-		Provides: map[string]string{"timeout-policy": "true"},
-	})
-	sdk.Policy(newPolicyServer())
-	sdk.Serve()
 }
