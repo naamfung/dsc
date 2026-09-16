@@ -32,6 +32,16 @@ type ViewExecutor interface {
 	ExecuteWithView(ctx context.Context, args json.RawMessage) (result string, viewJSON string, err error)
 }
 
+// ViewImageExecutor 可选接口：工具一次调用同时返回结果、视图与图像附件。图像
+// （data:image/...;base64,... 数据 URL）随工具结果消息送回视觉模型（对齐 Anthropic
+// computer-use 的 tool_result 图像块）。RemoteTool（插件工具经 ExecuteToolResponse.images）
+// 实现本接口；同时实现 ViewExecutor 时优先走本接口（单次 gRPC 往返带回全部产物）。
+// 由 ToolGRPCServer 统一填充 ExecuteToolResponse.Images，使宿主聚合路径的图像传播
+// 与视图传播一致。
+type ViewImageExecutor interface {
+	ExecuteWithViewAndImages(ctx context.Context, args json.RawMessage) (result string, viewJSON string, images []string, err error)
+}
+
 // PluginToolCall 表示 LLM 發起的一次工具調用
 type PluginToolCall struct {
 	ID        string          `json:"id"`

@@ -3008,10 +3008,14 @@ func (x *ExecuteToolRequest) GetApprovalPolicy() string {
 }
 
 type ExecuteToolResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	ViewJson      string                 `protobuf:"bytes,3,opt,name=view_json,json=viewJson,proto3" json:"view_json,omitempty"` // 可选：结构化视图 spec（JSON，对齐 DSH 显示契约）；供 TUI 统一渲染，缺失时回退到通用展示
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Content  string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	Error    string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	ViewJson string                 `protobuf:"bytes,3,opt,name=view_json,json=viewJson,proto3" json:"view_json,omitempty"` // 可选：结构化视图 spec（JSON，对齐 DSH 显示契约）；供 TUI 统一渲染，缺失时回退到通用展示
+	// 工具结果图像附件（data:image/...;base64,... 数据 URL）。宿主将其随 tool 结果消息
+	// 送回模型：Anthropic 内嵌 tool_result content blocks；OpenAI 在工具消息后接 user
+	// 图像消息。视觉能力未开启的端点由 LLM 插件按既有 vision 门控降级跳过。
+	Images        []string `protobuf:"bytes,4,rep,name=images,proto3" json:"images,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3065,6 +3069,13 @@ func (x *ExecuteToolResponse) GetViewJson() string {
 		return x.ViewJson
 	}
 	return ""
+}
+
+func (x *ExecuteToolResponse) GetImages() []string {
+	if x != nil {
+		return x.Images
+	}
+	return nil
 }
 
 type ListToolsRequest struct {
@@ -3702,11 +3713,12 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"toolCallId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x04 \x01(\tR\tsessionId\x12'\n" +
-	"\x0fapproval_policy\x18\x05 \x01(\tR\x0eapprovalPolicy\"b\n" +
+	"\x0fapproval_policy\x18\x05 \x01(\tR\x0eapprovalPolicy\"z\n" +
 	"\x13ExecuteToolResponse\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1b\n" +
-	"\tview_json\x18\x03 \x01(\tR\bviewJson\"\x12\n" +
+	"\tview_json\x18\x03 \x01(\tR\bviewJson\x12\x16\n" +
+	"\x06images\x18\x04 \x03(\tR\x06images\"\x12\n" +
 	"\x10ListToolsRequest\"4\n" +
 	"\x11ListToolsResponse\x12\x1f\n" +
 	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools\"\x14\n" +

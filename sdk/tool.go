@@ -30,6 +30,11 @@ type Tool struct {
 	// ExecuteToolResponse.view_json 传给 TUI 统一渲染，使该工具的结果呈现为专用卡片而风格与其余
 	// 工具一致；缺失/出错时 TUI 回退到通用展示。
 	ViewFn func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error)
+	// ImagesFn 可选：为本工具调用声明随结果返回的图像附件（data:image/...;base64,...
+	// 数据 URL，如 computer-use 截图）。经 ExecuteToolResponse.images 传给宿主，随工具
+	// 结果消息送回视觉模型（Anthropic 内嵌 tool_result 图像块；OpenAI 在工具消息段后
+	// 接 user 图像消息）。返回空切片/nil 表示无图像。
+	ImagesFn func(ctx context.Context, args json.RawMessage, result string) []string
 	// Context 可选：向宿主贡献的 system prompt 片段（ListContext），
 	// 用于向模型说明本工具的使用约定（如沙箱边界）。
 	// ContextFn 可选：动态上下文（每次 ListContext 调用时求值，优先于 Context），
@@ -104,6 +109,14 @@ func (s *toolServiceServer) ExecuteTool(ctx context.Context, req *proto.ExecuteT
 			if t.ViewFn != nil {
 				if v, verr := t.ViewFn(ctx, json.RawMessage(req.ArgumentsJson), res); verr == nil && len(v) > 0 {
 					resp.ViewJson = sanitizeUTF8(string(v))
+				}
+			}
+			// 可选图像附件：随结果送回视觉模型（见 Tool.ImagesFn）。
+			if t.ImagesFn != nil {
+				if imgs := t.ImagesFn(ctx, json.RawMessage(req.ArgumentsJson), res); len(imgs) > 0 {
+					for _, img := range imgs {
+						resp.Images = append(resp.Images, sanitizeUTF8(img))
+					}
 				}
 			}
 			return resp, nil

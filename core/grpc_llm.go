@@ -36,7 +36,7 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"` // assistant 消息回传的工具调用
-	// Images 图像附件（data:image/...;base64,... 数据 URL；仅 user 消息承载，视觉模型可见）
+	// Images 图像附件（data:image/...;base64,... 数据 URL；user 消息与工具结果消息均可承载，视觉模型可见）
 	Images []string `json:"images,omitempty"`
 }
 

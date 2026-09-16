@@ -29,11 +29,11 @@ func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteTool
 		ctx = WithApprovalPolicy(ctx, p)
 	}
 	var args json.RawMessage = []byte(req.ArgumentsJson)
-	result, viewJSON, err := s.mgr.ExecuteToolWithView(ctx, req.ToolName, args)
+	result, viewJSON, images, err := s.mgr.ExecuteToolWithView(ctx, req.ToolName, args)
 	if err != nil {
 		return &proto.ExecuteToolResponse{Error: err.Error()}, nil
 	}
-	return &proto.ExecuteToolResponse{Content: result, ViewJson: viewJSON}, nil
+	return &proto.ExecuteToolResponse{Content: result, ViewJson: viewJSON, Images: images}, nil
 }
 
 // ListTools 返回当前 presentation mode 下模型可直接调用的工具目录。

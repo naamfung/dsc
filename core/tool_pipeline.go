@@ -47,6 +47,9 @@ type ToolInvocation struct {
 	Result        string // post-execute 阶段：执行结果
 	Err           error  // 执行错误或 pre 阶段 veto 原因
 	ViewJSON      string // 工具声明的结构化视图 spec（可选，见 ViewExecutor）
+	// Images 工具结果图像附件（data URL，可选，见 ViewImageExecutor）：随工具结果
+	// 消息送回视觉模型；executeBackgroundPipeline 后台路径不携带。
+	Images []string
 	// SessionID 调用方会话标识（来自 ExecuteToolWithView 的 ctx，agent 每次调用都会带）；
 	// 供 per-session 审批策略（approvalPolicyFor）与审计事件归属使用。
 	SessionID string
@@ -88,7 +91,7 @@ func (e *ToolTimeoutError) Error() string {
 // 声明 TimeoutProvider 的工具在 execute 阶段获得协作式单次调用截止时间（timeout-policy）。
 // 视图信息（插件 ViewJson / 宿主 ViewExecutor）不在此返回，见 ExecuteToolWithView。
 func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, error) {
-	result, _, err := m.ExecuteToolWithView(ctx, toolName, argsJSON)
+	result, _, _, err := m.ExecuteToolWithView(ctx, toolName, argsJSON)
 	return result, err
 }
 
@@ -100,11 +103,12 @@ func (m *Manager) ExecuteTool(ctx context.Context, toolName string, argsJSON jso
 // run_in_background=true，宿主在 job 注册表中登记一个后台任务，异步执行完整
 // 流水线（pre-execute → execute → post-execute），立即返回 job_id。
 // 模型可用 job_output/job_list/job_kill 管理后台任务。
-func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, error) {
+func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, argsJSON json.RawMessage) (string, string, []string, error) {
 	// 检测 run_in_background 参数（对齐 DSH：模型在参数中声明 run_in_background: true）
 	if isBackgroundRequest(argsJSON) && m.jobs != nil {
 		caller := CallerFromContext(ctx)
-		return m.startBackgroundTool(ctx, toolName, argsJSON, caller)
+		res, view, err := m.startBackgroundTool(ctx, toolName, argsJSON, caller)
+		return res, view, nil, err // 后台路径立即返回 job_id，图像不适用
 	}
 
 	inv := &ToolInvocation{ToolName: toolName, ArgumentsJSON: string(argsJSON), SessionID: CallerFromContext(ctx), ApprovalPolicy: ApprovalPolicyFromContext(ctx)}
@@ -140,12 +144,12 @@ func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, args
 		return inv.Err
 	}); err != nil {
 		m.emitToolResult(inv)
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	// result（emit）：结果广播（非拦截），对齐 DSH tools/result。
 	m.emitToolResult(inv)
-	return inv.Result, inv.ViewJSON, inv.Err
+	return inv.Result, inv.ViewJSON, inv.Images, inv.Err
 }
 
 // executeToolBody 实际执行工具（可被 tools/execute 的 waterfall 监听器改写/包围）。
@@ -192,7 +196,11 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	var result string
 	var err error
 	var viewJSON string
-	if ev, ok := tool.(ViewExecutor); ok {
+	var images []string
+	if ev, ok := tool.(ViewImageExecutor); ok {
+		// 图像视图合一接口：单次执行带回全部产物（同时实现 ViewExecutor 时优先）
+		result, viewJSON, images, err = ev.ExecuteWithViewAndImages(execCtx, json.RawMessage(inv.ArgumentsJSON))
+	} else if ev, ok := tool.(ViewExecutor); ok {
 		result, viewJSON, err = ev.ExecuteWithView(execCtx, json.RawMessage(inv.ArgumentsJSON))
 	} else {
 		result, err = tool.Execute(execCtx, json.RawMessage(inv.ArgumentsJSON))
@@ -206,6 +214,7 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 	// 丢失。此处与 SDK 层（sdk/tool.go）双重设防：SDK 覆盖插件工具，本层覆盖宿主
 	// 内置工具与一切绕过 SDK 的路径。非法字节退化为 U+FFFD，不中断会话。
 	inv.Result, inv.ViewJSON, inv.Err = sanitizeUTF8(result), sanitizeUTF8(viewJSON), err
+	inv.Images = sanitizeUTF8All(images)
 	// 结算留痕（-log 启用时的全链路诊断能力）：每个模型请求的工具调用在此
 	// 统一计时——成功 Info、失败/超时 Warn，与 llm request 日志配套成完整链路。
 	if err != nil {
@@ -227,17 +236,31 @@ func sanitizeUTF8(s string) string {
 	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
+// sanitizeUTF8All 批量净化字符串切片（如工具图像附件 data URL），nil/空安全。
+func sanitizeUTF8All(ss []string) []string {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = sanitizeUTF8(s)
+	}
+	return out
+}
+
 // ToolResultInfo tools/result 事件的载荷（对齐 DSH tools/result）。
 type ToolResultInfo struct {
 	ToolName string `json:"tool_name"`
 	Result   string `json:"result"`
 	Error    string `json:"error,omitempty"`
 	ViewJSON string `json:"view_json,omitempty"`
+	// Images 工具结果图像附件（data URL，可选，见 ViewImageExecutor）。
+	Images []string `json:"images,omitempty"`
 }
 
 // emitToolResult 广播工具执行结果事件（非拦截）。
 func (m *Manager) emitToolResult(inv *ToolInvocation) {
-	info := ToolResultInfo{ToolName: inv.ToolName, Result: sanitizeUTF8(inv.Result), ViewJSON: sanitizeUTF8(inv.ViewJSON)}
+	info := ToolResultInfo{ToolName: inv.ToolName, Result: sanitizeUTF8(inv.Result), ViewJSON: sanitizeUTF8(inv.ViewJSON), Images: sanitizeUTF8All(inv.Images)}
 	if inv.Err != nil {
 		info.Error = sanitizeUTF8(inv.Err.Error())
 	}

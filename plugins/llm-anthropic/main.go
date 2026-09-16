@@ -126,7 +126,24 @@ func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []
 		case "tool":
 			// Anthropic 要求 tool 结果以 user 消息发送，并附上对应的 tool_use_id
 			// 如果 m.ToolCallID 为空，降级为纯文本（兼容旧逻辑）
-			if m.ToolCallID != "" {
+			if m.ToolCallID != "" && len(m.Images) > 0 {
+				// 工具结果携带图像（如 computer-use 截图）：按 Anthropic 规范把图像块
+				// 内嵌 tool_result.content（text/image 混合块），与文本结果同帧送达。
+				// 图像受 p.vision 门控；超内联上限的大图沿用 Files API 上传路径。
+				resultBlocks, usesFile := p.toolResultContentBlocks(m.Content, m.Images)
+				if usesFile {
+					usesBetaHeader = true
+				}
+				userMessages = append(userMessages, anthropic.NewUserMessage(
+					anthropic.ContentBlockParamUnion{
+						OfToolResult: &anthropic.ToolResultBlockParam{
+							ToolUseID: m.ToolCallID,
+							Content:   resultBlocks,
+							IsError:   anthropic.Bool(false),
+						},
+					},
+				))
+			} else if m.ToolCallID != "" {
 				userMessages = append(userMessages, anthropic.NewUserMessage(
 					anthropic.NewToolResultBlock(m.ToolCallID, m.Content, false),
 				))
@@ -249,6 +266,58 @@ func (p *AnthropicProvider) fileContentBlocks(text string, refs []string) ([]ant
 			}
 		}
 		blocks = append(blocks, anthropic.NewImageBlockBase64(mime, b64))
+	}
+	return blocks, usesFile
+}
+
+// toolResultContentBlocks 构造 tool_result 内容块：文本块 + 图像块（vision 门控）。
+// 图像 data URL 单图不超内联上限时内联 base64；超限且 Files API 可用时上传后以
+// file 块引用（与用户消息图像同一套判定），usesFile 标记请求须带 anthropic-beta 头。
+func (p *AnthropicProvider) toolResultContentBlocks(text string, refs []string) ([]anthropic.ToolResultBlockParamContentUnion, bool) {
+	blocks := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(refs)+1)
+	usesFile := false
+	if text != "" {
+		blocks = append(blocks, anthropic.ToolResultBlockParamContentUnion{OfText: &anthropic.TextBlockParam{Text: text}})
+	}
+	for _, ref := range refs {
+		if !p.vision {
+			continue // 视觉关闭：跳过图像引用
+		}
+		url, err := core.ResolveImageRef(ref)
+		if err != nil {
+			log.Printf("⚠️ 忽略无法解析的图像引用: %v", err)
+			continue
+		}
+		mime, b64, ok := splitDataURL(url)
+		if !ok {
+			continue
+		}
+		if p.filesAPI && dataURLSize(url) > maxInlineImageBytes {
+			if fileID := p.uploadImage(url); fileID != "" {
+				usesFile = true
+				blocks = append(blocks, anthropic.ToolResultBlockParamContentUnion{
+					OfImage: &anthropic.ImageBlockParam{
+						Source: anthropic.ImageBlockParamSourceUnion{
+							OfFile: &anthropic.FileImageSourceParam{
+								FileID:    fileID,
+								MediaType: anthropic.Base64ImageSourceMediaType(mime),
+							},
+						},
+					},
+				})
+				continue
+			}
+		}
+		blocks = append(blocks, anthropic.ToolResultBlockParamContentUnion{
+			OfImage: &anthropic.ImageBlockParam{
+				Source: anthropic.ImageBlockParamSourceUnion{
+					OfBase64: &anthropic.Base64ImageSourceParam{
+						Data:      b64,
+						MediaType: anthropic.Base64ImageSourceMediaType(mime),
+					},
+				},
+			},
+		})
 	}
 	return blocks, usesFile
 }

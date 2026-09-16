@@ -89,17 +89,45 @@ func isDeepSeekEndpoint(baseURL string) bool {
 
 // toOpenAIMessages 把 core.Message 转换为 OpenAI 请求消息。用户消息携带图像且
 // 视觉开启时，构造多模态 content（文本 + image_url / file 块）；assistant 消息
-// 回带工具调用。
+// 回带工具调用；tool 消息回带 tool_call_id 并在连续工具消息段结束后以一条 user
+// 图像消息补发其图像附件（OpenAI 协议工具消息不支持图像内容，且须紧跟
+// assistant tool_calls，故不能原地内嵌）。
 func (p *OpenAIProvider) toOpenAIMessages(messages []core.Message) []openai.ChatCompletionMessage {
-	openaiMessages := make([]openai.ChatCompletionMessage, len(messages))
-	for i, m := range messages {
+	openaiMessages := make([]openai.ChatCompletionMessage, 0, len(messages)+2)
+	// pendingToolImages 缓冲连续 tool 消息的图像附件（如 computer-use 截图），
+	// 段结束（下一条非 tool 消息或历史末尾）时统一补发；视觉关闭时
+	// fileContentBlocks 过滤全部图像引用，补发退化为空、不产生消息。
+	var pendingToolImages []string
+	flushToolImages := func() {
+		if len(pendingToolImages) == 0 {
+			return
+		}
+		refs := pendingToolImages
+		pendingToolImages = nil
+		parts := p.fileContentBlocks("", refs)
+		if len(parts) > 0 {
+			openaiMessages = append(openaiMessages, openai.ChatCompletionMessage{Role: "user", MultiContent: parts})
+		}
+	}
+	for _, m := range messages {
+		if m.Role != "tool" {
+			flushToolImages()
+		}
 		msg := openai.ChatCompletionMessage{Role: m.Role}
 		if m.Role == "user" && len(m.Images) > 0 {
 			// 多模态分支：文本块 + 每张图像的块（image 受 p.vision 门控；
 			// dsc-txt 文本引用不受视觉限制，始终注入）
 			msg.MultiContent = p.fileContentBlocks(m.Content, m.Images)
+		} else if m.Role == "tool" && len(m.Images) > 0 {
+			// 工具结果图像：工具消息本体走纯文本，图像缓冲到段末统一补发
+			msg.Content = m.Content
+			pendingToolImages = append(pendingToolImages, m.Images...)
 		} else {
 			msg.Content = m.Content
+		}
+		if m.Role == "tool" {
+			// OpenAI 协议要求 tool 消息回带 tool_call_id 关联原调用
+			msg.ToolCallID = m.ToolCallID
 		}
 		// assistant 消息需回带工具调用（OpenAI 格式要求 tool_calls 与后续 tool 结果匹配）
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
@@ -116,8 +144,9 @@ func (p *OpenAIProvider) toOpenAIMessages(messages []core.Message) []openai.Chat
 				}
 			}
 		}
-		openaiMessages[i] = msg
+		openaiMessages = append(openaiMessages, msg)
 	}
+	flushToolImages()
 	return openaiMessages
 }
 
@@ -351,11 +380,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message
 		// 请求流式 usage：服务端（含 llama.cpp）会在最后一个分片返回整轮 token 统计
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
-		// max_tokens：流式主路径此前从不携带——llama.cpp 等 OpenAI 兼容端点会把缺席
-		// 解释为服务端默认（n_predict=-1 无限，但 anthropic 兼容口同类场景自填 4096）。
-		// 宿主一律注入 DSC_MAX_OUTPUT_TOKENS=有效上下文窗口值（不分本地/云端），在此
-		// 显式携带（LLAMACPP 侧受上下文自然钳制，无害；云端值可经 context_window 或
-		// 插件 env 调整）。
+	// max_tokens：流式主路径此前从不携带——llama.cpp 等 OpenAI 兼容端点会把缺席
+	// 解释为服务端默认（n_predict=-1 无限，但 anthropic 兼容口同类场景自填 4096）。
+	// 宿主一律注入 DSC_MAX_OUTPUT_TOKENS=有效上下文窗口值（不分本地/云端），在此
+	// 显式携带（LLAMACPP 侧受上下文自然钳制，无害；云端值可经 context_window 或
+	// 插件 env 调整）。
 	if mt := p.resolveMaxTokens(0); mt > 0 {
 		req.MaxTokens = mt
 	}

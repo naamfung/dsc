@@ -197,6 +197,8 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 - `tool-browser-use`（无头浏览器工具：`web_fetch` / `web_search` / `browser_click` / `browser_type` / `browser_screenshot`；提供 `browser` 能力）
 
+- `tool-computer-use`（桌面观察与操作：`computer_use_screen` 截图随工具结果回传视觉模型 + `computer_use_click/move/drag/scroll/type/key/paste/cursor_position/screen_size/check`；基于 robotgo，坐标纪律=截图即坐标系；Linux 需 X11 开发头文件（libx11-dev/libxtst-dev/libxi-dev）与 DISPLAY，仅本机平台随发布包（CGO 插件不交叉编译）；提供 `computer-use` 能力）
+
 - `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱；提供 `lisp-eval` 能力）
 
 - `tool-skill`（技能读取/安装/卸载：`skill` / `install_skill` / `uninstall_skill` + `ContextFn` 注入技能索引到 system prompt；提供 `skill` 能力）

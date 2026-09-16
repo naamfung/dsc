@@ -119,6 +119,9 @@ type ToolCallData struct {
 type ToolResultData struct {
 	Turn, Step             int
 	CallID, Content, Error string
+	// Images 工具结果图像附件（data:image/...;base64,... 数据 URL）。随事件日志持久化，
+	// 投影为模型历史 tool 消息的图像（proto.Message.Images；视觉模型可见）。
+	Images []string
 }
 
 // LLMAttemptData llm/attempt 事件载荷（log-only）：一次 LLM 调用的结算留痕。
@@ -338,7 +341,7 @@ func deriveEventMessage(ev *Event) *proto.Message {
 		}
 		return m
 	case *ToolResultData:
-		return &proto.Message{Role: "tool", Content: toonizeToolContent(d.Content), ToolCallId: d.CallID}
+		return &proto.Message{Role: "tool", Content: toonizeToolContent(d.Content), ToolCallId: d.CallID, Images: d.Images}
 	case *CompactionSummaryData:
 		return &proto.Message{Role: "user", Content: d.Content}
 	}

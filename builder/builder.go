@@ -57,6 +57,7 @@ var publicPlugins = []string{
 	"tool-str-replace-editor",
 	"dsc-billion-context",
 	"tool-browser-use",
+	"tool-computer-use",
 	"tool-lisp-eval",
 	"tool-pdf",
 	"tool-skill",
@@ -68,6 +69,13 @@ var publicPlugins = []string{
 	"tool-ssh",
 	"tool-musicplayer",
 	"tool-harness-webui",
+}
+
+// cgoPlugins 依赖 CGO 的插件（robotgo 链接 X11）：只能在「与运行时平台一致」的
+// 本机环境构建（CGO_ENABLED=1 + 平台工具链），无法交叉编译。buildPlatform 对
+// 其余平台跳过（发布目录不含该插件），对宿主平台以 goBuildNative 构建。
+var cgoPlugins = map[string]bool{
+	"tool-computer-use": true,
 }
 
 // internalPlugins 本机内部专用插件（如粤语、2FA、小说），默认不进入发布包；
@@ -342,6 +350,21 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 			continue
 		}
 		out := filepath.Join(releaseDir, "plugins", name, binExt(name))
+		if cgoPlugins[name] {
+			if p.GOOS != runtime.GOOS || p.GOARCH != runtime.GOARCH {
+				printWarning(fmt.Sprintf("  - 跳过 %s：CGO 插件不支持交叉编译到 %s/%s（仅本机平台随包）\n", name, p.GOOS, p.GOARCH))
+				skippedPlugins = append(skippedPlugins, name)
+				continue
+			}
+			if err := goBuildNative(pdir, out); err != nil {
+				printError(fmt.Sprintf("  ✗ 插件 %s 本机 CGO 编译失败: %v\n", name, err))
+				continue
+			}
+			printSuccess(fmt.Sprintf("  ✓ 插件(cgo): %s\n", name))
+			pack(out)
+			builtPlugins++
+			continue
+		}
 		if name == "tool-harness-webui" {
 			if !buildWebUIAssets(repoRoot) {
 				printWarning(fmt.Sprintf("  - 跳过 tool-harness-webui：需宿主平台 bun 构建前端\n"))
@@ -383,6 +406,17 @@ func goBuild(dir, out string, p platform) error {
 		"CGO_ENABLED=0",
 	)
 	// 交错输出，便于在目标平台文件名上保留后缀
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// goBuildNative 本机 CGO 构建（tool-computer-use 等 cgo 插件）：不交叉、不强制
+// CGO_ENABLED=0，完整继承调用方环境（X11 头文件路径等经 CGO_CPPFLAGS 注入），
+// 与开发者手动 go build 同语义。
+func goBuildNative(dir, out string) error {
+	cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
+	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

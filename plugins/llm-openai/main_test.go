@@ -165,3 +165,46 @@ func TestChatCompletionMessageFilePartMarshal(t *testing.T) {
 		t.Fatalf("file part not marshaled correctly: %s", s)
 	}
 }
+
+// TestToOpenAIMessagesToolImages 工具消息图像：段末补发一条 user 图像消息；
+// tool 消息本体回带 tool_call_id（OpenAI 协议关联要求）。
+func TestToOpenAIMessagesToolImages(t *testing.T) {
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+
+	on := &OpenAIProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
+	msgs := on.toOpenAIMessages([]core.Message{
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "c1", Name: "computer_use_screen"}}},
+		{Role: "tool", Content: "ok", ToolCallID: "c1", Images: []string{url}},
+		{Role: "user", Content: "看到什么了？"},
+	})
+	if len(msgs) != 4 {
+		t.Fatalf("want assistant+tool+user(img)+user(text), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "assistant" || len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("msgs[0] 应为 assistant tool_calls, got %+v", msgs[0])
+	}
+	if msgs[1].Role != "tool" || msgs[1].ToolCallID != "c1" || msgs[1].Content != "ok" {
+		t.Fatalf("tool 消息应回带 tool_call_id, got %+v", msgs[1])
+	}
+	if msgs[2].Role != "user" || len(msgs[2].MultiContent) != 1 {
+		t.Fatalf("段末应补发 user 图像消息, got %+v", msgs[2])
+	}
+	if msgs[2].MultiContent[0].ImageURL == nil {
+		t.Fatalf("补发消息应为 image_url 块, got %+v", msgs[2].MultiContent[0])
+	}
+	if msgs[3].Content != "看到什么了？" {
+		t.Fatalf("末条用户文本应在图像消息之后, got %+v", msgs[3])
+	}
+}
+
+// TestToOpenAIMessagesToolImagesVisionOff 视觉关闭：不补发图像消息。
+func TestToOpenAIMessagesToolImagesVisionOff(t *testing.T) {
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+	off := &OpenAIProvider{vision: false, filesAPI: false, fileCache: map[string]string{}}
+	msgs := off.toOpenAIMessages([]core.Message{
+		{Role: "tool", Content: "ok", ToolCallID: "c1", Images: []string{url}},
+	})
+	if len(msgs) != 1 || msgs[0].ToolCallID != "c1" {
+		t.Fatalf("视觉关闭应仅 tool 消息本体, got %+v", msgs)
+	}
+}

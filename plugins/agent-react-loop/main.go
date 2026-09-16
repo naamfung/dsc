@@ -887,6 +887,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				sess.Append(session.ToolResult, &session.ToolResultData{
 					Turn: turnNo, Step: stepNo, CallID: tc.Id,
 					Content: toolResp.Content,
+					Images:  toolResp.Images,
 				}, &session.SurfaceOp{Op: session.SurfaceAppend})
 				// 把工具結果輸出到流，供 TUI 渲染 REX 式结果卡片；
 				// 成功结果帧附带 ToolArgs（供 TUI 更新待办面板）与 ToolView（结构化视图 spec，TUI 统一渲染）

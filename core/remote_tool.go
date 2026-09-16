@@ -59,7 +59,9 @@ func (r *RemoteTool) Execute(ctx context.Context, args json.RawMessage) (string,
 // 转为错误返回而非崩溃宿主。插件 SDK 层（sdk/tool.go）已先行 recover 一次（Handler
 // panic），本层兜底覆盖 gRPC 传输异常与未用 SDK 的插件。对齐「工具意外不中断会话」
 // 的最终防线设计（与 core.executeToolBody 的 panic recover 互补）。
-func (r *RemoteTool) ExecuteWithView(ctx context.Context, args json.RawMessage) (result string, viewJSON string, errRet error) {
+// ExecuteWithViewAndImages 实现 ViewImageExecutor：单次 gRPC 往返同时带回插件
+// 结果、视图与图像附件（ExecuteToolResponse.images，如 computer-use 截图）。
+func (r *RemoteTool) ExecuteWithViewAndImages(ctx context.Context, args json.RawMessage) (result string, viewJSON string, images []string, errRet error) {
 	defer func() {
 		if rv := recover(); rv != nil {
 			errRet = fmt.Errorf("tool %s panicked (remote): %v", r.name, rv)
@@ -70,10 +72,16 @@ func (r *RemoteTool) ExecuteWithView(ctx context.Context, args json.RawMessage) 
 		ArgumentsJson: string(args),
 	})
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	if resp.Error != "" {
-		return "", "", fmt.Errorf("%s", resp.Error)
+		return "", "", nil, fmt.Errorf("%s", resp.Error)
 	}
-	return resp.Content, resp.ViewJson, nil
+	return resp.Content, resp.ViewJson, resp.Images, nil
+}
+
+// ExecuteWithView 实现 ViewExecutor（委托合一接口，丢弃图像），保持既有调用方兼容。
+func (r *RemoteTool) ExecuteWithView(ctx context.Context, args json.RawMessage) (result string, viewJSON string, errRet error) {
+	result, viewJSON, _, err := r.ExecuteWithViewAndImages(ctx, args)
+	return result, viewJSON, err
 }

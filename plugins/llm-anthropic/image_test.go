@@ -124,3 +124,68 @@ func TestFileImageSourceMarshal(t *testing.T) {
 		t.Fatalf("file source not marshaled correctly: %s", s)
 	}
 }
+
+// TestToolResultContentBlocks 工具结果图像：文本块 + 内嵌 base64 图像块（vision on）。
+func TestToolResultContentBlocks(t *testing.T) {
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+	p := &AnthropicProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
+	blocks, usesFile := p.toolResultContentBlocks("截图完成", []string{url})
+	if usesFile {
+		t.Fatal("内联小图不应使用 file 源")
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("want text + image blocks, got %d", len(blocks))
+	}
+	if blocks[0].OfText == nil || blocks[0].OfText.Text != "截图完成" {
+		t.Fatalf("first block should be text, got %+v", blocks[0])
+	}
+	img := blocks[1].OfImage
+	if img == nil || img.Source.OfBase64 == nil || img.Source.OfBase64.Data != "c2hvdA==" {
+		t.Fatalf("second block should be base64 image, got %+v", blocks[1])
+	}
+}
+
+// TestToolResultContentBlocksVisionOff 视觉关闭：工具结果仅保留文本块。
+func TestToolResultContentBlocksVisionOff(t *testing.T) {
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+	p := &AnthropicProvider{vision: false, filesAPI: false, fileCache: map[string]string{}}
+	blocks, _ := p.toolResultContentBlocks("截图完成", []string{url})
+	if len(blocks) != 1 || blocks[0].OfText == nil {
+		t.Fatalf("视觉关闭应仅文本块, got %d", len(blocks))
+	}
+}
+
+// TestBuildMessageParamsToolImages tool 消息带图像：图像内嵌 tool_result.content
+// （Anthropic computer-use 规范形态），不产生独立图像块。
+func TestBuildMessageParamsToolImages(t *testing.T) {
+	url := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("shot"))
+	p := &AnthropicProvider{vision: true, filesAPI: false, fileCache: map[string]string{}}
+	params, beta := p.buildMessageParams([]core.Message{
+		{Role: "assistant", ToolCalls: []core.ToolCall{{ID: "call1", Name: "computer_use_screen"}}},
+		{Role: "tool", Content: "ok", ToolCallID: "call1", Images: []string{url}},
+	}, nil, 0)
+	if beta {
+		t.Fatal("内联图像不应触发 beta 头")
+	}
+	if len(params.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(params.Messages))
+	}
+	foundToolResult, foundImage := false, false
+	for _, b := range params.Messages[1].Content {
+		if b.OfToolResult != nil {
+			foundToolResult = true
+			if b.OfToolResult.ToolUseID != "call1" {
+				t.Fatalf("tool_use_id = %q, want call1", b.OfToolResult.ToolUseID)
+			}
+			if len(b.OfToolResult.Content) != 2 || b.OfToolResult.Content[1].OfImage == nil {
+				t.Fatalf("tool_result.content 应含 text + image, got %d", len(b.OfToolResult.Content))
+			}
+		}
+		if b.OfImage != nil {
+			foundImage = true
+		}
+	}
+	if !foundToolResult || foundImage {
+		t.Fatalf("图像应内嵌 tool_result（foundToolResult=%v, foundImage=%v）", foundToolResult, foundImage)
+	}
+}
