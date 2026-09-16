@@ -18,6 +18,9 @@
 //     tool/post-execute 槽超长结果外置为文件 + replace 预览替换）
 //   - reminder.go       重复工具调用提醒（对齐 DSH guard/repeat-tool-reminder，
 //     advisory 形态：只产出 notice，不否决/不改写）
+//   - skill.go          技能工具（自 tool-skill 迁入：skill / install_skill /
+//     uninstall_skill + ContextFn 注入技能索引；tool 服务叠加——TypeDsc 恒注册
+//     ToolServiceServer，宿主 ListTools 探测非空后登记为 tool provider）
 package main
 
 import (
@@ -39,9 +42,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	skillStore, skillInstalledDir := newSkillResident()
 	sdk := dsc.New(dsc.Config{
 		Name:    "dsc-system",
-		Version: "1.3.0",
+		Version: "1.4.0",
 		Type:    dsc.TypeDsc,
 	})
 	// 通用类型叠加 policy 服务：宿主按 PluginInfo.services 的 "policy" 声明，
@@ -52,5 +56,10 @@ func main() {
 	//（对齐 DSH repeat-tool-reminder 的 agent/pre-step reset hook——用户插话
 	// 改变了上下文，跨插话的重复不是循环）。
 	sdk.Hook(dsc.Hook{OnEvent: reminder.handleHostEvent})
+	// 工具服务叠加：skill 驻留的三个模型可见工具（宿主 ListTools 探测非空
+	// 工具集后把本进程同时登记为 tool provider——服务正交）。
+	for _, t := range newSkillTools(skillStore, skillInstalledDir) {
+		sdk.Tool(t)
+	}
 	sdk.Serve()
 }

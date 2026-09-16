@@ -217,7 +217,6 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 - `tool-lisp-eval`（Lisp/Scheme 精确有理数求值：`+ - * /` 变参精确运算、`3/4` 分数字面量、任意精度整数；浮点走 `f+ f- f* f/` 逃生舱；提供 `lisp-eval` 能力）
 
-- `tool-skill`（技能读取/安装/卸载：`skill` / `install_skill` / `uninstall_skill` + `ContextFn` 注入技能索引到 system prompt；提供 `skill` 能力）
 
 - `tool-lua-host`（LUA 脚本宿主：脚本注册工具，宿主互通复用 LLM/Tool/Notify；内置只读 `list_lua_tools` 枚举当前已注册的 LUA 脚本工具；脚本工具在创造模式下热加载（约 2s 轮询扫描 `scripts/`），宿主会节流同步其到模型可直接调用的工具目录——新脚本工具无需重启即可被模型直接调用）
 
@@ -233,7 +232,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Policy 插件
 
-- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）timeout 超时决策（自 `policy-timeout` 迁入，对齐 DSH timeout-policy：tool/execute 槽为 shell/subagent 裁决「活跃续命」执行域——空闲预算 DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT 可调、0s 禁用，宿主机械安装看门狗与活动信号通道，无状态）spill 外置决策（自 `policy-spill` 迁入，对齐 DSH spill-policy：tool/post-execute 槽把超阈值纯文本结果全文外置为文件并 replace 为「头尾预览 + 定位符 + view 取回指引」，阈值 DSC_SPILL_THRESHOLD 可调、0 禁用，存储按会话分目录、编号跨重启续接，尽力而为不把成功调用变失败）与重复工具调用提醒（advisory 形态，见特性条目）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
+- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）timeout 超时决策（自 `policy-timeout` 迁入，对齐 DSH timeout-policy：tool/execute 槽为 shell/subagent 裁决「活跃续命」执行域——空闲预算 DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT 可调、0s 禁用，宿主机械安装看门狗与活动信号通道，无状态）spill 外置决策（自 `policy-spill` 迁入，对齐 DSH spill-policy：tool/post-execute 槽把超阈值纯文本结果全文外置为文件并 replace 为「头尾预览 + 定位符 + view 取回指引」，阈值 DSC_SPILL_THRESHOLD 可调、0 禁用，存储按会话分目录、编号跨重启续接，尽力而为不把成功调用变失败）skill 技能工具（自 `tool-skill` 迁入：skill / install_skill / uninstall_skill 三工具经 ToolServiceServer 叠加——TypeDsc 恒注册工具服务，宿主 ListTools 探测非空后同时登记为 tool provider；ContextFn 注入技能索引到 system prompt，DSC_SKILLS_DIR 可调）与重复工具调用提醒（advisory 形态，见特性条目）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
 
 ### DSC 通用插件
 

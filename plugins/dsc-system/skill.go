@@ -1,3 +1,7 @@
+// 自 plugins/tool-skill 迁入的核心插件混合体驻留（工具类服务叠加：TypeDsc
+// 恒注册 ToolServiceServer，宿主经 ListTools 探测非空工具集后登记为 tool
+// provider——「插件类型与服务正交」，协议与宿主零改动）。
+
 package main
 
 import (
@@ -506,59 +510,53 @@ func uninstallSkillView(result string) (json.RawMessage, error) {
 	return dsc.CardView("Skill", &dsc.ViewBadge{Text: "uninstalled", Tone: "yellow"}, fields), nil
 }
 
-// main 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
-// PluginMetadata / PluginHookService 与 go-core 组装（重写自旧的
-// ToolServiceServer/MetadataServer/ToolMetadataGRPCPlugin 样板）。
-func main() {
-	// 技能目录由宿主通过环境变量传入（未设置时默认 ./skills）
+// newSkillResident 初始化 skill 驻留：读 DSC_SKILLS_DIR（未设置时默认 ./skills），
+// 构建技能存储（目录缺失视为无技能，不阻断混合体装载），返回存储与外置安装目录。
+func newSkillResident() (*SkillStore, string) {
 	skillsDir := os.Getenv("DSC_SKILLS_DIR")
 	if skillsDir == "" {
 		skillsDir = "./skills"
 	}
-	builtinDir := filepath.Join(skillsDir, "builtin")
 	installedDir := filepath.Join(skillsDir, "installed")
-	store := NewSkillStore(builtinDir, installedDir)
+	store := NewSkillStore(filepath.Join(skillsDir, "builtin"), installedDir)
+	return store, installedDir
+}
 
+// newSkillTools 构造 skill 驻留的工具集（原独立插件 main() 装配的等价物）：
+// 返回 skill / install_skill / uninstall_skill 三个工具，由混合体 main.go
+// 经 sdk.Tool 注册。
+func newSkillTools(store *SkillStore, installedDir string) []dsc.Tool {
 	readTool := &ReadSkillTool{store: store}
 	installTool := &InstallSkillTool{store: store, installedDir: installedDir}
 	uninstallTool := &UninstallSkillTool{store: store}
-
-	sdk := dsc.New(dsc.Config{
-		Name:    "skill",
-		Version: "1.0.0",
-		Type:    dsc.TypeTool,
-		Provides: map[string]string{
-			// 提供 "skill" 能力：含 skill/install_skill/uninstall_skill 工具
-			"skill": "true",
+	return []dsc.Tool{
+		{
+			Name:        readTool.Name(),
+			Description: readTool.Description(),
+			Schema:      readTool.ParametersSchema(),
+			Handler:     readTool.Execute,
+			ContextFn:   store.indexBlock, // 技能索引动态注入 system prompt（对齐旧 ListContext 每调用重算）
+			ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+				return readSkillView(args, result)
+			},
 		},
-	})
-	sdk.Tool(dsc.Tool{
-		Name:        readTool.Name(),
-		Description: readTool.Description(),
-		Schema:      readTool.ParametersSchema(),
-		Handler:     readTool.Execute,
-		ContextFn:   store.indexBlock, // 技能索引动态注入 system prompt（对齐旧 ListContext 每调用重算）
-		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
-			return readSkillView(args, result)
+		{
+			Name:        installTool.Name(),
+			Description: installTool.Description(),
+			Schema:      installTool.ParametersSchema(),
+			Handler:     installTool.Execute,
+			ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+				return installSkillView(result)
+			},
 		},
-	})
-	sdk.Tool(dsc.Tool{
-		Name:        installTool.Name(),
-		Description: installTool.Description(),
-		Schema:      installTool.ParametersSchema(),
-		Handler:     installTool.Execute,
-		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
-			return installSkillView(result)
+		{
+			Name:        uninstallTool.Name(),
+			Description: uninstallTool.Description(),
+			Schema:      uninstallTool.ParametersSchema(),
+			Handler:     uninstallTool.Execute,
+			ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
+				return uninstallSkillView(result)
+			},
 		},
-	})
-	sdk.Tool(dsc.Tool{
-		Name:        uninstallTool.Name(),
-		Description: uninstallTool.Description(),
-		Schema:      uninstallTool.ParametersSchema(),
-		Handler:     uninstallTool.Execute,
-		ViewFn: func(ctx context.Context, args json.RawMessage, result string) (json.RawMessage, error) {
-			return uninstallSkillView(result)
-		},
-	})
-	sdk.Serve()
+	}
 }

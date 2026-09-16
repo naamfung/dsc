@@ -11,6 +11,8 @@ plugins:
   #     （DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT，0s 禁用）
   #   - spill 外置决策：超长工具结果全文落盘，模型侧只见头尾预览 + 定位符
   #     + 取回指引（阈值 DSC_SPILL_THRESHOLD 字符，0 禁用；取回走 view）
+  #   - skill 技能工具（自 tool-skill 迁入）：skill / install_skill /
+  #     uninstall_skill + ContextFn 注入技能索引（DSC_SKILLS_DIR 可调）
   #   - 重复工具调用提醒（advisory）：连续同参重复调用达阈值时注入提醒
   #     （DSC_REPEAT_THRESHOLDS 缺省 3,5,8 / DSC_REPEAT_EXCLUDE
   #     缺省 todo_write）；不否决不改写，用户插话自动重置
@@ -30,9 +32,6 @@ plugins:
     type: tool
     enabled: true
   - name: tool-lisp-eval
-    type: tool
-    enabled: true
-  - name: tool-skill
     type: tool
     enabled: true
   # 通知音效（回合完成程序性响铃）
