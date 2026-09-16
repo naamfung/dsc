@@ -6,6 +6,14 @@ plugins:
   - name: policy-fs-observation
     type: policy
     enabled: true
+  # 超时决策插件：shell/subagent 活跃续命空闲预算（DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT，0s 禁用）
+  - name: policy-timeout
+    type: policy
+    enabled: true
+  # 外置决策插件：超长工具结果外置为文件（阈值 DSC_SPILL_THRESHOLD 字符，0 禁用；取回走 view）
+  - name: policy-spill
+    type: policy
+    enabled: true
   - name: tool-str-replace-editor
     type: tool
     enabled: true

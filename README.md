@@ -24,6 +24,8 @@ git clone -b master https://github.com/naamfung/dsc.git
 
 - **工具調用超時（活躍續命，策略插件化）**：超时决策插件 `policy-timeout` 在工具流水线 `tool/execute` 槽裁决「哪个工具、多大空闲预算、超时模型可见文案」（对齐 DSH timeout-policy 占位）：`shell` 預算由 `DSC_SHELL_TIMEOUT`（默认 10 分钟）、`subagent` 由 `DSC_SUBAGENT_IDLE_TIMEOUT`（默认 10 分钟）可调，设 `0s` 禁用；宿主机械安装执行域（看门狗 + 活动信号通道），执行方每次输出/帧到达即续命，仅对「长时间完全无活动」才判定超时，避免一刀切固定时长误杀仍在产出的长编译/测试与慢速本地模型；cron 任务与 workflow 子代理亦经同一 `subagent` 工具裁决路径，无旁路。
 
+- **超长结果外置（spill，策略插件化）**：外置决策插件 `policy-spill` 在工具流水线 `tool/post-execute` 槽裁决「超长纯文本工具结果何时外置」（对齐 DSH spill-policy 的结果变换器占位）：超过 `DSC_SPILL_THRESHOLD`（默认 4000 字符，设 `0` 禁用）的结果全文保存到外置存储（`DSC_SPILL_DIR` 显式覆盖，缺省 exe 目录 `temp/spill/<session>`，宿主 24 小时清理覆盖），模型侧只见「头尾预览 + 定位符 + 取回指引」；定位符即文件路径，取回走标准 `str_replace_editor` view 命令（支持 `view_range` 分段）或 `shell` grep 搜索（view 命令豁免外置，防「取回 → 又被外置」死循环）；替换体永不超阈值（告示成本在阈值内预留）；尽力而为：存储失败/阈内容不下替换体一律保留内联，绝不把成功调用变成失败。
+
 - **凭据隔离**：插件子进程 env 白名单化——仅 LLM 插件放行凭据类键（`*_API_KEY`/`*_TOKEN`/`*_SECRET` 等），其余 tool/policy/agent 插件一律滤除（`DSC_*` 宿主配置保留），防止 API key 经 shell 等工具进程被模型读进会话历史。
 
 - **RPC 可靠性保障**：跨插件 gRPC 調用支持超時控制與指數退避重試機制；採用語義化版本範圍（`>=1.0, <2.0`）進行插件 API 兼容性檢查，允許補丁與次版本升級。
@@ -230,6 +232,8 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 ### Policy 插件
 
 - `policy-fs-observation`（读前改写策略：**通用 PolicyService 形态**——宿主把工具流水线事件（`tool/pre-execute` / `tool/post-execute`）转发给插件，插件裁决 allow/deny/replace，策略逻辑与观察状态全部在插件侧，宿主不解读任何领域语义，新增 policy 类型 = 新插件、协议与宿主零改动。本插件对齐 DSH fs-observation-policy 语义：`str_replace_editor` 的 `str_replace`/`insert` 前必须有本会话内的先读记录（读前改写）；文件自观察后被外部修改 → 拦截（内容 sha256 新鲜度校验）；读到不存在的路径记录 confirmed absent（缺失记录）；观察状态按会话属主隔离（per-session owner）、仅内存不持久——会话恢复后须重新读取。deny 时 reason 原文透传模型，策略服务不可用时 best-effort 放行（策略缺失降级为无策略，而非工具不可用）。提供 `fs-observation-policy` 能力）
+- `policy-timeout`（超时决策插件：在 `tool/execute` 槽为 `shell`/`subagent` 裁决「活跃续命」执行域——空闲预算 `DSC_SHELL_TIMEOUT` / `DSC_SUBAGENT_IDLE_TIMEOUT`（默认 10 分钟，0s 禁用）与超时模型可见文案全部在插件侧，宿主只机械安装看门狗（WithIdleDeadline）与活动信号通道（TouchActivity）；无状态，每次调用独立裁决。提供 `timeout-policy` 能力）
+- `policy-spill`（外置决策插件：在 `tool/post-execute` 槽把超阈值的纯文本结果全文外置为文件，replace 裁决返回「头尾预览 + 文件路径定位符 + view 取回指引」；`str_replace_editor` 的 view 命令豁免（取回路径防死循环）；存储按会话属主分目录、编号跨重启续接不覆盖；尽力而为——存储失败或阈内容不下替换体时保留内联。提供 `spill-policy` 能力）
 
 ### DSC 通用插件
 

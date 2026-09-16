@@ -272,42 +272,12 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		_, _ = m.dispatchEventToPlugins(ctx.Name, ctx.Data)
 		return nil, nil
 	})
-	// spill：超长工具结果外置（阈值 4000 字符，目录可经 DSC_SPILL_DIR 配置）；
-	// post-execute 策略 + read_spill 取回工具
-	spillDir := os.Getenv("DSC_SPILL_DIR")
-	if spillDir == "" {
-		exeDir := cfg.ExecDir
-		if exeDir == "" {
-			// 嘗試獲取可執行文件所在目錄
-			if execPath, err := os.Executable(); err == nil {
-				exeDir = filepath.Dir(execPath)
-			} else {
-				logger.Warn("spill store: cannot determine executable dir, using default 'spill' dir", "error", err)
-				exeDir = ""
-			}
+	// temp/ 24 小时清理（temp 总管：截图等宿主落盘产物；spill 外置文件已随
+	// 外置策略插件化归插件自管，但默认仍落同目录，由本清理统一覆盖）
+	if exeDir := cfg.ExecDir; exeDir != "" {
+		if err := cleanupOldTempDirs(exeDir, logger); err != nil {
+			logger.Warn("temp store: failed to cleanup old temp dirs", "error", err)
 		}
-		if exeDir != "" {
-			// 清理24小時前的 temp 目錄
-			if err := cleanupOldTempDirs(exeDir, logger); err != nil {
-				logger.Warn("temp store: failed to cleanup old temp dirs", "error", err)
-			}
-			// spill 目錄：exe目錄下temp/spill/<sessionID>
-			sessionID := cfg.SessionID
-			if sessionID == "" {
-				sessionID = "default"
-			}
-			spillDir = filepath.Join(exeDir, "temp", "spill", sessionID)
-		} else {
-			logger.Warn("spill store: cannot determine executable dir, using default 'spill' dir", "error", fmt.Errorf("no exec dir"))
-			spillDir = "spill"
-		}
-	}
-	if store, err := NewSpillStore(spillDir); err == nil {
-		_ = m.toolRegistry.Register(&readSpillTool{store: store})
-		// 默认 4000 字符；可用 DSC_SPILL_THRESHOLD 覆盖
-		m.events.OnWaterfall(EventToolPostExecute, spillLargeResult(store, spillThreshold()))
-	} else {
-		logger.Warn("spill store unavailable", "error", err)
 	}
 	// sandbox：进程效应策略层（DSC_SANDBOX: full/workspace/readonly，缺省 workspace），
 	// pre-execute fail-closed 拦截写操作；运行时可用 SetSandboxPolicy 动态切换

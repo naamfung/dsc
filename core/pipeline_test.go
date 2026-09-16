@@ -57,7 +57,7 @@ func (c *mockPolicyClient) received() []*proto.PolicyEvent {
 
 func newPipelineManager(t *testing.T) *Manager {
 	t.Helper()
-	m := newRouterManager() // 无默认 retry/sandbox/spill 监听器，测试控制流水线
+	m := newRouterManager() // 无默认 retry/sandbox 监听器，测试控制流水线
 	if err := m.toolRegistry.Register(&mockTool{name: "str_replace_editor"}); err != nil {
 		t.Fatalf("register tool: %v", err)
 	}
@@ -328,7 +328,7 @@ func (t *panickyTool) Execute(_ context.Context, _ json.RawMessage) (string, err
 
 // TestExecuteToolRecoversFromPanic 验证 host 侧 executeToolBody 的通用 panic recover：
 // 工具 Execute panic 时返回错误而非崩溃宿主进程。对齐「工具意外不中断会话」
-// 的最终防线设计——覆盖所有宿主侧工具（builtin / read_spill / run_code / agent 内部工具等）。
+// 的最终防线设计——覆盖所有宿主侧工具（builtin / run_code / agent 内部工具等）。
 func TestExecuteToolRecoversFromPanic(t *testing.T) {
 	m := newPipelineManager(t)
 	if err := m.toolRegistry.Register(&panickyTool{name: "panicky"}); err != nil {
@@ -384,40 +384,5 @@ func TestRemoteToolRecoversFromPanic(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "panicked") {
 		t.Fatalf("err = %v, want contains 'panicked'", err)
-	}
-}
-
-// TestReadSpillRejectsFilePath 验证 read_spill 工具拒绝文件路径形式的 locator，
-// 引导模型改用 spill:N 格式。这修复了模型误把 read_spill 当成文件读取工具的问题。
-func TestReadSpillRejectsFilePath(t *testing.T) {
-	store, err := NewSpillStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewSpillStore: %v", err)
-	}
-	tool := &readSpillTool{store: store}
-
-	// 文件路径形式的 locator 应被拒绝（不返回底层 file-not-found 错误）
-	_, err = tool.Execute(context.Background(), json.RawMessage(`{"locator":"D:/foo/spill-3.txt"}`))
-	if err == nil {
-		t.Fatal("file path locator should be rejected")
-	}
-	if !strings.Contains(err.Error(), "spill:<id>") {
-		t.Fatalf("err = %v, want hint about spill:<id> format", err)
-	}
-	if !strings.Contains(err.Error(), "filesystem path") {
-		t.Fatalf("err = %v, want hint about filesystem path misuse", err)
-	}
-
-	// 合法 locator 应正常工作（先保存再读取）
-	locator, err := store.SaveText("hello spill")
-	if err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	out, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"locator":%q}`, locator)))
-	if err != nil {
-		t.Fatalf("read spill: %v", err)
-	}
-	if out != "hello spill" {
-		t.Fatalf("got %q, want 'hello spill'", out)
 	}
 }

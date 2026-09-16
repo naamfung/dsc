@@ -67,6 +67,7 @@ var publicPlugins = []string{
 	"tool-agentic-bench",
 	"policy-fs-observation",
 	"policy-timeout",
+	"policy-spill",
 	"tool-ssh",
 	"tool-musicplayer",
 	"tool-harness-webui",

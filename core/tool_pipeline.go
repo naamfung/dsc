@@ -162,7 +162,7 @@ func (m *Manager) ExecuteToolWithView(ctx context.Context, toolName string, args
 // executeToolBody 实际执行工具（可被 tools/execute 的 waterfall 监听器改写/包围）。
 // 返回执行错误；调用方负责据此置 inv.Err。超时策略在此协作式应用（对齐 DSH timeout-policy）。
 //
-// 通用 panic recover：覆盖所有宿主侧工具（含 builtin / read_spill / run_code / agent
+// 通用 panic recover：覆盖所有宿主侧工具（含 builtin / run_code / agent
 // 内部工具等）与 RemoteTool 调用——任何工具 panic 都被转为错误返回，避免宿主进程崩溃
 // 导致 LLM 连接中断。这是「工具意外不中断会话」的最后一道防线——插件 SDK 层（sdk/tool.go）
 // 已先行 recover 一次，本层兜底覆盖未用 SDK 的工具（如 Lua 脚本工具、host 内置工具）。
@@ -189,7 +189,7 @@ func (m *Manager) executeToolBody(ctx context.Context, inv *ToolInvocation, tool
 		}
 	}
 	// 通用 panic recover：任何工具执行 panic 都转为错误返回，避免宿主进程崩溃。
-	// 覆盖 host 内置工具（readSpillTool / runCodeTool 等）与 RemoteTool（虽插件 SDK
+	// 覆盖 host 内置工具（runCodeTool / cron 管理工具等）与 RemoteTool（虽插件 SDK
 	// 已 recover 一次，但若插件未用 SDK或 RemoteTool 自身 gRPC 调用 panic 仍兜底）。
 	defer func() {
 		if r := recover(); r != nil {
