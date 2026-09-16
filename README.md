@@ -233,10 +233,9 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Policy 插件
 
-- `policy-fs-observation`（读前改写策略：**通用 PolicyService 形态**——宿主把工具流水线事件（`tool/pre-execute` / `tool/post-execute`）转发给插件，插件裁决 allow/deny/replace，策略逻辑与观察状态全部在插件侧，宿主不解读任何领域语义，新增 policy 类型 = 新插件、协议与宿主零改动。本插件对齐 DSH fs-observation-policy 语义：`str_replace_editor` 的 `str_replace`/`insert` 前必须有本会话内的先读记录（读前改写）；文件自观察后被外部修改 → 拦截（内容 sha256 新鲜度校验）；读到不存在的路径记录 confirmed absent（缺失记录）；观察状态按会话属主隔离（per-session owner）、仅内存不持久——会话恢复后须重新读取。deny 时 reason 原文透传模型，策略服务不可用时 best-effort 放行（策略缺失降级为无策略，而非工具不可用）。提供 `fs-observation-policy` 能力）
 - `policy-timeout`（超时决策插件：在 `tool/execute` 槽为 `shell`/`subagent` 裁决「活跃续命」执行域——空闲预算 `DSC_SHELL_TIMEOUT` / `DSC_SUBAGENT_IDLE_TIMEOUT`（默认 10 分钟，0s 禁用）与超时模型可见文案全部在插件侧，宿主只机械安装看门狗（WithIdleDeadline）与活动信号通道（TouchActivity）；无状态，每次调用独立裁决。提供 `timeout-policy` 能力）
 - `policy-spill`（外置决策插件：在 `tool/post-execute` 槽把超阈值的纯文本结果全文外置为文件，replace 裁决返回「头尾预览 + 文件路径定位符 + view 取回指引」；`str_replace_editor` 的 view 命令豁免（取回路径防死循环）；存储按会话属主分目录、编号跨重启续接不覆盖；尽力而为——存储失败或阈内容不下替换体时保留内联。提供 `spill-policy` 能力）
-- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离，仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：重复工具调用提醒（advisory 形态，见特性条目）与内部多策略瀑布（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
+- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）与重复工具调用提醒（advisory 形态，见特性条目）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
 
 ### DSC 通用插件
 

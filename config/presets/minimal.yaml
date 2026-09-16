@@ -3,9 +3,6 @@ description: 仅提供持久 bash 与 str_replace_editor 的双工具编码 Agen
 persona: "You are a helpful software engineer assistant."
 plan_section: "You are in plan mode. Explore and design before presenting the complete plan through exit_plan_mode."
 plugins:
-  - name: policy-fs-observation
-    type: policy
-    enabled: true
   # 超时决策插件：shell/subagent 活跃续命空闲预算（DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT，0s 禁用）
   - name: policy-timeout
     type: policy
@@ -14,9 +11,12 @@ plugins:
   - name: policy-spill
     type: policy
     enabled: true
-  # 重复工具调用提醒（advisory 决策插件，dsc-system 驻留）：连续同参重复调用
-  # 达阈值时注入提醒（DSC_REPEAT_THRESHOLDS 缺省 3,5,8 / DSC_REPEAT_EXCLUDE
-  # 缺省 todo_write）；不否决不改写，用户插话自动重置
+  # 核心插件混合体（dsc-system 驻留）：
+  #   - fs-observation 读前改写策略：str_replace/insert 前必须有本会话内先读
+  #     记录，文件被外部修改后拦截（sha256 新鲜度校验）
+  #   - 重复工具调用提醒（advisory）：连续同参重复调用达阈值时注入提醒
+  #     （DSC_REPEAT_THRESHOLDS 缺省 3,5,8 / DSC_REPEAT_EXCLUDE
+  #     缺省 todo_write）；不否决不改写，用户插话自动重置
   - name: dsc-system
     type: dsc
     enabled: true

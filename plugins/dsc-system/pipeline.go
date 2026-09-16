@@ -1,10 +1,22 @@
 package main
 
 import (
-        "context"
+	"context"
 
-        "dsc/proto"
-        pbproto "google.golang.org/protobuf/proto"
+	"dsc/proto"
+	pbproto "google.golang.org/protobuf/proto"
+)
+
+// 工具流水线事件种类与裁决动作（与宿主 core 的 PolicyService 字符串约定一致，
+// 对应 proto PolicyEvent.kind / PolicyDecision.action）。驻留插件的协议词汇
+// 统一在此声明（对齐 AGENTS.md「重复逻辑必须抽取」——各驻留文件直接引用）。
+const (
+	kindPreExecute  = "tool/pre-execute"
+	kindPostExecute = "tool/post-execute"
+	kindExecute     = "tool/execute"
+
+	actionDeny    = "deny"
+	actionReplace = "replace"
 )
 
 // policyPipeline dsc-system 内部策略瀑布：宿主把本进程视为单个 policy 服务，
@@ -18,43 +30,43 @@ import (
 //
 // 转发失败即整体失败：fail-open（放行）由宿主桥统一负责，插件内不吞错。
 type policyPipeline struct {
-        proto.UnimplementedPolicyServiceServer
-        residents []proto.PolicyServiceServer
+	proto.UnimplementedPolicyServiceServer
+	residents []proto.PolicyServiceServer
 }
 
 func (p *policyPipeline) OnEvent(ctx context.Context, ev *proto.PolicyEvent) (*proto.PolicyDecision, error) {
-        merged := &proto.PolicyDecision{}
-        cur := ev
-        for _, r := range p.residents {
-                dec, err := r.OnEvent(ctx, cur)
-                if err != nil {
-                        return nil, err
-                }
-                if n := dec.GetNotice(); n != "" {
-                        if merged.Notice != "" {
-                                merged.Notice += "\n\n"
-                        }
-                        merged.Notice += n
-                }
-                if merged.Timeout == nil {
-                        merged.Timeout = dec.GetTimeout()
-                }
-                switch dec.GetAction() {
-                case "deny":
-                        return &proto.PolicyDecision{
-                                Action: "deny",
-                                Reason: dec.GetReason(),
-                                Notice: merged.Notice,
-                        }, nil
-                case "replace":
-                        if dec.GetResult() != "" {
-                                merged.Action = "replace"
-                                merged.Result = dec.GetResult()
-                                fed := pbproto.Clone(cur).(*proto.PolicyEvent) // 深拷贝（proto 消息不可浅拷贝）
-                                fed.Result = dec.GetResult()
-                                cur = fed
-                        }
-                }
-        }
-        return merged, nil
+	merged := &proto.PolicyDecision{}
+	cur := ev
+	for _, r := range p.residents {
+		dec, err := r.OnEvent(ctx, cur)
+		if err != nil {
+			return nil, err
+		}
+		if n := dec.GetNotice(); n != "" {
+			if merged.Notice != "" {
+				merged.Notice += "\n\n"
+			}
+			merged.Notice += n
+		}
+		if merged.Timeout == nil {
+			merged.Timeout = dec.GetTimeout()
+		}
+		switch dec.GetAction() {
+		case "deny":
+			return &proto.PolicyDecision{
+				Action: "deny",
+				Reason: dec.GetReason(),
+				Notice: merged.Notice,
+			}, nil
+		case "replace":
+			if dec.GetResult() != "" {
+				merged.Action = "replace"
+				merged.Result = dec.GetResult()
+				fed := pbproto.Clone(cur).(*proto.PolicyEvent) // 深拷贝（proto 消息不可浅拷贝）
+				fed.Result = dec.GetResult()
+				cur = fed
+			}
+		}
+	}
+	return merged, nil
 }
