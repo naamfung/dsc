@@ -65,17 +65,14 @@ type ToolInvocation struct {
 	EscalatedMode SandboxPolicy
 }
 
-// filePathFromArgs 从工具参数 JSON 中提取 file_path 字段（观测策略用）。
-func filePathFromArgs(argsJSON string) string {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
-		return ""
-	}
-	if p, ok := m["file_path"].(string); ok {
-		return p
-	}
-	return ""
-}
+// PolicyService 事件种类与裁决动作（宿主与插件共同遵守的字符串约定，
+// 与 proto PolicyEvent.kind / PolicyDecision.action 对应）。
+const (
+	policyEventPreExecute  = "tool/pre-execute"
+	policyEventPostExecute = "tool/post-execute"
+	policyDecisionDeny     = "deny"
+	policyDecisionReplace  = "replace"
+)
 
 // ToolTimeoutError 工具调用超时（对齐 DSH TOOL_TIMEOUT 结构化结果）。
 type ToolTimeoutError struct {
@@ -268,72 +265,70 @@ func (m *Manager) emitToolResult(inv *ToolInvocation) {
 	m.events.Emit(EventToolResult, EventContext{Data: info})
 }
 
-// bridgePolicyToPipeline 把已加载的 policy 插件观测服务桥接为工具流水线监听器：
-// post-execute 记录文件观测，pre-execute 执行读前检查（写操作要求已有观测）。
-// 返回监听器的移除函数（卸载 policy 时调用）。
-func (m *Manager) bridgePolicyToPipeline(name string, pc proto.FsObservationPolicyServiceClient) []func() {
+// bridgePolicyToPipeline 把已加载的 policy 插件通用策略服务桥接为工具流水线监听器：
+// pre-execute 转发事件，deny 即占槽拦截（reason 原文透传模型，对齐 DSH 单决策槽
+// veto 语义）；post-execute 转发事件，replace 即改写模型可见结果。宿主不解读任何
+// 领域语义——参数提取、工具类别判断、观察状态全部在插件侧（对齐 DSH「policy
+// 插件持有策略，宿主只派发与执行裁决」）。策略服务不可用时不阻塞执行（best-effort：
+// 策略缺失降级为无策略，而非工具不可用）。返回监听器的移除函数（卸载 policy 时调用）。
+func (m *Manager) bridgePolicyToPipeline(name string, pc proto.PolicyServiceClient) []func() {
 	var off []func()
-	// post-execute：工具执行后记录文件观测（无 file_path 的工具跳过）
-	off = append(off, m.events.OnWaterfall(EventToolPostExecute, func(ctx EventContext, next func(EventContext) error) error {
-		inv, _ := ctx.Data.(*ToolInvocation)
-		path := ""
-		if inv != nil {
-			path = filePathFromArgs(inv.ArgumentsJSON)
-		}
-		if err := next(ctx); err != nil {
-			return err
-		}
-		if path == "" || inv == nil {
-			return nil
-		}
-		content := inv.Result
-		if inv.Err != nil {
-			content = "error: " + inv.Err.Error()
-		}
-		_, err := pc.UpdateObservation(context.Background(), &proto.UpdateObservationRequest{
-			FilePath: path,
-			Observation: &proto.FsObservation{
-				State:       "observed",
-				Version:     "1",
-				LastContent: content,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("policy %s update observation: %w", name, err)
-		}
-		return nil
-	}))
-	// pre-execute：读前检查——写类工具要求目标文件已有观测记录
 	off = append(off, m.events.OnWaterfall(EventToolPreExecute, func(ctx EventContext, next func(EventContext) error) error {
 		inv, _ := ctx.Data.(*ToolInvocation)
 		if inv == nil {
 			return next(ctx)
 		}
-		path := filePathFromArgs(inv.ArgumentsJSON)
-		// 仅对写类工具（当前为读写合一编辑器）做读前检查
-		if path == "" || !isWriteTool(inv.ToolName) {
-			return next(ctx)
-		}
-		resp, err := pc.GetObservation(context.Background(), &proto.GetObservationRequest{FilePath: path})
+		dec, err := pc.OnEvent(context.Background(), &proto.PolicyEvent{
+			Kind:          policyEventPreExecute,
+			Tool:          inv.ToolName,
+			ArgumentsJson: inv.ArgumentsJSON,
+			Session:       inv.SessionID,
+		})
 		if err != nil {
-			return next(ctx) // 策略服务不可用不阻塞执行
-		}
-		if resp.GetFound() {
+			m.logger.Warn("policy pre-execute forward failed; allowing", "policy", name, "tool", inv.ToolName, "err", err)
 			return next(ctx)
 		}
-		return fmt.Errorf("policy %s: file %q has not been read yet; read it before editing", name, path)
+		if dec.GetAction() == policyDecisionDeny {
+			reason := dec.GetReason()
+			if reason == "" {
+				reason = fmt.Sprintf("tool call denied by policy %s", name)
+			}
+			m.logger.Info("policy denied tool call", "policy", name, "tool", inv.ToolName, "reason", reason)
+			return errors.New(reason)
+		}
+		return next(ctx)
+	}))
+	off = append(off, m.events.OnWaterfall(EventToolPostExecute, func(ctx EventContext, next func(EventContext) error) error {
+		inv, _ := ctx.Data.(*ToolInvocation)
+		if inv == nil {
+			return next(ctx)
+		}
+		runErr := next(ctx)
+		// 失败亦转发（失败是权威观察：如读到不存在的路径须记录 confirmed absent
+		// 以授权后续创建），随后原样上抛保持流水线错误语义。
+		ev := &proto.PolicyEvent{
+			Kind:          policyEventPostExecute,
+			Tool:          inv.ToolName,
+			ArgumentsJson: inv.ArgumentsJSON,
+			Result:        sanitizeUTF8(inv.Result),
+			Session:       inv.SessionID,
+		}
+		if inv.Err != nil {
+			ev.Error = sanitizeUTF8(inv.Err.Error())
+		} else if runErr != nil {
+			ev.Error = sanitizeUTF8(runErr.Error())
+		}
+		dec, err := pc.OnEvent(context.Background(), ev)
+		if err != nil {
+			m.logger.Warn("policy post-execute forward failed", "policy", name, "tool", inv.ToolName, "err", err)
+			return runErr
+		}
+		if dec.GetAction() == policyDecisionReplace && dec.GetResult() != "" {
+			inv.Result = dec.GetResult()
+		}
+		return runErr
 	}))
 	return off
-}
-
-// isWriteTool 判断工具是否属于写类（需要读前检查）。
-func isWriteTool(toolName string) bool {
-	switch toolName {
-	case "str_replace_editor":
-		return true
-	default:
-		return false
-	}
 }
 
 // isBackgroundRequest 检测工具参数 JSON 中是否声明 run_in_background: true。

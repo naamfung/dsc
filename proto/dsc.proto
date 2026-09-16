@@ -415,33 +415,30 @@ message ListContextResponse {
   string content = 1; // 插件贡献的上下文片段，可注入 system prompt；空表示无贡献
 }
 
-// FsObservationPolicyService 文件系統觀測策略服務
-service FsObservationPolicyService {
-  rpc GetObservation(GetObservationRequest) returns (GetObservationResponse);
-  rpc UpdateObservation(UpdateObservationRequest) returns (UpdateObservationResponse);
+// PolicyService 通用策略服务：宿主把工具流水线事件转发给 policy 插件，插件返回
+// 裁决（对齐 DSH 单决策槽事件瀑布——deny 即占槽拦截、reason 透传模型；replace
+// 即结果改写）。策略逻辑与状态全部归插件，宿主不解读任何领域语义（不提取参数、
+// 不判工具类别）：新增 policy 类型 = 新插件，协议与宿主零改动。
+service PolicyService {
+  rpc OnEvent(PolicyEvent) returns (PolicyDecision);
 }
 
-message FsObservation {
-  string state = 1; // "unseen", "absent", "present"
-  string version = 2; // 文件的內容 hash 或最後修改時間戳
-  string last_content = 3; // 最後一次觀測到的文件內容（可選）
+// PolicyEvent 工具流水线事件载荷。kind 取值：
+//   "tool/pre-execute"  —— 工具即将执行（result/error 为空）；deny 阻止执行
+//   "tool/post-execute" —— 工具已执行完毕；replace 可改写模型可见结果
+message PolicyEvent {
+  string kind = 1;           // 事件种类（见上）
+  string tool = 2;           // 工具名
+  string arguments_json = 3; // 工具参数 JSON 原文（插件自行提取其关心的字段）
+  string result = 4;         // 执行结果文本（仅 tool/post-execute）
+  string error = 5;          // 执行错误（仅 tool/post-execute；非空 = 执行失败）
+  string session = 6;        // 调用方会话标识（策略状态的属主，对齐 DSH per-session owner）
 }
 
-message GetObservationRequest {
-  string file_path = 1;
-}
-
-message GetObservationResponse {
-  FsObservation observation = 1;
-  bool found = 2;
-}
-
-message UpdateObservationRequest {
-  string file_path = 1;
-  FsObservation observation = 2;
-}
-
-message UpdateObservationResponse {
-  bool success = 1;
-  string message = 2;
+// PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre 阶段
+// 阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
+message PolicyDecision {
+  string action = 1; // "allow"（默认）| "deny" | "replace"
+  string reason = 2; // deny 时的模型可见文案（如读前改写指引）
+  string result = 3; // replace 时的替换结果文本（仅 tool/post-execute）
 }

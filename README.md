@@ -229,7 +229,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Policy 插件
 
-- `policy-fs-observation`
+- `policy-fs-observation`（读前改写策略：**通用 PolicyService 形态**——宿主把工具流水线事件（`tool/pre-execute` / `tool/post-execute`）转发给插件，插件裁决 allow/deny/replace，策略逻辑与观察状态全部在插件侧，宿主不解读任何领域语义，新增 policy 类型 = 新插件、协议与宿主零改动。本插件对齐 DSH fs-observation-policy 语义：`str_replace_editor` 的 `str_replace`/`insert` 前必须有本会话内的先读记录（读前改写）；文件自观察后被外部修改 → 拦截（内容 sha256 新鲜度校验）；读到不存在的路径记录 confirmed absent（缺失记录）；观察状态按会话属主隔离（per-session owner）、仅内存不持久——会话恢复后须重新读取。deny 时 reason 原文透传模型，策略服务不可用时 best-effort 放行（策略缺失降级为无策略，而非工具不可用）。提供 `fs-observation-policy` 能力）
 
 ### DSC 通用插件
 

@@ -10,7 +10,7 @@ import (
 )
 
 // policyGRPCPlugin 是 policy 类型插件的 go-core 适配器：在主 gRPC server 上
-// 注册宿主可桥接的策略服务（FsObservationPolicyService）+ 插件元数据。
+// 注册宿主可桥接的通用策略服务（PolicyService）+ 插件元数据。
 // 宿主对 policy 类型经主连接直接取对应 proto 客户端（见 core/manager.go），
 // 无需本插件提供自定义 GRPCClient。
 type policyGRPCPlugin struct {
@@ -19,7 +19,7 @@ type policyGRPCPlugin struct {
 }
 
 func (p *policyGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
-	proto.RegisterFsObservationPolicyServiceServer(s, p.sdk.policy)
+	proto.RegisterPolicyServiceServer(s, p.sdk.policy)
 	metadata.RegisterPluginMetadataServer(s, &metadataServer{cfg: p.sdk.cfg})
 	// 任何插件类型都可声明 Hook 订阅宿主事件（对齐 DSH cordis：事件广播类型无关）
 	proto.RegisterPluginHookServiceServer(s, &hookServiceServer{hook: p.sdk.hook})

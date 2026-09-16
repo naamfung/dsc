@@ -26,7 +26,7 @@ func TestApprovalChainRealManagerAssembly(t *testing.T) {
 	m := NewManager(&ManagerConfig{Logger: hclog.NewNullLogger(), PluginLogger: hclog.NewNullLogger()})
 	m.SetSandboxPolicy(SandboxReadOnly)
 	m.SetApprovalPolicy(ApprovalAsk)
-	// 写类工具（承载升级语义；isWriteTool/isWriteCapableExecutor 命中 str_replace_editor）
+	// 写类工具（承载升级语义；isWriteCapableExecutor 命中 str_replace_editor）
 	if err := m.toolRegistry.Register(&mockTool{name: "str_replace_editor"}); err != nil {
 		t.Fatalf("register tool: %v", err)
 	}

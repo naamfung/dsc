@@ -10,46 +10,41 @@ import (
 	"testing"
 
 	"dsc/core"
-	"dsc/proto"
 )
 
-// newTestState 創建帶臨時 workspace 的測試狀態
-func newTestState(t *testing.T) (*editorState, string) {
+// newTestWS 建立带臨時 workspace 的測試環境（統一工作空間根：handler 讀
+// core.WorkspaceRoot，宿主經 DSC_WORKSPACE_ROOT 注入；測試直接置變數指到臨時 ws）
+func newTestWS(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	ws := filepath.Join(dir, "workspace")
 	if err := os.MkdirAll(ws, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// 統一工作空間根：handler 現讀 core.WorkspaceRoot（宿主經 DSC_WORKSPACE_ROOT 注入），
-	// 測試需將根指到臨時 ws 以便斷言寫入位置。
 	core.WorkspaceRoot = ws
-	state := &editorState{
-		observations: make(map[string]*proto.FsObservation),
-	}
 	oldCwd, _ := os.Getwd()
 	t.Cleanup(func() { os.Chdir(oldCwd) })
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	return state, dir
+	return dir
 }
 
 // exec 執行一次工具調用並返回結果/錯誤
-func exec(t *testing.T, state *editorState, args map[string]interface{}) (string, error) {
+func exec(t *testing.T, args map[string]interface{}) (string, error) {
 	t.Helper()
 	data, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strReplaceEditorHandler(context.Background(), state, data)
+	return strReplaceEditorHandler(context.Background(), data)
 }
 
 func TestCreateView(t *testing.T) {
-	state, _ := newTestState(t)
+	newTestWS(t)
 
 	// create
-	res, err := exec(t, state, map[string]interface{}{
+	res, err := exec(t, map[string]interface{}{
 		"command":   "create",
 		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\nfunc main() {\n\tprintln(\"hi\")\n}\n",
@@ -71,7 +66,7 @@ func TestCreateView(t *testing.T) {
 	}
 
 	// view
-	res, err = exec(t, state, map[string]interface{}{
+	res, err = exec(t, map[string]interface{}{
 		"command": "view",
 		"path":    "/workspace/test/fib.go",
 	})
@@ -85,9 +80,9 @@ func TestCreateView(t *testing.T) {
 }
 
 func TestStrReplace(t *testing.T) {
-	state, _ := newTestState(t)
+	newTestWS(t)
 
-	_, err := exec(t, state, map[string]interface{}{
+	_, err := exec(t, map[string]interface{}{
 		"command":   "create",
 		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\nfunc main() {\n\tprintln(\"hi\")\n}\n",
@@ -95,12 +90,12 @@ func TestStrReplace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 需先 view 建立觀測狀態
-	if _, err = exec(t, state, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
+	// 先 view 贴近真实调用顺序（读前改写裁决由 policy 插件承载，编辑器自身不再检查）
+	if _, err = exec(t, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := exec(t, state, map[string]interface{}{
+	res, err := exec(t, map[string]interface{}{
 		"command": "str_replace",
 		"path":    "/workspace/test/fib.go",
 		"old_str": `println("hi")`,
@@ -124,7 +119,7 @@ func TestStrReplace(t *testing.T) {
 
 	// old_str 确实未匹配时：应返回简洁错误（含 did not appear verbatim），
 	// 且不得把整个文件内容 dump 进错误消息（回归：if 判断曾被误删导致无条件报错）
-	_, err = exec(t, state, map[string]interface{}{
+	_, err = exec(t, map[string]interface{}{
 		"command": "str_replace",
 		"path":    "/workspace/test/fib.go",
 		"old_str": "func nonexistent()",
@@ -139,24 +134,12 @@ func TestStrReplace(t *testing.T) {
 	if strings.Contains(err.Error(), "package main") {
 		t.Fatalf("missing-old_str error should not dump file content: %v", err)
 	}
-
-	// 未先 view 的文件應拒絕 str_replace
-	state2, _ := newTestState(t)
-	_, err = exec(t, state2, map[string]interface{}{
-		"command": "str_replace",
-		"path":    "/workspace/x.go",
-		"old_str": "a",
-		"new_str": "b",
-	})
-	if err == nil {
-		t.Fatalf("str_replace without view should fail")
-	}
 }
 
 func TestInsert(t *testing.T) {
-	state, _ := newTestState(t)
+	newTestWS(t)
 
-	_, err := exec(t, state, map[string]interface{}{
+	_, err := exec(t, map[string]interface{}{
 		"command":   "create",
 		"path":      "/workspace/test/fib.go",
 		"file_text": "package main\n\nfunc main() {\n}\n",
@@ -164,13 +147,13 @@ func TestInsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = exec(t, state, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
+	if _, err = exec(t, map[string]interface{}{"command": "view", "path": "/workspace/test/fib.go"}); err != nil {
 		t.Fatal(err)
 	}
 
 	// insert_line=2 在 DSH 语义中是 0-based AFTER：在第 2 行之后插入
 	// 文件有 3 行：package main / 空行 / func main... 插入到第 2 行之后 = 空行之后
-	res, err := exec(t, state, map[string]interface{}{
+	res, err := exec(t, map[string]interface{}{
 		"command":     "insert",
 		"path":        "/workspace/test/fib.go",
 		"insert_line": 1, // 0-based AFTER line 1 = 在第 1 行之后（空行之前）
@@ -212,10 +195,10 @@ func TestNormalizeWorkspacePath(t *testing.T) {
 
 // TestViewDirectoryRejected 对齐 DSH：view 目录时列出 2 层深度的文件/目录（而非报错）。
 func TestViewDirectoryRejected(t *testing.T) {
-	state, dir := newTestState(t)
+	dir := newTestWS(t)
 	ws := filepath.Join(dir, "workspace")
 
-	res, err := exec(t, state, map[string]interface{}{
+	res, err := exec(t, map[string]interface{}{
 		"command": "view",
 		"path":    ws,
 	})

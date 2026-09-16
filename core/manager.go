@@ -103,9 +103,6 @@ type Manager struct {
 	// （互通机制 2：插件进程经它向宿主事件总线发布事件）。
 	coreNotifyServiceID uint32
 
-	// policyClients 已加载 policy 插件的策略服务客户端（按插件名），
-	// 由桥接逻辑包装为工具流水线监听器（替代旁路）。
-	policyClients map[string]proto.FsObservationPolicyServiceClient
 	// policyOff policy 桥接监听器的移除函数（按插件名），卸载时一并撤销。
 	policyOff map[string][]func()
 
@@ -232,7 +229,6 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		pendingEntries:      make(map[string]PluginEntry),
 		resolvedDeps:        make(map[string][]ResolvedDep),
 		events:              NewEventBus(),
-		policyClients:       make(map[string]proto.FsObservationPolicyServiceClient),
 		policyOff:           make(map[string][]func()),
 		sessionApproval:     make(map[string]ApprovalPolicy),
 		jobs:                jobs.NewRegistry(),
@@ -1690,7 +1686,6 @@ func (m *Manager) UnloadPlugin(name string) error {
 		off()
 	}
 	delete(m.policyOff, name)
-	delete(m.policyClients, name)
 	m.markDisposedLocked(name)
 
 	// 持久化：从 config.yaml 移除该插件声明，使运行态与重启态一致
@@ -2471,8 +2466,7 @@ func (m *Manager) registerPolicyLocked(name string, info *metadata.PluginInfo, c
 	m.typeMap[name] = "policy"
 	m.coreMetadata[name] = info
 	m.registerHookClientLocked(name, grpcClient) // 策略插件也可声明 Hook 订阅事件（对齐 cordis）
-	pc := proto.NewFsObservationPolicyServiceClient(grpcClient.Conn)
-	m.policyClients[name] = pc
+	pc := proto.NewPolicyServiceClient(grpcClient.Conn)
 	m.policyOff[name] = m.bridgePolicyToPipeline(name, pc)
 	m.transitionLocked(name, StateActive, "")
 	go m.monitorExit(name, client)
@@ -2836,7 +2830,6 @@ func (m *Manager) SwitchMode(mode string) error {
 				off()
 			}
 			delete(m.policyOff, name)
-			delete(m.policyClients, name)
 
 			// 從工具註冊表中移除該插件註冊的所有工具，
 			// 否則 ListTools 仍會返回已下線插件的工具，模型會誤報多餘的工具

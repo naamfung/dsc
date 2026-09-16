@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,38 +25,34 @@ func (t *mockTool) Execute(_ context.Context, _ json.RawMessage) (string, error)
 	return "mock-result", nil
 }
 
-// mockPolicyClient 模拟 policy 插件的观测服务。
+// mockPolicyClient 模拟 policy 插件的通用策略服务（proto.PolicyServiceClient）：
+// 按预设脚本返回裁决，并记录收到的全部事件供字段保真断言。
 type mockPolicyClient struct {
-	mu           sync.Mutex
-	observations map[string]*proto.FsObservation
+	mu      sync.Mutex
+	decide  func(ev *proto.PolicyEvent) *proto.PolicyDecision
+	events  []*proto.PolicyEvent
+	callErr error // 非 nil 时模拟策略服务不可用（best-effort 放行路径）
 }
 
-func newMockPolicyClient() *mockPolicyClient {
-	return &mockPolicyClient{observations: make(map[string]*proto.FsObservation)}
-}
+func newMockPolicyClient() *mockPolicyClient { return &mockPolicyClient{} }
 
-func (c *mockPolicyClient) GetObservation(_ context.Context, req *proto.GetObservationRequest, _ ...grpc.CallOption) (*proto.GetObservationResponse, error) {
+func (c *mockPolicyClient) OnEvent(_ context.Context, ev *proto.PolicyEvent, _ ...grpc.CallOption) (*proto.PolicyDecision, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	obs, ok := c.observations[req.FilePath]
-	if !ok {
-		return &proto.GetObservationResponse{Found: false}, nil
+	c.events = append(c.events, ev)
+	if c.callErr != nil {
+		return nil, c.callErr
 	}
-	return &proto.GetObservationResponse{Found: true, Observation: obs}, nil
+	if c.decide == nil {
+		return &proto.PolicyDecision{}, nil
+	}
+	return c.decide(ev), nil
 }
 
-func (c *mockPolicyClient) UpdateObservation(_ context.Context, req *proto.UpdateObservationRequest, _ ...grpc.CallOption) (*proto.UpdateObservationResponse, error) {
+func (c *mockPolicyClient) received() []*proto.PolicyEvent {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.observations[req.FilePath] = req.Observation
-	return &proto.UpdateObservationResponse{Success: true}, nil
-}
-
-func (c *mockPolicyClient) observed(path string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.observations[path]
-	return ok
+	return append([]*proto.PolicyEvent(nil), c.events...)
 }
 
 func newPipelineManager(t *testing.T) *Manager {
@@ -132,62 +129,134 @@ func TestExecuteToolPostRewrite(t *testing.T) {
 	}
 }
 
-func TestPolicyBridgeReadBeforeEdit(t *testing.T) {
+// TestPolicyBridgeDenyBlocksExecution pre-execute deny 即占槽拦截：工具不执行，
+// reason 原文透传调用方；事件字段逐项保真抵达插件（跨层转发字段保真，对齐
+// AGENTS.md 第 3 条）。
+func TestPolicyBridgeDenyBlocksExecution(t *testing.T) {
+	m := newPipelineManager(t)
+	pc := newMockPolicyClient()
+	pc.decide = func(ev *proto.PolicyEvent) *proto.PolicyDecision {
+		if ev.GetKind() == policyEventPreExecute {
+			return &proto.PolicyDecision{Action: "deny", Reason: "file has not been read"}
+		}
+		return &proto.PolicyDecision{}
+	}
+	m.bridgePolicyToPipeline("fs-observation-policy", pc)
+	_, err := m.ExecuteTool(context.Background(), "str_replace_editor", json.RawMessage(`{"path":"/tmp/a.txt"}`))
+	if err == nil || !strings.Contains(err.Error(), "file has not been read") {
+		t.Fatalf("err = %v, want deny reason 透传", err)
+	}
+	evs := pc.received()
+	if len(evs) != 2 {
+		t.Fatalf("应转发 pre+post 两个事件, got %d", len(evs))
+	}
+	pre := evs[0]
+	if pre.GetKind() != policyEventPreExecute || pre.GetTool() != "str_replace_editor" ||
+		pre.GetArgumentsJson() != `{"path":"/tmp/a.txt"}` || pre.GetSession() != "" {
+		t.Fatalf("pre 事件字段保真: %+v", pre)
+	}
+	if evs[1].GetKind() != policyEventPostExecute || evs[1].GetError() == "" {
+		t.Fatalf("post 事件应携带 veto 错误: %+v", evs[1])
+	}
+}
+
+// TestPolicyBridgeForwardsSessionID 验证会话标识随事件转发（per-session 属主依据）。
+func TestPolicyBridgeForwardsSessionID(t *testing.T) {
 	m := newPipelineManager(t)
 	pc := newMockPolicyClient()
 	m.bridgePolicyToPipeline("fs-observation-policy", pc)
-	path := "/tmp/a.txt"
-	writeArgs := json.RawMessage(fmt.Sprintf(`{"file_path":%q,"action":"replace"}`, path))
+	ctx := WithCaller(context.Background(), "session-42")
+	if _, err := m.ExecuteTool(ctx, "plain-tool", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for _, ev := range pc.received() {
+		if ev.GetSession() != "session-42" {
+			t.Fatalf("事件 session 字段应转发调用方会话, got %q", ev.GetSession())
+		}
+	}
+}
 
-	// 1. 未读先写 → veto
-	_, err := m.ExecuteTool(context.Background(), "str_replace_editor", writeArgs)
-	if err == nil || !strings.Contains(err.Error(), "has not been read yet") {
-		t.Fatalf("err = %v, want read-before-edit veto", err)
+// TestPolicyBridgeReplaceRewritesResult post-execute replace 即改写模型可见结果。
+func TestPolicyBridgeReplaceRewritesResult(t *testing.T) {
+	m := newPipelineManager(t)
+	pc := newMockPolicyClient()
+	pc.decide = func(ev *proto.PolicyEvent) *proto.PolicyDecision {
+		if ev.GetKind() == policyEventPostExecute {
+			return &proto.PolicyDecision{Action: "replace", Result: "replaced-by-policy"}
+		}
+		return &proto.PolicyDecision{}
 	}
-	// 2. 先记录观测（模拟 read 已执行），再写 → 放行
-	_, err = pc.UpdateObservation(context.Background(), &proto.UpdateObservationRequest{
-		FilePath:    path,
-		Observation: &proto.FsObservation{State: "observed", Version: "1", LastContent: "x"},
-	})
+	m.bridgePolicyToPipeline("fs-observation-policy", pc)
+	result, err := m.ExecuteTool(context.Background(), "plain-tool", json.RawMessage(`{}`))
 	if err != nil {
-		t.Fatalf("seed observation: %v", err)
+		t.Fatalf("execute: %v", err)
 	}
-	result, err := m.ExecuteTool(context.Background(), "str_replace_editor", writeArgs)
+	if result != "replaced-by-policy" {
+		t.Fatalf("result = %q, want replaced-by-policy", result)
+	}
+}
+
+// TestPolicyBridgeServiceUnavailableDoesNotBlock 策略服务不可用时 best-effort 放行：
+// 策略缺失降级为无策略，而非工具不可用。
+func TestPolicyBridgeServiceUnavailableDoesNotBlock(t *testing.T) {
+	m := newPipelineManager(t)
+	pc := newMockPolicyClient()
+	pc.callErr = errors.New("connection refused")
+	m.bridgePolicyToPipeline("fs-observation-policy", pc)
+	result, err := m.ExecuteTool(context.Background(), "plain-tool", json.RawMessage(`{}`))
 	if err != nil {
-		t.Fatalf("write after read should pass: %v", err)
+		t.Fatalf("策略服务不可用不应阻塞执行: %v", err)
 	}
 	if result != "mock-result" {
 		t.Fatalf("result = %q", result)
 	}
-	// 3. post-execute 已记录新观测
-	if !pc.observed(path) {
-		t.Fatal("post-execute should record observation")
-	}
 }
 
-func TestPolicyBridgeSkipsNonWriteTool(t *testing.T) {
+// TestPolicyBridgeFailedToolForwardsError 工具执行失败时 post 事件仍转发
+// （失败是权威观察：如读到不存在的路径须记录 confirmed absent）。
+func TestPolicyBridgeFailedToolForwardsError(t *testing.T) {
 	m := newPipelineManager(t)
+	if err := m.toolRegistry.Register(&failingTool{name: "failing"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
 	pc := newMockPolicyClient()
 	m.bridgePolicyToPipeline("fs-observation-policy", pc)
-	// 非写工具（无 file_path 断言）不受读前检查约束
-	_, err := m.ExecuteTool(context.Background(), "plain-tool", json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("non-write tool should not be blocked: %v", err)
+	_, _ = m.ExecuteTool(context.Background(), "failing", json.RawMessage(`{}`))
+	var post *proto.PolicyEvent
+	for _, ev := range pc.received() {
+		if ev.GetKind() == policyEventPostExecute && ev.GetTool() == "failing" {
+			post = ev
+		}
+	}
+	if post == nil || post.GetError() == "" {
+		t.Fatalf("失败工具的 post 事件应携带错误: %+v", post)
 	}
 }
 
+// TestPolicyBridgeUnregisterRemovesListeners 卸载 policy 后监听器撤销：deny 不再生效。
 func TestPolicyBridgeUnregisterRemovesListeners(t *testing.T) {
 	m := newPipelineManager(t)
 	pc := newMockPolicyClient()
+	pc.decide = func(ev *proto.PolicyEvent) *proto.PolicyDecision {
+		return &proto.PolicyDecision{Action: "deny", Reason: "blocked"}
+	}
 	offs := m.bridgePolicyToPipeline("fs-observation-policy", pc)
 	for _, off := range offs {
 		off()
 	}
-	// 卸载后 pre 检查不再生效：未读先写也应放行
-	writeArgs := json.RawMessage(`{"file_path":"/tmp/b.txt","action":"replace"}`)
-	if _, err := m.ExecuteTool(context.Background(), "str_replace_editor", writeArgs); err != nil {
-		t.Fatalf("after unregister listeners should not veto: %v", err)
+	if _, err := m.ExecuteTool(context.Background(), "str_replace_editor", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("卸载后 deny 不应生效: %v", err)
 	}
+}
+
+// failingTool 测试用必败工具。
+type failingTool struct{ name string }
+
+func (t *failingTool) Name() string                      { return t.name }
+func (t *failingTool) Description() string               { return "always fails" }
+func (t *failingTool) ParametersSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (t *failingTool) Execute(_ context.Context, _ json.RawMessage) (string, error) {
+	return "", errors.New("boom")
 }
 
 // TestToolPipelineEmitsToolResult 验证工具执行完成后广播 tools/result 事件（对齐 DSH tools/result）。

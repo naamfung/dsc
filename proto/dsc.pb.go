@@ -3239,29 +3239,36 @@ func (x *ListContextResponse) GetContent() string {
 	return ""
 }
 
-type FsObservation struct {
+// PolicyEvent 工具流水线事件载荷。kind 取值：
+//
+//	"tool/pre-execute"  —— 工具即将执行（result/error 为空）；deny 阻止执行
+//	"tool/post-execute" —— 工具已执行完毕；replace 可改写模型可见结果
+type PolicyEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`                                // "unseen", "absent", "present"
-	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`                            // 文件的內容 hash 或最後修改時間戳
-	LastContent   string                 `protobuf:"bytes,3,opt,name=last_content,json=lastContent,proto3" json:"last_content,omitempty"` // 最後一次觀測到的文件內容（可選）
+	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`                                        // 事件种类（见上）
+	Tool          string                 `protobuf:"bytes,2,opt,name=tool,proto3" json:"tool,omitempty"`                                        // 工具名
+	ArgumentsJson string                 `protobuf:"bytes,3,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"` // 工具参数 JSON 原文（插件自行提取其关心的字段）
+	Result        string                 `protobuf:"bytes,4,opt,name=result,proto3" json:"result,omitempty"`                                    // 执行结果文本（仅 tool/post-execute）
+	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`                                      // 执行错误（仅 tool/post-execute；非空 = 执行失败）
+	Session       string                 `protobuf:"bytes,6,opt,name=session,proto3" json:"session,omitempty"`                                  // 调用方会话标识（策略状态的属主，对齐 DSH per-session owner）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FsObservation) Reset() {
-	*x = FsObservation{}
+func (x *PolicyEvent) Reset() {
+	*x = PolicyEvent{}
 	mi := &file_proto_dsc_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FsObservation) String() string {
+func (x *PolicyEvent) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FsObservation) ProtoMessage() {}
+func (*PolicyEvent) ProtoMessage() {}
 
-func (x *FsObservation) ProtoReflect() protoreflect.Message {
+func (x *PolicyEvent) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_dsc_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3273,53 +3280,78 @@ func (x *FsObservation) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FsObservation.ProtoReflect.Descriptor instead.
-func (*FsObservation) Descriptor() ([]byte, []int) {
+// Deprecated: Use PolicyEvent.ProtoReflect.Descriptor instead.
+func (*PolicyEvent) Descriptor() ([]byte, []int) {
 	return file_proto_dsc_proto_rawDescGZIP(), []int{58}
 }
 
-func (x *FsObservation) GetState() string {
+func (x *PolicyEvent) GetKind() string {
 	if x != nil {
-		return x.State
+		return x.Kind
 	}
 	return ""
 }
 
-func (x *FsObservation) GetVersion() string {
+func (x *PolicyEvent) GetTool() string {
 	if x != nil {
-		return x.Version
+		return x.Tool
 	}
 	return ""
 }
 
-func (x *FsObservation) GetLastContent() string {
+func (x *PolicyEvent) GetArgumentsJson() string {
 	if x != nil {
-		return x.LastContent
+		return x.ArgumentsJson
 	}
 	return ""
 }
 
-type GetObservationRequest struct {
+func (x *PolicyEvent) GetResult() string {
+	if x != nil {
+		return x.Result
+	}
+	return ""
+}
+
+func (x *PolicyEvent) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *PolicyEvent) GetSession() string {
+	if x != nil {
+		return x.Session
+	}
+	return ""
+}
+
+// PolicyDecision 插件裁决。action 为空或 "allow" = 放行；"deny" = 拦截（pre 阶段
+// 阻止执行，reason 透传模型）；"replace" = 结果改写（仅 tool/post-execute）。
+type PolicyDecision struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	FilePath      string                 `protobuf:"bytes,1,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"` // "allow"（默认）| "deny" | "replace"
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"` // deny 时的模型可见文案（如读前改写指引）
+	Result        string                 `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"` // replace 时的替换结果文本（仅 tool/post-execute）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetObservationRequest) Reset() {
-	*x = GetObservationRequest{}
+func (x *PolicyDecision) Reset() {
+	*x = PolicyDecision{}
 	mi := &file_proto_dsc_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetObservationRequest) String() string {
+func (x *PolicyDecision) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetObservationRequest) ProtoMessage() {}
+func (*PolicyDecision) ProtoMessage() {}
 
-func (x *GetObservationRequest) ProtoReflect() protoreflect.Message {
+func (x *PolicyDecision) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_dsc_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3331,170 +3363,28 @@ func (x *GetObservationRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetObservationRequest.ProtoReflect.Descriptor instead.
-func (*GetObservationRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use PolicyDecision.ProtoReflect.Descriptor instead.
+func (*PolicyDecision) Descriptor() ([]byte, []int) {
 	return file_proto_dsc_proto_rawDescGZIP(), []int{59}
 }
 
-func (x *GetObservationRequest) GetFilePath() string {
+func (x *PolicyDecision) GetAction() string {
 	if x != nil {
-		return x.FilePath
+		return x.Action
 	}
 	return ""
 }
 
-type GetObservationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Observation   *FsObservation         `protobuf:"bytes,1,opt,name=observation,proto3" json:"observation,omitempty"`
-	Found         bool                   `protobuf:"varint,2,opt,name=found,proto3" json:"found,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetObservationResponse) Reset() {
-	*x = GetObservationResponse{}
-	mi := &file_proto_dsc_proto_msgTypes[60]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetObservationResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetObservationResponse) ProtoMessage() {}
-
-func (x *GetObservationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_dsc_proto_msgTypes[60]
+func (x *PolicyDecision) GetReason() string {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetObservationResponse.ProtoReflect.Descriptor instead.
-func (*GetObservationResponse) Descriptor() ([]byte, []int) {
-	return file_proto_dsc_proto_rawDescGZIP(), []int{60}
-}
-
-func (x *GetObservationResponse) GetObservation() *FsObservation {
-	if x != nil {
-		return x.Observation
-	}
-	return nil
-}
-
-func (x *GetObservationResponse) GetFound() bool {
-	if x != nil {
-		return x.Found
-	}
-	return false
-}
-
-type UpdateObservationRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	FilePath      string                 `protobuf:"bytes,1,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
-	Observation   *FsObservation         `protobuf:"bytes,2,opt,name=observation,proto3" json:"observation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpdateObservationRequest) Reset() {
-	*x = UpdateObservationRequest{}
-	mi := &file_proto_dsc_proto_msgTypes[61]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpdateObservationRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpdateObservationRequest) ProtoMessage() {}
-
-func (x *UpdateObservationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_dsc_proto_msgTypes[61]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpdateObservationRequest.ProtoReflect.Descriptor instead.
-func (*UpdateObservationRequest) Descriptor() ([]byte, []int) {
-	return file_proto_dsc_proto_rawDescGZIP(), []int{61}
-}
-
-func (x *UpdateObservationRequest) GetFilePath() string {
-	if x != nil {
-		return x.FilePath
+		return x.Reason
 	}
 	return ""
 }
 
-func (x *UpdateObservationRequest) GetObservation() *FsObservation {
+func (x *PolicyDecision) GetResult() string {
 	if x != nil {
-		return x.Observation
-	}
-	return nil
-}
-
-type UpdateObservationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *UpdateObservationResponse) Reset() {
-	*x = UpdateObservationResponse{}
-	mi := &file_proto_dsc_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *UpdateObservationResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*UpdateObservationResponse) ProtoMessage() {}
-
-func (x *UpdateObservationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_dsc_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use UpdateObservationResponse.ProtoReflect.Descriptor instead.
-func (*UpdateObservationResponse) Descriptor() ([]byte, []int) {
-	return file_proto_dsc_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *UpdateObservationResponse) GetSuccess() bool {
-	if x != nil {
-		return x.Success
-	}
-	return false
-}
-
-func (x *UpdateObservationResponse) GetMessage() string {
-	if x != nil {
-		return x.Message
+		return x.Result
 	}
 	return ""
 }
@@ -3725,22 +3615,18 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"\x05tools\x18\x01 \x03(\v2\t.dsc.ToolR\x05tools\"\x14\n" +
 	"\x12ListContextRequest\"/\n" +
 	"\x13ListContextResponse\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\tR\acontent\"b\n" +
-	"\rFsObservation\x12\x14\n" +
-	"\x05state\x18\x01 \x01(\tR\x05state\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\x12!\n" +
-	"\flast_content\x18\x03 \x01(\tR\vlastContent\"4\n" +
-	"\x15GetObservationRequest\x12\x1b\n" +
-	"\tfile_path\x18\x01 \x01(\tR\bfilePath\"d\n" +
-	"\x16GetObservationResponse\x124\n" +
-	"\vobservation\x18\x01 \x01(\v2\x12.dsc.FsObservationR\vobservation\x12\x14\n" +
-	"\x05found\x18\x02 \x01(\bR\x05found\"m\n" +
-	"\x18UpdateObservationRequest\x12\x1b\n" +
-	"\tfile_path\x18\x01 \x01(\tR\bfilePath\x124\n" +
-	"\vobservation\x18\x02 \x01(\v2\x12.dsc.FsObservationR\vobservation\"O\n" +
-	"\x19UpdateObservationResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\xed\x01\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\"\xa4\x01\n" +
+	"\vPolicyEvent\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04tool\x18\x02 \x01(\tR\x04tool\x12%\n" +
+	"\x0earguments_json\x18\x03 \x01(\tR\rargumentsJson\x12\x16\n" +
+	"\x06result\x18\x04 \x01(\tR\x06result\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\x12\x18\n" +
+	"\asession\x18\x06 \x01(\tR\asession\"X\n" +
+	"\x0ePolicyDecision\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x16\n" +
+	"\x06result\x18\x03 \x01(\tR\x06result2\xed\x01\n" +
 	"\x10DSCPluginService\x12+\n" +
 	"\x04Name\x12\x10.dsc.NameRequest\x1a\x11.dsc.NameResponse\x124\n" +
 	"\aVersion\x12\x13.dsc.VersionRequest\x1a\x14.dsc.VersionResponse\x124\n" +
@@ -3781,10 +3667,9 @@ const file_proto_dsc_proto_rawDesc = "" +
 	"BeforeTool\x12\x16.dsc.BeforeToolRequest\x1a\x17.dsc.BeforeToolResponse\x12:\n" +
 	"\tAfterTool\x12\x15.dsc.AfterToolRequest\x1a\x16.dsc.AfterToolResponse\x124\n" +
 	"\aOnEvent\x12\x13.dsc.OnEventRequest\x1a\x14.dsc.OnEventResponse\x12@\n" +
-	"\vListContext\x12\x17.dsc.ListContextRequest\x1a\x18.dsc.ListContextResponse2\xbb\x01\n" +
-	"\x1aFsObservationPolicyService\x12I\n" +
-	"\x0eGetObservation\x12\x1a.dsc.GetObservationRequest\x1a\x1b.dsc.GetObservationResponse\x12R\n" +
-	"\x11UpdateObservation\x12\x1d.dsc.UpdateObservationRequest\x1a\x1e.dsc.UpdateObservationResponseB\vZ\tdsc/protob\x06proto3"
+	"\vListContext\x12\x17.dsc.ListContextRequest\x1a\x18.dsc.ListContextResponse2A\n" +
+	"\rPolicyService\x120\n" +
+	"\aOnEvent\x12\x10.dsc.PolicyEvent\x1a\x13.dsc.PolicyDecisionB\vZ\tdsc/protob\x06proto3"
 
 var (
 	file_proto_dsc_proto_rawDescOnce sync.Once
@@ -3798,7 +3683,7 @@ func file_proto_dsc_proto_rawDescGZIP() []byte {
 	return file_proto_dsc_proto_rawDescData
 }
 
-var file_proto_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
+var file_proto_dsc_proto_msgTypes = make([]protoimpl.MessageInfo, 61)
 var file_proto_dsc_proto_goTypes = []any{
 	(*InterconnectRequest)(nil),             // 0: dsc.InterconnectRequest
 	(*InterconnectResponse)(nil),            // 1: dsc.InterconnectResponse
@@ -3858,15 +3743,12 @@ var file_proto_dsc_proto_goTypes = []any{
 	(*ListToolsResponse)(nil),               // 55: dsc.ListToolsResponse
 	(*ListContextRequest)(nil),              // 56: dsc.ListContextRequest
 	(*ListContextResponse)(nil),             // 57: dsc.ListContextResponse
-	(*FsObservation)(nil),                   // 58: dsc.FsObservation
-	(*GetObservationRequest)(nil),           // 59: dsc.GetObservationRequest
-	(*GetObservationResponse)(nil),          // 60: dsc.GetObservationResponse
-	(*UpdateObservationRequest)(nil),        // 61: dsc.UpdateObservationRequest
-	(*UpdateObservationResponse)(nil),       // 62: dsc.UpdateObservationResponse
-	nil,                                     // 63: dsc.ExecuteRequest.ParamsEntry
+	(*PolicyEvent)(nil),                     // 58: dsc.PolicyEvent
+	(*PolicyDecision)(nil),                  // 59: dsc.PolicyDecision
+	nil,                                     // 60: dsc.ExecuteRequest.ParamsEntry
 }
 var file_proto_dsc_proto_depIdxs = []int32{
-	63, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
+	60, // 0: dsc.ExecuteRequest.params:type_name -> dsc.ExecuteRequest.ParamsEntry
 	13, // 1: dsc.RunStreamResponse.usage:type_name -> dsc.Usage
 	15, // 2: dsc.ChatRequest.messages:type_name -> dsc.Message
 	16, // 3: dsc.ChatRequest.tools:type_name -> dsc.Tool
@@ -3881,79 +3763,75 @@ var file_proto_dsc_proto_depIdxs = []int32{
 	47, // 12: dsc.AskQuestion.intent:type_name -> dsc.AskIntent
 	49, // 13: dsc.AskResponse.answers:type_name -> dsc.AskAnswer
 	16, // 14: dsc.ListToolsResponse.tools:type_name -> dsc.Tool
-	58, // 15: dsc.GetObservationResponse.observation:type_name -> dsc.FsObservation
-	58, // 16: dsc.UpdateObservationRequest.observation:type_name -> dsc.FsObservation
-	2,  // 17: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
-	4,  // 18: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
-	6,  // 19: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
-	8,  // 20: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	10, // 21: dsc.AgentService.Run:input_type -> dsc.RunRequest
-	10, // 22: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
-	2,  // 23: dsc.AgentService.Name:input_type -> dsc.NameRequest
-	4,  // 24: dsc.AgentService.Version:input_type -> dsc.VersionRequest
-	20, // 25: dsc.AgentService.RegisterServices:input_type -> dsc.RegisterServicesRequest
-	22, // 26: dsc.AgentService.SwitchSession:input_type -> dsc.SwitchSessionRequest
-	24, // 27: dsc.AgentService.SetPlanMode:input_type -> dsc.SetPlanModeRequest
-	26, // 28: dsc.AgentService.SetHistoryInjection:input_type -> dsc.SetHistoryInjectionRequest
-	28, // 29: dsc.AgentService.SetUserQuestionsService:input_type -> dsc.SetUserQuestionsServiceRequest
-	50, // 30: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
-	30, // 31: dsc.AgentService.InjectMessage:input_type -> dsc.InjectMessageRequest
-	32, // 32: dsc.AgentService.DebugSnapshot:input_type -> dsc.DebugSnapshotRequest
-	14, // 33: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
-	14, // 34: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
-	2,  // 35: dsc.LLMService.Name:input_type -> dsc.NameRequest
-	4,  // 36: dsc.LLMService.Version:input_type -> dsc.VersionRequest
-	8,  // 37: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
-	52, // 38: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
-	54, // 39: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
-	56, // 40: dsc.ToolService.ListContext:input_type -> dsc.ListContextRequest
-	0,  // 41: dsc.ToolService.SetInterconnect:input_type -> dsc.InterconnectRequest
-	44, // 42: dsc.UserQuestionsService.Ask:input_type -> dsc.AskRequest
-	36, // 43: dsc.PluginNotifyService.Notify:input_type -> dsc.NotifyRequest
-	38, // 44: dsc.PluginHookService.BeforeTool:input_type -> dsc.BeforeToolRequest
-	40, // 45: dsc.PluginHookService.AfterTool:input_type -> dsc.AfterToolRequest
-	42, // 46: dsc.PluginHookService.OnEvent:input_type -> dsc.OnEventRequest
-	56, // 47: dsc.PluginHookService.ListContext:input_type -> dsc.ListContextRequest
-	59, // 48: dsc.FsObservationPolicyService.GetObservation:input_type -> dsc.GetObservationRequest
-	61, // 49: dsc.FsObservationPolicyService.UpdateObservation:input_type -> dsc.UpdateObservationRequest
-	3,  // 50: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
-	5,  // 51: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
-	7,  // 52: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
-	9,  // 53: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	11, // 54: dsc.AgentService.Run:output_type -> dsc.RunResponse
-	12, // 55: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
-	3,  // 56: dsc.AgentService.Name:output_type -> dsc.NameResponse
-	5,  // 57: dsc.AgentService.Version:output_type -> dsc.VersionResponse
-	21, // 58: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
-	23, // 59: dsc.AgentService.SwitchSession:output_type -> dsc.SwitchSessionResponse
-	25, // 60: dsc.AgentService.SetPlanMode:output_type -> dsc.SetPlanModeResponse
-	27, // 61: dsc.AgentService.SetHistoryInjection:output_type -> dsc.SetHistoryInjectionResponse
-	29, // 62: dsc.AgentService.SetUserQuestionsService:output_type -> dsc.SetUserQuestionsServiceResponse
-	51, // 63: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
-	31, // 64: dsc.AgentService.InjectMessage:output_type -> dsc.InjectMessageResponse
-	34, // 65: dsc.AgentService.DebugSnapshot:output_type -> dsc.DebugSnapshotResponse
-	17, // 66: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
-	18, // 67: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
-	3,  // 68: dsc.LLMService.Name:output_type -> dsc.NameResponse
-	5,  // 69: dsc.LLMService.Version:output_type -> dsc.VersionResponse
-	9,  // 70: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
-	53, // 71: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
-	55, // 72: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
-	57, // 73: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
-	1,  // 74: dsc.ToolService.SetInterconnect:output_type -> dsc.InterconnectResponse
-	48, // 75: dsc.UserQuestionsService.Ask:output_type -> dsc.AskResponse
-	37, // 76: dsc.PluginNotifyService.Notify:output_type -> dsc.NotifyResponse
-	39, // 77: dsc.PluginHookService.BeforeTool:output_type -> dsc.BeforeToolResponse
-	41, // 78: dsc.PluginHookService.AfterTool:output_type -> dsc.AfterToolResponse
-	43, // 79: dsc.PluginHookService.OnEvent:output_type -> dsc.OnEventResponse
-	57, // 80: dsc.PluginHookService.ListContext:output_type -> dsc.ListContextResponse
-	60, // 81: dsc.FsObservationPolicyService.GetObservation:output_type -> dsc.GetObservationResponse
-	62, // 82: dsc.FsObservationPolicyService.UpdateObservation:output_type -> dsc.UpdateObservationResponse
-	50, // [50:83] is the sub-list for method output_type
-	17, // [17:50] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	2,  // 15: dsc.DSCPluginService.Name:input_type -> dsc.NameRequest
+	4,  // 16: dsc.DSCPluginService.Version:input_type -> dsc.VersionRequest
+	6,  // 17: dsc.DSCPluginService.Execute:input_type -> dsc.ExecuteRequest
+	8,  // 18: dsc.DSCPluginService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	10, // 19: dsc.AgentService.Run:input_type -> dsc.RunRequest
+	10, // 20: dsc.AgentService.RunStream:input_type -> dsc.RunRequest
+	2,  // 21: dsc.AgentService.Name:input_type -> dsc.NameRequest
+	4,  // 22: dsc.AgentService.Version:input_type -> dsc.VersionRequest
+	20, // 23: dsc.AgentService.RegisterServices:input_type -> dsc.RegisterServicesRequest
+	22, // 24: dsc.AgentService.SwitchSession:input_type -> dsc.SwitchSessionRequest
+	24, // 25: dsc.AgentService.SetPlanMode:input_type -> dsc.SetPlanModeRequest
+	26, // 26: dsc.AgentService.SetHistoryInjection:input_type -> dsc.SetHistoryInjectionRequest
+	28, // 27: dsc.AgentService.SetUserQuestionsService:input_type -> dsc.SetUserQuestionsServiceRequest
+	50, // 28: dsc.AgentService.Shutdown:input_type -> dsc.ShutdownRequest
+	30, // 29: dsc.AgentService.InjectMessage:input_type -> dsc.InjectMessageRequest
+	32, // 30: dsc.AgentService.DebugSnapshot:input_type -> dsc.DebugSnapshotRequest
+	14, // 31: dsc.LLMService.Chat:input_type -> dsc.ChatRequest
+	14, // 32: dsc.LLMService.ChatStream:input_type -> dsc.ChatRequest
+	2,  // 33: dsc.LLMService.Name:input_type -> dsc.NameRequest
+	4,  // 34: dsc.LLMService.Version:input_type -> dsc.VersionRequest
+	8,  // 35: dsc.LLMService.HealthCheck:input_type -> dsc.HealthCheckRequest
+	52, // 36: dsc.ToolService.ExecuteTool:input_type -> dsc.ExecuteToolRequest
+	54, // 37: dsc.ToolService.ListTools:input_type -> dsc.ListToolsRequest
+	56, // 38: dsc.ToolService.ListContext:input_type -> dsc.ListContextRequest
+	0,  // 39: dsc.ToolService.SetInterconnect:input_type -> dsc.InterconnectRequest
+	44, // 40: dsc.UserQuestionsService.Ask:input_type -> dsc.AskRequest
+	36, // 41: dsc.PluginNotifyService.Notify:input_type -> dsc.NotifyRequest
+	38, // 42: dsc.PluginHookService.BeforeTool:input_type -> dsc.BeforeToolRequest
+	40, // 43: dsc.PluginHookService.AfterTool:input_type -> dsc.AfterToolRequest
+	42, // 44: dsc.PluginHookService.OnEvent:input_type -> dsc.OnEventRequest
+	56, // 45: dsc.PluginHookService.ListContext:input_type -> dsc.ListContextRequest
+	58, // 46: dsc.PolicyService.OnEvent:input_type -> dsc.PolicyEvent
+	3,  // 47: dsc.DSCPluginService.Name:output_type -> dsc.NameResponse
+	5,  // 48: dsc.DSCPluginService.Version:output_type -> dsc.VersionResponse
+	7,  // 49: dsc.DSCPluginService.Execute:output_type -> dsc.ExecuteResponse
+	9,  // 50: dsc.DSCPluginService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	11, // 51: dsc.AgentService.Run:output_type -> dsc.RunResponse
+	12, // 52: dsc.AgentService.RunStream:output_type -> dsc.RunStreamResponse
+	3,  // 53: dsc.AgentService.Name:output_type -> dsc.NameResponse
+	5,  // 54: dsc.AgentService.Version:output_type -> dsc.VersionResponse
+	21, // 55: dsc.AgentService.RegisterServices:output_type -> dsc.RegisterServicesResponse
+	23, // 56: dsc.AgentService.SwitchSession:output_type -> dsc.SwitchSessionResponse
+	25, // 57: dsc.AgentService.SetPlanMode:output_type -> dsc.SetPlanModeResponse
+	27, // 58: dsc.AgentService.SetHistoryInjection:output_type -> dsc.SetHistoryInjectionResponse
+	29, // 59: dsc.AgentService.SetUserQuestionsService:output_type -> dsc.SetUserQuestionsServiceResponse
+	51, // 60: dsc.AgentService.Shutdown:output_type -> dsc.ShutdownResponse
+	31, // 61: dsc.AgentService.InjectMessage:output_type -> dsc.InjectMessageResponse
+	34, // 62: dsc.AgentService.DebugSnapshot:output_type -> dsc.DebugSnapshotResponse
+	17, // 63: dsc.LLMService.Chat:output_type -> dsc.ChatResponse
+	18, // 64: dsc.LLMService.ChatStream:output_type -> dsc.ChatStreamResponse
+	3,  // 65: dsc.LLMService.Name:output_type -> dsc.NameResponse
+	5,  // 66: dsc.LLMService.Version:output_type -> dsc.VersionResponse
+	9,  // 67: dsc.LLMService.HealthCheck:output_type -> dsc.HealthCheckResponse
+	53, // 68: dsc.ToolService.ExecuteTool:output_type -> dsc.ExecuteToolResponse
+	55, // 69: dsc.ToolService.ListTools:output_type -> dsc.ListToolsResponse
+	57, // 70: dsc.ToolService.ListContext:output_type -> dsc.ListContextResponse
+	1,  // 71: dsc.ToolService.SetInterconnect:output_type -> dsc.InterconnectResponse
+	48, // 72: dsc.UserQuestionsService.Ask:output_type -> dsc.AskResponse
+	37, // 73: dsc.PluginNotifyService.Notify:output_type -> dsc.NotifyResponse
+	39, // 74: dsc.PluginHookService.BeforeTool:output_type -> dsc.BeforeToolResponse
+	41, // 75: dsc.PluginHookService.AfterTool:output_type -> dsc.AfterToolResponse
+	43, // 76: dsc.PluginHookService.OnEvent:output_type -> dsc.OnEventResponse
+	57, // 77: dsc.PluginHookService.ListContext:output_type -> dsc.ListContextResponse
+	59, // 78: dsc.PolicyService.OnEvent:output_type -> dsc.PolicyDecision
+	47, // [47:79] is the sub-list for method output_type
+	15, // [15:47] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_proto_dsc_proto_init() }
@@ -3967,7 +3845,7 @@ func file_proto_dsc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_dsc_proto_rawDesc), len(file_proto_dsc_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   64,
+			NumMessages:   61,
 			NumExtensions: 0,
 			NumServices:   8,
 		},

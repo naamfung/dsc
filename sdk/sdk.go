@@ -27,8 +27,8 @@ const (
 	TypeLLM Type = "llm"
 	// TypeAgent 智能体插件：实现 core.Agent。
 	TypeAgent Type = "agent"
-	// TypePolicy 策略插件：注册宿主可桥接的策略服务（如文件系统观测
-	// FsObservationPolicyService）；宿主经主连接直接取对应 proto 客户端。
+	// TypePolicy 策略插件：注册通用策略服务（PolicyService——宿主转发工具流水线
+	// 事件，插件裁决 allow/deny/replace）；宿主经主连接直接取对应 proto 客户端。
 	TypePolicy Type = "policy"
 	// TypeDsc 通用插件：不注册 llm/agent/policy 服务，仅提供元数据与可选 Hook
 	// （OnEvent 订阅宿主事件等）；可声明工具（sdk.Tool/ToolProvider），宿主经
@@ -95,7 +95,7 @@ type SDK struct {
 	tools  []*Tool
 	llm    core.LLMProvider
 	agent  core.Agent
-	policy proto.FsObservationPolicyServiceServer
+	policy proto.PolicyServiceServer
 	hook   *Hook
 	inter  InterconnectHandler
 	// toolProvider 可选动态工具提供者：每次 ListTools/ExecuteTool 求值当前工具集，
@@ -160,9 +160,10 @@ func (s *SDK) Agent(impl core.Agent) *SDK {
 	return s
 }
 
-// Policy 注册策略服务实现（仅 policy 类型插件；实现 proto.FsObservationPolicyServiceServer，
-// 宿主经主连接直接取对应 proto 客户端并桥接到工具流水线）。
-func (s *SDK) Policy(impl proto.FsObservationPolicyServiceServer) *SDK {
+// Policy 注册策略服务实现（仅 policy 类型插件；实现 proto.PolicyServiceServer，
+// 宿主经主连接直接取对应 proto 客户端并桥接到工具流水线：pre-execute deny 拦截、
+// post-execute replace 改写，策略逻辑与状态全部在插件侧）。
+func (s *SDK) Policy(impl proto.PolicyServiceServer) *SDK {
 	s.policy = impl
 	return s
 }

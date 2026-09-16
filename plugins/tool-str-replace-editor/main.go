@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,42 +11,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"dsc-sdk"
 	"dsc/core"
-	"dsc/proto"
 	"github.com/aymanbagabas/go-udiff"
 )
-
-// editorState 维护编辑工具的观察状态（view 过的文件内容与版本），
-// 供 str_replace/insert 校验文件未在观察后被外部修改（重写自旧的
-// ToolServiceServer.observations，SDK 的 Tool.Handler 无 server 引用，
-// 故把状态抽成独立结构并由 handler 闭包捕获）。
-type editorState struct {
-	observations map[string]*proto.FsObservation
-	mu           sync.RWMutex
-}
-
-func (s *editorState) getObservation(filePath string) (*proto.FsObservation, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	obs, found := s.observations[filePath]
-	return obs, found
-}
-
-func (s *editorState) updateObservation(filePath, state, version, lastContent string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.observations == nil {
-		s.observations = make(map[string]*proto.FsObservation)
-	}
-	s.observations[filePath] = &proto.FsObservation{
-		State:       state,
-		Version:     version,
-		LastContent: lastContent,
-	}
-}
 
 // withinBase 判斷 real 路徑是否在 base 目錄（含 base 自身）之內。
 // Windows 文件系統大小寫不敏感，故忽略大小寫比較（對齊宿主 containsPath）。
@@ -181,12 +148,6 @@ type strReplaceEditorArgs struct {
 	NewStr     string `json:"new_str"`
 	InsertLine int    `json:"insert_line"`
 	ViewRange  []int  `json:"view_range"`
-}
-
-// computeHash 計算字符串的 sha256 hash
-func computeHash(content string) string {
-	h := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(h[:])
 }
 
 // slashErr 把文件系统错误里的原生路径归一为正斜杆（Windows 上 os.* 错误内嵌
@@ -331,7 +292,7 @@ func lineNumbersAt(content string, offsets []int) []string {
 	return result
 }
 
-func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON json.RawMessage) (string, error) {
+func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (string, error) {
 	var args strReplaceEditorArgs
 	if err := json.Unmarshal(argsJSON, &args); err != nil {
 		return "", err
@@ -371,8 +332,6 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		if err != nil {
 			return "", err
 		}
-		version := computeHash(contentStr)
-		state.updateObservation(reqPath, "present", version, contentStr)
 		return formatFileView(relPath, contentStr, args.ViewRange), nil
 
 	case "create":
@@ -390,9 +349,6 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		if err := dsc.WriteFile(reqPath, []byte(args.FileText)); err != nil {
 			return "", slashErr(err)
 		}
-		version := computeHash(args.FileText)
-		// 更新觀測狀態
-		state.updateObservation(reqPath, "present", version, args.FileText)
 		return appendDiff("File created successfully.", relPath, "", args.FileText), nil
 
 	case "str_replace":
@@ -403,20 +359,9 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("new_str is required for str_replace command")
 		}
 
-		// 檢查觀測狀態
-		obs, found := state.getObservation(reqPath)
-		if !found || obs.State == "unseen" || obs.State == "absent" {
-			return "", fmt.Errorf("str_replace failed: file has not been observed (viewed). Please use 'view' command first.")
-		}
-
 		contentStr, err := readFileForEdit(reqPath)
 		if err != nil {
 			return "", err
-		}
-
-		// 驗證版本/內容是否匹配
-		if obs.LastContent != "" && obs.LastContent != contentStr {
-			return "", fmt.Errorf("str_replace failed: file content has changed since last observation. Please use 'view' to get the latest content.")
 		}
 
 		// 对齐 DSH：检查 old_str 唯一性——多匹配报错
@@ -434,10 +379,6 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", slashErr(err)
 		}
 
-		// 更新觀測狀態
-		newVersion := computeHash(newContentStr)
-		state.updateObservation(reqPath, "present", newVersion, newContentStr)
-
 		return appendDiff("File replaced successfully.", relPath, contentStr, newContentStr), nil
 
 	case "insert":
@@ -449,20 +390,9 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 			return "", fmt.Errorf("Invalid `insert_line` parameter: %d. It should be within the range [0, line_count]", args.InsertLine)
 		}
 
-		// 檢查觀測狀態
-		obs, found := state.getObservation(reqPath)
-		if !found || obs.State == "unseen" || obs.State == "absent" {
-			return "", fmt.Errorf("insert failed: file has not been observed (viewed). Please use 'view' command first.")
-		}
-
 		contentStr, err := readFileForEdit(reqPath)
 		if err != nil {
 			return "", err
-		}
-
-		// 驗證版本/內容是否匹配
-		if obs.LastContent != "" && obs.LastContent != contentStr {
-			return "", fmt.Errorf("insert failed: file content has changed since last observation. Please use 'view' to get the latest content.")
 		}
 
 		lines := strings.Split(contentStr, "\n")
@@ -476,10 +406,6 @@ func strReplaceEditorHandler(ctx context.Context, state *editorState, argsJSON j
 		if err := dsc.WriteFile(reqPath, []byte(newContent)); err != nil {
 			return "", slashErr(err)
 		}
-
-		// 更新觀測狀態
-		newVersion := computeHash(newContent)
-		state.updateObservation(reqPath, "present", newVersion, newContent)
 
 		return appendDiff("File inserted successfully.", relPath, contentStr, newContent), nil
 
@@ -499,8 +425,9 @@ func appendDiff(msg, path, oldContent, newContent string) string {
 }
 
 func main() {
-	// 观察状态由独立结构承载（SDK 的 Tool.Handler 无 server 引用，闭包捕获 state）
-	state := &editorState{observations: make(map[string]*proto.FsObservation)}
+	// 工具自身零观察状态：读前改写/新鲜度裁决由 policy 插件（fs-observation-policy）
+	// 统一承载，宿主在工具流水线 pre/post-execute 转发事件并由其裁决（对齐 DSH
+	// 「工具只管执行、policy 持有策略与状态」）。
 
 	// 定义 str_replace_editor 工具。path 描述以真实工作区根路径为示例：
 	// shell 等原生命令无法解析 /workspace 虚拟前缀，模型应优先使用真实路径；
@@ -560,7 +487,7 @@ func main() {
                 "required": ["command", "path"]
         }`)
 	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
-		return strReplaceEditorHandler(ctx, state, args)
+		return strReplaceEditorHandler(ctx, args)
 	}
 
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
