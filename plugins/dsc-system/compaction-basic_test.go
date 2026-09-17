@@ -25,12 +25,11 @@ func (f *fakeCompactionBasicLLM) Chat(ctx context.Context, messages []*proto.Mes
 	return &proto.ChatResponse{Content: f.content}, nil
 }
 
-// newTestCompactionBasicServer 构建受控驻留（绕开 env：直接设字段，状态目录进临时区）。
+// newTestCompactionBasicServer 构建受控驻留（绕开 env：直接设字段）。
 func newTestCompactionBasicServer(t *testing.T, window int) *compactionBasicServer {
 	t.Helper()
 	s := newCompactionBasicServer()
 	s.window = window
-	s.stateDir = t.TempDir()
 	return s
 }
 

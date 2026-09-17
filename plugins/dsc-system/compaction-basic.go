@@ -15,9 +15,12 @@
 //     返回 {"retry": true} 让宿主重走 pre-step（应用改写）+ 重发请求。
 //
 // per-session 状态：pre-step 改写只作用于本次 LLM 请求（agent 内部历史不改写），
-// 逐 step 复用靠状态文件（<stateDir>/<session>.json）：记录已压缩前缀的指纹
+// 逐 step 复用靠进程内 per-session 记录（内存 map）：记录已压缩前缀的指纹
 // （sha256），指纹吻合直接复用既有摘要、仅对新溢出段追加压缩；历史被改写
-// （指纹失配）则丢弃记录从头评估。持久化尽力而为：失败不阻塞改写。
+// （指纹失配）则丢弃记录从头评估。对齐 DSH compaction-basic 的零文件 IO：
+// 压缩状态是运行时兜底的内部记账，持久化由宿主会话存储承担（DSH 侧为
+// session 日志事件）；插件重启即重新评估（指纹失配语义的自然延伸），
+// 文件落盘是加强版（dsc-billion-context，记忆形态）的领域。
 //
 // 配置（DSC_ 前缀 env 白名单天然可见）：
 //   - DSC_COMPACTION_BASIC_CONTEXT_WINDOW  上下文窗口 token 数（默认 131072；0 = 驻留禁用）
@@ -25,7 +28,6 @@
 //     可调，与接管机制无关）
 //   - DSC_COMPACTION_BASIC_RETAIN_RATIO    保留尾部比例（默认 0.16）
 //   - DSC_COMPACTION_BASIC_RETAIN_MIN      保留尾部最少 token 数（默认 1024）
-//   - DSC_COMPACTION_BASIC_DIR             状态目录覆盖（缺省 ExecDir/compaction-basic）
 package main
 
 import (
@@ -35,8 +37,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,7 +67,7 @@ type compactionRecord struct {
 	Emergency bool   `json:"emergency,omitempty"` // 溢出紧急压缩（截断式摘要）
 }
 
-// compactionState per-session 压缩状态（<stateDir>/<session>.json）。
+// compactionState per-session 压缩状态（进程内内存 map 项）。
 type compactionState struct {
 	Records []compactionRecord `json:"records"`
 }
@@ -85,7 +85,8 @@ type compactionBasicServer struct {
 	threshold   float64 // 压力触发阈值比例
 	retainRatio float64 // 保留尾部比例
 	retainMin   int     // 保留尾部最少 token 数
-	stateDir    string  // 状态目录
+
+	states map[string]*compactionState // per-session 压缩记录（进程内，须持 mu）
 }
 
 // newCompactionBasicServer 读 env 构建驻留（fail-soft：非法配置逐项回退默认；
@@ -117,14 +118,7 @@ func newCompactionBasicServer() *compactionBasicServer {
 			s.retainMin = n
 		}
 	}
-	execDir := os.Getenv("DSC_EXEC_DIR")
-	if execDir == "" {
-		execDir, _ = os.Getwd()
-	}
-	s.stateDir = filepath.Join(execDir, "compaction-basic")
-	if v := os.Getenv("DSC_COMPACTION_BASIC_DIR"); v != "" {
-		s.stateDir = v
-	}
+	s.states = map[string]*compactionState{}
 	return s
 }
 
@@ -171,17 +165,13 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 	s.mu.Lock()
 	s.lastMsgs = msgs // 缓存供溢出紧急压缩使用（request-error 事件不带消息列表）
 	s.lastSession = sess
+	st := s.stateFor(sess)
+	// 指纹校验：历史被改写/回滚时丢弃记录从头评估
+	records := validRecords(msgs, st.Records)
 	s.mu.Unlock()
 	if len(msgs) == 0 {
 		return "", nil
 	}
-
-	st, err := s.loadState(sess)
-	if err != nil {
-		return "", fmt.Errorf("compaction-basic: load state: %w", err)
-	}
-	// 指纹校验：历史被改写/回滚时丢弃记录从头评估
-	records := validRecords(msgs, st.Records)
 
 	// 复用既有压缩后的用量评估：低于阈值则直接返回改写（或无记录时不改写）
 	rewritten := applyRecords(msgs, records)
@@ -215,11 +205,9 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 		Shadowed: s.estimateMsgs(msgs[base:retainIdx]),
 		ID:       id,
 	}
+	s.mu.Lock()
 	st.Records = append(records, rec)
-	if err := s.saveState(sess, st); err != nil {
-		// best-effort：状态持久化失败不阻塞本次改写（内存评估仍成立）
-		fmt.Fprintf(os.Stderr, "[dsc-system/compaction-basic] save state: %v\n", err)
-	}
+	s.mu.Unlock()
 	return rewriteJSON(applyRecords(msgs, st.Records))
 }
 
@@ -245,11 +233,10 @@ func (s *compactionBasicServer) handleRequestError(ctx context.Context, dataJSON
 	if len(msgs) < 2 {
 		return "", nil // 无缓存消息（未走过 pre-step）无法压缩
 	}
-	st, err := s.loadState(sess)
-	if err != nil {
-		return "", fmt.Errorf("compaction-basic: load state: %w", err)
-	}
+	s.mu.Lock()
+	st := s.stateFor(sess)
 	records := validRecords(msgs, st.Records)
+	s.mu.Unlock()
 	base := 0
 	if len(records) > 0 {
 		base = records[len(records)-1].UpTo
@@ -267,10 +254,9 @@ func (s *compactionBasicServer) handleRequestError(ctx context.Context, dataJSON
 		ID:        id,
 		Emergency: true,
 	}
+	s.mu.Lock()
 	st.Records = append(records, rec)
-	if err := s.saveState(sess, st); err != nil {
-		fmt.Fprintf(os.Stderr, "[dsc-system/compaction-basic] save state: %v\n", err)
-	}
+	s.mu.Unlock()
 	return `{"retry": true}`, nil
 }
 
@@ -456,57 +442,24 @@ func rewriteJSON(msgs []*proto.Message) (string, error) {
 	return `{"messages": ` + string(b) + `}`, nil
 }
 
-// loadState / saveState per-session 状态读写（目录自动创建；写盘原子替换）。
-func (s *compactionBasicServer) loadState(sessID string) (*compactionState, error) {
-	st := &compactionState{}
-	b, err := os.ReadFile(filepath.Join(s.stateDir, sessID+".json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return st, nil
-		}
-		return st, err
+// stateFor per-session 压缩记录（进程内 map，须持 s.mu；缺失即空状态）。
+// 基础兜底零文件 IO（对齐 DSH compaction-basic：持久化由宿主会话存储承担）；
+// 插件重启即重新评估——指纹失配语义的自然延伸，尽力而为。
+func (s *compactionBasicServer) stateFor(sessID string) *compactionState {
+	st, ok := s.states[sessID]
+	if !ok {
+		st = &compactionState{}
+		s.states[sessID] = st
 	}
-	if err := json.Unmarshal(b, st); err != nil {
-		return &compactionState{}, nil // 状态损坏视为空（压缩重新开始，不致命）
-	}
-	return st, nil
-}
-
-func (s *compactionBasicServer) saveState(sessID string, st *compactionState) error {
-	if err := os.MkdirAll(s.stateDir, 0o755); err != nil {
-		return err
-	}
-	b, err := json.Marshal(st)
-	if err != nil {
-		return err
-	}
-	tmp := filepath.Join(s.stateDir, sessID+".json.tmp")
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(s.stateDir, sessID+".json"))
+	return st
 }
 
 // sessionKey 会话状态键：优先事件透传的 session_id（宿主 ChatRequest.session_id），
 // 缺省按工作区派生项目级键（对齐宿主 session 存储的 SessionKeyForProject——
-// 同一项目同名、不同项目隔离），并净化为安全文件名。
+// 同一项目同名、不同项目隔离）。
 func (s *compactionBasicServer) sessionKey(sessID string) string {
 	if sessID == "" {
-		sessID = session.SessionKeyForProject(dsc.WorkspaceRoot())
+		return session.SessionKeyForProject(dsc.WorkspaceRoot())
 	}
-	return sanitizeFileStem(sessID)
-}
-
-var fileStemRe = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-
-// sanitizeFileStem 净化为安全文件名主干（防 session_id 携带路径分隔符等）。
-func sanitizeFileStem(s string) string {
-	s = fileStemRe.ReplaceAllString(s, "_")
-	if s == "" {
-		s = "default"
-	}
-	if len(s) > 80 {
-		s = s[:80]
-	}
-	return s
+	return sessID
 }

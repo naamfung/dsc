@@ -519,12 +519,10 @@ func TestCompactionBasicE2E(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 
-	// 2. 拉起插件进程：小窗口（阈值 800）+ 状态目录隔离到临时区
-	stateDir := filepath.Join(dir, "compaction-basic-state")
+	// 2. 拉起插件进程：小窗口（阈值 800）
 	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(),
 		"DSC_COMPACTION_BASIC_CONTEXT_WINDOW=1000",
-		"DSC_COMPACTION_BASIC_DIR="+stateDir,
 	)
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  core.Handshake,
@@ -641,11 +639,6 @@ func TestCompactionBasicE2E(t *testing.T) {
 	if res := requestError("rate_limited"); res != "" {
 		t.Fatalf("non-overflow code must be ignored, got %q", res)
 	}
-
-	// 8. 状态落盘（per-session 状态文件存在）
-	if _, err := os.Stat(filepath.Join(stateDir, "e2e-compaction-basic.json")); err != nil {
-		t.Fatalf("session state file must persist: %v", err)
-	}
 }
 
 // TestImageOffloadE2E 请求面图像预算卸载端到端（真实 Hook 多路复用链）：
@@ -753,10 +746,8 @@ func TestImageOffloadE2E(t *testing.T) {
 		}
 		msgsB = append(msgsB, m)
 	}
-	stateDir := filepath.Join(dir, "compaction-basic-state")
 	hookB := spawn(
 		"DSC_COMPACTION_BASIC_CONTEXT_WINDOW=1000",
-		"DSC_COMPACTION_BASIC_DIR="+stateDir,
 		"DSC_MAX_REQUEST_IMAGES=1",
 	)
 	res = preStep(t, hookB, "e2e-image-offload-chain", msgsB, 1800)
