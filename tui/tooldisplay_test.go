@@ -140,3 +140,22 @@ func TestRenderPlainView(t *testing.T) {
 		}
 	}
 }
+
+// TestToolErrorText 工具错误帧显示文本：①路径反斜杆归一（Windows 插件错误内嵌
+// 原生路径，显示端兜底）；②工具名前缀「Tool > 错误」与上方调用卡片呼应。
+func TestToolErrorText(t *testing.T) {
+	got := toolErrorText("str_replace_editor",
+		`GetFileAttributesEx D:\Agents\pkg\src: The system cannot find the file specified.`)
+	want := "StrReplaceEditor > GetFileAttributesEx D:/Agents/pkg/src: The system cannot find the file specified."
+	if got != want {
+		t.Fatalf("toolErrorText = %q, want %q", got, want)
+	}
+	// 无工具名：仅归一不加前缀
+	if got := toolErrorText("", `D:\a\b`); got != "D:/a/b" {
+		t.Fatalf("toolErrorText(\"\") = %q, want %q", got, "D:/a/b")
+	}
+	// 已是正斜杆的错误：只加前缀
+	if got := toolErrorText("shell", "command not found: foo"); got != "Shell > command not found: foo" {
+		t.Fatalf("toolErrorText = %q, want %q", got, "Shell > command not found: foo")
+	}
+}

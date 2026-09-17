@@ -33,7 +33,12 @@ func (s *ToolGRPCServer) ExecuteTool(ctx context.Context, req *proto.ExecuteTool
 	// 策略提醒恰恰最需要发生在反复重试的被拒/失败调用上（对齐 DSH）。
 	result, viewJSON, images, notices, err := s.mgr.ExecuteToolWithView(ctx, req.ToolName, args)
 	if err != nil {
-		return &proto.ExecuteToolResponse{Error: err.Error(), Notices: notices}, nil
+		// 错误文本出口归一（SlashErrText 兜底）：Windows 上工具插件（或宿主
+		// 管线）错误内嵌反斜杆原生路径，此处是所有 agent 客户端的唯一聚合
+		// 出口——归一后模型与 TUI 看到的路径风格与「POSIX 内置 shell、输入
+		// 输出统一正斜杆」规范一致，插件侧漏网（如仅在特定失败分支返回的
+		// EvalSymlinks 错误）也在此兜住。
+		return &proto.ExecuteToolResponse{Error: SlashErrText(err.Error()), Notices: notices}, nil
 	}
 	return &proto.ExecuteToolResponse{Content: result, ViewJson: viewJSON, Images: images, Notices: notices}, nil
 }

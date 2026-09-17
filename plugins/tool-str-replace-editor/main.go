@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -150,21 +149,12 @@ type strReplaceEditorArgs struct {
 	ViewRange  []int  `json:"view_range"`
 }
 
-// slashErr 把文件系统错误里的原生路径归一为正斜杆（Windows 上 os.* 错误内嵌
-// 反斜杆路径，直接透传给模型/用户时与其余正斜杆路径风格不一致）。
-// 对齐 AGENTS.md 第 10 条：禁止使用 filepath.ToSlash，必须用两行连续替换。
+// slashErr 委托 core.SlashErr（公共实现，见 core/errslash.go）：把文件系统
+// 错误里的原生路径归一为正斜杆（Windows 上 os.* 错误内嵌反斜杆路径，直接透传
+// 给模型/用户时与其余正斜杆路径风格不一致）。本地不再保留第二份替换实现
+// （对齐 AGENTS.md 重复逻辑必须抽取）。
 func slashErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		p := pe.Path
-		p = strings.ReplaceAll(p, `\\`, "/") // 先：反引号
-		p = strings.ReplaceAll(p, "\\", "/") // 后：双引号
-		return &os.PathError{Op: pe.Op, Path: p, Err: pe.Err}
-	}
-	return err
+	return core.SlashErr(err)
 }
 
 // readFileForEdit 读取待编辑文件内容。路径指向目录时给出明确提示：Windows 上
@@ -424,6 +414,16 @@ func appendDiff(msg, path, oldContent, newContent string) string {
 	return msg + "\n\n" + diff
 }
 
+// strReplaceEditor 是工具 handler 的包级入口：业务处理后于唯一出口做错误
+// 路径归一（core.SlashErr）。safePath 在路径不存在等失败分支直接返回原生错误
+// （如 EvalSymlinks 父目录失败的 *os.PathError，内嵌反斜杆原生路径——历史
+// 回归即漏在此），逐点补挂易漏，统一在此结构化归一（宿主聚合工具服务出口
+// 另有文本级兜底）。
+func strReplaceEditor(ctx context.Context, args json.RawMessage) (string, error) {
+	res, err := strReplaceEditorHandler(ctx, args)
+	return res, core.SlashErr(err)
+}
+
 func main() {
 	// 工具自身零观察状态：读前改写/新鲜度裁决由 policy 插件（fs-observation-policy）
 	// 统一承载，宿主在工具流水线 pre/post-execute 转发事件并由其裁决（对齐 DSH
@@ -486,10 +486,6 @@ func main() {
                 },
                 "required": ["command", "path"]
         }`)
-	handler := func(ctx context.Context, args json.RawMessage) (string, error) {
-		return strReplaceEditorHandler(ctx, args)
-	}
-
 	// 以公共 SDK（dsc-sdk）声明式启动：SDK 自动提供 ToolService /
 	// PluginMetadata / PluginHookService 与 go-core 组装。
 	sdk := dsc.New(dsc.Config{
@@ -501,6 +497,6 @@ func main() {
 			"editor": "true",
 		},
 	})
-	sdk.Tool(dsc.Tool{Name: "str_replace_editor", Description: "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert.", Schema: schema, Handler: handler})
+	sdk.Tool(dsc.Tool{Name: "str_replace_editor", Description: "Custom editor tool for viewing, creating, and editing files. Supports commands: view, create, str_replace, insert.", Schema: schema, Handler: strReplaceEditor})
 	sdk.Serve()
 }

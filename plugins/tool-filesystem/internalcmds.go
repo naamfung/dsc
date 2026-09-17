@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"dsc/core"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -68,16 +69,14 @@ func posixHint(cmd string) string {
 }
 
 // slashErr 把错误字符串里的路径归一为正斜杆（Windows 上 os.* 错误内嵌反斜杆
-// 路径，直接回显给模型/用户时与其余正斜杆路径风格不一致）。
-// 对齐 AGENTS.md 第 10 条：禁止使用 filepath.ToSlash，必须用两行连续替换。
+// 路径，直接回显给模型/用户时与其余正斜杆路径风格不一致）。委托 core.SlashErrText
+// 公共实现（与 str_replace_editor 的 error 版归一收敛同一份替换逻辑，见
+// core/errslash.go；对齐 AGENTS.md 重复逻辑必须抽取）。
 func slashErr(err error) string {
 	if err == nil {
 		return ""
 	}
-	s := err.Error()
-	s = strings.ReplaceAll(s, `\\`, "/") // 先：反引号
-	s = strings.ReplaceAll(s, "\\", "/") // 后：双引号
-	return s
+	return core.SlashErrText(err.Error())
 }
 
 // shellExecHandler 是 interp.ExecHandler 的入口：命中内部工具表走进程内实现，

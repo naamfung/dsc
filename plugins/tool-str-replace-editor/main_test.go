@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -211,7 +212,8 @@ func TestViewDirectoryRejected(t *testing.T) {
 }
 
 // TestSlashErr 断言文件系统错误的路径字段被归一为正斜杆（Windows 上 os.* 错误
-// 内嵌反斜杆路径，透传前须统一展示风格）。
+// 内嵌反斜杆路径，透传前须统一展示风格）。实现已委托 core.SlashErr（公共实现
+// 见 core/errslash.go），此处保留行为级断言防止委托链回退。
 func TestSlashErr(t *testing.T) {
 	err := &os.PathError{Op: "read", Path: `D:\a\b.txt`, Err: errors.New("Incorrect function.")}
 	got := slashErr(err).Error()
@@ -220,5 +222,30 @@ func TestSlashErr(t *testing.T) {
 	}
 	if slashErr(nil) != nil {
 		t.Fatal("slashErr(nil) should be nil")
+	}
+}
+
+// TestTopLevelSlashErrOnMissingPath 回归测试（真实复现报告场景）：view 一个
+// 不存在的路径（父目录亦不存在）时，safePath 返回 EvalSymlinks(parent) 的原生
+// *os.PathError——历史回归即漏在此分支：内嵌反斜杆原生路径未经归一直接透传
+// （Windows 实测表现为「GetFileAttributesEx D:\Agents\...: The system cannot
+// find the file specified.」）。经包级入口 strReplaceEditor 顶层归一后，错误
+// 文本不得再含任何反斜杆；路径反斜杠同样不得残留在错误信息里。Linux 上传入
+// 的反斜杠被 filepath.Abs 原样保留进 PathError.Path，同样能验证归一链路。
+func TestTopLevelSlashErrOnMissingPath(t *testing.T) {
+	newTestWS(t)
+
+	for _, path := range []string{
+		`D:\nonexistent-dir\nonexistent-file.txt`, // Windows 反斜杆原生形式
+		"D:/nonexistent-dir/nonexistent-file.txt", // 正斜杆形式（亦不存在）
+	} {
+		_, err := strReplaceEditor(context.Background(),
+			[]byte(`{"command":"view","path":`+strconv.Quote(path)+`}`))
+		if err == nil {
+			t.Fatalf("view on missing path %q should fail", path)
+		}
+		if strings.Contains(err.Error(), `\`) {
+			t.Fatalf("error text for %q should be slash-normalized, got %q", path, err.Error())
+		}
 	}
 }

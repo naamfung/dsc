@@ -1072,7 +1072,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 调用帧（ToolName 非空）以「● Verb(arg)」卡片展示；均无结构化信息时回退原文。
 			toolLine := ""
 			if f.ToolResult != "" {
-				toolLine = renderToolResultFrame(f.ToolView, f.ToolResult, f.Error != "")
+				resultText := f.ToolResult
+				if f.Error != "" {
+					// 错误结果帧：路径反斜杆归一（显示端兜底）+ 工具名前缀，
+					// 错误归属一眼可见（「StrReplaceEditor > GetFileAttributesEx ...」）
+					resultText = toolErrorText(f.ToolName, resultText)
+				}
+				toolLine = renderToolResultFrame(f.ToolView, resultText, f.Error != "")
 			} else {
 				toolLine = renderToolCall(f.ToolName, f.ToolArgs)
 			}
@@ -2008,6 +2014,17 @@ func jsonScalar(v any) string {
 	default:
 		return fmt.Sprintf("%v", x)
 	}
+}
+
+// toolErrorText 工具错误帧的显示文本：①路径反斜杆归一（core.SlashErrText，
+// 显示端兜底——宿主聚合出口已归一，此处覆盖绕经其他通道的文本）；②工具名前缀
+// 「Tool > 错误」，错误归属一眼可见，与上方「● Tool(arg)」调用卡片呼应。
+func toolErrorText(name, text string) string {
+	text = core.SlashErrText(text)
+	if name != "" {
+		text = toolDisplayName(name) + " > " + text
+	}
+	return text
 }
 
 // renderToolResultFrame 渲染工具结果帧：优先用插件声明的结构化视图 spec（对齐 DSH
