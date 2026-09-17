@@ -44,7 +44,7 @@ type Config struct {
 	// HotReload 是否启用版本化二进制自动热重载 watch：插件目录内出现版本高于当前运行的
 	// <基名>-v<版本><ext> 文件时，自动经 HotReload 换成新进程（默认关闭）。
 	HotReload bool `json:"hot_reload" yaml:"hot_reload"`
-	// CompactionBasic 显式声明压缩后端（对齐 DSH preset 的 compaction group）：
+	// Compaction 显式声明压缩后端（对齐 DSH preset 的 compaction group）：
 	//   ""             — 默认：agent 走内联 compactHistory（向后兼容）
 	//   后端插件名      — 使用该插件的压缩接管（插件需声明 Provides compaction 能力：
 	//                     dsc-system 基础压缩 / dsc-billion-context ACP 接管），

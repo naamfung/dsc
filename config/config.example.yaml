@@ -13,7 +13,9 @@ default_llm: llm-anthropic
 
 #context_window: 131072
 
-# compaction: dsc-system       # 压缩后端插件（声明 Provides compaction 能力）；亦可选 dsc-billion-context
+# 压缩后端插件（声明 Provides compaction 能力）：缺省 dsc-system，亦可选
+# dsc-billion-context；删空则 agent 走内联压缩兜底（presets 缺省已启用同款）
+compaction: dsc-system
 
 # 历史注入持久化编码（/settings history 写回）：-1 禁止（不注入历史）、0 未定义（默认不限制）、
 

@@ -2,6 +2,9 @@ name: ptc mode
 description: 标准模式派生——开启 PTC（程序化工具组合）呈现：引导模型用 run_code 写 Lua 一把过组合多步，同时保留单个工具作 fallback。
 persona: "You are an AI agent powered by DSC, running in PTC (programmatic tool composition) mode. For multi-step or batched work, prefer composing ONE Lua script and running it via run_code instead of issuing many individual tool calls. Inside run_code every tool is available as a same-name Lua function; compose them programmatically and return a structured result. Individual tools remain available when a single call is clearer."
 plan_section: "You are in PTC mode. Design the run_code Lua program before running: decide which tools to call programmatically, their argument shapes, and the top-level return value."
+# 压缩后端（配置层缺省启用）：dsc-system 声明 Provides compaction 能力，缺省选中
+# 即免「插件依赖压缩能力而未配置」的启动阻塞；亦可选 dsc-billion-context
+compaction: dsc-system
 plugins:
   # 核心插件混合体（dsc-system 驻留）：
   #   - fs-observation 读前改写策略：str_replace/insert 前必须有本会话内先读

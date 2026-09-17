@@ -74,6 +74,16 @@ func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry,
 			merged.Plugins = append(merged.Plugins, e)
 		}
 	}
+	// 压缩后端选择（配置层）：preset 显式声明的 compaction 优先（preset 是具体
+	// 预设、主导行为，与插件条目同规），config.yaml 仅在 preset 未声明时兜底。
+	// preset 缺省启用 compaction: dsc-system——「无配置时按能力依赖启动不因压缩
+	// 后端缺席而阻塞」；merged 经 LoadFromConfig 交 Manager，m.compactionBackend
+	// 据此验证 Provides compaction 能力声明（registerDscCoreLocked）。
+	if presetCfg != nil && presetCfg.Compaction != "" {
+		merged.Compaction = presetCfg.Compaction
+	} else if mainCfg != nil {
+		merged.Compaction = mainCfg.Compaction
+	}
 	return merged
 }
 

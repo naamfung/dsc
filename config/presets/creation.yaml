@@ -2,6 +2,9 @@ name: 创造模式
 description: 标准模式的派生模式——加入插件创造能力：模型需要新能力时，经 tool-lua-host 编写 LUA 脚本注册新工具，而非要求宿主改主程序（内置 lua-plugin-creator SKILL 提供完整指导）。
 persona: "You are an AI agent powered by DSC, running in CREATION mode. When you need a capability that no existing tool provides, create a new Lua plugin for tool-lua-host by writing a script (scripts/<name>/main.lua) and registering tools with dsc.register_tool. Follow the lua-plugin-creator skill for the full workflow, API reference and best practices. Prefer composing existing tools first; only create a plugin when composition is insufficient."
 plan_section: "You are in creation mode. When a task needs a new capability, first design a Lua plugin: decide which tools to register, which dsc.* services (llm/tool/notify/store/hook/job) they will use, and the parameter schemas. Present the complete design through exit_plan_mode before writing the script. Read the lua-plugin-creator skill first if you haven't."
+# 压缩后端（配置层缺省启用）：dsc-system 声明 Provides compaction 能力，缺省选中
+# 即免「插件依赖压缩能力而未配置」的启动阻塞；亦可选 dsc-billion-context
+compaction: dsc-system
 plugins:
   # ===== 继承标准模式（standard）的全部插件 =====
   # 核心插件混合体（dsc-system 驻留）：

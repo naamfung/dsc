@@ -2,6 +2,9 @@ name: 极简模式
 description: 仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent。
 persona: "You are a helpful software engineer assistant."
 plan_section: "You are in plan mode. Explore and design before presenting the complete plan through exit_plan_mode."
+# 压缩后端（配置层缺省启用）：dsc-system 声明 Provides compaction 能力，缺省选中
+# 即免「插件依赖压缩能力而未配置」的启动阻塞；亦可选 dsc-billion-context
+compaction: dsc-system
 plugins:
   # 核心插件混合体（dsc-system 驻留）：
   #   - fs-observation 读前改写策略：str_replace/insert 前必须有本会话内先读
