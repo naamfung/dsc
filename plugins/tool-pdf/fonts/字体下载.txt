@@ -11,9 +11,10 @@ CJK 字体下载说明
 注意：必须使用 TrueType (.ttf) 格式——pdfcpu 不支持 OpenType CFF (.otf) 字体。
 Google Fonts gstatic 提供的 Noto Sans SC 是 TrueType 格式（含 glyf table）。
 
-手动下载（可选）
+手动下载（部署必需）
 ----------------
-如需手动放置其他 CJK 字体，仅支持 .ttf (TrueType) 格式。
+插件启动时强制校验 fonts/ 目录：未检测到任何 .ttf 字体将直接 PANIC 拒绝启动并打印本节指引——
+使用本插件必须先下载字体。仅支持 .ttf (TrueType) 格式。
 字体名按文件名主干匹配（不区分大小写），例如：
 - NotoSansSC-Regular.ttf → 字体名 "NotoSansSC-Regular"
 - SourceHanSansSC-Regular.ttf → 字体名 "SourceHanSansSC-Regular"

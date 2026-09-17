@@ -3,6 +3,7 @@
 // 基于 pdfcpu 库（github.com/pdfcpu/pdfcpu）实现 PDF 结构解析与内容流提取，
 // 自写文本操作符解释器与字体编码解码层（WinAnsi/MacRoman/StandardEncoding + ToUnicode CMap）。
 // 创建侧支持标准 14 字体与内置 CJK 字体（Type0 嵌入子集，渲染中文）。
+// 启动时强制校验自带字体：fonts/ 目录无任何 .ttf（中文渲染必需）即 PANIC，并给出下载指引。
 //
 // 暴露的工具：
 //   - 读取：pdf_read_text（提取纯文本）、pdf_info、pdf_outline、pdf_search、pdf_extract_images
@@ -510,9 +511,13 @@ func truncateUTF8(s string, max int) string {
 // ---------- 主入口 ----------
 
 func main() {
+	// 启动硬校验：fonts 目录必须含 .ttf 字体（中文渲染必需），缺失即 PANIC 并给出下载指引。
+	// 快速失败优于静默降级——详见 fonts/字体下载.txt 与 README「创建 PDF 字体支持」。
+	requireBundledFonts()
+
 	sdk := dsc.New(dsc.Config{
 		Name:    "pdf",
-		Version: "1.0.0",
+		Version: "1.1.0",
 		Type:    dsc.TypeTool,
 		Provides: map[string]string{
 			"pdf": "true", // 提供 PDF 处理能力

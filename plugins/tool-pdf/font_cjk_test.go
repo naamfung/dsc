@@ -168,3 +168,41 @@ func TestScanBundledTTFs(t *testing.T) {
 	}
 	t.Logf("listAvailableCJKFonts prompt: %s", prompt)
 }
+
+// TestRequireBundledFonts 验证启动硬校验：
+//  1. fonts 目录含 .ttf → 正常返回（不 panic）
+//  2. fonts 目录为空 → PANIC，消息含下载指引关键信息（探测目录、环境变量、下载地址）
+//
+// 两条子测试均经 TOOL_PDF_FONTS_DIR 指向临时目录注入，与源码树 fonts/（TestMain
+// 可能已下载字体，cwd 探测必然命中）隔离，保证「有/无字体」两态可控。
+// 启动校验只查存在性不解析字体，.ttf 内容无关紧要。
+func TestRequireBundledFonts(t *testing.T) {
+	t.Run("有字体则通过", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "FakeCJK-Regular.ttf"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write fake font: %v", err)
+		}
+		t.Setenv(fontsDirEnv, dir)
+		requireBundledFonts() // 不 panic 即通过
+	})
+
+	t.Run("无字体则panic带下载指引", func(t *testing.T) {
+		t.Setenv(fontsDirEnv, t.TempDir()) // 空目录：合法但无 .ttf
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic when fonts directory has no .ttf")
+			}
+			msg, ok := r.(string)
+			if !ok {
+				t.Fatalf("panic value not a string: %v", r)
+			}
+			for _, want := range []string{"tool-pdf 启动失败", ".ttf", "下载", fontsDirEnv, "Noto Sans SC"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("panic message missing %q:\n%s", want, msg)
+				}
+			}
+		}()
+		requireBundledFonts()
+	})
+}

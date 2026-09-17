@@ -15,6 +15,7 @@
 // 创建 PDF Context 之后、使用字体之前再次调用它。
 //
 // 对外入口：
+//   - requireBundledFonts：启动硬校验——fonts 目录无任何 .ttf 即 PANIC，并给出下载指引。
 //   - resolveFontName：把模型传入的字体名解析为 pdfcpu 可用的字体名，并标明是否走 CJK 嵌入路径。
 //   - wrapTextForRender：按可用行宽把文本折行为视觉行（CJK 才折行）。
 package main
@@ -31,7 +32,7 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
-// fontsDirEnv 覆写字体目录（仅测试/调试用；生产按可执行文件所在目录与工作目录探测）。
+// fontsDirEnv 覆写字体目录（测试/调试/部署覆写；默认按可执行文件所在目录与工作目录探测）。
 const fontsDirEnv = "TOOL_PDF_FONTS_DIR"
 
 var (
@@ -70,14 +71,47 @@ func bundledFontsDir() string {
 	return ""
 }
 
+// requireBundledFonts 启动硬校验：fonts 目录必须含至少一个 TrueType（.ttf）字体，否则直接 PANIC。
+// 创建侧渲染中文（CJK）完全依赖自带 .ttf（标准 14 字体不含 CJK 字形），字体缺失意味着
+// 插件核心能力残缺。按「快速失败优于静默降级」原则，启动即 PANIC 并给出下载指引，
+// 强制部署者先行下载字体（详见 fonts/字体下载.txt 与 README「创建 PDF 字体支持」）。
+func requireBundledFonts() {
+	if len(scanBundledTTFs()) > 0 {
+		return
+	}
+	panic(fontRequirementMessage())
+}
+
+// fontRequirementMessage 构造字体缺失的启动失败指引（PANIC 消息）：
+// 列出已探测的 fonts 候选目录与环境变量覆写手段，并给出 TrueType 中文字体下载地址。
+func fontRequirementMessage() string {
+	var b strings.Builder
+	b.WriteString("tool-pdf 启动失败：fonts 目录未检测到任何 TrueType（.ttf）字体。\n")
+	b.WriteString("本插件渲染中文（CJK）必须内嵌 TrueType 字体（标准 14 字体不含 CJK 字形），使用本插件前必须先下载字体放入 fonts 目录。\n")
+	if d := os.Getenv(fontsDirEnv); d != "" {
+		fmt.Fprintf(&b, "当前 %s=%s（该目录不存在或不含 .ttf）。\n", fontsDirEnv, d)
+	} else {
+		if exe, err := os.Executable(); err == nil {
+			fmt.Fprintf(&b, "已探测字体目录：%s\n", filepath.Join(filepath.Dir(exe), "fonts"))
+		}
+		if wd, err := os.Getwd(); err == nil {
+			fmt.Fprintf(&b, "已探测字体目录：%s\n", filepath.Join(wd, "fonts"))
+		}
+		fmt.Fprintf(&b, "可用环境变量 %s 覆写字体目录。\n", fontsDirEnv)
+	}
+	b.WriteString("下载指引（任选其一，仅 .ttf 格式；.otf/CFF 不受支持）：\n")
+	b.WriteString("  1. Noto Sans SC（Google 开源，OFL-1.1，推荐）: https://fonts.google.com/noto/specimen/Noto+Sans+SC\n")
+	b.WriteString("  2. Source Han Sans SC 思源黑体（Adobe+Google 开源，OFL-1.1，需 TrueType 版）: https://github.com/adobe-fonts/source-han-sans\n")
+	b.WriteString("  3. HarmonyOS Sans SC 鸿蒙黑体（华为开源，OFL-1.1）: https://developer.huawei.com/cn/design/harmonyos-symbol/\n")
+	b.WriteString("下载后放入上述任一 fonts 目录（如 NotoSansSC-Regular.ttf）再重新启动；详见插件 fonts/字体下载.txt。")
+	return b.String()
+}
+
 // listAvailableCJKFonts 扫描 fonts/ 目录，返回所有可用 .ttf 字体名的列表字符串。
 // 经 ContextFn 注入 system prompt，让模型知道实际有哪些字体可用——
-// 而非硬编码特定字体名。空目录返回提示让模型知道可用标准 14 字体。
+// 而非硬编码特定字体名。启动硬校验 requireBundledFonts 保证扫描结果非空。
 func listAvailableCJKFonts() string {
 	names := scanBundledTTFs()
-	if len(names) == 0 {
-		return " 当前无 CJK 字体（仅支持标准 14 字体）。"
-	}
 	return " 可用 CJK 字体（.ttf）: " + strings.Join(names, ", ") + "。"
 }
 

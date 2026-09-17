@@ -94,9 +94,11 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 
 ### 内置 CJK 字体（支持中文等字符，自动嵌入）
 
-**字体需自行下载**：字体体积大，不进公开仓库。`fonts/` 目录中的字体文件未随源码跟踪，
-需按 `fonts/字体下载.txt` 的地址自行下载后放入 `plugins/tool-pdf/fonts/`（部署时随插件二进制一起，
-运行时查找优先级：可执行文件同级 `fonts/` → 工作目录 `fonts/`）。当前推荐 HarmonyOS Sans（简体中文字重）。
+**字体需自行下载（启动强制校验）**：字体体积大，不进公开仓库，`fonts/` 目录中的字体文件未随源码跟踪。
+插件启动时检查 fonts 目录，未检测到任何 `.ttf` 字体（中文渲染必需）则直接 PANIC 拒绝启动并打印下载指引——
+使用本插件必须先下载字体。需按 `fonts/字体下载.txt` 的地址自行下载后放入 `plugins/tool-pdf/fonts/`
+（部署时随插件二进制一起，运行时查找优先级：环境变量 `TOOL_PDF_FONTS_DIR` → 可执行文件同级 `fonts/` →
+工作目录 `fonts/`）。当前推荐 HarmonyOS Sans（简体中文字重）。
 
 `pdf_create_text` / `pdf_append_text` 的 `font` 参数接受这些 `.ttf` 的文件名主干（不含扩展名），
 例如简体中文用 `HarmonyOS_Sans_SC_Regular`。
