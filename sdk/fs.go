@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"dsc/core"
 )
 
 // 统一文件 IO 助手：所有插件读写文件统一经此层，获得一致的错误包装
@@ -33,16 +35,33 @@ func (e *posixPathErr) Error() string {
 
 func (e *posixPathErr) Unwrap() error { return e.err }
 
-// WorkspaceRoot 返回宿主注入的工作空间根目录（DSC_WORKSPACE_ROOT），未注入时
-// 回退当前工作目录。所有插件默认输出路径推断统一用此函数。
+// WorkspaceRoot 返回统一工作空间根目录。单一源头在 core（宿主进程按 config
+// workspace_root 解析，工具插件等子进程经包 init 读宿主注入的 DSC_WORKSPACE_ROOT，
+// 无注入回退 cwd），SDK 层转发供第三方插件使用；所有插件默认输出路径推断统一用
+// 此函数。
 func WorkspaceRoot() string {
-	if r := os.Getenv("DSC_WORKSPACE_ROOT"); r != "" {
-		return r
+	return core.WorkspaceRoot
+}
+
+// MapWorkspacePath 把模型书写的路径按「虚拟根 = 工作空间根」契约映射为真实路径
+// （WSL 盘符映射、/workspace 前缀、Windows 裸 / 锚定根；规则详见 core.MapWorkspacePath）。
+// 源头实现在 core（宿主本身亦有虚拟根诉求），SDK 导入 core 二次封装，第三方插件
+// 无须直接依赖 core 即可在 SDK 层获得工作空间相关方法的完整支持，各插件不再
+// 各自实现归并转换。
+func MapWorkspacePath(p string) string {
+	return core.MapWorkspacePath(p)
+}
+
+// ResolveWorkspacePath 把模型书写的路径映射后解析为真实绝对路径：相对路径一律
+// 锚定工作空间根（非插件进程 cwd——插件 cwd 是 ExecDir，锚 cwd 会把工作空间
+// 相对路径落到安装目录）。错误统一包装为 "resolve path <p>: <err>"（路径正斜杆
+// 呈现，见 posixPathErr），底层错误保留供 errors.Is/As。
+func ResolveWorkspacePath(p string) (string, error) {
+	resolved, err := core.ResolveWorkspacePath(p)
+	if err != nil {
+		return "", &posixPathErr{op: "resolve path", path: p, err: err}
 	}
-	if r, err := os.Getwd(); err == nil {
-		return r
-	}
-	return "."
+	return resolved, nil
 }
 
 // AbsPath 规范化路径为绝对路径（filepath.Abs）。错误统一包装为

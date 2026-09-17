@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"dsc/core"
 )
 
 func TestReadFileRoundTrip(t *testing.T) {
@@ -109,14 +111,39 @@ func TestMkdirAll(t *testing.T) {
 }
 
 func TestWorkspaceRoot(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "")
-	cwd, _ := os.Getwd()
-	if got := WorkspaceRoot(); got != cwd {
-		t.Fatalf("fallback = %q, want cwd %q", got, cwd)
-	}
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/ws")
+	// WorkspaceRoot 单一源头在 core 包变量（进程 init 从 DSC_WORKSPACE_ROOT/cwd
+	// 解析后进程内冻结），SDK 层是转发——t.Setenv 改不了已冻结的变量，测试直接
+	// 设变量验证转发语义（与 core/workspace_test.go 的 setWorkspaceRoot 同模式）。
+	old := core.WorkspaceRoot
+	t.Cleanup(func() { core.WorkspaceRoot = old })
+
+	core.WorkspaceRoot = "/tmp/ws"
 	if got := WorkspaceRoot(); got != "/tmp/ws" {
-		t.Fatalf("env = %q, want /tmp/ws", got)
+		t.Fatalf("forward = %q, want /tmp/ws", got)
+	}
+	core.WorkspaceRoot = filepath.Join(t.TempDir(), "ws")
+	if got := WorkspaceRoot(); got != core.WorkspaceRoot {
+		t.Fatalf("forward = %q, want %q", got, core.WorkspaceRoot)
+	}
+}
+
+// TestMapWorkspacePathDelegation 验证 SDK 层虚拟根归并的二次封装转发到 core
+// 源头：/workspace 前缀映射与相对路径锚定工作空间根（第三方插件经 SDK 获得
+// 完整工作空间支持，无须直接依赖 core）。
+func TestMapWorkspacePathDelegation(t *testing.T) {
+	old := core.WorkspaceRoot
+	t.Cleanup(func() { core.WorkspaceRoot = old })
+	core.WorkspaceRoot = "/tmp/myws"
+
+	if got := MapWorkspacePath("/workspace/a.md"); got != "/tmp/myws/a.md" {
+		t.Fatalf("MapWorkspacePath = %q, want /tmp/myws/a.md", got)
+	}
+	got, err := ResolveWorkspacePath("docs/a.md")
+	if err != nil {
+		t.Fatalf("ResolveWorkspacePath: %v", err)
+	}
+	if want := filepath.Join("/tmp/myws", "docs", "a.md"); got != want {
+		t.Fatalf("ResolveWorkspacePath = %q, want %q", got, want)
 	}
 }
 

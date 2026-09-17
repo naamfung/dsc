@@ -94,10 +94,10 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 		margin = 50
 	}
 
-	// 2. 解析输出路径（沙箱策略由宿主流水线统一判定，本插件不做越界检查）
-	absOut, err := filepath.Abs(outPath)
+	// 2. 解析输出路径（虚拟根归并统一走 SDK，源头 core；沙箱策略由宿主流水线统一判定）
+	absOut, err := dsc.ResolveWorkspacePath(outPath)
 	if err != nil {
-		return "", 0, fmt.Errorf("resolve out_path: %w", err)
+		return "", 0, err
 	}
 
 	// 3. 创建空 PDF Context（含 pageTree root，无页）
@@ -397,9 +397,10 @@ func handleImagesToPDF(ctx context.Context, args json.RawMessage) (string, error
 	}
 
 	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
-	absOut, err := filepath.Abs(p.OutPath)
+	// 虚拟根归并统一走 SDK（源头 core）：相对 out_path 锚定工作区根
+	absOut, err := dsc.ResolveWorkspacePath(p.OutPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve out_path: %w", err)
+		return "", err
 	}
 
 	// 使用 pdfcpu 的 ImportImagesFile
@@ -439,9 +440,10 @@ func handleAppendText(ctx context.Context, args json.RawMessage) (string, error)
 	}
 
 	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
-	absPath, err := filepath.Abs(p.FilePath)
+	// 虚拟根归并统一走 SDK（源头 core）：相对 file_path 锚定工作区根
+	absPath, err := dsc.ResolveWorkspacePath(p.FilePath)
 	if err != nil {
-		return "", fmt.Errorf("resolve file_path: %w", err)
+		return "", err
 	}
 
 	// 读取原 PDF

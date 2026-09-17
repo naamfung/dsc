@@ -43,7 +43,9 @@ func isAbsPath(path string) bool {
 	return false
 }
 
-// makeAbsPath 將路徑轉換為絕對路徑，正確處理 Unix 絕對路徑和 Windows 盤符絕對路徑
+// makeAbsPath 將路徑轉換為絕對路徑，正確處理 Unix 絕對路徑和 Windows 盤符絕對路徑。
+// 模型書寫的虛擬根路徑（/workspace、Windows 裸 /）已在入口經 core.MapWorkspacePath
+// 映射為真實路徑，此處只做純絕對化（映射後不會再出現裸 / 形態）。
 func makeAbsPath(reqPath string) (string, error) {
 	// 先使用 FromSlash 轉換斜槓，將 / 轉換為 \（在 Windows 上）
 	cleanReq := filepath.FromSlash(reqPath)
@@ -127,17 +129,9 @@ func safePath(base, reqPath string) (string, error) {
 	return realReq, nil
 }
 
-// normalizeWorkspacePath 剝離模型按工具描述傳入的 /workspace 前綴，
-// 使 /workspace/test/fib.go 映射到 workspace 根目錄下的 test/fib.go
-func normalizeWorkspacePath(p string) string {
-	p = strings.TrimSpace(p)
-	for _, prefix := range []string{"/workspace", `\workspace`} {
-		if strings.HasPrefix(p, prefix) {
-			return strings.TrimLeft(strings.TrimPrefix(p, prefix), `/\`)
-		}
-	}
-	return p
-}
+// normalizeWorkspacePath 已删除：/workspace 前缀剥离（以及此前缺失的裸 / 锚定）
+// 统一由 core.MapWorkspacePath 承担（本入口经 mappedPath 接入），避免两套归并
+// 语义并存（AGENTS.md 重复逻辑必须抽取）。
 
 type strReplaceEditorArgs struct {
 	Command    string `json:"command"`
@@ -297,15 +291,31 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 	// （宿主按 config workspace_root 解析並經 DSC_WORKSPACE_ROOT 注入，對齊 DSH 單一策略歸屬）
 	workspaceRoot := core.WorkspaceRoot
 
-	// 模型按工具描述會傳入形如 /workspace/test/fib.go 的絕對路徑，
-	// 需剝離 /workspace 前綴後再與 workspaceRoot 拼接，避免變成 workspace/workspace/...
-	reqPath, err := safePath(workspaceRoot, normalizeWorkspacePath(args.Path))
+	// 虛擬根歸并統一走 core.MapWorkspacePath（源頭在 core，SDK 供第三方插件復用，
+	// 各插件不再自行轉換）：/workspace 前綴與 Windows 裸 / 前綴一律錨定工作區根。
+	// 真實案例：模型傳 /docs/architecture.md，舊實現經 filepath.Abs 落到進程 cwd
+	// 所在盤的盤根（D:/docs），錨定工作區根後為 <root>/docs/architecture.md。
+	mappedPath := core.MapWorkspacePath(args.Path)
+	// 映射後落在工作區根內的路徑轉為相對形式，與模型直接傳相對路徑共用 safePath
+	// 的 join 分支（create 可自建缺失父目錄；view 缺失路徑報工作區內真實路徑錯誤，
+	// 而非走絕對分支報盤根 lstat 錯誤）。工作區外路徑保持絕對形式由 abs 分支校驗。
+	if filepath.IsAbs(mappedPath) {
+		if rel, relErr := filepath.Rel(workspaceRoot, mappedPath); relErr == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			mappedPath = rel
+		}
+	}
+	reqPath, err := safePath(workspaceRoot, mappedPath)
 	if err != nil {
 		return "", err
 	}
 	// diff 标签用相对 workspace 的路径（对齐 REX 的 a/path b/path），
-	// ToSlash 统一为正斜杆，避免 Windows 绝对路径标签含反斜杆
-	relPath := filepath.ToSlash(normalizeWorkspacePath(args.Path))
+	// ToSlash 统一为正斜杆，避免 Windows 绝对路径标签含反斜杆；
+	// 工作区外路径（模型显式盘符路径）保留全路径标签
+	relPath := filepath.ToSlash(reqPath)
+	if prefix := filepath.ToSlash(filepath.Clean(workspaceRoot)) + "/"; strings.HasPrefix(relPath, prefix) {
+		relPath = relPath[len(prefix):]
+	}
 
 	switch args.Command {
 	case "view":

@@ -29,9 +29,10 @@ import (
 func resolveWorkspacePaths(paths []string) ([]string, error) {
 	abs := make([]string, 0, len(paths))
 	for _, p := range paths {
-		a, err := filepath.Abs(p)
+		// 虚拟根归并统一走 SDK（源头 core）：相对路径锚定工作区根
+		a, err := dsc.ResolveWorkspacePath(p)
 		if err != nil {
-			return nil, fmt.Errorf("resolve path %q: %w", p, err)
+			return nil, err
 		}
 		abs = append(abs, a)
 	}

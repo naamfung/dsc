@@ -5,11 +5,20 @@ import (
 	"strings"
 	"testing"
 
+	"dsc/core"
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// setRoot 在测试期内直接设置统一根变量（core.WorkspaceRoot 在进程 init 时从
+// DSC_WORKSPACE_ROOT/cwd 解析后冻结，t.Setenv 改不了它），测试结束后恢复。
+func setRoot(t *testing.T, root string) {
+	old := core.WorkspaceRoot
+	core.WorkspaceRoot = root
+	t.Cleanup(func() { core.WorkspaceRoot = old })
+}
+
 func TestMapWorkspacePath(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	setRoot(t, "/tmp/myws")
 
 	cases := []struct{ in, want string }{
 		{"/workspace", "/tmp/myws"},
@@ -29,14 +38,16 @@ func TestMapWorkspacePath(t *testing.T) {
 }
 
 func TestMapWorkspacePathNoRoot(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "")
+	// 生产中 WorkspaceRoot 经 init 回退链恒非空；空串仅在防御分支可达，
+	// 此处显式构造验证「无根不改写」语义保留。
+	setRoot(t, "")
 	if got := mapWorkspacePath("/workspace/x"); got != "/workspace/x" {
 		t.Fatalf("未注入根时不应改写: got %q", got)
 	}
 }
 
 func TestMapWorkspacePathInvalidPrefix(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	setRoot(t, "/tmp/myws")
 	if got := mapWorkspacePath("workspacerel"); got != "workspacerel" {
 		t.Fatalf("相对路径应原样: got %q", got)
 	}
@@ -52,7 +63,7 @@ func TestMapWorkspacePathInvalidPrefix(t *testing.T) {
 //
 // 这是 DSC 跨平台根本约束的具体落地：路径映射绝不可在能合法访问 /mnt/c/ 的系统上破坏真实路径。
 func TestMapWorkspacePathWSLGating(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	setRoot(t, "/tmp/myws")
 	cases := []struct{ in, want string }{
 		{"/mnt/c/Users/foo", "/mnt/c/Users/foo"},
 		{"/mnt/d/projects/x", "/mnt/d/projects/x"},
@@ -78,7 +89,7 @@ func TestMapWorkspacePathWSLGating(t *testing.T) {
 // TestMapWorkspaceAST 校验 AST 层重写：裸词、单/双引号里的 /workspace 被映射，
 // 变量展开/命令替换等复杂词不改；边界 /workspacefoo 不改。
 func TestMapWorkspaceAST(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	setRoot(t, "/tmp/myws")
 	cases := []struct {
 		in, want string
 	}{
@@ -116,7 +127,7 @@ func TestMapWorkspaceAST(t *testing.T) {
 // 原样（mvdan DefaultOpenHandler 在 Windows 特判重定向到 NUL）；// 开头的 UNC
 // 路径不改写。Linux/macOS 上 / 是真实根，不启用本映射。
 func TestMapWorkspacePathBarePosixRoot(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	setRoot(t, "/tmp/myws")
 
 	cases := []struct{ in, want string }{
 		{"/", "/"},
@@ -147,7 +158,7 @@ func TestMapWorkspacePathBarePosixRoot(t *testing.T) {
 // TestMapWorkspaceASTBareRoot 校验 AST 层：裸 `/` 与裸 POSIX 路径在 Windows 上被
 // 重写（find / 不再遍历盘根），/dev/null 重定向保持原样。
 func TestMapWorkspaceASTBareRoot(t *testing.T) {
-	t.Setenv("DSC_WORKSPACE_ROOT", "/tmp/myws")
+	setRoot(t, "/tmp/myws")
 
 	cases := []struct{ in, want string }{
 		{`find / -maxdepth 2`, `find / -maxdepth 2`},

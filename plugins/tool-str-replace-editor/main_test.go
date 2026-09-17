@@ -179,20 +179,9 @@ func TestInsert(t *testing.T) {
 	}
 }
 
-func TestNormalizeWorkspacePath(t *testing.T) {
-	cases := map[string]string{
-		"/workspace/test/fib.go": "test/fib.go",
-		"/workspace/fib.go":      "fib.go",
-		`\workspace\a\b.go`:      `a\b.go`,
-		"test/plain.go":          "test/plain.go",
-		"workspace/nested.go":    "workspace/nested.go",
-	}
-	for in, want := range cases {
-		if got := normalizeWorkspacePath(in); got != want {
-			t.Errorf("normalizeWorkspacePath(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
+// TestNormalizeWorkspacePath 已随 normalizeWorkspacePath 删除：/workspace 前缀
+// 剥离与裸 / 锚定统一由 core.MapWorkspacePath 承担（规则矩阵见 core/workspace_test.go，
+// 入口接线见 TestVirtualRootMappedToWorkspaceRoot），插件内不再保留第二份实现。
 
 // TestViewDirectoryRejected 对齐 DSH：view 目录时列出 2 层深度的文件/目录（而非报错）。
 func TestViewDirectoryRejected(t *testing.T) {
@@ -247,5 +236,34 @@ func TestTopLevelSlashErrOnMissingPath(t *testing.T) {
 		if strings.Contains(err.Error(), `\`) {
 			t.Fatalf("error text for %q should be slash-normalized, got %q", path, err.Error())
 		}
+	}
+}
+
+// TestVirtualRootMappedToWorkspaceRoot 回归测试（虚拟根映射报告场景）：模型按
+// 「虚拟根 = 工作空间根」契约传入 /workspace/docs/architecture.md，必须映射到
+// 工作空间根下的真实文件并成功读出内容——旧实现只剥 /workspace 前缀，裸 / 形态
+// 在 Windows 上经 filepath.Abs 落到进程 cwd 所在盘的盘根（实测 D:/docs），虚拟根
+// 未转换。接入 core.MapWorkspacePath 后（源头 core，SDK 二次封装），裸 / 的
+// Windows 锚定语义由 core/workspace_test.go 纯函数矩阵覆盖，此处验证入口接线。
+func TestVirtualRootMappedToWorkspaceRoot(t *testing.T) {
+	newTestWS(t)
+	ws := core.WorkspaceRoot
+
+	dir := filepath.Join(ws, "docs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "# Architecture\nvirtual root mapping works"
+	if err := os.WriteFile(filepath.Join(dir, "architecture.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := strReplaceEditor(context.Background(),
+		[]byte(`{"command":"view","path":"/workspace/docs/architecture.md"}`))
+	if err != nil {
+		t.Fatalf("view via /workspace virtual root: %v", err)
+	}
+	if !strings.Contains(out, "virtual root mapping works") {
+		t.Fatalf("view output missing file content, got %q", out)
 	}
 }

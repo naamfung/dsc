@@ -51,9 +51,11 @@ var sharedCtx pdfReadContext
 // 与 tool-filesystem / tool-str-replace-editor 一致，避免 full-access 模式下
 // 插件仍自行拒绝 workspace 外路径。
 func loadPDFContext(path string) (*model.Context, error) {
-	absPath, err := filepath.Abs(path)
+	// 虛擬根歸并統一走 SDK（源頭 core）：相對路徑錨定工作區根（插件進程 cwd 是
+	// ExecDir），/workspace 與 Windows 裸 / 前綴映射到工作區根，錯誤正斜杆呈現。
+	absPath, err := dsc.ResolveWorkspacePath(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolve path: %w", err)
+		return nil, err
 	}
 
 	info, err := os.Stat(absPath)
@@ -233,7 +235,14 @@ func handleInfo(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	f, err := os.Open(p.FilePath)
+	// 虛擬根歸并統一走 SDK（源頭 core）：相對路徑錨定工作區根，/workspace 與
+	// Windows 裸 / 前綴映射到工作區根（各插件不再自行轉換）。
+	filePath, err := dsc.ResolveWorkspacePath(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := os.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("open: %w", err)
 	}
@@ -311,7 +320,14 @@ func handleOutline(ctx context.Context, args json.RawMessage) (string, error) {
 		return "", fmt.Errorf("file_path is required")
 	}
 
-	f, err := os.Open(p.FilePath)
+	// 虛擬根歸并統一走 SDK（源頭 core）：相對路徑錨定工作區根，/workspace 與
+	// Windows 裸 / 前綴映射到工作區根（各插件不再自行轉換）。
+	filePath, err := dsc.ResolveWorkspacePath(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := os.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("open: %w", err)
 	}
@@ -438,7 +454,13 @@ func handleExtractImages(ctx context.Context, args json.RawMessage) (string, err
 		return "", fmt.Errorf("create out_dir: %w", err)
 	}
 
-	f, err := os.Open(p.FilePath)
+	// 虛擬根歸并統一走 SDK（源頭 core）：同 handleInfo（相對路徑錨定工作區根）
+	filePath, err := dsc.ResolveWorkspacePath(p.FilePath)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := os.Open(filePath)
 	if err != nil {
 		return "", fmt.Errorf("open: %w", err)
 	}
