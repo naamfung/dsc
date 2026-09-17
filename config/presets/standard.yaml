@@ -30,9 +30,9 @@ plugins:
   - name: tool-browser-use
     type: tool
     enabled: true
-  - name: tool-computer-use
-    type: tool
-    enabled: true
+  # - name: tool-computer-use
+  #   type: tool
+  #   enabled: true
   - name: tool-lisp-eval
     type: tool
     enabled: true
