@@ -507,11 +507,11 @@ func TestSkillE2E(t *testing.T) {
 	}
 }
 
-// TestCompactionE2E 端到端验证基础压缩驻留（自宿主 core/compaction.go 迁入）：
+// TestCompactionBasicE2E 端到端验证基础压缩驻留（自宿主 core/compaction.go 迁入）：
 // spawn dsc-system exe，经 gRPC PluginHookService.OnEvent 走宿主 agent/pre-step /
 // agent/request-error 同款调用——溢出紧急压缩返回 {"retry": true}、重试的 pre-step
 // 返回 {"messages": [...]} 改写（LLM 未互联 → 截断式退化路径）、非溢出错误码忽略。
-func TestCompactionE2E(t *testing.T) {
+func TestCompactionBasicE2E(t *testing.T) {
 	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "dsc-system.exe")
@@ -520,11 +520,11 @@ func TestCompactionE2E(t *testing.T) {
 	}
 
 	// 2. 拉起插件进程：小窗口（阈值 800）+ 状态目录隔离到临时区
-	stateDir := filepath.Join(dir, "compaction-state")
+	stateDir := filepath.Join(dir, "compaction-basic-state")
 	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(),
-		"DSC_COMPACTION_CONTEXT_WINDOW=1000",
-		"DSC_COMPACTION_DIR="+stateDir,
+		"DSC_COMPACTION_BASIC_CONTEXT_WINDOW=1000",
+		"DSC_COMPACTION_BASIC_DIR="+stateDir,
 	)
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  core.Handshake,
@@ -565,7 +565,7 @@ func TestCompactionE2E(t *testing.T) {
 	preStep := func() string {
 		t.Helper()
 		data, err := json.Marshal(map[string]any{
-			"agent": "agent-react-loop", "session": "e2e-compaction",
+			"agent": "agent-react-loop", "session": "e2e-compaction-basic",
 			"messages_json": string(msgsJSON), "token_count": 1800,
 		})
 		if err != nil {
@@ -643,7 +643,7 @@ func TestCompactionE2E(t *testing.T) {
 	}
 
 	// 8. 状态落盘（per-session 状态文件存在）
-	if _, err := os.Stat(filepath.Join(stateDir, "e2e-compaction.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(stateDir, "e2e-compaction-basic.json")); err != nil {
 		t.Fatalf("session state file must persist: %v", err)
 	}
 }

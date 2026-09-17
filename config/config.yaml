@@ -13,7 +13,7 @@ default_llm: llm-anthropic
 
 #context_window: 131072
 
-compaction: dsc-billion-context
+compaction-basic: dsc-billion-context
 
 # 历史注入持久化编码（/settings history 写回）：-1 禁止（不注入历史）、0 未定义（默认不限制）、
 

@@ -31,10 +31,10 @@ DSC 是多进程：插件在独立进程，事件经 gRPC `PluginHookService.OnE
 
 | DSH Cordis | DSC 等价 | 位置 |
 |------------|---------|------|
-| `Plugin.Base.provide('compaction')` | `Config.Provides: {"compaction": "true"}` | `sdk/sdk.go` |
+| `Plugin.Base.provide('compaction')` | `Config.Provides: {"compaction-basic": "true"}` | `sdk/sdk.go` |
 | `Plugin.Base.inject(['compaction'])` | `Config.Requires: [{Type: "llm", Capability: "llm"}]` | `sdk/sdk.go` |
 | Cordis registry 扫描 provide/inject 匹配 | `findProviderByCapabilityLocked` + `resolveRequiredDeps` | `core/capability_deps.go` + `core/inject.go` |
-| `ctx.get('compaction')` 查询 Service | `HasPluginProvidingCapability("compaction")` | `core/capability_deps.go` |
+| `ctx.get('compaction')` 查询 Service | `HasPluginProvidingCapability("compaction-basic")` | `core/capability_deps.go` |
 | 同域唯一 provider（fail-loud） | `findProviderByCapabilityLocked` 多 provider 报错 | `core/capability_deps.go` |
 
 ### 关键差异
@@ -67,14 +67,14 @@ DSH 的 `systemPrompt` 是全局 Service，section 有 `order` 字段排序。DS
 
 | DSH Cordis | DSC 等价 | 位置 |
 |------------|---------|------|
-| `extends Service` + `super(ctx, 'compaction')` | 基础压缩驻留 compactionServer（对齐 compaction-basic） | `plugins/dsc-system/compaction.go` |
-| `declare module Context { ctx.compaction: CompactionEngine }` | config.yaml `compaction` 字段选后端 + Provides compaction 能力验证（agent/pre-step 事件接管） | `core/config.go` + `core/manager.go` + `plugins/dsc-system/compaction.go` |
-| preset YAML 挂 compaction-basic | `config.yaml` 的 `compaction` 字段显式声明 | `core/config.go` |
+| `extends Service` + `super(ctx, 'compaction')` | 基础压缩驻留 compactionBasicServer（对齐 compaction-basic） | `plugins/dsc-system/compaction-basic.go` |
+| `declare module Context { ctx.compaction: CompactionEngine }` | config.yaml `compaction-basic` 字段选后端 + Provides compaction-basic 能力验证（agent/pre-step 事件接管） | `core/config.go` + `core/manager.go` + `plugins/dsc-system/compaction-basic.go` |
+| preset YAML 挂 compaction-basic | `config.yaml` 的 `compaction-basic` 字段显式声明 | `core/config.go` |
 | `static inject = ['llm', 'tokenMeter']` | 插件经 `Config.Requires` 声明依赖 | `sdk/sdk.go` |
 
 ### 当前状态
 
-压缩后端已完全插件化：基础压缩引擎为 `dsc-system` 驻留（自宿主 core/compaction.go 迁入，宿主零压缩代码），接管经 `agent/pre-step` 事件机制（非 Service 调用）；config.yaml `compaction` 字段显式选后端（`dsc-system` / `dsc-billion-context`），宿主仅验证 Provides compaction 能力声明。
+压缩后端已完全插件化：基础压缩引擎为 `dsc-system` 驻留（自宿主 core/compaction.go 迁入，宿主零压缩代码），接管经 `agent/pre-step` 事件机制（非 Service 调用）；config.yaml `compaction-basic` 字段显式选后端（`dsc-system` / `dsc-billion-context`），宿主仅验证 Provides compaction-basic 能力声明。
 
 ## 7. Scope / Fiber（DSC 无等价物）
 
@@ -108,6 +108,6 @@ DSC 多进程架构下，每个插件是独立进程，天然隔离——不需�
 
 1. **新增通用能力时**：检查本对照表，若有 Cordis 等价物则复用，而非重新实现。
 2. **新增事件时**：在 `eventDispatchMode` 映射表中声明分发模式，`Hook.OnEvent` 统一接收。
-3. **新增 Service 时**：定义 interface + Manager 持有字段 + `config.yaml` 显式声明，对齐 `CompactionEngine` 模式。
+3. **新增 Service 时**：定义 interface + Manager 持有字段 + `config.yaml` 显式声明，对齐 `compactionBasicServer`（dsc-system 驻留）模式。
 4. **新增 system prompt 贡献时**：经 `Hook.ContextFn`，宿主经 `ListContext` 聚合，不直接改消息列表。
 5. **跨进程通信时**：经 gRPC（`PluginHookService`）或事件（`agent/pre-step`），不经 env。

@@ -5,7 +5,7 @@
 //
 //   - agent/pre-step（waterfall 拦截）：收到本步消息列表（MessagesJSON）；
 //     估算用量超过阈值（默认窗口 80%，对齐 compaction-basic 压力语义；agent 经
-//     [DSC_COMPACTION_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩——接管靠
+//     [DSC_COMPACTION_BASIC_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩——接管靠
 //     能力声明驱动，与阈值无关）时保留尾部
 //     （RetainRatio / RetainTokensMin 取大），把未压缩前段经 LLM 生成摘要
 //     （interconnect 聚合 LLM；未互联或调用失败退化为截断式摘要），以
@@ -20,12 +20,12 @@
 // （指纹失配）则丢弃记录从头评估。持久化尽力而为：失败不阻塞改写。
 //
 // 配置（DSC_ 前缀 env 白名单天然可见）：
-//   - DSC_COMPACTION_CONTEXT_WINDOW  上下文窗口 token 数（默认 131072；0 = 驻留禁用）
-//   - DSC_COMPACTION_THRESHOLD       触发阈值比例（默认 0.80，对齐 compaction-basic；
+//   - DSC_COMPACTION_BASIC_CONTEXT_WINDOW  上下文窗口 token 数（默认 131072；0 = 驻留禁用）
+//   - DSC_COMPACTION_BASIC_THRESHOLD       触发阈值比例（默认 0.80，对齐 compaction-basic；
 //     可调，与接管机制无关）
-//   - DSC_COMPACTION_RETAIN_RATIO    保留尾部比例（默认 0.16）
-//   - DSC_COMPACTION_RETAIN_MIN      保留尾部最少 token 数（默认 1024）
-//   - DSC_COMPACTION_DIR             状态目录覆盖（缺省 ExecDir/compaction）
+//   - DSC_COMPACTION_BASIC_RETAIN_RATIO    保留尾部比例（默认 0.16）
+//   - DSC_COMPACTION_BASIC_RETAIN_MIN      保留尾部最少 token 数（默认 1024）
+//   - DSC_COMPACTION_BASIC_DIR             状态目录覆盖（缺省 ExecDir/compaction-basic）
 package main
 
 import (
@@ -72,9 +72,9 @@ type compactionState struct {
 	Records []compactionRecord `json:"records"`
 }
 
-// compactionServer 基础压缩驻留（对齐宿主原 BasicCompactionEngine 语义：
+// compactionBasicServer 基础压缩驻留（对齐宿主原 BasicCompactionEngine 语义：
 // 压力驱动 + 溢出紧急，保留尾部，LLM 摘要，截断式退化，防重入）。
-type compactionServer struct {
+type compactionBasicServer struct {
 	mu          sync.Mutex
 	llm         llmChat // interconnect 聚合 LLM（未互联为 nil → 截断式退化）
 	compacting  bool    // 防重入：同一时间只允许一次压缩
@@ -88,31 +88,31 @@ type compactionServer struct {
 	stateDir    string  // 状态目录
 }
 
-// newCompactionServer 读 env 构建驻留（fail-soft：非法配置逐项回退默认；
+// newCompactionBasicServer 读 env 构建驻留（fail-soft：非法配置逐项回退默认；
 // window<=0 即禁用——与 timeout/spill 的 0 禁用同款语义）。
-func newCompactionServer() *compactionServer {
-	s := &compactionServer{
+func newCompactionBasicServer() *compactionBasicServer {
+	s := &compactionBasicServer{
 		window:      131072,
 		threshold:   0.80,
 		retainRatio: 0.16,
 		retainMin:   1024,
 	}
-	if v := os.Getenv("DSC_COMPACTION_CONTEXT_WINDOW"); v != "" {
+	if v := os.Getenv("DSC_COMPACTION_BASIC_CONTEXT_WINDOW"); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
 			s.window = n
 		}
 	}
-	if v := os.Getenv("DSC_COMPACTION_THRESHOLD"); v != "" {
+	if v := os.Getenv("DSC_COMPACTION_BASIC_THRESHOLD"); v != "" {
 		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 && f < 1 {
 			s.threshold = f
 		}
 	}
-	if v := os.Getenv("DSC_COMPACTION_RETAIN_RATIO"); v != "" {
+	if v := os.Getenv("DSC_COMPACTION_BASIC_RETAIN_RATIO"); v != "" {
 		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 && f < 1 {
 			s.retainRatio = f
 		}
 	}
-	if v := os.Getenv("DSC_COMPACTION_RETAIN_MIN"); v != "" {
+	if v := os.Getenv("DSC_COMPACTION_BASIC_RETAIN_MIN"); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
 			s.retainMin = n
 		}
@@ -121,8 +121,8 @@ func newCompactionServer() *compactionServer {
 	if execDir == "" {
 		execDir, _ = os.Getwd()
 	}
-	s.stateDir = filepath.Join(execDir, "compaction")
-	if v := os.Getenv("DSC_COMPACTION_DIR"); v != "" {
+	s.stateDir = filepath.Join(execDir, "compaction-basic")
+	if v := os.Getenv("DSC_COMPACTION_BASIC_DIR"); v != "" {
 		s.stateDir = v
 	}
 	return s
@@ -130,7 +130,7 @@ func newCompactionServer() *compactionServer {
 
 // attachLLM 缓存 interconnect 聚合 LLM 客户端（宿主挂载后回调注入）。
 // nil 不覆盖：未互联时保持 nil，摘要走截断式退化（对齐宿主引擎 nil-LLM 路径）。
-func (s *compactionServer) attachLLM(c *llmclient.Client) {
+func (s *compactionBasicServer) attachLLM(c *llmclient.Client) {
 	if c == nil {
 		return
 	}
@@ -140,7 +140,7 @@ func (s *compactionServer) attachLLM(c *llmclient.Client) {
 }
 
 // handleHostEvent 事件入口（main.go 的 hook 多路复用之一）。
-func (s *compactionServer) handleHostEvent(ctx context.Context, eventType, dataJSON string) (string, error) {
+func (s *compactionBasicServer) handleHostEvent(ctx context.Context, eventType, dataJSON string) (string, error) {
 	switch eventType {
 	case string(core.EventAgentPreStep):
 		return s.handlePreStep(ctx, dataJSON)
@@ -153,18 +153,18 @@ func (s *compactionServer) handleHostEvent(ctx context.Context, eventType, dataJ
 
 // handlePreStep 压力驱动压缩（agent/pre-step 拦截）。
 // 返回 {"messages": [...]}（改写后列表）或 ""（本步不改写，零开销）。
-func (s *compactionServer) handlePreStep(ctx context.Context, dataJSON string) (string, error) {
+func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON string) (string, error) {
 	if s.window <= 0 {
 		return "", nil // 驻留禁用
 	}
 	var ev core.AgentPreStepEvent
 	if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
-		return "", fmt.Errorf("compaction: parse pre-step event: %w", err)
+		return "", fmt.Errorf("compaction-basic: parse pre-step event: %w", err)
 	}
 	var msgs []*proto.Message
 	if ev.MessagesJSON != "" {
 		if err := json.Unmarshal([]byte(ev.MessagesJSON), &msgs); err != nil {
-			return "", fmt.Errorf("compaction: parse messages: %w", err)
+			return "", fmt.Errorf("compaction-basic: parse messages: %w", err)
 		}
 	}
 	sess := s.sessionKey(ev.Session)
@@ -178,7 +178,7 @@ func (s *compactionServer) handlePreStep(ctx context.Context, dataJSON string) (
 
 	st, err := s.loadState(sess)
 	if err != nil {
-		return "", fmt.Errorf("compaction: load state: %w", err)
+		return "", fmt.Errorf("compaction-basic: load state: %w", err)
 	}
 	// 指纹校验：历史被改写/回滚时丢弃记录从头评估
 	records := validRecords(msgs, st.Records)
@@ -218,7 +218,7 @@ func (s *compactionServer) handlePreStep(ctx context.Context, dataJSON string) (
 	st.Records = append(records, rec)
 	if err := s.saveState(sess, st); err != nil {
 		// best-effort：状态持久化失败不阻塞本次改写（内存评估仍成立）
-		fmt.Fprintf(os.Stderr, "[dsc-system/compaction] save state: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[dsc-system/compaction-basic] save state: %v\n", err)
 	}
 	return rewriteJSON(applyRecords(msgs, st.Records))
 }
@@ -227,13 +227,13 @@ func (s *compactionServer) handlePreStep(ctx context.Context, dataJSON string) (
 // code=context_window_exceeded 时以截断式摘要压缩未压缩前段（保留最后 1 条，
 // 当前用户意图/在途上下文不动），返回 {"retry": true} 让宿主重走 pre-step + 重发。
 // 不调 LLM：溢出时再调大概率同样溢出（对齐 dsc-billion-context 紧急路径的取舍）。
-func (s *compactionServer) handleRequestError(ctx context.Context, dataJSON string) (string, error) {
+func (s *compactionBasicServer) handleRequestError(ctx context.Context, dataJSON string) (string, error) {
 	if s.window <= 0 {
 		return "", nil
 	}
 	var ev core.AgentRequestErrorEvent
 	if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
-		return "", fmt.Errorf("compaction: parse request-error event: %w", err)
+		return "", fmt.Errorf("compaction-basic: parse request-error event: %w", err)
 	}
 	if ev.Code != "context_window_exceeded" {
 		return "", nil // 仅对上下文溢出触发；rate_limited 等不归压缩管
@@ -247,7 +247,7 @@ func (s *compactionServer) handleRequestError(ctx context.Context, dataJSON stri
 	}
 	st, err := s.loadState(sess)
 	if err != nil {
-		return "", fmt.Errorf("compaction: load state: %w", err)
+		return "", fmt.Errorf("compaction-basic: load state: %w", err)
 	}
 	records := validRecords(msgs, st.Records)
 	base := 0
@@ -269,7 +269,7 @@ func (s *compactionServer) handleRequestError(ctx context.Context, dataJSON stri
 	}
 	st.Records = append(records, rec)
 	if err := s.saveState(sess, st); err != nil {
-		fmt.Fprintf(os.Stderr, "[dsc-system/compaction] save state: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[dsc-system/compaction-basic] save state: %v\n", err)
 	}
 	return `{"retry": true}`, nil
 }
@@ -277,7 +277,7 @@ func (s *compactionServer) handleRequestError(ctx context.Context, dataJSON stri
 // summarize 生成 [region] 的摘要。LLM 路径：聚合 LLM 生成（对齐宿主引擎提示词与
 // maxTokens=窗口/8、下限 512）；LLM 未互联或失败：退化为截断式摘要（对齐宿主引擎
 // nil-LLM 路径）。emergency=true 强制截断式（溢出时不赌 LLM 可用）。
-func (s *compactionServer) summarize(ctx context.Context, region []*proto.Message, emergency bool) (string, string) {
+func (s *compactionBasicServer) summarize(ctx context.Context, region []*proto.Message, emergency bool) (string, string) {
 	id := fmt.Sprintf("compact-%d", time.Now().UnixMilli())
 	if !emergency {
 		s.mu.Lock()
@@ -302,7 +302,7 @@ func (s *compactionServer) summarize(ctx context.Context, region []*proto.Messag
 }
 
 // llmSummary 构建压缩请求并调用聚合 LLM（提示词与宿主原引擎逐字一致）。
-func (s *compactionServer) llmSummary(ctx context.Context, llm llmChat, region []*proto.Message) (string, error) {
+func (s *compactionBasicServer) llmSummary(ctx context.Context, llm llmChat, region []*proto.Message) (string, error) {
 	prompt := "你是对话压缩器。请将下面的对话历史压缩成一段精简但信息完整的摘要，" +
 		"保留关键信息（用户意图、重要决策、工具结果要点），去除冗余细节。只输出摘要，不添加额外解释。\n\n--- 对话历史 ---\n"
 	for _, msg := range region {
@@ -318,21 +318,21 @@ func (s *compactionServer) llmSummary(ctx context.Context, llm llmChat, region [
 	}
 	resp, err := llm.Chat(ctx, compactMsgs, int32(maxTokens))
 	if err != nil {
-		return "", fmt.Errorf("compaction LLM call failed: %w", err)
+		return "", fmt.Errorf("compaction-basic LLM call failed: %w", err)
 	}
 	if resp.GetContent() == "" {
-		return "", fmt.Errorf("compaction returned empty summary")
+		return "", fmt.Errorf("compaction-basic returned empty summary")
 	}
 	return resp.GetContent(), nil
 }
 
 // pressureThreshold 压力触发阈值（token 数）。
-func (s *compactionServer) pressureThreshold() int {
+func (s *compactionBasicServer) pressureThreshold() int {
 	return int(float64(s.window) * s.threshold)
 }
 
 // retainBudget 保留尾部预算（token 数）：Ratio 与 Min 取大（对齐宿主引擎）。
-func (s *compactionServer) retainBudget() int {
+func (s *compactionBasicServer) retainBudget() int {
 	b := int(float64(s.window) * s.retainRatio)
 	if b < s.retainMin {
 		b = s.retainMin
@@ -342,7 +342,7 @@ func (s *compactionServer) retainBudget() int {
 
 // retainBoundary 保留尾部边界：从末尾向前累积，返回前段可压缩的上界
 // （[retainIdx, len) 为保留区）。全部落在保留区时返回 len(msgs)。
-func (s *compactionServer) retainBoundary(msgs []*proto.Message) int {
+func (s *compactionBasicServer) retainBoundary(msgs []*proto.Message) int {
 	budget := s.retainBudget()
 	acc := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -356,7 +356,7 @@ func (s *compactionServer) retainBoundary(msgs []*proto.Message) int {
 
 // msgTokens 字节级启发式 token 估算（对齐宿主 pre-step 估算与原引擎：约 4 字节/token，
 // 工具调用结构开销 +8）。
-func (s *compactionServer) msgTokens(m *proto.Message) int {
+func (s *compactionBasicServer) msgTokens(m *proto.Message) int {
 	n := len(m.GetContent()) / 4
 	if len(m.GetToolCalls()) > 0 {
 		n += 8
@@ -365,7 +365,7 @@ func (s *compactionServer) msgTokens(m *proto.Message) int {
 }
 
 // estimateMsgs 估算消息列表总 token 数。
-func (s *compactionServer) estimateMsgs(msgs []*proto.Message) int {
+func (s *compactionBasicServer) estimateMsgs(msgs []*proto.Message) int {
 	total := 0
 	for _, m := range msgs {
 		total += s.msgTokens(m)
@@ -399,7 +399,7 @@ func capText(s string) string {
 }
 
 // applyRecords 把已压缩记录应用到消息列表：前缀替换为逐条摘要（user 角色，
-// 显式标注 compaction 标识），其余原样保留。记录失配/越界时原样返回。
+// 显式标注 compaction-basic 标识），其余原样保留。记录失配/越界时原样返回。
 func applyRecords(msgs []*proto.Message, records []compactionRecord) []*proto.Message {
 	if len(records) == 0 {
 		return msgs
@@ -410,7 +410,7 @@ func applyRecords(msgs []*proto.Message, records []compactionRecord) []*proto.Me
 	}
 	out := make([]*proto.Message, 0, len(records)+len(msgs)-last.UpTo)
 	for _, rec := range records {
-		marker := "[上下文压缩摘要 compaction=" + rec.ID
+		marker := "[上下文压缩摘要 compaction-basic=" + rec.ID
 		if rec.Emergency {
 			marker += " emergency"
 		}
@@ -457,7 +457,7 @@ func rewriteJSON(msgs []*proto.Message) (string, error) {
 }
 
 // loadState / saveState per-session 状态读写（目录自动创建；写盘原子替换）。
-func (s *compactionServer) loadState(sessID string) (*compactionState, error) {
+func (s *compactionBasicServer) loadState(sessID string) (*compactionState, error) {
 	st := &compactionState{}
 	b, err := os.ReadFile(filepath.Join(s.stateDir, sessID+".json"))
 	if err != nil {
@@ -472,7 +472,7 @@ func (s *compactionServer) loadState(sessID string) (*compactionState, error) {
 	return st, nil
 }
 
-func (s *compactionServer) saveState(sessID string, st *compactionState) error {
+func (s *compactionBasicServer) saveState(sessID string, st *compactionState) error {
 	if err := os.MkdirAll(s.stateDir, 0o755); err != nil {
 		return err
 	}
@@ -490,7 +490,7 @@ func (s *compactionServer) saveState(sessID string, st *compactionState) error {
 // sessionKey 会话状态键：优先事件透传的 session_id（宿主 ChatRequest.session_id），
 // 缺省按工作区派生项目级键（对齐宿主 session 存储的 SessionKeyForProject——
 // 同一项目同名、不同项目隔离），并净化为安全文件名。
-func (s *compactionServer) sessionKey(sessID string) string {
+func (s *compactionBasicServer) sessionKey(sessID string) string {
 	if sessID == "" {
 		sessID = session.SessionKeyForProject(dsc.WorkspaceRoot())
 	}

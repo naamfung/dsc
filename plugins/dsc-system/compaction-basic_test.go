@@ -10,14 +10,14 @@ import (
 	"dsc/proto"
 )
 
-// fakeCompactionLLM 聚合 LLM 的 fake（llmChat 接口）：计数调用、返回固定摘要。
-type fakeCompactionLLM struct {
+// fakeCompactionBasicLLM 聚合 LLM 的 fake（llmChat 接口）：计数调用、返回固定摘要。
+type fakeCompactionBasicLLM struct {
 	calls   int
 	content string
 	err     error
 }
 
-func (f *fakeCompactionLLM) Chat(ctx context.Context, messages []*proto.Message, maxTokens int32) (*proto.ChatResponse, error) {
+func (f *fakeCompactionBasicLLM) Chat(ctx context.Context, messages []*proto.Message, maxTokens int32) (*proto.ChatResponse, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
@@ -25,10 +25,10 @@ func (f *fakeCompactionLLM) Chat(ctx context.Context, messages []*proto.Message,
 	return &proto.ChatResponse{Content: f.content}, nil
 }
 
-// newTestCompactionServer 构建受控驻留（绕开 env：直接设字段，状态目录进临时区）。
-func newTestCompactionServer(t *testing.T, window int) *compactionServer {
+// newTestCompactionBasicServer 构建受控驻留（绕开 env：直接设字段，状态目录进临时区）。
+func newTestCompactionBasicServer(t *testing.T, window int) *compactionBasicServer {
 	t.Helper()
-	s := newCompactionServer()
+	s := newCompactionBasicServer()
 	s.window = window
 	s.stateDir = t.TempDir()
 	return s
@@ -50,12 +50,12 @@ func bigMsgs(n, charsPer int) []*proto.Message {
 	return msgs
 }
 
-func mustPreStep(t *testing.T, s *compactionServer, msgs []*proto.Message) string {
+func mustPreStep(t *testing.T, s *compactionBasicServer, msgs []*proto.Message) string {
 	t.Helper()
 	return mustPreStepSession(t, s, "sess-c1", msgs)
 }
 
-func mustPreStepSession(t *testing.T, s *compactionServer, sess string, msgs []*proto.Message) string {
+func mustPreStepSession(t *testing.T, s *compactionBasicServer, sess string, msgs []*proto.Message) string {
 	t.Helper()
 	msgsJSON, err := json.Marshal(msgs)
 	if err != nil {
@@ -89,9 +89,9 @@ func parseRewrite(t *testing.T, res string) []*proto.Message {
 	return m.Messages
 }
 
-// TestCompactionDisabledByZeroWindow 驻留禁用（窗口 0）：一切事件静止。
-func TestCompactionDisabledByZeroWindow(t *testing.T) {
-	s := newTestCompactionServer(t, 0)
+// TestCompactionBasicDisabledByZeroWindow 驻留禁用（窗口 0）：一切事件静止。
+func TestCompactionBasicDisabledByZeroWindow(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 0)
 	msgs := bigMsgs(6, 1200)
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("disabled resident must not rewrite, got %q", res)
@@ -103,11 +103,11 @@ func TestCompactionDisabledByZeroWindow(t *testing.T) {
 	}
 }
 
-// TestCompactionPressureLLMSummary 压力触发：超阈值时保留尾部、前段经 LLM 摘要、
+// TestCompactionBasicPressureLLMSummary 压力触发：超阈值时保留尾部、前段经 LLM 摘要、
 // 返回 {"messages":[...]}；同载荷重放复用状态（LLM 不再被调用）。
-func TestCompactionPressureLLMSummary(t *testing.T) {
-	s := newTestCompactionServer(t, 10000) // 阈值 8000；保留预算 max(1600,1024)=1600
-	fake := &fakeCompactionLLM{content: "LLM-SUMMARY"}
+func TestCompactionBasicPressureLLMSummary(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000) // 阈值 8000；保留预算 max(1600,1024)=1600
+	fake := &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
 	s.llm = fake
 
 	msgs := bigMsgs(16, 6000) // 每条 1500 token，共 24000
@@ -142,11 +142,11 @@ func TestCompactionPressureLLMSummary(t *testing.T) {
 	}
 }
 
-// TestCompactionFingerprintMismatchResets 历史被改写（指纹失配）：记录作废、
+// TestCompactionBasicFingerprintMismatchResets 历史被改写（指纹失配）：记录作废、
 // 从头重新评估并重新摘要。
-func TestCompactionFingerprintMismatchResets(t *testing.T) {
-	s := newTestCompactionServer(t, 10000)
-	fake := &fakeCompactionLLM{content: "S1"}
+func TestCompactionBasicFingerprintMismatchResets(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000)
+	fake := &fakeCompactionBasicLLM{content: "S1"}
 	s.llm = fake
 	msgs := bigMsgs(16, 6000)
 	if res := mustPreStep(t, s, msgs); res == "" {
@@ -165,9 +165,9 @@ func TestCompactionFingerprintMismatchResets(t *testing.T) {
 	}
 }
 
-// TestCompactionTruncateFallback LLM 未互联：截断式退化摘要（首条+末条拼接）。
-func TestCompactionTruncateFallback(t *testing.T) {
-	s := newTestCompactionServer(t, 10000) // llm 为 nil
+// TestCompactionBasicTruncateFallback LLM 未互联：截断式退化摘要（首条+末条拼接）。
+func TestCompactionBasicTruncateFallback(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000) // llm 为 nil
 	msgs := bigMsgs(16, 6000)
 	res := mustPreStep(t, s, msgs)
 	got := parseRewrite(t, res)
@@ -179,10 +179,10 @@ func TestCompactionTruncateFallback(t *testing.T) {
 	}
 }
 
-// TestCompactionLLMFailureDegrades LLM 调用失败：退化截断式，不把失败上抛。
-func TestCompactionLLMFailureDegrades(t *testing.T) {
-	s := newTestCompactionServer(t, 10000)
-	s.llm = &fakeCompactionLLM{err: errors.New("provider down")}
+// TestCompactionBasicLLMFailureDegrades LLM 调用失败：退化截断式，不把失败上抛。
+func TestCompactionBasicLLMFailureDegrades(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000)
+	s.llm = &fakeCompactionBasicLLM{err: errors.New("provider down")}
 	msgs := bigMsgs(16, 6000)
 	res := mustPreStep(t, s, msgs)
 	if res == "" {
@@ -193,12 +193,12 @@ func TestCompactionLLMFailureDegrades(t *testing.T) {
 	}
 }
 
-// TestCompactionEmergencyRetainLast 溢出紧急压缩：保留最后 1 条、截断式摘要、
+// TestCompactionBasicEmergencyRetainLast 溢出紧急压缩：保留最后 1 条、截断式摘要、
 // 返回 {"retry": true}；非溢出错误码不触发。
-func TestCompactionEmergencyRetainLast(t *testing.T) {
-	s := newTestCompactionServer(t, 1000) // 阈值 800：估算 1800 ≥ 阈值
-	s.retainMin = 2000                    // 保留预算盖过全部消息 → pre-step 不动作（全部落保留区）
-	msgs := bigMsgs(6, 1200)              // 每条 300 token，共 1800
+func TestCompactionBasicEmergencyRetainLast(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 1000) // 阈值 800：估算 1800 ≥ 阈值
+	s.retainMin = 2000                         // 保留预算盖过全部消息 → pre-step 不动作（全部落保留区）
+	msgs := bigMsgs(6, 1200)                   // 每条 300 token，共 1800
 	// 第一次 pre-step：估算超阈值但保留区覆盖全部 → 不改写
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("all-in-retain pre-step must not rewrite, got %q", res)
@@ -229,9 +229,9 @@ func TestCompactionEmergencyRetainLast(t *testing.T) {
 	}
 }
 
-// TestCompactionSmallHistoryNoOp 消息太少/用量低：零开销不改写。
-func TestCompactionSmallHistoryNoOp(t *testing.T) {
-	s := newTestCompactionServer(t, 10000)
+// TestCompactionBasicSmallHistoryNoOp 消息太少/用量低：零开销不改写。
+func TestCompactionBasicSmallHistoryNoOp(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000)
 	msgs := bigMsgs(3, 400) // 300 token << 8000
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("small history must not rewrite, got %q", res)
