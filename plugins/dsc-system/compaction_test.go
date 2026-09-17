@@ -106,7 +106,7 @@ func TestCompactionDisabledByZeroWindow(t *testing.T) {
 // TestCompactionPressureLLMSummary 压力触发：超阈值时保留尾部、前段经 LLM 摘要、
 // 返回 {"messages":[...]}；同载荷重放复用状态（LLM 不再被调用）。
 func TestCompactionPressureLLMSummary(t *testing.T) {
-	s := newTestCompactionServer(t, 10000) // 阈值 4500；保留预算 max(1600,1024)=1600
+	s := newTestCompactionServer(t, 10000) // 阈值 8000；保留预算 max(1600,1024)=1600
 	fake := &fakeCompactionLLM{content: "LLM-SUMMARY"}
 	s.llm = fake
 
@@ -196,7 +196,7 @@ func TestCompactionLLMFailureDegrades(t *testing.T) {
 // TestCompactionEmergencyRetainLast 溢出紧急压缩：保留最后 1 条、截断式摘要、
 // 返回 {"retry": true}；非溢出错误码不触发。
 func TestCompactionEmergencyRetainLast(t *testing.T) {
-	s := newTestCompactionServer(t, 1000) // 阈值 450：估算 1800 ≥ 阈值
+	s := newTestCompactionServer(t, 1000) // 阈值 800：估算 1800 ≥ 阈值
 	s.retainMin = 2000                    // 保留预算盖过全部消息 → pre-step 不动作（全部落保留区）
 	msgs := bigMsgs(6, 1200)              // 每条 300 token，共 1800
 	// 第一次 pre-step：估算超阈值但保留区覆盖全部 → 不改写
@@ -232,7 +232,7 @@ func TestCompactionEmergencyRetainLast(t *testing.T) {
 // TestCompactionSmallHistoryNoOp 消息太少/用量低：零开销不改写。
 func TestCompactionSmallHistoryNoOp(t *testing.T) {
 	s := newTestCompactionServer(t, 10000)
-	msgs := bigMsgs(3, 400) // 300 token << 4500
+	msgs := bigMsgs(3, 400) // 300 token << 8000
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("small history must not rewrite, got %q", res)
 	}

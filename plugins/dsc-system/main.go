@@ -51,7 +51,7 @@ func main() {
 	skillStore, skillInstalledDir := newSkillResident()
 	sdk := dsc.New(dsc.Config{
 		Name:    "dsc-system",
-		Version: "1.5.0",
+		Version: "1.5.1",
 		Type:    dsc.TypeDsc,
 		// 声明压缩后端能力：config.yaml 的 compaction: dsc-system 选中时，
 		// 宿主 registerDscCoreLocked 验证此声明并标记后端生效

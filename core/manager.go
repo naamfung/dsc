@@ -2486,14 +2486,15 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
 	// config.yaml 中 compaction 字段显式选择后端，宿主验证该
 	// 插件声明了 Provides: {"compaction": "true"} 能力。验证通过后仅记日志——
 	// 不再设环境变量（env 不能跨进程动态同步，导致动态加载/卸载与 agent env 快照
-	// 不同步）。后端接管经 agent/pre-step 事件机制：有后端时 pre-step 改写消息列表
-	// （45% 阈值主动压缩），agent 内联压缩（80% 阈值）作为兜底安全网——两者不冲突：
-	// 后端在 45% 压缩后用量下降，80% 永不触发；后端卸载后 80% 自动恢复为唯一路径。
+	// 不同步）。后端接管经 agent/pre-step 事件机制：有后端时 pre-step 按后端自身阈值
+	// （默认 80%，对齐 compaction-basic）改写消息列表，agent 经
+	// [DSC_COMPACTION_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩（同为 80% 阈值）——
+	// 接管靠能力声明驱动、与阈值无关；后端卸载 → 标记消失 → 内联自动恢复为唯一路径。
 	if m.compactionBackend != "" && m.compactionBackend == name {
 		if info != nil && len(info.Capabilities) > 0 {
 			if v, ok := info.Capabilities["compaction"]; ok && v != "false" {
 				m.logger.Info("compaction backend selected", "backend", name,
-					"mode", "pre-step event takeover, agent inline compaction as fallback")
+					"mode", "pre-step event takeover, agent inline compaction skipped while backend active")
 			} else {
 				m.logger.Error("compaction backend does not declare compaction capability (Provides compaction)",
 					"backend", name, "hint", "plugin must declare Provides: {\"compaction\": \"true\"} in SDK Config")

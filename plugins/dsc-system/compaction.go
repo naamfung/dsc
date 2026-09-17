@@ -4,7 +4,9 @@
 // 同一协议，agent 与协议零改动）：
 //
 //   - agent/pre-step（waterfall 拦截）：收到本步消息列表（MessagesJSON）；
-//     估算用量超过阈值（默认窗口 45%，先于 agent 内联 80% 兜底触发）时保留尾部
+//     估算用量超过阈值（默认窗口 80%，对齐 compaction-basic 压力语义；agent 经
+//     [DSC_COMPACTION_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩——接管靠
+//     能力声明驱动，与阈值无关）时保留尾部
 //     （RetainRatio / RetainTokensMin 取大），把未压缩前段经 LLM 生成摘要
 //     （interconnect 聚合 LLM；未互联或调用失败退化为截断式摘要），以
 //     {"messages": [...]} 返回改写后的消息列表。
@@ -19,7 +21,8 @@
 //
 // 配置（DSC_ 前缀 env 白名单天然可见）：
 //   - DSC_COMPACTION_CONTEXT_WINDOW  上下文窗口 token 数（默认 131072；0 = 驻留禁用）
-//   - DSC_COMPACTION_THRESHOLD       触发阈值比例（默认 0.45，接管语义：先于 agent 80%）
+//   - DSC_COMPACTION_THRESHOLD       触发阈值比例（默认 0.80，对齐 compaction-basic；
+//     可调，与接管机制无关）
 //   - DSC_COMPACTION_RETAIN_RATIO    保留尾部比例（默认 0.16）
 //   - DSC_COMPACTION_RETAIN_MIN      保留尾部最少 token 数（默认 1024）
 //   - DSC_COMPACTION_DIR             状态目录覆盖（缺省 ExecDir/compaction）
@@ -90,7 +93,7 @@ type compactionServer struct {
 func newCompactionServer() *compactionServer {
 	s := &compactionServer{
 		window:      131072,
-		threshold:   0.45,
+		threshold:   0.80,
 		retainRatio: 0.16,
 		retainMin:   1024,
 	}
@@ -197,7 +200,7 @@ func (s *compactionServer) handlePreStep(ctx context.Context, dataJSON string) (
 	}
 	if retainIdx >= len(msgs) || retainIdx <= base {
 		// 可压缩段已被既有记录覆盖（或全部落在保留区）：尽力返回当前改写；
-		// 用量仍超阈值时 agent 内联 80% 压缩仍是最终兜底
+		// 用量仍超阈值时溢出紧急压缩（agent/request-error）仍是安全阀
 		if len(records) > 0 {
 			return rewriteJSON(rewritten)
 		}

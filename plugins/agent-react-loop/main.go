@@ -100,7 +100,7 @@ type ReactLoopAgent struct {
 	sysPrompt string
 
 	// hasCompactionBackend 宿主是否有 compaction 后端插件接管（经 ListContext 标记检测）。
-	// 有后端时跳过内联 compactHistory（后端在 pre-step 以更低阈值接管）；
+	// 有后端时跳过内联 compactHistory（后端在 pre-step 以自身策略阈值接管）；
 	// 无后端时走内联压缩。每轮 buildSystemPrompt 时更新（ListContext 响应实时反映插件生命周期）。
 	hasCompactionBackend bool
 
@@ -1060,7 +1060,7 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 		listContextContent := strings.TrimSpace(resp.GetContent())
 		if listContextContent != "" {
 			// 检测 compaction 后端标记（宿主 ListContext 追加 [DSC_COMPACTION_BACKEND_ACTIVE]）
-			// 有后端时跳过内联 compactHistory——后端在 pre-step 以更低阈值接管。
+			// 有后端时跳过内联 compactHistory——后端在 pre-step 以自身策略阈值接管。
 			// 此检测每轮 buildSystemPrompt 执行，与插件生命周期同步：
 			// 后端加载 → 标记出现 → 跳过内联；后端卸载 → 标记消失 → 恢复内联。
 			a.hasCompactionBackend = strings.Contains(listContextContent, "[DSC_COMPACTION_BACKEND_ACTIVE]")

@@ -519,7 +519,7 @@ func TestCompactionE2E(t *testing.T) {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 
-	// 2. 拉起插件进程：小窗口（阈值 450）+ 状态目录隔离到临时区
+	// 2. 拉起插件进程：小窗口（阈值 800）+ 状态目录隔离到临时区
 	stateDir := filepath.Join(dir, "compaction-state")
 	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(),
@@ -545,7 +545,7 @@ func TestCompactionE2E(t *testing.T) {
 	ctx := context.Background()
 	hook := proto.NewPluginHookServiceClient(conn)
 
-	// 3. pre-step：6 条约 300 token 的消息（共 1800 ≥ 450）——未走紧急压缩前
+	// 3. pre-step：6 条约 300 token 的消息（共 1800 ≥ 800）——未走紧急压缩前
 	//    不改写（默认保留预算 1024 未覆盖全部时不触发该分支，此处窗口 1000 下
 	//    保留预算 max(160,1024)=1024 < 1800，会直接压缩；为验证紧急路径，
 	//    用更低估算让首步走「未达阈值」分支不可行——改验：首步直接压缩也可，
