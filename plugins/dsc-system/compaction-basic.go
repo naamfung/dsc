@@ -5,7 +5,7 @@
 //
 //   - agent/pre-step（waterfall 拦截）：收到本步消息列表（MessagesJSON）；
 //     估算用量超过阈值（默认窗口 80%，对齐 compaction-basic 压力语义；agent 经
-//     [DSC_COMPACTION_BASIC_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩——接管靠
+//     [DSC_COMPACTION_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩——接管靠
 //     能力声明驱动，与阈值无关）时保留尾部
 //     （RetainRatio / RetainTokensMin 取大），把未压缩前段经 LLM 生成摘要
 //     （interconnect 聚合 LLM；未互联或调用失败退化为截断式摘要），以

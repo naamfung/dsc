@@ -19,7 +19,7 @@
 //   - compaction-basic.go 基础上下文压缩（自宿主 core/compaction.go 迁入，对齐 DSH
 //     compaction-basic：agent/pre-step 压力驱动改写消息列表 + agent/request-error
 //     溢出紧急压缩重试；LLM 摘要经 interconnect，未互联退化截断式；
-//     config.yaml compaction-basic: dsc-system 选其为本插件后端）
+//     config.yaml compaction: dsc-system 选其为本插件后端）
 //   - reminder.go       重复工具调用提醒（对齐 DSH guard/repeat-tool-reminder，
 //     advisory 形态：只产出 notice，不否决/不改写）
 //   - skill.go          技能工具（自 tool-skill 迁入：skill / install_skill /
@@ -51,13 +51,13 @@ func main() {
 	skillStore, skillInstalledDir := newSkillResident()
 	sdk := dsc.New(dsc.Config{
 		Name:    "dsc-system",
-		Version: "1.5.2",
+		Version: "1.5.3",
 		Type:    dsc.TypeDsc,
-		// 声明压缩后端能力：config.yaml 的 compaction-basic: dsc-system 选中时，
+		// 声明压缩后端能力：config.yaml 的 compaction: dsc-system 选中时，
 		// 宿主 registerDscCoreLocked 验证此声明并标记后端生效
 		//（对齐 DSH preset compaction group 的能力验证）。
 		Provides: map[string]string{
-			"compaction-basic": "true",
+			"compaction": "true",
 		},
 	})
 	// 通用类型叠加 policy 服务：宿主按 PluginInfo.services 的 "policy" 声明，

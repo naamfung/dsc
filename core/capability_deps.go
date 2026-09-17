@@ -245,7 +245,7 @@ func (m *Manager) HasPluginRequiringCapability(providerType, capability string) 
 
 // HasPluginProvidingCapability 报告是否有任何已加载的插件在 PluginInfo.Capabilities
 // 中声明了指定能力（普通能力键，非 requires/ 前缀）。供宿主检测后端接管——
-// 如 billion-context 声明 Provides: {"compaction-basic": "true"}，宿主检测到后设
+// 如 billion-context 声明 Provides: {"compaction": "true"}，宿主检测到后设
 // 供宿主查询是否有插件声明了提供压缩能力。线程安全。
 func (m *Manager) HasPluginProvidingCapability(capability string) bool {
 	m.mu.RLock()

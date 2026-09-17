@@ -23,8 +23,8 @@ DSC 上下文管理插件：以 [acp-kernel](https://github.com/ranxianglei/acp-
 
 ## 接管流程
 
-1. 用户在 `config.yaml` 中声明 `compaction-basic: dsc-billion-context` 显式选择后端
-2. 宿主验证插件声明了 `Provides: {"compaction-basic": "true"}` 能力（对齐 DSH preset + 能力验证）
+1. 用户在 `config.yaml` 中声明 `compaction: dsc-billion-context` 显式选择后端
+2. 宿主验证插件声明了 `Provides: {"compaction": "true"}` 能力（对齐 DSH preset + 能力验证）
 3. 插件经 `Hook.ContextFn` 贡献 ACP system prompt（压缩哲学、何时压缩、工具使用说明、蒸馏规则）
 4. agent 每轮 `buildSystemPrompt` 经 `ListContext` 拉取 ACP 指导（对齐 DSH `ctx.systemPrompt.section`）
 5. agent 发起 LLM 请求前，宿主 emit `agent/pre-step` 事件
@@ -61,7 +61,7 @@ DSC 上下文管理插件：以 [acp-kernel](https://github.com/ranxianglei/acp-
 
 agent-react-loop 的内联 `compactHistory`（80% 阈值）作为**兜底安全网**保留：
 - billion-context 在 45% 阈值主动 nudge 模型压缩，使 80% 正常不被触发
-- agent 经 `ListContext` 响应中的 `[DSC_COMPACTION_BASIC_BACKEND_ACTIVE]` 标记检测后端存在
+- agent 经 `ListContext` 响应中的 `[DSC_COMPACTION_BACKEND_ACTIVE]` 标记检测后端存在
 - 后端卸载后标记消失，agent 自动恢复内联压缩
 - 不依赖 env 或跨进程状态同步——`ListContext` 每轮实时反映插件生命周期
 
@@ -69,7 +69,7 @@ agent-react-loop 的内联 `compactHistory`（80% 阈值）作为**兜底安全�
 
 在 `config.yaml` 中声明：
 ```yaml
-compaction-basic: dsc-billion-context
+compaction: dsc-billion-context
 plugins:
   - name: dsc-billion-context
     type: dsc

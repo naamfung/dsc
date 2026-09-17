@@ -46,12 +46,12 @@ type Config struct {
 	HotReload bool `json:"hot_reload" yaml:"hot_reload"`
 	// CompactionBasic 显式声明压缩后端（对齐 DSH preset 的 compaction group）：
 	//   ""             — 默认：agent 走内联 compactHistory（向后兼容）
-	//   后端插件名      — 使用该插件的压缩接管（插件需声明 Provides compaction-basic 能力：
+	//   后端插件名      — 使用该插件的压缩接管（插件需声明 Provides compaction 能力：
 	//                     dsc-system 基础压缩 / dsc-billion-context ACP 接管），
 	//                     宿主 registerDscCoreLocked 验证能力声明；接管经
 	//                     agent/pre-step 事件机制（后端主动压缩，agent 内联兜底）
 	// 对齐 DSH：preset YAML 显式挂 compaction-basic 或其他后端。
-	CompactionBasic string `json:"compaction-basic" yaml:"compaction-basic"`
+	Compaction string `json:"compaction" yaml:"compaction"`
 }
 
 type PluginEntry struct {

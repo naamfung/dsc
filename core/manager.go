@@ -150,11 +150,11 @@ type Manager struct {
 	// logFanout 宿主/插件日志扇出，供 ADMIN /logs SSE 消费；由 ManagerConfig 注入。
 	logFanout *LogFanout
 
-	// compactionBasicBackend config.yaml 中显式声明的压缩后端插件名（对齐 DSH preset
+	// compactionBackend config.yaml 中显式声明的压缩后端插件名（对齐 DSH preset
 	// 的 compaction group）。registerDscCoreLocked 检测插件名匹配时验证其
-	// Provides compaction-basic 能力声明；空串 = 默认（agent 走内联压缩，后端经
+	// Provides compaction 能力声明；空串 = 默认（agent 走内联压缩，后端经
 	// pre-step 事件接管——压缩引擎已插件化，见 plugins/dsc-system/compaction-basic.go）。
-	compactionBasicBackend string
+	compactionBackend string
 }
 
 type ManagerConfig struct {
@@ -1599,9 +1599,9 @@ func (m *Manager) ListContext(ctx context.Context) (string, error) {
 			parts = append(parts, content)
 		}
 	}
-	// compaction-basic 后端状态标记（对齐 DSH ctx.compaction Service 的运行时查询）
-	if m.HasPluginProvidingCapability("compaction-basic") {
-		parts = append(parts, "[DSC_COMPACTION_BASIC_BACKEND_ACTIVE]")
+	// compaction 后端状态标记（对齐 DSH ctx.compaction Service 的运行时查询）
+	if m.HasPluginProvidingCapability("compaction") {
+		parts = append(parts, "[DSC_COMPACTION_BACKEND_ACTIVE]")
 	}
 	return strings.Join(parts, "\n\n"), nil
 }
@@ -1961,7 +1961,7 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
 	defer m.mu.Unlock()
 
 	// 保存显式声明的压缩后端插件名（供 registerDscCoreLocked 匹配检测）
-	m.compactionBasicBackend = cfg.CompactionBasic
+	m.compactionBackend = cfg.Compaction
 
 	// 版本感知解析：各插件目录内若存在「<目录基名>-v<版本><ext>」的更高版本二进制，
 	// 启动即直接加载最高版本，避免先起基线进程再由 watcher 换新（Windows 下运行中的
@@ -2477,21 +2477,21 @@ func (m *Manager) registerDscCoreLocked(name string, info *metadata.PluginInfo, 
 		// len(st.tools) == 0：插件无工具（如 dsc-notify），不登记 tool provider。
 	}
 	// 压缩后端检测（对齐 DSH preset compaction group + 能力验证）：
-	// config.yaml 中 compaction-basic 字段显式选择后端，宿主验证该
-	// 插件声明了 Provides: {"compaction-basic": "true"} 能力。验证通过后仅记日志——
+	// config.yaml 中 compaction 字段显式选择后端，宿主验证该
+	// 插件声明了 Provides: {"compaction": "true"} 能力。验证通过后仅记日志——
 	// 不再设环境变量（env 不能跨进程动态同步，导致动态加载/卸载与 agent env 快照
 	// 不同步）。后端接管经 agent/pre-step 事件机制：有后端时 pre-step 按后端自身阈值
 	// （默认 80%，对齐 compaction-basic）改写消息列表，agent 经
-	// [DSC_COMPACTION_BASIC_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩（同为 80% 阈值）——
+	// [DSC_COMPACTION_BACKEND_ACTIVE] 标记检测到后端即跳过内联压缩（同为 80% 阈值）——
 	// 接管靠能力声明驱动、与阈值无关；后端卸载 → 标记消失 → 内联自动恢复为唯一路径。
-	if m.compactionBasicBackend != "" && m.compactionBasicBackend == name {
+	if m.compactionBackend != "" && m.compactionBackend == name {
 		if info != nil && len(info.Capabilities) > 0 {
-			if v, ok := info.Capabilities["compaction-basic"]; ok && v != "false" {
-				m.logger.Info("compaction-basic backend selected", "backend", name,
+			if v, ok := info.Capabilities["compaction"]; ok && v != "false" {
+				m.logger.Info("compaction backend selected", "backend", name,
 					"mode", "pre-step event takeover, agent inline compaction skipped while backend active")
 			} else {
-				m.logger.Error("compaction-basic backend does not declare compaction-basic capability (Provides compaction-basic)",
-					"backend", name, "hint", "plugin must declare Provides: {\"compaction-basic\": \"true\"} in SDK Config")
+				m.logger.Error("compaction backend does not declare compaction capability (Provides compaction)",
+					"backend", name, "hint", "plugin must declare Provides: {\"compaction\": \"true\"} in SDK Config")
 			}
 		}
 	}
