@@ -51,6 +51,13 @@ func ToCoreMessages(protoMsgs []*proto.Message, idProvider func(idx int, msg *pr
 		default: // user
 			cm.ContentType = bcacp.ContentTypeText
 		}
+		// 工具调用与图像引用保真透传（改写往返不丢结构化字段）
+		for _, tc := range pm.ToolCalls {
+			cm.ToolCalls = append(cm.ToolCalls, bcacp.CoreToolCall{ID: tc.Id, Name: tc.Name})
+		}
+		if len(pm.Images) > 0 {
+			cm.Images = append([]string(nil), pm.Images...)
+		}
 		out = append(out, cm)
 	}
 	return out
@@ -67,6 +74,13 @@ func FromCoreMessages(coreMsgs []bcacp.CoreMessage) []*proto.Message {
 		}
 		if cm.ToolCallID != "" {
 			pm.ToolCallId = cm.ToolCallID
+		}
+		// 工具调用与图像引用保真还原（缺失即破坏 provider 端协议）
+		for _, tc := range cm.ToolCalls {
+			pm.ToolCalls = append(pm.ToolCalls, &proto.ToolCall{Id: tc.ID, Name: tc.Name})
+		}
+		if len(cm.Images) > 0 {
+			pm.Images = append([]string(nil), cm.Images...)
 		}
 		out = append(out, pm)
 	}

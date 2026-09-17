@@ -2,7 +2,6 @@ package acp
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -34,51 +33,31 @@ type SearchResult struct {
 	EndRef   string `json:"endRef"`
 }
 
-// Search 在所有 active 块的 summary 中搜索关键词（子串匹配，对齐 acp-kernel substring 算法）。
-// 后续可升级为 BM25 / fuzzy。
-//
-// 关键词按空格分割；命中次数越多分数越高。返回按 score 降序。
+// Search 在所有 active 块的 summary 中搜索关键词（升级：hybrid BM25+fuzzy
+// 打分，对齐 acp-kernel 默认检索算法；接口与 active-only 语义保持不变，
+// 全量文档集版本见 SearchBlocks + BlockDocs/MessageDocs）。
 func Search(query string, state *CompressionState, limit int) []SearchResult {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil
+	docs := BlockDocs(state)
+	scored := SearchBlocks(docs, query, SearchOptions{Limit: limit})
+	out := make([]SearchResult, 0, len(scored))
+	for _, s := range scored {
+		out = append(out, SearchResult{
+			BlockID:  s.BlockID,
+			Topic:    s.Title,
+			Summary:  s.Preview,
+			Score:    int(s.Score * 100),
+			StartRef: s.Ref,
+			EndRef:   s.Ref,
+		})
 	}
-	keywords := strings.Fields(strings.ToLower(query))
-	if len(keywords) == 0 {
-		return nil
-	}
-
-	var results []SearchResult
-	for _, b := range state.Blocks {
-		if !b.Active {
-			continue
-		}
-		score := 0
-		haystack := strings.ToLower(b.Summary + " " + b.Topic)
-		for _, kw := range keywords {
-			if strings.Contains(haystack, kw) {
-				score++
-			}
-		}
-		if score > 0 {
-			results = append(results, SearchResult{
-				BlockID:  b.BlockID,
-				Topic:    b.Topic,
-				Summary:  b.Summary,
-				Score:    score,
-				StartRef: b.StartRef,
-				EndRef:   b.EndRef,
-			})
+	// 回填整块 startRef/endRef（bN 自身即范围）
+	for k := range out {
+		if b := state.BlockByID(out[k].BlockID); b != nil {
+			out[k].Summary = b.Summary
+			out[k].Topic = b.Topic
 		}
 	}
-
-	// 按 score 降序
-	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-
-	if limit > 0 && len(results) > limit {
-		results = results[:limit]
-	}
-	return results
+	return out
 }
 
 // StatusReport 上下文状态报告（对齐 acp-kernel StatusReport）。

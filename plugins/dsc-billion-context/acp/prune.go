@@ -54,6 +54,7 @@ func ApplyCompression(ranges []PruneRange, messages []CoreMessage, state *Compre
 	// 压缩成功后重置 nudge baseline（防反馈循环：避免压缩后立即重新 nudge）
 	if result.BlocksCreated > 0 {
 		state.Nudge.BaselineTokens = 0
+		state.TerminalStreak = 0 // 成功压缩即 viable progress，重启逃逸连击（#300）
 	}
 	return state, result
 }
@@ -333,7 +334,7 @@ func RenderMessages(messages []CoreMessage, state *CompressionState, config Conf
 
 	// 收集每个 active 块的 summary 锚点：优先用已渲染 summary 的位置（保持稳定），
 	// 否则用块覆盖范围的最早消息索引
-	anchors := collectSummaryAnchors(state, indexByID, summaryIndexByID)
+	anchors := collectSummaryAnchors(messages, state, indexByID, summaryIndexByID)
 
 	// 重建消息列表：在锚点位置插入 summary，跳过被覆盖的原始消息
 	out := rebuildMessagesWithAnchors(messages, covered, firstUserIndex, anchors)
@@ -479,9 +480,52 @@ type summaryAnchor struct {
 	insertAt int
 }
 
+// pairSafeAnchorIndex 把锚点索引校正到「provider 校验单元」边界之外
+// (对齐 acp-kernel prune.ts pairSafeAnchorIndex，含 v0.0.71 assistant-run 规则 2f60bfb)：
+//   - 并行工具突发：锚点不得落在 assistant tool-call 与其 tool-result 之间——
+//     严格上游整体拒绝该形态，锚点被移到越界 result 之后；
+//   - assistant 连续 run（reasoning + text + tool_calls 合为一条 wire 消息）：
+//     锚点落在 run 内部会拆散消息（DeepSeek thinking 模式拒绝缺失 reasoning
+//     的 tool_calls）——锚点回退到 run 起点。
+//
+// 循环达不动点；上限只防畸形消息列表。
+func pairSafeAnchorIndex(messages []CoreMessage, index int) int {
+	safe := index
+	for safe > 0 && safe < len(messages) &&
+		messages[safe-1].Role == RoleAssistant && messages[safe].Role == RoleAssistant {
+		safe--
+	}
+	resultIndexByCallID := map[string]int{}
+	for i, m := range messages {
+		if m.ContentType == ContentTypeToolResult && m.ToolCallID != "" {
+			if _, seen := resultIndexByCallID[m.ToolCallID]; !seen {
+				resultIndexByCallID[m.ToolCallID] = i
+			}
+		}
+	}
+	for guard := 0; guard < len(messages); guard++ {
+		moved := false
+		for i := 0; i < safe && i < len(messages); i++ {
+			m := messages[i]
+			if m.ContentType != ContentTypeToolCall || m.ToolCallID == "" {
+				continue
+			}
+			if rIdx, ok := resultIndexByCallID[m.ToolCallID]; ok && rIdx >= safe {
+				safe = rIdx + 1
+				moved = true
+			}
+		}
+		if !moved {
+			break
+		}
+	}
+	return safe
+}
+
 // collectSummaryAnchors 收集每个 active 块的 summary 锚点（对齐 acp-kernel collectSummaryAnchors）。
-// 优先用已渲染 summary 的位置（保持稳定）；否则用块覆盖范围的最早消息索引。
-func collectSummaryAnchors(state *CompressionState, indexByID, summaryIndexByID map[string]int) []summaryAnchor {
+// 优先用已渲染 summary 的位置（保持稳定，不再校正）；否则用块覆盖范围的最早
+// 消息索引作为回退锚点，并经 pairSafeAnchorIndex 校正后落位。
+func collectSummaryAnchors(messages []CoreMessage, state *CompressionState, indexByID, summaryIndexByID map[string]int) []summaryAnchor {
 	var anchors []summaryAnchor
 	for _, b := range state.ActiveBlocks() {
 		// 优先：已渲染 summary 的位置（前缀稳定的关键）
@@ -504,6 +548,7 @@ func collectSummaryAnchors(state *CompressionState, indexByID, summaryIndexByID 
 		if earliest < 0 {
 			earliest = 0
 		}
+		earliest = pairSafeAnchorIndex(messages, earliest)
 		anchors = append(anchors, summaryAnchor{
 			blockID:  b.BlockID,
 			summary:  b.Summary,

@@ -97,11 +97,40 @@ plugins:
 - 4 个工具 handler
 - 18 个单元测试
 
-## 留待后续
+## 与 acp-kernel v0.0.75 的对齐（0.3.0 完工）
 
-- absorb 即时工具结果吸收
-- fork/恢复时 state 重建（经 session 事件日志重放）
-- BM25 / fuzzy 搜索
-- merge-blocks 节点（批量合并 old 块）
-- hide-compress-calls（隐藏已消费 compress 调用）
-- emergency-truncate（近满时截断大工具输出）
+「留待后续」六项全部落地（对照上游算法实现，非逐行移植）：
+
+- **absorb 即时工具结果吸收**：`absorb` 第五工具（`DSC_ACP_ABSORB=1` 启用）——
+  达标大工具结果每轮追加 `[ACP absorb]` 强制提示；模型蒸馏后消息对在下一轮
+  pre-step 隐藏，摘要成为唯一持久记录（对齐 absorb.ts 全流程：候选判定/
+  宽松参数解析/膨胀警告/隐藏两半）
+- **fork/恢复 state 重建**：消息列表即事件日志——重建按首次见到顺序重排 ref
+  （原始历史完整时逐位一致），依序重放 compress 调用链（args 范围 + 结果
+  blocksCreated 校验），块与 callId 全量还原；state 空白而历史有压缩痕迹时
+  自动触发
+- **BM25 / fuzzy 混合检索**：search_context 升级为 hybrid（0.7×归一化
+  BM25(stem) + 0.3×fuzzy 字符 bigram，对齐上游默认算法与基准权重）；文档集
+  = active 块摘要 + 历史消息原文（命中消息携带归属块 → 直接 decompress）；
+  CJK 走上游文档化 OOV 兜底（bigram+单字，Go 无 CLDR 词典的有意取舍）
+- **hide-compress-calls**：被块消费的 compress 调用对隐藏；孤儿调用保留最新
+  两对（失败可观察 + 残留封顶，对齐上游 #9 风暴修复）；存活调用 args 内
+  重复 summary 压为 200 字符存根（上游 #336 实测仅重复即 ~22K token）；
+  块的 compressCallId 由 pre-step 依范围精确匹配从历史回填
+- **emergency-truncate**：占用 ≥95% 时截断超大工具输出为「前缀+标记+后缀」
+  （降到目标线即停、近端 5 条保护、文本消息为最后手段、渲染 summary 永不
+  触碰、rune 边界安全——对齐 #816 surrogate 中毒修复的 Go 等价）；terminal
+  escape 信号（#300）同步落地：连续 3 轮近满无解零收益 → 单次逃逸信号
+- **merge-blocks（批量合并 old 块）**：上游现行版已以「模型驱动 bN 蒸馏 +
+  recommend 门控合并」取代自动合并节点——本插件经 T2/T3 nudge 触发蒸馏
+  （既有）+ `MergeRangesToThreshold`（新增，#309 尾部门控：按真实字符量
+  批量合并、尾部并入前批、整段低于门不出推荐）承载同一语义
+
+同步落地的上游修复：prune 锚点防裂（v0.0.71 2f60bfb：assistant 连续 run 与
+并行工具突发内部不落锚）、sync-blocks 节点（消费/展开/缺席停用 + summary 在场
+保持活性）、adapter 工具调用与图像引用保真往返（改写输出不再丢 ToolCalls/
+Images——此前会破坏 provider 端 tool-call 协议）。
+
+仍未引入（有意）：cache-report（acp_cache 工具，属流式宿主记账面）、wire
+codec / transform-channel / filter（dsc 无对应配置面）、语义向量检索（无嵌入
+通路）、per-tier nudge cadence（现用 baseline+增长门控，行为等价已够）。

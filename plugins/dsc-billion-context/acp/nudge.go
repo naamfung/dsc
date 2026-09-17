@@ -18,6 +18,9 @@ type NudgeDecision struct {
 	//   2    — T1 块数达 Tier2Trigger，提示蒸馏为 T2
 	//   3    — T2 块数达 Tier3Trigger，提示凝结为 T3
 	Tier *CompressionTier `json:"tier,omitempty"`
+	// RecommendedRanges 经 MergeRangesToThreshold 合并后的推荐范围
+	//（每批各自越过 MinCompressRangeChars——推荐永不低于 apply 侧最小门，#309）
+	RecommendedRanges []CompressibleRange `json:"recommendedRanges,omitempty"`
 	// TierTargetBlocks 待蒸馏的目标块列表（对齐 acp-kernel tierTargetBlocks）。
 	// 模型在 compress 调用中用这些块的 bN 作为 startId/endId。
 	TierTargetBlocks []CompressionBlock `json:"tierTargetBlocks,omitempty"`
@@ -29,6 +32,7 @@ type CompressibleRange struct {
 	EndRef   string `json:"endRef"`
 	Count    int    `json:"count"`
 	Tokens   int    `json:"tokens"`
+	Chars    int    `json:"chars"` // 真实字符量（minCompressRange 记账单位，对齐 #309）
 }
 
 // DecideNudge 决策是否注入 nudge 提示（对齐 acp-kernel decideNudge）。
@@ -74,14 +78,13 @@ func DecideNudge(messages []CoreMessage, state *CompressionState, config Config,
 	decision.Breakdown["growthFloor"] = growthFloor
 	decision.Breakdown["baselineTokens"] = state.Nudge.BaselineTokens
 
-	// 计算可压缩范围
+	// 计算可压缩范围，并按最小字符量门合并（#309：推荐永不低于 apply 侧最小门）
 	ranges := ComputeCompressibleRanges(messages, state, config)
 	decision.CompressibleRanges = ranges
 	decision.Breakdown["compressibleRanges"] = len(ranges)
-	if len(ranges) == 0 {
-		decision.Reason = "no compressible ranges"
-		return decision
-	}
+	recommended := MergeRangesToThreshold(ranges, config.MinCompressRangeChars)
+	decision.RecommendedRanges = recommended
+	decision.Breakdown["recommendedRanges"] = len(recommended)
 
 	// 检查 T2/T3 蒸馏触发条件（对齐 acp-kernel tier distillation）
 	// T2：active T1 块数达 Tier2Trigger
@@ -123,10 +126,17 @@ func DecideNudge(messages []CoreMessage, state *CompressionState, config Config,
 		return decision
 	}
 
+	// 全部条件满足：注入 nudge——标准 T1 路径要求存在越过最小门的推荐范围
+	//（#309：低于门的范围推荐出去只会被 apply 侧拒绝）；层级蒸馏路径不受
+	// 此门约束（蒸馏操作对象是块，与范围大小无关）
+	if len(recommended) == 0 {
+		decision.Reason = "no compressible ranges above the minimum size gate"
+		return decision
+	}
 	// 全部条件满足：注入 nudge
 	// 不暴露使用率百分比——只告诉模型有可压缩内容（对齐 ACP 设计）
 	decision.ShouldInject = true
-	decision.Reason = fmt.Sprintf("%d compressible ranges detected", len(ranges))
+	decision.Reason = fmt.Sprintf("%d compressible ranges detected", len(recommended))
 	return decision
 }
 
@@ -146,7 +156,7 @@ func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, 
 
 	// 收集可压缩消息的索引（连续段合并为 range）
 	var ranges []CompressibleRange
-	var curStart, curEnd, curTokens int
+	var curStart, curEnd, curTokens, curChars int
 	inRange := false
 
 	for i, msg := range messages {
@@ -157,7 +167,7 @@ func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, 
 		// 跳过已覆盖
 		if msg.ID != "" && covered[msg.ID] {
 			if inRange {
-				ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, state))
+				ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, curChars, state))
 				inRange = false
 			}
 			continue
@@ -165,7 +175,7 @@ func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, 
 		// 跳过受保护工具
 		if msg.ToolName != "" && protected[msg.ToolName] {
 			if inRange {
-				ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, state))
+				ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, curChars, state))
 				inRange = false
 			}
 			continue
@@ -177,7 +187,7 @@ func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, 
 		// 形成"nudge→compress→error→再 nudge"的死循环。
 		if isRenderedSummary(msg) {
 			if inRange {
-				ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, state))
+				ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, curChars, state))
 				inRange = false
 			}
 			continue
@@ -190,15 +200,17 @@ func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, 
 		}
 		curEnd = i
 		curTokens += estimateTokensForText(msg.Text)
+		curChars += runeLen(msg.Text)
 	}
 	if inRange {
-		ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, state))
+		ranges = append(ranges, finalizeRange(messages, curStart, curEnd, curTokens, curChars, state))
 	}
 
-	// 合并过小的 range（< 500 token 不值得压缩）
+	// 过滤零 token 段；过小段的合并交给 MergeRangesToThreshold（#309
+	// 字符记账 + 尾部并入前批），此处不再按 token 硬切
 	filtered := ranges[:0]
 	for _, r := range ranges {
-		if r.Tokens >= 500 {
+		if r.Tokens > 0 {
 			filtered = append(filtered, r)
 		}
 	}
@@ -206,7 +218,7 @@ func ComputeCompressibleRanges(messages []CoreMessage, state *CompressionState, 
 }
 
 // finalizeRange 把 [startIdx, endIdx] 范围转为 CompressibleRange。
-func finalizeRange(messages []CoreMessage, startIdx, endIdx, tokens int, state *CompressionState) CompressibleRange {
+func finalizeRange(messages []CoreMessage, startIdx, endIdx, tokens, chars int, state *CompressionState) CompressibleRange {
 	startRef := ""
 	endRef := ""
 	count := 0
@@ -229,6 +241,7 @@ func finalizeRange(messages []CoreMessage, startIdx, endIdx, tokens int, state *
 		EndRef:   endRef,
 		Count:    count,
 		Tokens:   tokens,
+		Chars:    chars,
 	}
 }
 
@@ -269,12 +282,12 @@ func FormatNudgeText(d NudgeDecision) string {
 		return sb.String()
 	}
 
-	// 标准 T1 压缩提示
-	if len(d.CompressibleRanges) > 0 {
+	// 标准 T1 压缩提示（展示合并后的推荐范围——每批各自越过最小门）
+	if len(d.RecommendedRanges) > 0 {
 		sb.WriteString("Compressible ranges (call `compress` to reclaim context):\n")
 		// 按 tokens 降序，让模型优先压缩最大的范围
-		ranges := make([]CompressibleRange, len(d.CompressibleRanges))
-		copy(ranges, d.CompressibleRanges)
+		ranges := make([]CompressibleRange, len(d.RecommendedRanges))
+		copy(ranges, d.RecommendedRanges)
 		sort.Slice(ranges, func(i, j int) bool { return ranges[i].Tokens > ranges[j].Tokens })
 		for i, r := range ranges {
 			sb.WriteString(fmt.Sprintf("  %d. %s..%s (%d messages, ~%d tokens)\n",

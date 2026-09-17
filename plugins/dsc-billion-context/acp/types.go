@@ -42,6 +42,17 @@ type CoreMessage struct {
 	Text        string             `json:"text,omitempty"`
 	ToolName    string             `json:"toolName,omitempty"`
 	ToolCallID  string             `json:"toolCallId,omitempty"`
+	// ToolCalls assistant 消息承载的工具调用集（proto.ToolCalls 保真往返——
+	// 改写输出若丢失 ToolCalls，provider 端 tool-call 协议即被破坏）
+	ToolCalls []CoreToolCall `json:"toolCalls,omitempty"`
+	// Images 内容寻址图像引用（dsc-img:// 等，随消息透传不参与压缩决策）
+	Images []string `json:"images,omitempty"`
+}
+
+// CoreToolCall assistant 消息上的工具调用（proto.ToolCall 保真往返）。
+type CoreToolCall struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // CompressionTier 压缩块层级。
@@ -78,6 +89,12 @@ type CompressionBlock struct {
 	Active              bool            `json:"active"`
 	StartRef            string          `json:"startRef,omitempty"`
 	EndRef              string          `json:"endRef,omitempty"`
+	// CompressCallID 产出本块的 compress 工具调用 ID（hide-compress-calls 依此
+	// 区分「已被块消费的调用」与「孤儿调用」；pre-step 时从历史回填）
+	CompressCallID string `json:"compressCallId,omitempty"`
+	// Expanded 用户已显式 decompress 本块（宿主置位）：sync-blocks 保持其
+	// inactive，防止下一轮把已恢复的原始消息重新折叠（双倍成本 + 丢原文）
+	Expanded bool `json:"expanded,omitempty"`
 }
 
 // MessageRefMap message-id ↔ mNNNNN ref 双向映射。
@@ -98,6 +115,20 @@ type NudgeState struct {
 type CompressionStats struct {
 	TokensCompressed int `json:"tokensCompressed"`
 	CompressionCount int `json:"compressionCount"`
+	AbsorbedTokens   int `json:"absorbedTokens,omitempty"`
+}
+
+// AbsorbRecord 一次即时工具结果吸收（对齐 acp-kernel AbsorbRecord）：
+// tool-call + tool-result 对被记录后，后续 pre-step 经 hideAbsorbedMessages 隐藏，
+// 模型的 absorb 调用摘要成为唯一持久记录。
+type AbsorbRecord struct {
+	ToolCallID      string `json:"toolCallId"`
+	CallMessageID   string `json:"callMessageId"`
+	ResultMessageID string `json:"resultMessageId"`
+	AbsorbCallID    string `json:"absorbCallId,omitempty"`
+	Summary         string `json:"summary"`
+	TokensReclaimed int    `json:"tokensReclaimed"`
+	CreatedAt       int64  `json:"createdAt"`
 }
 
 // CompressionState acp 核心状态（显式传入传出，对齐 zip(data)→data 模型）。
@@ -107,8 +138,12 @@ type CompressionState struct {
 	MessageRefs MessageRefMap      `json:"messageRefs"`
 	Nudge       NudgeState         `json:"nudge"`
 	Stats       CompressionStats   `json:"stats"`
-	NextBlockID int                `json:"nextBlockId"`
-	NextRunID   int                `json:"nextRunId"`
+	// Absorbed 已吸收的工具结果记录（hide-absorbed 每轮隐藏对应消息对）
+	Absorbed []AbsorbRecord `json:"absorbed,omitempty"`
+	// TerminalStreak 近满无解连续计数（terminal-escape 信号，对齐 #300）
+	TerminalStreak int `json:"terminalStreak,omitempty"`
+	NextBlockID    int `json:"nextBlockId"`
+	NextRunID      int `json:"nextRunId"`
 }
 
 // Config 压缩配置（对齐 acp-kernel Config，精简版）。
@@ -119,6 +154,28 @@ type Config struct {
 	ProtectedTools     []string   `json:"protectedTools"`     // 受保护工具名（其 tool-call/result 不被压缩）
 	PromotionThreshold int        `json:"promotionThreshold"` // young→old 升级所需存活次数
 	Tiers              TierConfig `json:"tiers"`              // 多层蒸馏触发阈值
+	// MinCompressRangeChars 推荐范围的最小字符量（对齐 acp-kernel
+	// compress.minCompressRange，默认 5000）——mergeRangesToThreshold 把相邻范围
+	// 批量合并到该阈值之上，低于阈值的尾部并入前一批，整段低于阈值则不出推荐
+	MinCompressRangeChars int `json:"minCompressRangeChars"`
+	// TruncateThreshold 紧急截断触发线（上下文占用比例，默认 0.95——
+	// pipeline 最后的安全阀，晚于 nudge/压缩）
+	TruncateThreshold float64 `json:"truncateThreshold"`
+	// PreserveRecentMessages 紧急截断的近端保护条数（默认 5）
+	PreserveRecentMessages int `json:"preserveRecentMessages"`
+	// TerminalEscapeAfter 连续近满无解轮数达到该值时发出逃逸信号（默认 3，0 禁用）
+	TerminalEscapeAfter int `json:"terminalEscapeAfter"`
+	// Absorb 即时工具结果吸收配置（默认关闭，DSC_ACP_ABSORB=1 开启）
+	Absorb AbsorbConfig `json:"absorb"`
+}
+
+// AbsorbConfig 吸收配置（对齐 acp-kernel AbsorbConfig）。
+type AbsorbConfig struct {
+	Enabled             bool     `json:"enabled"`
+	ToolName            string   `json:"toolName"`            // 模型可见工具名（absorb）
+	MinToolTokens       int      `json:"minToolTokens"`       // 结果达到该 token 数才提示吸收（0=全部）
+	ContextThresholdPct float64  `json:"contextThresholdPct"` // 上下文占用达到该比例才提示（0=仅大小门控）
+	ExcludeTools        []string `json:"excludeTools"`        // 不可吸收的工具名（支持 * 后缀通配）
 }
 
 // TierConfig 多层蒸馏配置（对齐 acp-kernel TierConfig）。
@@ -142,6 +199,15 @@ func DefaultConfig(modelContextLimit int) Config {
 		Tiers: TierConfig{
 			Tier2Trigger: 5,  // T1 块数达 5 时蒸馏为 T2
 			Tier3Trigger: 10, // T2 块数达 10 时凝结为 T3
+		},
+		MinCompressRangeChars:  5000,
+		TruncateThreshold:      0.95,
+		PreserveRecentMessages: 5,
+		TerminalEscapeAfter:    3,
+		Absorb: AbsorbConfig{
+			Enabled:       false,
+			ToolName:      "absorb",
+			MinToolTokens: 1000,
 		},
 	}
 }

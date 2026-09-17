@@ -72,9 +72,20 @@ func main() {
 		config: bcacp.DefaultConfig(contextWindow),
 	}
 
+	// 即时工具结果吸收开关（默认关闭，DSC_ACP_ABSORB=1 启用）：
+	// 启用后达标大工具结果被追加强制提示，模型经 absorb 蒸馏后消息对被隐藏
+	if os.Getenv("DSC_ACP_ABSORB") == "1" {
+		bc.config.Absorb.Enabled = true
+		if n := os.Getenv("DSC_ACP_ABSORB_MIN_TOKENS"); n != "" {
+			if v, err := parseInt(n); err == nil && v >= 0 {
+				bc.config.Absorb.MinToolTokens = v
+			}
+		}
+	}
+
 	sdkInst := dsc.New(dsc.Config{
 		Name:    "dsc-billion-context",
-		Version: "0.2.1",
+		Version: "0.3.0",
 		Type:    dsc.TypeDsc,
 		// 声明提供 "compaction" 能力：宿主检测到任何插件 Provides compaction 后，
 		// 对齐 DSH preset 不挂 compaction-basic 改挂 billion-context 的后端替换模式——
@@ -130,7 +141,7 @@ func main() {
 		Schema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "query": {"type": "string", "description": "Keyword or phrase to search for in compressed block summaries (substring match)"},
+    "query": {"type": "string", "description": "Keyword or phrase to search in compressed summaries and history (hybrid BM25 + fuzzy match)"},
     "limit": {"type": "integer", "description": "Max results to return (default 5)", "default": 5, "minimum": 1, "maximum": 50}
   },
   "required": ["query"]
@@ -147,10 +158,32 @@ func main() {
 }`),
 	})
 
+	// 吸收工具（启用即时吸收时注册——模型侧第五个工具）
+	if bc.config.Absorb.Enabled {
+		sdkInst.Tool(dsc.Tool{
+			Name:        bc.config.Absorb.ToolName,
+			Description: "Distill a large tool result into a short summary. Call this IMMEDIATELY for any result marked [ACP absorb]; the original output is removed afterwards and your summary becomes the durable record.",
+			Handler:     bc.handleAbsorb,
+			Schema: json.RawMessage(`{
+			  "type": "object",
+			  "properties": {
+			    "ref": {"type": "string", "description": "The mNNNNN ref of the tool result to absorb"},
+			    "summary": {"type": "string", "description": "Distilled essentials: outcome, key values, exact paths:lines, error text verbatim, decisions"}
+			  },
+			  "required": ["ref", "summary"]
+			}`),
+		})
+	}
+
 	// Hook: 拦截 agent/pre-step 改写消息列表 + ContextFn 贡献 ACP system prompt
 	sdkInst.Hook(dsc.Hook{
-		OnEvent:   bc.onEvent,
-		ContextFn: func() string { return bcacp.ACPSystemPrompt },
+		OnEvent: bc.onEvent,
+		ContextFn: func() string {
+			if bc.config.Absorb.Enabled {
+				return bcacp.ACPSystemPrompt + "\n\n" + bcacp.BuildAbsorbSystemPrompt(bc.config.Absorb.ToolName)
+			}
+			return bcacp.ACPSystemPrompt
+		},
 	})
 
 	sdkInst.Serve()
@@ -275,6 +308,20 @@ func (bc *BillionContext) handlePreStep(ctx context.Context, dataJSON string) (s
 	bc.mu.Lock()
 	bc.lastMessages = coreMsgs
 	bc.mu.Unlock()
+
+	// fork/恢复重建：state 空白而历史已有 ACP 压缩痕迹（状态文件缺失/损坏、
+	// 会话 fork 换 ID、跨机恢复）——消息列表即事件日志，重放 compress 调用链
+	if len(state.Blocks) == 0 && state.Stats.CompressionCount == 0 && bcacp.HasACPStateTrace(coreMsgs) {
+		if rebuilt, n := bcacp.RebuildStateFromMessages(coreMsgs, bc.config); n > 0 {
+			state = rebuilt
+			fmt.Fprintf(os.Stderr, "[billion-context] state rebuilt from history: %d block(s) replayed\n", n)
+		}
+	}
+
+	// 回塔块的 compress 调用 ID：handleCompress 执行时调用对尚不在历史中，
+	// 下一轮 pre-step 依「范围精确匹配」把历史调用的 callId 记到块上
+	// （hide-compress-calls 依此区分已消费调用与孤儿调用）
+	backfillCompressCallIDs(coreMsgs, state)
 
 	// token 计数：优先用事件携带的宿主估算值（含工具结构开销），回退本地估算
 	tokenCount := ev.TokenCount
@@ -438,7 +485,16 @@ func (bc *BillionContext) handleSearch(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("load state: %w", err)
 	}
 
-	results := bcacp.Search(req.Query, state, req.Limit)
+	// 混合检索（BM25+fuzzy 归一化，对齐上游默认 hybrid）：文档集 = 块摘要
+	// + 历史消息原文（命中消息携带归属块——模型知道 decompress 哪个块）
+	bc.mu.Lock()
+	cachedMsgs := bc.lastMessages
+	bc.mu.Unlock()
+	docs := bcacp.BlockDocs(state)
+	if len(cachedMsgs) > 0 {
+		docs = append(docs, bcacp.MessageDocs(cachedMsgs, state)...)
+	}
+	results := bcacp.SearchBlocks(docs, req.Query, bcacp.SearchOptions{Limit: req.Limit})
 	out, _ := json.Marshal(map[string]any{
 		"ok":      true,
 		"query":   req.Query,
@@ -495,6 +551,65 @@ func estimateTokens(msgs []*proto.Message) int {
 // containsStr 报告 s 是否包含 sub（轻量实现，避免引入 strings 包）。
 func containsStr(s, sub string) bool {
 	return len(s) >= len(sub) && strings.Contains(s, sub)
+}
+
+// handleAbsorb 处理 absorb 工具调用：记录吸收，消息对下轮 pre-step 隐藏。
+func (bc *BillionContext) handleAbsorb(ctx context.Context, args json.RawMessage) (string, error) {
+	parsed := bcacp.ParseAbsorbInput(args, "")
+	if parsed == nil {
+		return "", fmt.Errorf("invalid args: need ref (string) + summary (string)")
+	}
+	sessionID := bc.getSessionID()
+	state, err := bc.store.Load(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("load state: %w", err)
+	}
+	bc.mu.Lock()
+	cachedMsgs := bc.lastMessages
+	bc.mu.Unlock()
+	outcome := bcacp.ApplyAbsorb(parsed.Ref, parsed.Summary, parsed.AbsorbCallID, cachedMsgs, state, bc.config)
+	if outcome.OK {
+		if err := bc.store.Save(sessionID, state); err != nil {
+			fmt.Fprintf(os.Stderr, "[billion-context] absorb save state failed: %v\n", err)
+		}
+	}
+	out, _ := json.Marshal(map[string]any{
+		"ok":     outcome.OK,
+		"result": outcome.ResultText,
+	})
+	return string(out), nil
+}
+
+// backfillCompressCallIDs 依范围精确匹配把历史 compress 调用的 callId 回塔到
+// 尚无调用标记的 active 块（refs 按首次见到顺序分配且永不改变，
+// 范围对即唯一键；同范围二次压缩会被块消费判定拒绝，不产生歧义）。
+func backfillCompressCallIDs(msgs []bcacp.CoreMessage, state *bcacp.CompressionState) {
+	pending := map[string]bool{}
+	for i := range state.Blocks {
+		b := &state.Blocks[i]
+		if b.Active && b.CompressCallID == "" && b.StartRef != "" {
+			pending[b.StartRef+"::"+b.EndRef] = true
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	for i := range msgs {
+		m := &msgs[i]
+		if m.ContentType != bcacp.ContentTypeToolCall || m.ToolName != "compress" || m.ToolCallID == "" {
+			continue
+		}
+		for _, r := range bcacp.ParseCompressArgs(m.Text) {
+			if pending[r.StartRef+"::"+r.EndRef] {
+				for j := range state.Blocks {
+					b := &state.Blocks[j]
+					if b.CompressCallID == "" && b.StartRef == r.StartRef && b.EndRef == r.EndRef {
+						b.CompressCallID = m.ToolCallID
+					}
+				}
+			}
+		}
+	}
 }
 
 // parseInt 轻量 string → int。

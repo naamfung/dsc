@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -188,6 +189,7 @@ func TestDecideNudge(t *testing.T) {
 	state := CreateInitialState()
 	config := DefaultConfig(10000) // 10K 窗口
 	config.NudgeThresholdPct = 0.45
+	config.MinCompressRangeChars = 0 // 关闭最小门：本测验证阈值门控，非范围大小门
 	// 构造足够长的消息（每条 > 500 token 才能进入可压缩范围）
 	longText := string(make([]byte, 2500)) // ~625 tokens (bytes/4)
 	for i := range longText {
@@ -226,11 +228,18 @@ func TestSearch(t *testing.T) {
 		{BlockID: "b2", Active: false, Topic: "old", Summary: "deprecated auth token"}, // inactive，不应被搜到
 	}
 	results := Search("auth token", state, 5)
-	if len(results) != 1 {
-		t.Fatalf("results = %d, want 1 (only active b0 matches)", len(results))
+	// hybrid 算法（BM25+fuzzy）下弱相关块可能带小分残留（fuzzy 召回通道），
+	// 核心断言：active 且强相关的 b0 必须居首；inactive 的 b2 绝不出现
+	if len(results) == 0 {
+		t.Fatalf("results = 0, want >= 1")
 	}
 	if results[0].BlockID != "b0" {
 		t.Errorf("first result blockID = %q, want b0", results[0].BlockID)
+	}
+	for _, r := range results {
+		if r.BlockID == "b2" {
+			t.Errorf("inactive block b2 must never appear")
+		}
 	}
 }
 
@@ -746,5 +755,309 @@ func TestComputeCompressibleRangesSkipsRenderedSummary(t *testing.T) {
 	}
 	if startID := RawForRef(ranges[0].StartRef, state); startID != "new1" {
 		t.Errorf("range start = %q, want new1 (summary should be skipped)", startID)
+	}
+}
+
+// ---------------- sync-blocks ----------------
+
+// TestSyncBlocks 验证块活性对齐：蒸馏消费停用 / Expanded 保持停用 /
+// 覆盖消息与 summary 双缺席停用 / 其余保持 active。
+func TestSyncBlocks(t *testing.T) {
+	msgs := []CoreMessage{
+		{ID: "a", Role: RoleUser, Text: "u1"},
+		{ID: "acp_summary_b2", Role: RoleSystem, ContentType: ContentTypeText, Text: "[Compressed conversation section]\nsummary"},
+		{ID: "acp_summary_b5", Role: RoleSystem, ContentType: ContentTypeText, Text: "[Compressed conversation section]\ndistilled"},
+	}
+	state := CreateInitialState()
+	state.Blocks = []CompressionBlock{
+		{BlockID: "b0", Active: true, EffectiveMessageIDs: []string{"x1"}}, // 消息缺席 → 停用
+		{BlockID: "b1", Active: true, EffectiveMessageIDs: []string{"x2"}, Expanded: true},
+		{BlockID: "b2", Active: false, DirectBlockIDs: nil}, // summary 在场 → 重新激活
+		{BlockID: "b3", Active: true, EffectiveMessageIDs: []string{"x3"}},
+	}
+	// b4 被 b5 蒸馏消费
+	state.Blocks = append(state.Blocks,
+		CompressionBlock{BlockID: "b4", Active: true, EffectiveMessageIDs: []string{"x4"}},
+		CompressionBlock{BlockID: "b5", Active: true, EffectiveMessageIDs: []string{"x5"}, DirectBlockIDs: []string{"b4"}})
+	deactivated := SyncBlocks(msgs, state)
+	seen := map[string]bool{}
+	for _, id := range deactivated {
+		seen[id] = true
+	}
+	if !seen["b0"] {
+		t.Errorf("b0 (messages absent) must be deactivated, got %v", deactivated)
+	}
+	if state.BlockByID("b1").Active {
+		t.Errorf("expanded block must stay inactive")
+	}
+	if !state.BlockByID("b2").Active {
+		t.Errorf("b2 (summary present) must be re-activated")
+	}
+	if state.BlockByID("b4").Active {
+		t.Errorf("consumed block b4 must be deactivated")
+	}
+	if !state.BlockByID("b5").Active {
+		t.Errorf("b5 must stay active")
+	}
+}
+
+// ---------------- emergency-truncate ----------------
+
+// TestTruncateLargeToolOutputs 验证近满截断：阈值门 / 近端保护 / 标记与保留 /
+// 已标记消息跳过 / 候选计数。
+func TestTruncateLargeToolOutputs(t *testing.T) {
+	config := DefaultConfig(10000)
+	config.TruncateThreshold = 0.9
+	config.PreserveRecentMessages = 3 // 近端保护窗（缺省 5 会让本例全表受保护）
+	big := strings.Repeat("x", 12000) // ~3000 tokens
+	msgs := []CoreMessage{
+		{ID: "t1", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "c1", Text: big},
+		{ID: "t2", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "c2", Text: big},
+		{ID: "keep1", Role: RoleUser, Text: "recent"},
+		{ID: "keep2", Role: RoleAssistant, Text: "recent"},
+		{ID: "keep3", Role: RoleUser, Text: "recent"},
+	}
+	// 用量 5000/10000 = 50% < 90%：不触发
+	got := TruncateLargeToolOutputs(msgs, 5000, config, true)
+	if got.TruncatedCount != 0 || got.Messages[0].Text != big {
+		t.Fatalf("below threshold must be no-op")
+	}
+	// 用量 9500/10000 = 95% ≥ 90%：按 token 降序截断，降到目标线（9000×0.9=
+	// 8100）即停——单条 ~3000 token 已够 → 只截 1 条；近端 3 条保护
+	got = TruncateLargeToolOutputs(msgs, 9500, config, true)
+	if got.TruncatedCount != 1 {
+		t.Fatalf("truncatedCount = %d, want 1 (stop at target)", got.TruncatedCount)
+	}
+	if got.CandidatesFound != 2 {
+		t.Fatalf("candidatesFound = %d, want 2", got.CandidatesFound)
+	}
+	if !strings.Contains(got.Messages[0].Text, "[truncated for context space]") ||
+		!strings.HasPrefix(got.Messages[0].Text, "xxxx") {
+		t.Fatalf("truncated text must keep prefix + marker")
+	}
+	if got.Messages[1].Text != big {
+		t.Fatalf("second candidate must stay verbatim (target already met)")
+	}
+	for i := 2; i < 5; i++ {
+		if got.Messages[i].Text != msgs[i].Text {
+			t.Fatalf("recent message %d must be protected", i)
+		}
+	}
+	// 已标记消息不再入选：t1 已带标记被排除，未截断的 t2 仍是合法候选
+	again := TruncateLargeToolOutputs(got.Messages, 9900, config, true)
+	if again.CandidatesFound != 1 {
+		t.Fatalf("marked messages must not re-qualify, want 1 candidate (t2 only), got %d", again.CandidatesFound)
+	}
+	for _, m := range again.Messages {
+		if m.ID == "t1" && !strings.Contains(m.Text, "[truncated for context space]") {
+			t.Fatalf("already-truncated t1 must be left untouched")
+		}
+	}
+}
+
+// ---------------- absorb ----------------
+
+// TestAbsorbFlow 验证吸收闭环：候选判定 → 提示追加 → apply 记录 → 消息对隐藏。
+func TestAbsorbFlow(t *testing.T) {
+	state := CreateInitialState()
+	config := DefaultConfig(100000)
+	config.Absorb.Enabled = true
+	config.Absorb.MinToolTokens = 10
+	msgs := []CoreMessage{
+		{ID: "call", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolName: "shell", ToolCallID: "c1", Text: `{"command":"ls"}`},
+		{ID: "result", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "c1", ToolName: "shell", Text: strings.Repeat("log ", 200)},
+	}
+	AssignRefs(msgs, state)
+	// 候选：非 ACP 工具的 tool-result
+	if !IsAbsorbCandidate(msgs[1], config) {
+		t.Fatalf("tool result must be an absorb candidate")
+	}
+	// 提示追加（带 ref）
+	applied := AppendAbsorbPrompts(msgs, state, config, 100)
+	if applied.PromptedCount != 1 || !strings.Contains(applied.Messages[1].Text, AbsorbPromptMarker) ||
+		!strings.Contains(applied.Messages[1].Text, "m00001") {
+		t.Fatalf("absorb prompt must be appended with ref, got %+v", applied)
+	}
+	// apply：记录吸收
+	outcome := ApplyAbsorb("m00001", "distilled: empty dir", "", applied.Messages, state, config)
+	if !outcome.OK {
+		t.Fatalf("absorb failed: %s", outcome.ResultText)
+	}
+	if len(state.Absorbed) != 1 || state.Stats.AbsorbedTokens <= 0 {
+		t.Fatalf("absorb record missing: %+v", state.Absorbed)
+	}
+	// 下一轮：消息对隐藏
+	hidden := HideAbsorbedMessages(msgs, state)
+	if len(hidden) != 0 {
+		t.Fatalf("absorbed pair must be hidden, got %d messages", len(hidden))
+	}
+	// ACP 管理工具不可吸收
+	acpMsg := CoreMessage{ID: "r2", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "c2", ToolName: "compress", Text: "x"}
+	if IsAbsorbCandidate(acpMsg, config) {
+		t.Fatalf("ACP-managed tool result must not be absorbable")
+	}
+}
+
+// ---------------- hide-compress-calls ----------------
+
+// TestHideConsumedCompressCalls 验证：被块消费的调用对隐藏、孤儿只留最新两对、
+// 存活调用 args 的超长 summary 存根化。
+func TestHideConsumedCompressCalls(t *testing.T) {
+	state := CreateInitialState()
+	// b0：由 call-1 产出（callId 回填后）
+	state.Blocks = []CompressionBlock{{
+		BlockID: "b0", Active: true, StartRef: "m00000", EndRef: "m00001",
+		Summary: "s", CompressCallID: "call-1",
+	}}
+	call1 := CoreMessage{ID: "mc1", Role: RoleAssistant, ContentType: ContentTypeToolCall,
+		ToolName: "compress", ToolCallID: "call-1",
+		Text: `{"content":[{"startId":"m00000","endId":"m00001","summary":"` + strings.Repeat("s", 500) + `"}]}`}
+	result1 := CoreMessage{ID: "mr1", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "call-1", Text: `{"ok":true,"blocksCreated":1}`}
+	// 孤儿调用三对（无块引用）
+	orphan := func(n int) []CoreMessage {
+		return []CoreMessage{
+			{ID: fmt.Sprintf("mo%d", n), Role: RoleAssistant, ContentType: ContentTypeToolCall,
+				ToolName: "compress", ToolCallID: fmt.Sprintf("orphan-%d", n), Text: `{"content":[{"startId":"m00000","endId":"m00000","summary":"x"}]}`},
+			{ID: fmt.Sprintf("mro%d", n), Role: RoleTool, ContentType: ContentTypeToolResult,
+				ToolCallID: fmt.Sprintf("orphan-%d", n), Text: `{"ok":true,"blocksCreated":0}`},
+		}
+	}
+	msgs := append([]CoreMessage{call1, result1}, append(orphan(1), append(orphan(2), orphan(3)...)...)...)
+	got := HideConsumedCompressCalls(state, msgs)
+	// 孤儿 3 对 → 隐藏最旧 1 对（保留最新 2 对）
+	if got.Hidden != 2 {
+		t.Fatalf("hidden = %d, want 2 (oldest orphan pair)", got.Hidden)
+	}
+	for _, m := range got.Messages {
+		if m.ToolCallID == "orphan-1" {
+			t.Fatalf("oldest orphan must be hidden")
+		}
+	}
+	// 存活调用（call-1）的 summary 被存根化
+	found := false
+	for _, m := range got.Messages {
+		if m.ToolCallID == "call-1" && m.ContentType == ContentTypeToolCall {
+			found = true
+			if strings.Contains(m.Text, strings.Repeat("s", 500)) {
+				t.Fatalf("live call summary must be stubbed")
+			}
+			if !strings.Contains(m.Text, `"startId":"m00000"`) {
+				t.Fatalf("live call range must be preserved")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("live compress call must be kept")
+	}
+}
+
+// ---------------- recommend（mergeRangesToThreshold，#309） ----------------
+
+// TestMergeRangesToThreshold 验证：逐批越过最小门 / 尾部并入前批 /
+// 整段低于门不出推荐。
+func TestMergeRangesToThreshold(t *testing.T) {
+	r := func(start, end string, chars int) CompressibleRange {
+		return CompressibleRange{StartRef: start, EndRef: end, Count: 2, Tokens: chars / 4, Chars: chars}
+	}
+	// 3000 + 3000 = 6000 ≥ 5000：合并成一批；4000 尾部并入前批
+	merged := MergeRangesToThreshold([]CompressibleRange{
+		r("m00000", "m00001", 3000), r("m00002", "m00003", 3000), r("m00004", "m00005", 4000),
+	}, 5000)
+	if len(merged) != 1 || merged[0].StartRef != "m00000" || merged[0].EndRef != "m00005" || merged[0].Chars != 10000 {
+		t.Fatalf("batch + tail fold mismatch: %+v", merged)
+	}
+	// 单段 3000 < 5000：无前批可并 → 不出推荐（#847）
+	merged = MergeRangesToThreshold([]CompressibleRange{r("m00000", "m00001", 3000)}, 5000)
+	if len(merged) != 0 {
+		t.Fatalf("below-gate-only input must emit nothing, got %+v", merged)
+	}
+	// minChars<=0：原样返回
+	ranges := []CompressibleRange{r("m00000", "m00001", 1)}
+	if got := MergeRangesToThreshold(ranges, 0); len(got) != 1 {
+		t.Fatalf("disabled gate must pass through")
+	}
+}
+
+// ---------------- prune pair-safe anchor（v0.0.71 2f60bfb） ----------------
+
+// TestPairSafeAnchorIndex 验证：assistant 连续 run 内部不落锚（回退 run 起点）/
+// 并行工具突发内不落锚（移过 result）。
+func TestPairSafeAnchorIndex(t *testing.T) {
+	msgs := []CoreMessage{
+		{ID: "m0", Role: RoleUser, ContentType: ContentTypeText, Text: "task"},
+		{ID: "m1", Role: RoleAssistant, ContentType: ContentTypeReasoning, Text: "think"},
+		{ID: "m2", Role: RoleAssistant, ContentType: ContentTypeText, Text: "answer"},
+	}
+	// 锚点落在 m2（assistant run 内部）→ 回退到 run 起点 m1
+	if got := pairSafeAnchorIndex(msgs, 2); got != 1 {
+		t.Fatalf("anchor inside assistant run must move to run start, got %d", got)
+	}
+	toolMsgs := []CoreMessage{
+		{ID: "u", Role: RoleUser, ContentType: ContentTypeText, Text: "go"},
+		{ID: "c", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolCallID: "c1", ToolName: "shell", Text: "{}"},
+		{ID: "r", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "c1", Text: "out"},
+		{ID: "n", Role: RoleUser, ContentType: ContentTypeText, Text: "next"},
+	}
+	// 锚点落在 call 与 result 之间（index 2 指向 result 前的位置不可行）→ 移过 result
+	if got := pairSafeAnchorIndex(toolMsgs, 2); got != 3 {
+		t.Fatalf("anchor splitting tool pair must move past result, got %d", got)
+	}
+}
+
+// ---------------- rebuild（fork/恢复 state 重建） ----------------
+
+// TestRebuildStateFromMessages 验证：压缩事件流重放后块覆盖关系与 callId 还原。
+func TestRebuildStateFromMessages(t *testing.T) {
+	config := DefaultConfig(100000)
+	// 第一段：正常会话 → compress → 后续消息
+	original := []CoreMessage{
+		{ID: "a", Role: RoleUser, Text: strings.Repeat("x", 400)},
+		{ID: "b", Role: RoleAssistant, Text: strings.Repeat("y", 400)},
+		{ID: "mc1", Role: RoleAssistant, ContentType: ContentTypeToolCall, ToolName: "compress", ToolCallID: "call-1",
+			Text: `{"content":[{"startId":"m00000","endId":"m00001","summary":"combined summary","topic":"t"}]}`},
+		{ID: "mr1", Role: RoleTool, ContentType: ContentTypeToolResult, ToolCallID: "call-1",
+			Text: `{"ok":true,"blocksCreated":1,"tokensCompressed":200}`},
+		{ID: "c", Role: RoleUser, Text: strings.Repeat("z", 400)},
+	}
+	// 现场压缩
+	liveState := CreateInitialState()
+	AssignRefs(original, liveState)
+	ranges := ParseCompressArgs(original[2].Text)
+	if len(ranges) != 1 {
+		t.Fatalf("parse args: %v", ranges)
+	}
+	if _, result := ApplyCompression(ranges, original, liveState, config); result.BlocksCreated != 1 {
+		t.Fatalf("live compress failed: %+v", result)
+	}
+	// 模拟 fork/恢复：state 丢失 → 从消息列表重放
+	rebuilt, n := RebuildStateFromMessages(original, config)
+	if n != 1 {
+		t.Fatalf("replayed blocks = %d, want 1", n)
+	}
+	if len(rebuilt.Blocks) != 1 {
+		t.Fatalf("rebuilt blocks = %d, want 1", len(rebuilt.Blocks))
+	}
+	liveBlock := liveState.Blocks[0]
+	rebuiltBlock := rebuilt.Blocks[0]
+	if rebuiltBlock.Summary != "combined summary" || rebuiltBlock.Topic != "t" {
+		t.Fatalf("rebuilt block content mismatch: %+v", rebuiltBlock)
+	}
+	if rebuiltBlock.StartRef != liveBlock.StartRef || rebuiltBlock.EndRef != liveBlock.EndRef {
+		t.Fatalf("rebuilt range mismatch: %s..%s vs %s..%s",
+			rebuiltBlock.StartRef, rebuiltBlock.EndRef, liveBlock.StartRef, liveBlock.EndRef)
+	}
+	if rebuiltBlock.CompressCallID != "call-1" {
+		t.Fatalf("rebuilt block must carry callId, got %q", rebuiltBlock.CompressCallID)
+	}
+	if rebuilt.MessageRefs.ByRaw["c"] != liveState.MessageRefs.ByRaw["c"] {
+		t.Fatalf("ref map must reproduce identically")
+	}
+	// HasACPStateTrace 探测
+	if !HasACPStateTrace(original) {
+		t.Fatalf("trace must be detected")
+	}
+	plain := []CoreMessage{{ID: "a", Role: RoleUser, Text: "hi"}}
+	if HasACPStateTrace(plain) {
+		t.Fatalf("plain history must not carry trace")
 	}
 }
