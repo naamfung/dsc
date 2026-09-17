@@ -168,3 +168,35 @@ func TestQuestionCustomInput(t *testing.T) {
 		t.Fatal("answer should be delivered")
 	}
 }
+
+// TestQuestionOverlayShrinksViewport 回归：问题覆盖层占独立行（View 组装位于
+// viewport 之后），viewport 高度必须等量收缩，否则覆盖层被推到终端可视区之外
+// （AltScreen 截断）——Windows 实测表现为 ask_user_question 提问后界面无任何
+// 可见变化。此前 inputCursorAbs 计入该行数而 vpHeight 漏计，二者不对称。
+func TestQuestionOverlayShrinksViewport(t *testing.T) {
+	m := New(&stubAgent{}, nil, context.Background(), "m", "minimal", 131072)
+	m.high = 60
+	m.viewport.SetHeight(m.vpHeight())
+	before := m.vpHeight()
+
+	ansCh := make(chan *userquestions.Answer, 1)
+	errCh := make(chan error, 1)
+	m.Update(questionMsg{request: &userquestions.Request{Questions: []userquestions.Question{{
+		ID: "q", Question: "Approve this plan?",
+		Options: []userquestions.Option{{Label: "Approve"}, {Label: "Keep planning"}},
+	}}}, answer: ansCh, err: errCh})
+
+	q := m.questionView()
+	if q == "" {
+		t.Fatal("question overlay should render")
+	}
+	rows := strings.Count(q, "\n") + 1
+	if got := m.vpHeight(); got != before-rows {
+		t.Fatalf("vpHeight with overlay = %d, want %d (before %d - overlay rows %d)", got, before-rows, before, rows)
+	}
+	// 覆盖层清除后恢复原高度
+	m.Update(questionMsg{})
+	if got := m.vpHeight(); got != before {
+		t.Fatalf("vpHeight after clear = %d, want %d", got, before)
+	}
+}

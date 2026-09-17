@@ -657,6 +657,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			ToolCalls: toolCalls,
 			Usage:     lastUsage,
 		}, &session.SurfaceOp{Op: session.SurfaceAppend})
+		// 增量落盘（对齐 DSH 事件日志即时持久化）：模型响应已发生即持久化，
+		// 长轮次中途（工具阻塞/多步循环）崩溃或 /export 时不丢已发生的步
+		if err := a.store.Save(sess); err != nil {
+			a.logger.Warn("incremental session save failed", "turn", turnNo, "step", stepNo, "error", err)
+		}
 
 		// 没有工具调用 → 目标续行驱动器检查（对齐 DSH goal-round-driver）：
 		// goal active+armed+预算未耗尽时，准入下一轮 goal-round 用户消息并继续循环。
@@ -809,6 +814,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			sess.Append(session.ToolCallEvent, &session.ToolCallData{
 				Turn: turnNo, Step: stepNo, CallID: tc.Id, Name: tc.Name, Arguments: tc.ArgumentsJson,
 			}, nil)
+			// 调用发起前落盘：此后可能长时间阻塞（如 ask_user_question 等待用户
+			// 回答、browser 长任务），调用记录须已持久化（/export 与崩溃恢复可见）
+			if err := a.store.Save(sess); err != nil {
+				a.logger.Warn("incremental session save failed", "turn", turnNo, "step", stepNo, "error", err)
+			}
 
 			// 截断防护（工具调用）：截断响应携带的工具调用，参数 JSON 可能被拦腰
 			// 切断——不得以残缺参数下发执行（历史上表现为以空参/残参触达工具，
@@ -920,6 +930,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// 步骤结束（log-only）
 		sess.Append(session.StepEnd, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
 		stepOpen = false
+		// 步收口增量落盘：工具结果/守卫消息已入事件日志，持久化到磁盘边界
+		if err := a.store.Save(sess); err != nil {
+			a.logger.Warn("incremental session save failed", "turn", turnNo, "step", stepNo, "error", err)
+		}
 
 		// 工具执行后刷新工具列表：若本轮调用了 load_dsc_plugin / unload_dsc_plugin 等，
 		// 宿主工具注册表已更新，但 availableTools 仍是 RunStream 开始时的快照——

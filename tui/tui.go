@@ -528,12 +528,18 @@ func (m *Model) interruptTurn() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// vpHeight 计算消息区高度：总高度减去标题、状态栏、输入区（含边框），思考时再减去指示行，补全菜单时再减去补全菜单行。
+// vpHeight 计算消息区高度：总高度减去标题、状态栏、输入区（含边框），思考时再减去指示行，问题覆盖层与补全菜单时再分别减去对应行数。
 // 输入区高度随内容行数变化（1~composerMin 行），这里以当前实际高度为准。
 func (m *Model) vpHeight() int {
 	h := m.high - titleRows - statusRows - infoRows - boxBorder - m.input.Height()
 	if m.thinking || m.streaming {
 		h -= thinkingRow
+	}
+	if q := m.questionView(); q != "" {
+		// 问题覆盖层占独立行（View 组装位于 viewport 之后）：viewport 必须等量收缩，
+		// 否则覆盖层被推到终端可视区之外（AltScreen 截断）——提问弹出后界面无任何
+		// 可见变化。与 inputCursorAbs 的行数计入保持对称。
+		h -= strings.Count(q, "\n") + 1
 	}
 	if m.completion.active && len(m.completion.items) > 0 {
 		// 减去补全菜单的高度：显示行数（窗口封顶 maxCompRows）+ 1 行提示
