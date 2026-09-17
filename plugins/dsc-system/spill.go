@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 
+	dsc "dsc-sdk"
 	"dsc/proto"
 )
 
@@ -130,7 +130,7 @@ func (s *spillServer) resolveRoot(session string) string {
 	if err != nil {
 		cwd = "."
 	}
-	return filepath.Join(cwd, "temp", "spill", session)
+	return dsc.PJoin(cwd, "temp", "spill", session)
 }
 
 // storeFor 取得（或创建）会话存储句柄：首次触及时建目录并扫描续接编号。
@@ -166,7 +166,7 @@ func (st *sessionStore) saveText(content string) (string, error) {
 	id := st.next
 	st.next++
 	st.mu.Unlock()
-	path := filepath.Join(st.dir, fmt.Sprintf("spill-%d.txt", id))
+	path := dsc.PJoin(st.dir, fmt.Sprintf("spill-%d.txt", id))
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("spill store: write %s: %w", path, err)
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -28,10 +27,9 @@ import (
 //	/mnt/c/Users/Administrator/Desktop/DeepClean → mnt-c-Users-Administrator-Desktop-DeepClean
 //	/home/jor/DeepClean → home-jor-DeepClean
 func SessionKeyForProject(projectRoot string) string {
-	// 先统一反斜杠为正斜杠（跨平台：Linux 上 filepath.ToSlash 不会转换 \，
-	// 而 Windows 路径在 Linux 上仍以 \ 分隔，需显式归一）
+	// 先统一反斜杠为正斜杠（跨平台：仅靠平台相关转换函数无法处理另一平台的
+	// 反斜杠输入，须显式归一，见 AGENTS.md 路径纪律）
 	p := strings.ReplaceAll(projectRoot, "\\", "/")
-	p = filepath.ToSlash(p) // 平台相关：Windows 上多余转换无副作用
 	p = strings.TrimPrefix(p, "/")
 	p = strings.ReplaceAll(p, ":", "-")
 	p = strings.ReplaceAll(p, "/", "-")
@@ -87,7 +85,7 @@ func (s *Store) path(id string) (string, error) {
 	if !safeSessionID(id) {
 		return "", fmt.Errorf("session store: invalid session id %q", id)
 	}
-	return filepath.Join(s.dir, id+".jsonl"), nil
+	return posixJoin(s.dir, id+".jsonl"), nil
 }
 
 // safeSessionID 校验会话 id 是否为安全的单组件文件名：非空、不含路径分隔符、
@@ -176,7 +174,7 @@ func (s *Store) List() ([]SessionInfo, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
-		info, err := scanInfo(filepath.Join(s.dir, e.Name()))
+		info, err := scanInfo(posixJoin(s.dir, e.Name()))
 		if err != nil {
 			continue // 单会话损坏不影响列表
 		}

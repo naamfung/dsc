@@ -262,17 +262,17 @@ func resolveRefPath(wsRoot, ref string) string {
 		rel := strings.TrimPrefix(strings.TrimPrefix(ref, "/workspace"), "\\workspace")
 		rel = strings.TrimPrefix(rel, "/")
 		if wsRoot != "" {
-			return filepath.Join(wsRoot, filepath.FromSlash(rel))
+			return core.PJoin(wsRoot, rel)
 		}
-		return filepath.FromSlash(rel)
+		return rel
 	}
 	if filepath.IsAbs(ref) {
 		return ref
 	}
 	if wsRoot != "" {
-		return filepath.Join(wsRoot, ref)
+		return core.PJoin(wsRoot, ref)
 	}
-	if abs, err := filepath.Abs(ref); err == nil {
+	if abs, err := core.PAbs(ref); err == nil {
 		return abs
 	}
 	return ref

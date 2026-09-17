@@ -130,7 +130,7 @@ func saveConfigNode(path string, doc *yaml.Node) error {
 	if err := enc.Close(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(PDir(path), 0755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0644)
@@ -193,19 +193,19 @@ func (m *Manager) persistInjectionLocked(entry PluginEntry) error {
 // portableBinaryPath 把要写回 config.yaml 的插件 binary_path 归为可移植形式：
 //  1. 相对化：二进制位于插件根（ExecDir/plugins）之下时转为相对路径
 //     （./plugins/<name>/<name><ext>）——避免绝对路径（含盘符与反斜杆，由
-//     filepath.Join 在 Windows 上生成）在把部署目录拷贝/迁移到其他机器后失效；
+//     路径拼接在 Windows 上生成）在把部署目录拷贝/迁移到其他机器后失效；
 //  2. 复用 normalizeBinaryPath 的转换逻辑：统一正斜杆 + 按平台调整 .exe 后缀
 //     （Windows 保留、其它平台去掉），保证配置跨平台可用。
 func (m *Manager) portableBinaryPath(bin string) string {
 	if bin == "" {
 		return ""
 	}
-	clean := filepath.Clean(bin)
-	root := filepath.Clean(m.pluginsRoot())
+	clean := PClean(bin)
+	root := PClean(m.pluginsRoot())
 	if filepath.IsAbs(clean) {
-		if rel, err := filepath.Rel(root, clean); err == nil &&
-			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return normalizeBinaryPath("./" + filepath.Join("plugins", rel))
+		if rel, err := PRel(root, clean); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, "../") {
+			return normalizeBinaryPath("./" + PJoin("plugins", rel))
 		}
 	}
 	return normalizeBinaryPath(clean)

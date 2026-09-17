@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,12 +62,12 @@ func dbPath() string {
 	if err != nil {
 		cwd = "."
 	}
-	return filepath.Join(cwd, "memory", "memory.db")
+	return dsc.PJoin(cwd, "memory", "memory.db")
 }
 
 // initDB 初始化数据库：常规表自动迁移 + FTS5 虚拟表与同步触发器。
 func initDB(path string) error {
-	if err := dsc.MkdirAll(filepath.Dir(path)); err != nil {
+	if err := dsc.MkdirAll(dsc.PDir(path)); err != nil {
 		return err
 	}
 	var err error

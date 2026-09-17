@@ -122,7 +122,7 @@ func main() {
 	var extraAdvice string
 
 	if runtime.GOOS == "windows" {
-		pathAdvice = "CRITICAL: In Windows environments, terminal path styles vary (e.g., Git Bash uses '/mnt/d/...', while this terminal supports 'D:/...'). You MUST first run the 'pwd' command to obtain the current directory path format before performing any path operations. Always wrap paths in quotes to ensure safe usage."
+		pathAdvice = "CRITICAL: In Windows environments, terminal path styles vary (e.g., Git Bash uses '/mnt/d/...', while this terminal supports 'D:/...'). A bare POSIX path like '/docs' resolves to the current drive root (e.g. 'D:/docs'), matching Linux real-root semantics — the session workspace is reached via the '/workspace' prefix or the real path shown by 'pwd'. You MUST first run the 'pwd' command to obtain the current directory path format before performing any path operations. Always wrap paths in quotes to ensure safe usage."
 		extraAdvice = "Note: This interpreter does not support PowerShell (PWSH), CMD, or other Windows-specific shell command interpreters. Please use standard Unix/Linux POSIX shell commands only (e.g., ls, find, cd, grep)."
 	} else {
 		pathAdvice = "When working with paths, it is mandatory to first use the 'pwd' command to get the current directory path format, and always wrap paths in quotes to ensure safe usage."
@@ -233,9 +233,9 @@ var exitCodeMarkRe = regexp.MustCompile(`\[exit_code\s*:\s*(-?\d+)\]`)
 // 实现已上收至 core.MapWorkspacePath（宿主与各插件进程同源，SDK 层有同名二次
 // 封装供第三方插件，各插件不再各自实现归并转换）；此处仅保留 shell AST 字面量
 // 重写（mapWorkspacePaths）的接入点。规则与例外详见 core/workspace.go：
-// /workspace 前缀（全平台，前缀后必须是分隔符或结尾）、Windows 裸 / 锚定工作区
-// 根（真实案例：模型 `find /` 被 MSYS 解释为盘符根遍历整个 D:\ 盘）、/dev/null
-// 与 // UNC 例外、WSL 风格 /mnt/<drive>/ 映射（仅 Windows）。
+// /workspace 前缀（全平台，前缀后必须是分隔符或结尾）、裸 POSIX 绝对路径保持
+// 原样（Windows 上经绝对化解析为当前盘根，与 Linux 真实根一致）、
+// /dev/null 与 // UNC 例外、WSL 风格 /mnt/<drive>/ 映射（仅 Windows）。
 func mapWorkspacePath(p string) string {
 	return core.MapWorkspacePath(p)
 }

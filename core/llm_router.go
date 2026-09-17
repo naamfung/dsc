@@ -113,6 +113,12 @@ func (s *llmAggregateServer) ChatStream(req *proto.ChatRequest, stream proto.LLM
 					"finish_reason", call.FinishReason,
 					"tool_calls", call.ToolCalls,
 					"usage", streamUsageSummary(call.Usage))
+				// 按会话记录最近一次成功请求的上报 prompt 用量：agent/pre-step 的压缩
+				// 压力判定以此精确底数 + 启发式增量（对齐 DSH tokenMeter pressureTokens）。
+				// 仅流式请求携带 usage；非流式 Chat 不记录（保持 0 → 插件退回启发式）。
+				if call.Usage != nil && call.Usage.PromptTokens > 0 {
+					s.m.recordSessionUsage(req.GetSessionId(), call.Usage.PromptTokens)
+				}
 				return nil
 			}
 			providerTried = true
@@ -165,20 +171,17 @@ func (s *llmAggregateServer) applyPreStepHook(ctx context.Context, req *proto.Ch
 		return req // 无插件监听：直接返回，零开销
 	}
 	msgsJSON, _ := json.Marshal(req.Messages)
-	// 估算当前 token 数（字节/CJK 启发式，供插件 nudge 决策）
-	tokenCount := 0
-	for _, m := range req.Messages {
-		tokenCount += len(m.Content) / 4
-		if len(m.ToolCalls) > 0 {
-			tokenCount += 8
-		}
-	}
+	// 估算当前 token 数（复用 core 公用启发式 EstimateProtoMessagesTokens，
+	// CJK 感知 + 角色开销 + 图像 + 工具参数，供插件 nudge 决策）——
+	// 与压缩插件同一估算口径，避免各处字节/4 粗略估算漂移。
+	tokenCount := EstimateProtoMessagesTokens(req.Messages)
 	result, err := s.m.dispatchEventToPlugins(EventAgentPreStep, AgentPreStepEvent{
-		Agent:        s.m.GetMainAgentName(),
-		Session:      req.GetSessionId(),
-		MessagesJSON: string(msgsJSON),
-		TokenCount:   tokenCount,
-		UserInput:    req.GetNewUserInput(),
+		Agent:           s.m.GetMainAgentName(),
+		Session:         req.GetSessionId(),
+		MessagesJSON:    string(msgsJSON),
+		TokenCount:      tokenCount,
+		LastUsageTokens: int(s.m.lastSessionPrompt(req.GetSessionId())),
+		UserInput:       req.GetNewUserInput(),
 	})
 	if err != nil {
 		s.m.logger.Warn("agent/pre-step hook vetoed request", "error", err.Error())
@@ -211,6 +214,26 @@ func (s *llmAggregateServer) applyPreStepHook(ctx context.Context, req *proto.Ch
 		NewUserInput: req.NewUserInput,
 	}
 	return rewritten
+}
+
+// recordSessionUsage 按会话记录最近一次成功 LLM 请求的服务端上报 prompt 用量
+// （对齐 DSH tokenMeter 的 pressureTokens：压力判定的精确底数）。空会话 id 或
+// 非正用量忽略（内部调用/非流式请求无上报值，不污染会话状态）。
+func (m *Manager) recordSessionUsage(sessionID string, promptTokens int32) {
+	if sessionID == "" || promptTokens <= 0 {
+		return
+	}
+	m.sessionLastPromptMu.Lock()
+	defer m.sessionLastPromptMu.Unlock()
+	m.sessionLastPrompt[sessionID] = promptTokens
+}
+
+// lastSessionPrompt 返回某会话最近一次成功请求的上报 prompt 用量（0 = 无记录：
+// 首次请求、重启恢复或仅走非流式 Chat）。
+func (m *Manager) lastSessionPrompt(sessionID string) int32 {
+	m.sessionLastPromptMu.RLock()
+	defer m.sessionLastPromptMu.RUnlock()
+	return m.sessionLastPrompt[sessionID]
 }
 
 // emitRequestError 在 LLM 请求失败后分发 agent/request-error 事件（waterfall 模式），

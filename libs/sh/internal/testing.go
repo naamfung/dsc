@@ -6,8 +6,9 @@ package internal
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+
+	"mvdan.cc/sh/v3/internal/posixpath"
 )
 
 // TestMainSetup is used by the integration tests running shell scripts
@@ -42,7 +43,7 @@ func TestMainSetup() {
 		"a", "b", "c", "d", "e", "f", "foo", "bar",
 	} {
 		os.Unsetenv(s)
-		pathFile := filepath.Join(pathDir, s)
+		pathFile := posixpath.Join(pathDir, s)
 		if err := os.WriteFile(pathFile, []byte("#!/bin/sh\necho NO_SUCH_COMMAND; exit 1"), 0o777); err != nil {
 			panic(err)
 		}

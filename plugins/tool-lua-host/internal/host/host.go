@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	dsc "dsc-sdk"
 	"dsc/proto"
 	"tool-lua-host/internal/bindings"
 
@@ -129,7 +129,7 @@ func (h *Host) scan() {
 
 	// 新增/变更
 	for name, d := range seen {
-		path := filepath.Join(d, name, "main.lua")
+		path := dsc.PJoin(d, name, "main.lua")
 		src, err := os.ReadFile(path)
 		if err != nil {
 			continue

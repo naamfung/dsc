@@ -163,6 +163,8 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 	}
 	sess := s.sessionKey(ev.Session)
 	s.mu.Lock()
+	prevMsgs := s.lastMsgs // 上次 pre-step 的消息列表（原始；供自上次请求以来的增量估算）
+	prevSession := s.lastSession
 	s.lastMsgs = msgs // 缓存供溢出紧急压缩使用（request-error 事件不带消息列表）
 	s.lastSession = sess
 	st := s.stateFor(sess)
@@ -175,7 +177,23 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 
 	// 复用既有压缩后的用量评估：低于阈值则直接返回改写（或无记录时不改写）
 	rewritten := applyRecords(msgs, records)
-	if s.estimateMsgs(rewritten) < s.pressureThreshold() {
+	// 压力判定：优先「上次服务端上报用量 + 自上次请求以来改写列表的启发式增量」
+	//（对齐 DSH tokenMeter 的 projectedTokens = pressureTokens + surfaceTokens -
+	// sampledSurfaceTokens）：上报用量是精确底数，启发式只补差量。纯字节启发式
+	//（不含工具定义、CJK 每字 3 字节被 /4 低估）会把真实用量显著估低——实测
+	// 真实已用 83.56% 而插件估算仅 60.08%，压缩因此不触发。无上报记录（首次
+	// 请求/重启恢复）时退回纯启发式兜底。
+	pressure := core.EstimateProtoMessagesTokens(rewritten)
+	if ev.LastUsageTokens > 0 && prevSession == sess && len(prevMsgs) > 0 {
+		delta := pressure - core.EstimateProtoMessagesTokens(applyRecords(prevMsgs, records))
+		if delta < 0 {
+			delta = 0
+		}
+		pressure = ev.LastUsageTokens + delta
+	} else if ev.LastUsageTokens > 0 {
+		pressure = ev.LastUsageTokens
+	}
+	if pressure < s.pressureThreshold() {
 		if len(records) > 0 {
 			return rewriteJSON(rewritten)
 		}
@@ -202,7 +220,7 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 		UpTo:     retainIdx,
 		HeadHash: fingerprint(msgs[:retainIdx]),
 		Summary:  summary,
-		Shadowed: s.estimateMsgs(msgs[base:retainIdx]),
+		Shadowed: core.EstimateProtoMessagesTokens(msgs[base:retainIdx]),
 		ID:       id,
 	}
 	s.mu.Lock()
@@ -250,7 +268,7 @@ func (s *compactionBasicServer) handleRequestError(ctx context.Context, dataJSON
 		UpTo:      end,
 		HeadHash:  fingerprint(msgs[:end]),
 		Summary:   summary,
-		Shadowed:  s.estimateMsgs(msgs[base:end]),
+		Shadowed:  core.EstimateProtoMessagesTokens(msgs[base:end]),
 		ID:        id,
 		Emergency: true,
 	}
@@ -328,35 +346,18 @@ func (s *compactionBasicServer) retainBudget() int {
 
 // retainBoundary 保留尾部边界：从末尾向前累积，返回前段可压缩的上界
 // （[retainIdx, len) 为保留区）。全部落在保留区时返回 len(msgs)。
+// 用量估算复用 core 公用启发式（core.EstimateProtoMessageTokens，CJK 感知
+// + 角色开销 + 图像 + 工具参数），与压力判定同一估算口径。
 func (s *compactionBasicServer) retainBoundary(msgs []*proto.Message) int {
 	budget := s.retainBudget()
 	acc := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
-		acc += s.msgTokens(msgs[i])
+		acc += core.EstimateProtoMessageTokens(msgs[i])
 		if acc > budget {
 			return i + 1
 		}
 	}
 	return len(msgs)
-}
-
-// msgTokens 字节级启发式 token 估算（对齐宿主 pre-step 估算与原引擎：约 4 字节/token，
-// 工具调用结构开销 +8）。
-func (s *compactionBasicServer) msgTokens(m *proto.Message) int {
-	n := len(m.GetContent()) / 4
-	if len(m.GetToolCalls()) > 0 {
-		n += 8
-	}
-	return n
-}
-
-// estimateMsgs 估算消息列表总 token 数。
-func (s *compactionBasicServer) estimateMsgs(msgs []*proto.Message) int {
-	total := 0
-	for _, m := range msgs {
-		total += s.msgTokens(m)
-	}
-	return total
 }
 
 // truncateSummary 截断式退化摘要：取首条+末条拼接（对齐宿主引擎 truncateCompact，

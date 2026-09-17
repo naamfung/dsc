@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -56,7 +55,7 @@ func main() {
 	if execDir == "" {
 		execDir, _ = os.Getwd()
 	}
-	stateDir := filepath.Join(execDir, "billion-context")
+	stateDir := dsc.PJoin(execDir, "billion-context")
 	store := bcadapter.NewStateStore(stateDir)
 
 	// 上下文窗口（默认 128K，可经 DSC_CONTEXT_WINDOW 覆盖）
@@ -165,13 +164,13 @@ func main() {
 			Description: "Distill a large tool result into a short summary. Call this IMMEDIATELY for any result marked [ACP absorb]; the original output is removed afterwards and your summary becomes the durable record.",
 			Handler:     bc.handleAbsorb,
 			Schema: json.RawMessage(`{
-			  "type": "object",
-			  "properties": {
-			    "ref": {"type": "string", "description": "The mNNNNN ref of the tool result to absorb"},
-			    "summary": {"type": "string", "description": "Distilled essentials: outcome, key values, exact paths:lines, error text verbatim, decisions"}
-			  },
-			  "required": ["ref", "summary"]
-			}`),
+                          "type": "object",
+                          "properties": {
+                            "ref": {"type": "string", "description": "The mNNNNN ref of the tool result to absorb"},
+                            "summary": {"type": "string", "description": "Distilled essentials: outcome, key values, exact paths:lines, error text verbatim, decisions"}
+                          },
+                          "required": ["ref", "summary"]
+                        }`),
 		})
 	}
 

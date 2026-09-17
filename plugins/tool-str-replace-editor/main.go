@@ -44,24 +44,24 @@ func isAbsPath(path string) bool {
 }
 
 // makeAbsPath 將路徑轉換為絕對路徑，正確處理 Unix 絕對路徑和 Windows 盤符絕對路徑。
-// 模型書寫的虛擬根路徑（/workspace、Windows 裸 /）已在入口經 core.MapWorkspacePath
-// 映射為真實路徑，此處只做純絕對化（映射後不會再出現裸 / 形態）。
+// 模型書寫的虛擬根路徑（/workspace）已在入口經 core.MapWorkspacePath 映射為真實路徑；
+// 裸 POSIX 路徑（/docs）保持真實根語義，此處純絕對化後在 Windows 上即為當前盤根。
 func makeAbsPath(reqPath string) (string, error) {
-	// 先使用 FromSlash 轉換斜槓，將 / 轉換為 \（在 Windows 上）
-	cleanReq := filepath.FromSlash(reqPath)
+	// 路徑統一保持正斜槓（dsc.PAbs 結果一律正斜槓，Windows 上 os.* 亦接受正斜槓）。
+	cleanReq := reqPath
 
 	// 檢查是否為 Windows 盤符絕對路徑 (如 C:\ 或 C:/)
 	if len(cleanReq) >= 2 && cleanReq[1] == ':' {
 		c := cleanReq[0]
 		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-			return filepath.Abs(cleanReq)
+			return dsc.PAbs(cleanReq)
 		}
 	}
 
 	// 檢查是否為 Unix 絕對路徑或 Windows 無盤符根路徑 (以 / 或 \ 開頭)
 	// 在 Windows 上，以 \ 開頭的路徑被視為相對於當前驅動器的根目錄
-	// 直接使用 filepath.Abs 即可正確處理這種情況（會映射為如 D:\Agents\novelforge\main.go）
-	return filepath.Abs(cleanReq)
+	// 直接使用 dsc.PAbs 即可正確處理這種情況（結果為正斜槓絕對路徑）
+	return dsc.PAbs(cleanReq)
 }
 
 // safePath 檢查並返回安全的路徑（防止路徑遍歷和符號鏈接/junction 繞過）。
@@ -73,11 +73,11 @@ func safePath(base, reqPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		realReq, err := filepath.EvalSymlinks(absReq)
+		realReq, err := dsc.PEvalSymlinks(absReq)
 		if err != nil {
 			// 解析失敗，可能文件不存在，則檢查父目錄
-			parent := filepath.Dir(absReq)
-			_, symlinksErr := filepath.EvalSymlinks(parent)
+			parent := dsc.PDir(absReq)
+			_, symlinksErr := dsc.PEvalSymlinks(parent)
 			if symlinksErr != nil {
 				return "", symlinksErr
 			}
@@ -88,7 +88,7 @@ func safePath(base, reqPath string) (string, error) {
 		return realReq, nil
 	}
 
-	absBase, err := filepath.Abs(base)
+	absBase, err := dsc.PAbs(base)
 	if err != nil {
 		return "", err
 	}
@@ -104,11 +104,11 @@ func safePath(base, reqPath string) (string, error) {
 	}
 
 	// 構建絕對路徑並清理（去除 . .. 等）
-	absReq, err := filepath.Abs(filepath.Join(realBase, reqPath))
+	absReq, err := dsc.PAbs(dsc.PJoin(realBase, reqPath))
 	if err != nil {
 		return "", err
 	}
-	absReq = filepath.Clean(absReq)
+	absReq = dsc.PClean(absReq)
 
 	// 詞法前綴檢查：確保在 base 目錄內（对齐 DSH：工具层不做独立策略开关，
 	// 相对路径永远以 workspace 为根，防止 ../ 路径穿越；是否允许绝对路径写
@@ -237,8 +237,8 @@ func visitDir(dirPath string, depth int, rows *[]string) {
 		if e.IsDir() {
 			typeChar = "d"
 		}
-		fullPath := filepath.Join(dirPath, name)
-		relPath := filepath.ToSlash(strings.TrimPrefix(fullPath, filepath.Clean(core.WorkspaceRoot)+string(filepath.Separator)))
+		fullPath := dsc.PJoin(dirPath, name)
+		relPath := filepath.ToSlash(strings.TrimPrefix(fullPath, dsc.PClean(core.WorkspaceRoot)+"/"))
 		*rows = append(*rows, fmt.Sprintf("%s\t%s", typeChar, relPath))
 		if e.IsDir() {
 			visitDir(fullPath, depth+1, rows)
@@ -292,16 +292,17 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 	workspaceRoot := core.WorkspaceRoot
 
 	// 虛擬根歸并統一走 core.MapWorkspacePath（源頭在 core，SDK 供第三方插件復用，
-	// 各插件不再自行轉換）：/workspace 前綴與 Windows 裸 / 前綴一律錨定工作區根。
-	// 真實案例：模型傳 /docs/architecture.md，舊實現經 filepath.Abs 落到進程 cwd
-	// 所在盤的盤根（D:/docs），錨定工作區根後為 <root>/docs/architecture.md。
+	// 各插件不再自行轉換）：/workspace 前綴錨定工作區根；裸 POSIX 路徑（如
+	// /docs/architecture.md）保持真實根語義（Windows 上經下方 isAbsPath→dsc.PAbs
+	// 解析為當前盤根，與 Linux 把 /docs 解析到真實根行為一致），模型須以 /workspace
+	// 前綴引用工作區文件。
 	mappedPath := core.MapWorkspacePath(args.Path)
 	// 映射後落在工作區根內的路徑轉為相對形式，與模型直接傳相對路徑共用 safePath
 	// 的 join 分支（create 可自建缺失父目錄；view 缺失路徑報工作區內真實路徑錯誤，
 	// 而非走絕對分支報盤根 lstat 錯誤）。工作區外路徑保持絕對形式由 abs 分支校驗。
 	if filepath.IsAbs(mappedPath) {
-		if rel, relErr := filepath.Rel(workspaceRoot, mappedPath); relErr == nil &&
-			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if rel, relErr := dsc.PRel(workspaceRoot, mappedPath); relErr == nil &&
+			rel != ".." && !strings.HasPrefix(rel, "../") {
 			mappedPath = rel
 		}
 	}
@@ -313,7 +314,7 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 	// ToSlash 统一为正斜杆，避免 Windows 绝对路径标签含反斜杆；
 	// 工作区外路径（模型显式盘符路径）保留全路径标签
 	relPath := filepath.ToSlash(reqPath)
-	if prefix := filepath.ToSlash(filepath.Clean(workspaceRoot)) + "/"; strings.HasPrefix(relPath, prefix) {
+	if prefix := filepath.ToSlash(dsc.PClean(workspaceRoot)) + "/"; strings.HasPrefix(relPath, prefix) {
 		relPath = relPath[len(prefix):]
 	}
 
@@ -342,7 +343,7 @@ func strReplaceEditorHandler(ctx context.Context, argsJSON json.RawMessage) (str
 		if _, err := os.Stat(reqPath); err == nil {
 			return "", fmt.Errorf("File already exists at: %s. Cannot overwrite files using command `create`.", relPath)
 		}
-		dir := filepath.Dir(reqPath)
+		dir := dsc.PDir(reqPath)
 		if err := dsc.MkdirAll(dir); err != nil {
 			return "", slashErr(err)
 		}

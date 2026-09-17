@@ -64,7 +64,7 @@ func handleMergePDFs(ctx context.Context, args json.RawMessage) (string, error) 
 		return "", err
 	}
 	outPath := outAbs[0]
-	if err := dsc.MkdirAll(filepath.Dir(outPath)); err != nil {
+	if err := dsc.MkdirAll(dsc.PDir(outPath)); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -162,7 +162,7 @@ func handleExtractPagesTool(ctx context.Context, args json.RawMessage) (string, 
 	if err != nil {
 		return "", fmt.Errorf("invalid pages %q: %w", p.Pages, err)
 	}
-	if err := dsc.MkdirAll(filepath.Dir(outPath)); err != nil {
+	if err := dsc.MkdirAll(dsc.PDir(outPath)); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 
@@ -226,7 +226,7 @@ func listPDFs(dir string) []string {
 	var out []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".pdf") {
-			out = append(out, filepath.Join(dir, e.Name()))
+			out = append(out, dsc.PJoin(dir, e.Name()))
 		}
 	}
 	sort.Strings(out)

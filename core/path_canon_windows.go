@@ -24,13 +24,13 @@ const (
 func canonicalExistingOS(p string) (string, error) {
 	u16, err := syscall.UTF16PtrFromString(p)
 	if err != nil {
-		return filepath.EvalSymlinks(p)
+		return PEvalSymlinks(p)
 	}
 	h, err := syscall.CreateFile(u16, syscall.GENERIC_READ,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
 		nil, winOpenExisting, winFileFlagBackupSemant, 0)
 	if err != nil {
-		return filepath.EvalSymlinks(p)
+		return PEvalSymlinks(p)
 	}
 	defer syscall.CloseHandle(h)
 
@@ -38,9 +38,11 @@ func canonicalExistingOS(p string) (string, error) {
 	n, _, _ := procGetFinalPathNameByHandleW.Call(
 		uintptr(h), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), winVolumeNameDos)
 	if n == 0 || int(n) > len(buf) {
-		return filepath.EvalSymlinks(p)
+		return PEvalSymlinks(p)
 	}
-	return normWinPath(syscall.UTF16ToString(buf[:n])), nil
+	// Win32 API 返回原生反斜杠形态，统一归一化为正斜杠（与 CanonicalPath 其余
+	// 分支的 P* 输出一致）。
+	return filepath.ToSlash(normWinPath(syscall.UTF16ToString(buf[:n]))), nil
 }
 
 // normWinPath 把 GetFinalPathNameByHandleW 的 \\?\<path> 形式归一化为普通路径。

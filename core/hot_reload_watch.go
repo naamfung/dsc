@@ -53,7 +53,7 @@ func (m *Manager) StartHotReloadWatcher() error {
 		if p == "" {
 			continue
 		}
-		w.addWatchDir(filepath.Dir(p))
+		w.addWatchDir(PDir(p))
 	}
 	m.mu.RUnlock()
 	go w.run()
@@ -91,7 +91,7 @@ func (w *hotReloadWatcher) run() {
 			// 新文件一旦出现就主动加入 watch，确保后续更高版本继续触发；
 			// 事件去抖交给 rescan 内部的节流处理。
 			if ev.Op&(fsnotify.Create|fsnotify.Write) != 0 {
-				w.addWatchDir(filepath.Dir(ev.Name))
+				w.addWatchDir(PDir(ev.Name))
 			}
 			w.rescan()
 		case <-ticker.C:
@@ -135,7 +135,7 @@ func (w *hotReloadWatcher) collectUpgrades() []upgradeCandidate {
 		if p == "" {
 			continue
 		}
-		dir := filepath.Dir(p)
+		dir := PDir(p)
 		base := filepath.Base(dir)
 		best, v := versionedCandidatesInDir(dir, base)
 		if best == "" {

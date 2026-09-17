@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -68,12 +67,12 @@ func getExeDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Dir(exePath), nil
+	return dsc.PDir(exePath), nil
 }
 
 // cleanupOldBrowserData 清理24小時前的臨時瀏覽器數據目錄
 func cleanupOldBrowserData(exeDir string) error {
-	browserDataRoot := filepath.Join(exeDir, "temp", "browser-data")
+	browserDataRoot := dsc.PJoin(exeDir, "temp", "browser-data")
 	// 確保根目錄存在
 	if err := dsc.MkdirAll(browserDataRoot); err != nil {
 		return err
@@ -89,7 +88,7 @@ func cleanupOldBrowserData(exeDir string) error {
 		if !entry.IsDir() {
 			continue
 		}
-		fullPath := filepath.Join(browserDataRoot, entry.Name())
+		fullPath := dsc.PJoin(browserDataRoot, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -110,7 +109,7 @@ func cleanupOldBrowserData(exeDir string) error {
 func defaultUserDataDir() string {
 	if runtime.GOOS == "windows" {
 		if la := os.Getenv("LOCALAPPDATA"); la != "" {
-			p := filepath.Join(la, "Google", "Chrome", "User Data")
+			p := dsc.PJoin(la, "Google", "Chrome", "User Data")
 			if st, err := os.Stat(p); err == nil && st.IsDir() {
 				return p
 			}
@@ -162,7 +161,7 @@ func launchBrowserRod(sessionID string, userMode bool) (*rod.Browser, bool, erro
 
 	// 浏览器数据目录：程序可执行路径下的 temp/browser-data/<sessionID>
 	// 避免与 workspace 混雜，並通過 sessionID 區分不同實例
-	browserDataDir := filepath.Join(exeDir, "temp", "browser-data", sessionID)
+	browserDataDir := dsc.PJoin(exeDir, "temp", "browser-data", sessionID)
 	if err := dsc.MkdirAll(browserDataDir); err != nil {
 		return nil, false, fmt.Errorf("failed to create browser data directory: %w", err)
 	}
@@ -766,14 +765,14 @@ func browserScreenshotImpl(sessionID, url string, fullPage bool) (string, error)
 	}
 
 	// 保存截圖到工作區目錄（沙箱限制寫入系統臨時目錄，如 %TEMP%，故存到 workspace 內）
-	downloadDir := filepath.Join(core.WorkspaceRoot, "screenshots")
+	downloadDir := dsc.PJoin(core.WorkspaceRoot, "screenshots")
 	if err := dsc.MkdirAll(downloadDir); err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"創建下載目錄失敗: %s"}`, err.Error()), nil
 	}
 
 	timestamp := time.Now().Format("20060102_150405")
 	fileName := fmt.Sprintf("screenshot_%s.png", timestamp)
-	filePath := filepath.Join(downloadDir, fileName)
+	filePath := dsc.PJoin(downloadDir, fileName)
 
 	if err := dsc.WriteFile(filePath, screenshot); err != nil {
 		return fmt.Sprintf(`{"success":false,"error":"保存截圖失敗: %s"}`, err.Error()), nil

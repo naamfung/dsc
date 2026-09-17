@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	dsc "dsc-sdk"
@@ -173,7 +172,7 @@ func createPDFFromText(outPath, text, fontName string, fontSize float64, paper s
 	}
 
 	// 8. 写入文件
-	if err := dsc.MkdirAll(filepath.Dir(absOut)); err != nil {
+	if err := dsc.MkdirAll(dsc.PDir(absOut)); err != nil {
 		return "", 0, fmt.Errorf("create output dir: %w", err)
 	}
 	if err := api.CreatePDFFile(xRefTable, absOut, conf); err != nil {

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/internal/posixpath"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -346,7 +347,7 @@ func Dir(path string) RunnerOption {
 			r.Dir = path
 			return nil
 		}
-		path, err := filepath.Abs(path)
+		path, err := posixpath.Abs(path)
 		if err != nil {
 			return fmt.Errorf("could not get absolute dir: %w", err)
 		}
@@ -875,7 +876,7 @@ func (r *Runner) Reset() {
 			r.tempDir = os.TempDir()
 		}
 		// Clean it as we will later do a string prefix match.
-		r.tempDir = filepath.Clean(r.tempDir)
+		r.tempDir = posixpath.Clean(r.tempDir)
 	}
 	// reset the internal state
 	*r = Runner{

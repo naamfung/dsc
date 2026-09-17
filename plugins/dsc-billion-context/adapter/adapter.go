@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
-	"path/filepath"
 	"sync"
 
 	bcacp "dsc-billion-context/acp"
+	dsc "dsc-sdk"
 	"dsc/proto"
 )
 
@@ -180,7 +180,7 @@ func (s *StateStore) Save(sessionID string, state *bcacp.CompressionState) error
 func (s *StateStore) path(sessionID string) string {
 	// 防止路径遍历：sessionID 仅允许字母数字与 -_
 	safe := sanitizeSessionID(sessionID)
-	return filepath.Join(s.dir, safe+".json")
+	return dsc.PJoin(s.dir, safe+".json")
 }
 
 // sanitizeSessionID 把 sessionID 限制为安全字符（防止路径遍历）。

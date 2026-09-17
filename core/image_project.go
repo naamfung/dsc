@@ -8,7 +8,6 @@ import (
 	jpegenc "image/jpeg"
 	"image/png"
 	"os"
-	"path/filepath"
 	"strings"
 
 	xdraw "golang.org/x/image/draw"
@@ -49,7 +48,7 @@ func ProjectImageRef(ref string, maxSide int) (string, error) {
 	default:
 		return "", fmt.Errorf("不支持的图像引用: %s", ref)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ref))
+	data, err := os.ReadFile(PJoin(dir, ref))
 	if err != nil {
 		return "", fmt.Errorf("读取图像附件 %s 失败: %w", ref, err)
 	}

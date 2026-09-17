@@ -39,7 +39,7 @@ func binExt() string {
 func (m *Manager) execName(dirBase string) string { return dirBase + binExt() }
 
 // pluginsRoot 返回插件根目录（ExecDir/plugins）。
-func (m *Manager) pluginsRoot() string { return filepath.Join(m.config.ExecDir, "plugins") }
+func (m *Manager) pluginsRoot() string { return PJoin(m.config.ExecDir, "plugins") }
 
 // backupConfig 在改动前把 config.yaml 备份到 config.yaml.<毫秒时间戳>.bak，返回备份路径。
 //
@@ -150,7 +150,7 @@ func (t *installDscPluginTool) install(ctx context.Context, ptype, name, source 
 	// name 即完整目录基名（如 tool-musicplayer），与 load/unload/uninstall/upgrade
 	// 一致，直接作为 plugins/ 下的目录基名；type 仅用于条目声明与 live 加载元数据校验。
 	dirBase := name
-	pluginRoot := filepath.Join(t.m.pluginsRoot(), dirBase)
+	pluginRoot := PJoin(t.m.pluginsRoot(), dirBase)
 
 	// 拷贝来源到约定目录
 	if err := copyPluginSource(source, pluginRoot, t.m.execName(dirBase)); err != nil {
@@ -204,12 +204,12 @@ func copyPluginSource(source, pluginRoot, execFile string) error {
 		if err := os.MkdirAll(pluginRoot, 0755); err != nil {
 			return err
 		}
-		if err := copyFile(source, filepath.Join(pluginRoot, execFile)); err != nil {
+		if err := copyFile(source, PJoin(pluginRoot, execFile)); err != nil {
 			return fmt.Errorf("拷贝插件二进制失败: %w", err)
 		}
 	}
 	// 断言约定执行文件齐备（目录来源须含 <type>-<name><ext>）
-	if st, err := os.Stat(filepath.Join(pluginRoot, execFile)); err != nil || st.IsDir() {
+	if st, err := os.Stat(PJoin(pluginRoot, execFile)); err != nil || st.IsDir() {
 		return fmt.Errorf("插件目录 %s 缺少约定执行文件 %s（须含 <type>-<name><ext>）", pluginRoot, execFile)
 	}
 	return nil
@@ -265,7 +265,7 @@ func (t *uninstallDscPluginTool) Execute(_ context.Context, args json.RawMessage
 	}
 	t.m.removeHookClient(p.Name)
 	if p.DeleteDir {
-		if err := os.RemoveAll(filepath.Join(t.m.pluginsRoot(), p.Name)); err != nil {
+		if err := os.RemoveAll(PJoin(t.m.pluginsRoot(), p.Name)); err != nil {
 			return "", fmt.Errorf("删除插件目录失败: %w", err)
 		}
 	}
@@ -435,7 +435,7 @@ func pluginBinaryStemValid(dir, stem string) bool {
 // 返回的路径统一用正斜杠（filepath.ToSlash），避免 Windows 反斜杠误导模型——
 // 宿主 SHELL 是标准 POSIX，内置工具结果一律以正斜杠对外。
 func (m *Manager) diskPluginBinary(name string) string {
-	dir := filepath.Join(m.pluginsRoot(), name)
+	dir := PJoin(m.pluginsRoot(), name)
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
@@ -457,7 +457,7 @@ func (m *Manager) diskPluginBinary(name string) string {
 		}
 		stem := strings.TrimSuffix(fn, binExt())
 		if pluginBinaryStemValid(name, stem) {
-			return filepath.ToSlash(filepath.Join(dir, fn))
+			return PJoin(dir, fn)
 		}
 	}
 	return ""
@@ -597,7 +597,7 @@ func (t *upgradeDscPluginTool) upgrade(name, versionStr, source string) (map[str
 	if !dscPluginNameRe.MatchString(name) || name == "" || name == "." || name == ".." {
 		return nil, fmt.Errorf("invalid name %q: use [A-Za-z0-9_-] only", name)
 	}
-	pluginDir := filepath.Join(t.m.pluginsRoot(), name)
+	pluginDir := PJoin(t.m.pluginsRoot(), name)
 	st, err := os.Stat(pluginDir)
 	if err != nil || !st.IsDir() {
 		return nil, fmt.Errorf("插件目录 %s 不存在（请先用 install_dsc_plugin 安装）", pluginDir)
@@ -613,13 +613,13 @@ func (t *upgradeDscPluginTool) upgrade(name, versionStr, source string) (map[str
 	if nv.LessThanOrEqual(version.Must(version.NewVersion("0.0.0"))) {
 		return nil, fmt.Errorf("版本号必须大于 0.0.0")
 	}
-	newFile := filepath.Join(pluginDir, base+"-v"+versionStr+ext)
+	newFile := PJoin(pluginDir, base+"-v"+versionStr+ext)
 	if _, err := os.Stat(newFile); err == nil {
 		return nil, fmt.Errorf("目标版本 %s 已存在（%s），无需重复升级", versionStr, newFile)
 	}
 
 	// 当前运行版本（基线或既有版本化二进制中最高者）
-	curBinary := ResolveLatestBinary(filepath.Join(pluginDir, base+ext))
+	curBinary := ResolveLatestBinary(PJoin(pluginDir, base+ext))
 	curV := binaryVersion(curBinary)
 	if !nv.GreaterThan(curV) {
 		return nil, fmt.Errorf("版本 %s 不高于当前运行版本 %s，不是升级",
@@ -633,7 +633,7 @@ func (t *upgradeDscPluginTool) upgrade(name, versionStr, source string) (map[str
 		return nil, fmt.Errorf("source 不存在: %w", err)
 	}
 	if si.IsDir() {
-		srcFile = filepath.Join(source, base+ext)
+		srcFile = PJoin(source, base+ext)
 		if _, err := os.Stat(srcFile); err != nil {
 			return nil, fmt.Errorf("目录 %s 缺少约定执行文件 %s", source, base+ext)
 		}
@@ -744,13 +744,13 @@ func (t *loadDscPluginTool) Execute(ctx context.Context, args json.RawMessage) (
 
 	// 二进制一律按命名约定自动解析（plugins/<name>/<name>.exe，含版本化），不向模型
 	// 暴露插件文件路径，也不接受模型传入路径。
-	pluginDir := filepath.Join(t.m.pluginsRoot(), p.Name)
+	pluginDir := PJoin(t.m.pluginsRoot(), p.Name)
 	if st, err := os.Stat(pluginDir); err != nil || !st.IsDir() {
 		return "", fmt.Errorf("插件目录 %s 不存在（插件须已置于 plugins/ 目录下）", pluginDir)
 	}
-	bin := ResolveLatestBinary(filepath.Join(pluginDir, p.Name+binExt()))
-	bin = filepath.Clean(bin)
-	root := strings.ToLower(filepath.Clean(t.m.pluginsRoot()))
+	bin := ResolveLatestBinary(PJoin(pluginDir, p.Name+binExt()))
+	bin = PClean(bin)
+	root := strings.ToLower(PClean(t.m.pluginsRoot()))
 	if !strings.HasPrefix(strings.ToLower(bin), root) {
 		return "", fmt.Errorf("拒绝加载 plugins/ 目录之外的可执行文件: %s", bin)
 	}
@@ -940,15 +940,15 @@ func (m *Manager) dscPluginTools() []ToolDefinition {
 }
 
 func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	return PWalk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
+		rel, err := PRel(src, path)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
+		target := PJoin(dst, rel)
 		if info.IsDir() {
 			return os.MkdirAll(target, 0755)
 		}
@@ -962,7 +962,7 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := os.MkdirAll(PDir(dst), 0755); err != nil {
 		return err
 	}
 	out, err := os.Create(dst)

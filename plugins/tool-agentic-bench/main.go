@@ -51,7 +51,7 @@ func benchRoot() string {
 
 // caseOutDir 返回某用例在产物根下的绝对目录。
 func caseOutDir(root, id string) string {
-	return filepath.Join(root, benchOutDirName, id)
+	return dsc.PJoin(root, benchOutDirName, id)
 }
 
 // renderTask 把用例任务陈述里的 <benchRoot>/<caseOut> 占位符替换为真实路径后返回。
@@ -127,7 +127,7 @@ func hBenchStart(ctx context.Context, args json.RawMessage) (string, error) {
 			state.caseBudget = time.Duration(s) * time.Second
 		}
 	}
-	outRoot := filepath.Join(state.root, benchOutDirName)
+	outRoot := dsc.PJoin(state.root, benchOutDirName)
 	if err := dsc.MkdirAll(outRoot); err != nil {
 		return "", fmt.Errorf("创建产物目录失败: %w", err)
 	}
@@ -236,7 +236,7 @@ func hBenchSubmit(ctx context.Context, args json.RawMessage) (string, error) {
 	if c.Kind == "answer" {
 		candidate = p.Answer
 	} else { // file：插件直接读产物文件判定（端态校验，无需模型回传内容）。
-		raw, err := dsc.ReadFile(filepath.Join(caseOutDir(root, c.ID), "reply.txt"))
+		raw, err := dsc.ReadFile(dsc.PJoin(caseOutDir(root, c.ID), "reply.txt"))
 		if err != nil {
 			state.results[c.ID] = CaseResult{Status: "fail", Feedback: "未找到产物文件 " + c.Relative, DurationMs: msSince(startAt)}
 			return submitPayload(c.ID, "fail", "FAIL（未找到产物文件 "+c.Relative+"）", false, root), nil
@@ -287,7 +287,7 @@ func hBenchReport(ctx context.Context, args json.RawMessage) (string, error) {
 	}
 	summary, _, _ := buildReport(root, state.results, totalMs())
 	// 报告 JSON 已落盘到 <root>/bench-out/report.json，结果字符串给出摘要与路径。
-	return fmt.Sprintf("%s（报告已写入 %s）", summary, filepath.ToSlash(filepath.Join(root, benchOutDirName, "report.json"))), nil
+	return fmt.Sprintf("%s（报告已写入 %s）", summary, filepath.ToSlash(dsc.PJoin(root, benchOutDirName, "report.json"))), nil
 }
 
 // totalMs 返回从 bench_start 到现在（或上次已报告节点）的总耗时毫秒；未开始为 0。

@@ -33,6 +33,10 @@ func TestRuntimeSpawnSitesConsoleHidden(t *testing.T) {
 	// 目录豁免（相对仓库根，"/" 分隔）：非运行时链路或 vendored 第三方库。
 	// libs/vodka、libs/anthropic-sdk-go：vendored 外部依赖，运行时不可达
 	//（agenttoolset 的 bash/rg 派生无任何 DSC 代码引用；见全仓 import 排查）。
+	// plugins/tool-2fa-master/vendor：内部专用插件的 vendored 第三方剪贴板库
+	//（atotto/clipboard）——其 pbcopy/pbpaste/xclip/xsel 派生仅 darwin/unix 编译
+	//（对应文件受 //go:build 约束，Windows 控制台闪窗链路不涉及），且属非本仓库
+	// 维护的 vendored 内部实现，不修改（对齐 libs/vodka 豁免口径）。
 	// builder：开发者本机构建工具，始终运行在开发者终端内，非 TUI 运行时链路。
 	skipDirs := map[string]bool{
 		".git":                         true,
@@ -43,8 +47,9 @@ func TestRuntimeSpawnSitesConsoleHidden(t *testing.T) {
 		"examples":                     true,
 		"testdata":                     true,
 		filepath.ToSlash("libs/vodka"): true,
-		filepath.ToSlash("libs/anthropic-sdk-go"): true,
-		filepath.ToSlash("builder"):               true,
+		filepath.ToSlash("libs/anthropic-sdk-go"):          true,
+		filepath.ToSlash("plugins/tool-2fa-master/vendor"): true,
+		filepath.ToSlash("builder"):                        true,
 	}
 
 	// 文件豁免（相对仓库根，"/" 分隔）：派生点不直接接触 exec.Cmd 启动属性、

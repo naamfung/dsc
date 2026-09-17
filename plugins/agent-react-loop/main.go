@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"dsc-sdk"
 	"dsc/core"
@@ -431,7 +430,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		compacted := false
 		promptTokens := int(a.lastPromptTokens)
 		if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens <= 0 {
-			if est := estimatePromptTokens(msgs); est > promptTokens {
+			if est := core.EstimateProtoMessagesTokens(msgs); est > promptTokens {
 				promptTokens = est
 			}
 		}
@@ -459,7 +458,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 				keep := len(nodes) // 首个被逐字保留的节点下标
 				acc := 0
 				for j := len(nodes) - 1; j >= 1; j-- {
-					acc += estimateMessageTokens(msgs[offset+j])
+					acc += core.EstimateProtoMessageTokens(msgs[offset+j])
 					if acc > retainTokens {
 						break
 					}
@@ -1229,50 +1228,11 @@ const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史
 	"保留用户意图、已执行的工具调用及其结果、以及所有关键的中间结论，以便在后续对话中无需原始记录也能继续。" +
 	"只输出压缩后的摘要，不要输出任何解释、前言或结尾。"
 
-// estimateTextTokens 估算一段文本的 token 数（对齐 rex guardian/estimateTokens）：
-// 取「字节数/4」与「rune 数」的较大者。英文按 /4（约 4 字符 1 token）；CJK（UTF-8
-// 每字 3 字节）字节/4 会低估，故回调为 rune 数（每字按 1 token），避免中文会话被
-// 笼统 /4 低估约 4 倍而撑爆上下文。
-func estimateTextTokens(s string) int {
-	bytes := len(s)
-	runes := utf8.RuneCountInString(s)
-	if byBytes := (bytes + 3) / 4; byBytes > runes {
-		return byBytes
-	}
-	return runes
-}
-
-// estimateMessageTokens 估算单条消息的 token 数（对齐 DSH tokenMeter 的
-// "字符数 + 结构开销" 回退，不依赖精确 tokenizer）：文本估算 + 每条消息的固定
-// 结构开销（角色、tool_call_id 等），工具调用额外计入名称与参数；图像按
-// DeepSeek 文档的单图 token 上限（384）估算，避免 base64 字节数被误放大。
-func estimateMessageTokens(m *proto.Message) int {
-	toks := estimateTextTokens(m.Content)
-	if m.Role == "tool" {
-		toks += 6 // tool 角色 + tool_call_id 开销
-	} else {
-		toks += 4
-	}
-	for _, img := range m.Images {
-		if img == "" {
-			continue
-		}
-		toks += 384 // 单图 token 上限（视觉模型按尺寸换算）
-	}
-	for _, tc := range m.ToolCalls {
-		toks += estimateTextTokens(tc.Name) + estimateTextTokens(tc.ArgumentsJson) + 8
-	}
-	return toks
-}
-
-// estimatePromptTokens 估算整份请求历史（含 system 前缀）的 token 数。
-func estimatePromptTokens(msgs []*proto.Message) int {
-	total := 0
-	for _, m := range msgs {
-		total += estimateMessageTokens(m)
-	}
-	return total
-}
+// 用量估算统一走 core 公用启发式（core.EstimateProtoMessageTokens /
+// core.EstimateProtoMessagesTokens，对齐 DSH tokenMeter：CJK 感知
+// max(bytes/4, runes) + 角色开销 + 图像 + 工具参数），与压缩后端
+// （dsc-system compaction-basic）及宿主 pre-step 同一估算口径，
+// 不再各持一份私有字节/4 粗略实现。
 
 // compactHistory 當上下文已用容量超過 80% 時觸發：讓模型把派生歷史壓縮成摘要。
 // 返回摘要文本（不含 system 消息，避免把基礎指令與技能索引壓進摘要），
@@ -1283,7 +1243,7 @@ func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLM
 	if a.contextWindow <= 0 {
 		return "", nil
 	}
-	inputTokens := estimatePromptTokens(msgs) + 64 // 压缩指令与结构开销
+	inputTokens := core.EstimateProtoMessagesTokens(msgs) + 64 // 压缩指令与结构开销
 	remaining := a.contextWindow - inputTokens
 	if remaining < 1024 {
 		remaining = 1024

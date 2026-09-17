@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	dsc "dsc-sdk"
 	"dsc/core"
 	"dsc/proto"
 )
@@ -172,13 +173,13 @@ func keyFor(_, path string) string {
 		}
 	}
 	if !filepath.IsAbs(p) {
-		p = filepath.Join(core.WorkspaceRoot, p)
+		p = dsc.PJoin(core.WorkspaceRoot, p)
 	}
-	p = filepath.Clean(p)
-	if real, err := filepath.EvalSymlinks(p); err == nil {
+	p = dsc.PClean(p)
+	if real, err := dsc.PEvalSymlinks(p); err == nil {
 		p = real
-	} else if real, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-		p = filepath.Join(real, filepath.Base(p))
+	} else if real, err := dsc.PEvalSymlinks(dsc.PDir(p)); err == nil {
+		p = dsc.PJoin(real, filepath.Base(p))
 	}
 	if runtime.GOOS == "windows" {
 		p = strings.ToLower(p)

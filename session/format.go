@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // 会话格式版本化与迁移（对齐 DSH session-format + session-format-catalog + 迁移 codec）。
@@ -131,7 +130,7 @@ func SaveWithFormat(path string, events []*Event) error {
 		return fmt.Errorf("session format: marshal header: %w", err)
 	}
 	// 确保目录存在
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(posixDir(path), 0755); err != nil {
 		return err
 	}
 	f, err := os.Create(path)

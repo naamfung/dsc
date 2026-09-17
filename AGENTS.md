@@ -191,7 +191,17 @@ DSC 的命令解析使用内置 POSIX shell 实现（mvdan/sh），所有路径�
 
   两行**必须先后同时出现**，顺序不可颠倒——先处理双反斜杆（避免被第 2 行拆成两个单反斜杆后再各自转换，产生多余的 `/`），再处理单反斜杆。
 
-- **适用范围**：所有向模型或用户展示的路径字符串（错误消息、工具结果、日志、TUI 显示等）。`filepath.Join` 生成的路径可用 `filepath.ToSlash`（因为它用的是平台原生分隔符，`ToSlash` 能正确转换），但从外部输入或错误中提取的路径必须用上述两行替换。
+- **适用范围**：所有向模型或用户展示的路径字符串（错误消息、工具结果、日志、TUI 显示等），以及从外部输入或错误中提取的路径（必须用上述两行替换）。构造内部路径一律使用 `core.P*` / `dsc.P*` 正斜杠 helper（见规则 11），不得先经原生 filepath 拼接再用 ToSlash 补救。
+
+### 11. 路径 API 黑名单：禁止直接使用 Windows 下返回反斜杠的 filepath 函数
+
+filepath 包在 Windows 上会把路径结果归一化为原生反斜杠（实测 Clean/Dir/Join/Abs/Rel/Split/FromSlash/EvalSymlinks/Glob/WalkDir/Walk 均如此，甚至对正斜杠输入也归一化为反斜杠），与「内部 POSIX shell 统一视窗与 UNIX 都以正斜杠处理路径输入输出」相悖。
+
+- **黑名单**：`filepath.Join / Abs / Clean / Rel / Split / FromSlash / EvalSymlinks / Glob / WalkDir / Walk / Dir / Separator` 一律禁止直接使用；由 `core/filepath_guard_test.go` 哨兵测试全仓守护，检出即报错（注释提及亦算命中，须改写）。
+
+- **正确接入**：本仓主模块（core/session/tui/cron/main 等）用 `core.P*`（PJoin/PAbs/PClean/PRel/PSplit/PDir/PEvalSymlinks/PGlob/PWalkDir/PWalk，先原生计算再归一化为正斜杠）；插件用 SDK 转发 `dsc.P*`；libs/sh、plugin、cron、session 等因独立模块或包级 import 环无法引入 core 的，用其本地等价实现（libs/sh/internal/posixpath、plugin/internal/pathx、cron/posix.go、session/posix.go，均登记守卫测试 fileAllowlist）。`string(filepath.Separator)` 一律用 `"/"`。
+
+- **豁免口径**：目录豁免（skipDirs）仅限第三方非直管 vendored 代码（libs/vodka、libs/anthropic-sdk-go、libs/go-openai、libs/go-lua、libs/jig-lisp、libs/toon-go、libs/fasttemplate、libs/bytebufferpool、plugins/tool-2fa-master/vendor）与仓库内非运行时产物（builder、examples、docs、testdata 等）。**本仓直管的 libs（libs/sh、libs/cron 等）无豁免权**，必须同样遵守黑名单——为第三方非直管 vendored 加白名单可以，直管代码不得以「第三方」名义豁免。
 
 ## 文档同步
 

@@ -8,6 +8,7 @@ plugins/*/dsc-plugin-*.exe
 plugins/*/dsc-plugin-*.exe~
 plugins/tool-harness-webui/tool-harness-webui
 plugins/tool-computer-use/tool-computer-use
+plugins/tool-pdf/tool-pdf
 
 # 放行仓库自带的构建/清理脚本（须位于 *.sh 之后才生效）
 !build.sh

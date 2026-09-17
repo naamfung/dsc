@@ -127,6 +127,14 @@ type Manager struct {
 	sessionApproval   map[string]ApprovalPolicy
 	sessionApprovalMu sync.RWMutex
 
+	// sessionLastPrompt 按会话记录最近一次成功 LLM 请求的服务端上报 prompt 用量
+	//（per-session，对齐 DSH tokenMeter 的 pressureTokens 语义）。供 agent/pre-step
+	// 分发时透传：压缩插件以「上次上报 + 自采样以来启发式增量」判定压力，而非仅靠
+	// 纯启发式估算（不含工具定义、CJK 字节/4 低估 → 真实用量已超阈值也不触发压缩）。
+	// 仅流式请求（ChatStream 回传 usage）记录；非流式 Chat 不携带 usage，保持 0。
+	sessionLastPrompt   map[string]int32
+	sessionLastPromptMu sync.RWMutex
+
 	// stopHooks 对称清理 hook：插件名 -> 按注册顺序执行的清理函数序列。
 	stopHooks map[string][]func() error
 
@@ -227,6 +235,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 		events:              NewEventBus(),
 		policyOff:           make(map[string][]func()),
 		sessionApproval:     make(map[string]ApprovalPolicy),
+		sessionLastPrompt:   make(map[string]int32),
 		jobs:                jobs.NewRegistry(),
 	}
 	m.jobs.SetLogger(m.logger)
@@ -294,7 +303,7 @@ func NewManager(cfg *ManagerConfig) *Manager {
 
 // cleanupOldTempDirs 清理exe目錄下temp/内時間超過 24 小時的目錄
 func cleanupOldTempDirs(exeDir string, logger hclog.Logger) error {
-	tempRoot := filepath.Join(exeDir, "temp")
+	tempRoot := PJoin(exeDir, "temp")
 	// 確保根目錄存在
 	if err := os.MkdirAll(tempRoot, 0755); err != nil {
 		return err
@@ -310,7 +319,7 @@ func cleanupOldTempDirs(exeDir string, logger hclog.Logger) error {
 		if !entry.IsDir() {
 			continue
 		}
-		fullPath := filepath.Join(tempRoot, entry.Name())
+		fullPath := PJoin(tempRoot, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -1522,7 +1531,7 @@ func (m *Manager) DeleteSession(id string) error {
 
 // sessionStore 打开/创建多会话 store（ExecDir/sessions）。
 func (m *Manager) sessionStore() (*session.Store, error) {
-	dir := filepath.Join(m.config.ExecDir, "sessions")
+	dir := PJoin(m.config.ExecDir, "sessions")
 	return session.NewStore(dir)
 }
 
@@ -1540,11 +1549,11 @@ func (m *Manager) ExportSession(id string) (string, error) {
 	if sess == nil {
 		return "", fmt.Errorf("export session: session %q not found", id)
 	}
-	dir := filepath.Join(m.config.ExecDir, "exports")
+	dir := PJoin(m.config.ExecDir, "exports")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("export session: %w", err)
 	}
-	path := filepath.Join(dir, id+".md")
+	path := PJoin(dir, id+".md")
 	if err := os.WriteFile(path, []byte(sess.ExportTranscript()), 0644); err != nil {
 		return "", fmt.Errorf("export session: %w", err)
 	}
@@ -1892,7 +1901,7 @@ func normalizeBinaryPath(path string) string {
 
 // getPluginDirectoryName 從二進制路徑中提取插件目錄名
 func getPluginDirectoryName(binaryPath string) string {
-	dir := filepath.Dir(binaryPath)
+	dir := PDir(binaryPath)
 	baseDir := filepath.Base(dir)
 	if baseDir == "plugins" || baseDir == "plugin" {
 		// 如果 dir 是 .../plugins，說明 binaryPath 是 ./plugins/<binaryName>.exe 或 plugins/<binaryName>.exe
@@ -2753,12 +2762,12 @@ func (m *Manager) SwitchMode(mode string) error {
 	presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
 	// 使用基於 ExecDir 或可執行文件所在目錄的絕對路徑
 	if m.config.ExecDir != "" {
-		presetPath = filepath.Join(m.config.ExecDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
+		presetPath = PJoin(m.config.ExecDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
 	} else {
 		// 嘗試獲取可執行文件所在目錄
 		if execPath, err := os.Executable(); err == nil {
-			execDir := filepath.Dir(execPath)
-			presetPath = filepath.Join(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
+			execDir := PDir(execPath)
+			presetPath = PJoin(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
 		}
 	}
 

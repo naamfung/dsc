@@ -66,7 +66,7 @@ func (s *SkillStore) loadDir(root string, scope SkillScope) {
 	for _, e := range entries {
 		if e.IsDir() {
 			// 目录布局：<dir>/SKILL.md
-			skillFile := filepath.Join(root, e.Name(), "SKILL.md")
+			skillFile := dsc.PJoin(root, e.Name(), "SKILL.md")
 			if info, err := os.Stat(skillFile); err == nil && !info.IsDir() {
 				if sk, ok := parseSkillFile(skillFile, e.Name()); ok {
 					sk.Scope = scope
@@ -78,7 +78,7 @@ func (s *SkillStore) loadDir(root string, scope SkillScope) {
 		// 扁平布局：<name>.md（根目录下直接是技能文件）
 		if strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 			name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
-			if sk, ok := parseSkillFile(filepath.Join(root, e.Name()), name); ok {
+			if sk, ok := parseSkillFile(dsc.PJoin(root, e.Name()), name); ok {
 				sk.Scope = scope
 				s.skills = append(s.skills, sk)
 			}
@@ -106,8 +106,8 @@ func (s *SkillStore) removeInstalled(name string) error {
 	}
 	// 目录布局时删除整个技能目录（含资源文件）；扁平文件则只删该文件
 	target := sk.Path
-	if filepath.Base(filepath.Dir(sk.Path)) == sk.Name {
-		target = filepath.Dir(sk.Path)
+	if filepath.Base(dsc.PDir(sk.Path)) == sk.Name {
+		target = dsc.PDir(sk.Path)
 	}
 	if err := os.RemoveAll(target); err != nil {
 		return fmt.Errorf("uninstall skill %q: %w", name, err)
@@ -250,7 +250,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args json.RawMessage) (s
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := dsc.PAbs(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve path: %w", err)
 	}
@@ -297,7 +297,7 @@ func candidateFromFile(path string) (SkillCandidate, bool) {
 	base := filepath.Base(path)
 	var name string
 	if strings.EqualFold(base, "SKILL.md") {
-		name = filepath.Base(filepath.Dir(path))
+		name = filepath.Base(dsc.PDir(path))
 	} else if strings.HasSuffix(strings.ToLower(base), ".md") {
 		name = strings.TrimSuffix(base, filepath.Ext(base))
 	} else {
@@ -318,21 +318,21 @@ func scanSkillDir(root string) []SkillCandidate {
 
 	// 若根目录本身就是技能包（含 SKILL.md），直接作为单一技能包返回。
 	// 否則 WalkDir 會跳過根節點、且頂層 SKILL.md 文件也被扁平分支跳過，導致識別不到。
-	if info, statErr := os.Stat(filepath.Join(root, "SKILL.md")); statErr == nil && !info.IsDir() {
-		if sk, ok := parseSkillFile(filepath.Join(root, "SKILL.md"), filepath.Base(root)); ok && strings.TrimSpace(sk.Description) != "" {
+	if info, statErr := os.Stat(dsc.PJoin(root, "SKILL.md")); statErr == nil && !info.IsDir() {
+		if sk, ok := parseSkillFile(dsc.PJoin(root, "SKILL.md"), filepath.Base(root)); ok && strings.TrimSpace(sk.Description) != "" {
 			return []SkillCandidate{{Name: sk.Name, SourceDir: root, DirLayout: true}}
 		}
 	}
 
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	_ = dsc.PWalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // 忽略无法访问的条目
 		}
 		if path == root {
 			return nil
 		}
-		rel, _ := filepath.Rel(root, path)
-		depth := len(strings.Split(filepath.Clean(rel), string(filepath.Separator)))
+		rel, _ := dsc.PRel(root, path)
+		depth := len(strings.Split(dsc.PClean(rel), "/"))
 		if d.IsDir() {
 			if depth > maxSkillScanDepth {
 				return filepath.SkipDir
@@ -340,7 +340,7 @@ func scanSkillDir(root string) []SkillCandidate {
 			if strings.EqualFold(d.Name(), ".git") {
 				return filepath.SkipDir
 			}
-			skillFile := filepath.Join(path, "SKILL.md")
+			skillFile := dsc.PJoin(path, "SKILL.md")
 			if info, statErr := os.Stat(skillFile); statErr == nil && !info.IsDir() {
 				if sk, ok := parseSkillFile(skillFile, d.Name()); ok && strings.TrimSpace(sk.Description) != "" {
 					out = append(out, SkillCandidate{Name: sk.Name, SourceDir: path, DirLayout: true})
@@ -369,13 +369,13 @@ func scanSkillDir(root string) []SkillCandidate {
 
 // installCandidate 将技能包拷贝到外置技能目录，统一为目录布局 <name>/SKILL.md。
 func (t *InstallSkillTool) installCandidate(c SkillCandidate) error {
-	destDir := filepath.Join(t.installedDir, c.Name)
+	destDir := dsc.PJoin(t.installedDir, c.Name)
 	if c.DirLayout {
 		if err := copyDir(c.SourceDir, destDir); err != nil {
 			return fmt.Errorf("install skill %q: %w", c.Name, err)
 		}
 	} else {
-		if err := copyFile(c.SourceFile, filepath.Join(destDir, "SKILL.md")); err != nil {
+		if err := copyFile(c.SourceFile, dsc.PJoin(destDir, "SKILL.md")); err != nil {
 			return fmt.Errorf("install skill %q: %w", c.Name, err)
 		}
 	}
@@ -385,15 +385,15 @@ func (t *InstallSkillTool) installCandidate(c SkillCandidate) error {
 // copyDir 递归拷贝技能包目录（跳过 .git），保留技能引用的资源文件。
 func copyDir(src, dst string) error {
 	var copied int64
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+	return dsc.PWalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
+		rel, err := dsc.PRel(src, path)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
+		target := dsc.PJoin(dst, rel)
 		if d.IsDir() {
 			if strings.EqualFold(d.Name(), ".git") {
 				return filepath.SkipDir
@@ -413,7 +413,7 @@ func copyDir(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	if err := dsc.MkdirAll(filepath.Dir(dst)); err != nil {
+	if err := dsc.MkdirAll(dsc.PDir(dst)); err != nil {
 		return err
 	}
 	data, err := dsc.ReadFile(src)
@@ -517,8 +517,8 @@ func newSkillResident() (*SkillStore, string) {
 	if skillsDir == "" {
 		skillsDir = "./skills"
 	}
-	installedDir := filepath.Join(skillsDir, "installed")
-	store := NewSkillStore(filepath.Join(skillsDir, "builtin"), installedDir)
+	installedDir := dsc.PJoin(skillsDir, "installed")
+	store := NewSkillStore(dsc.PJoin(skillsDir, "builtin"), installedDir)
 	return store, installedDir
 }
 

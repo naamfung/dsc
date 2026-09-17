@@ -2,7 +2,6 @@ package core
 
 import (
 	"os"
-	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,8 +15,8 @@ func init() {
 		// 若無法獲取可執行文件路徑，則回退到相對路徑
 		ConfigPath = "./config/config.yaml"
 	} else {
-		execDir := filepath.Dir(exePath)
-		ConfigPath = filepath.Join(execDir, "config", "config.yaml")
+		execDir := PDir(exePath)
+		ConfigPath = PJoin(execDir, "config", "config.yaml")
 	}
 }
 
@@ -84,7 +83,7 @@ func SaveConfig(path string, cfg *Config) error {
 		return err
 	}
 	// 確保目錄存在
-	dir := filepath.Dir(path)
+	dir := PDir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}

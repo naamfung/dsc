@@ -15,7 +15,6 @@ import (
 	"math"
 	mathrand "math/rand/v2"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -25,6 +24,7 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/internal"
+	"mvdan.cc/sh/v3/internal/posixpath"
 	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -92,7 +92,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			var path string
 			try := 0
 			for {
-				path = filepath.Join(r.tempDir, fifoNamePrefix+strconv.FormatUint(mathrand.Uint64(), 16))
+				path = posixpath.Join(r.tempDir, fifoNamePrefix+strconv.FormatUint(mathrand.Uint64(), 16))
 				err := mkfifo(path, 0o666)
 				if err == nil {
 					break
@@ -1199,7 +1199,7 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 	//
 	// If we want FIFOs to use a handler in the future, they probably
 	// need their own separate handler API matching Unix-like semantics.
-	dir, name := filepath.Split(path)
+	dir, name := posixpath.Split(path)
 	dir = strings.TrimSuffix(dir, "/")
 	if dir == r.tempDir && strings.HasPrefix(name, fifoNamePrefix) {
 		return os.OpenFile(path, flags, mode)

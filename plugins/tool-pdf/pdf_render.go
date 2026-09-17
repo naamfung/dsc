@@ -141,7 +141,7 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 	first, last := contiguousPages(selected)
 
 	if p.OutDir == "" {
-		p.OutDir = filepath.Join(dsc.WorkspaceRoot(), "pdf-images",
+		p.OutDir = dsc.PJoin(dsc.WorkspaceRoot(), "pdf-images",
 			strings.TrimSuffix(filepath.Base(p.FilePath), ".pdf"), "render")
 	}
 	// 沙箱策略由宿主流水线统一判定，本插件不做越界检查
@@ -149,7 +149,7 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 	if dpi <= 0 {
 		dpi = renderDPI
 	}
-	outAbs, err := filepath.Abs(p.OutDir)
+	outAbs, err := dsc.PAbs(p.OutDir)
 	if err != nil {
 		return "", fmt.Errorf("resolve out_dir: %w", err)
 	}
@@ -162,11 +162,11 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 		return "", fmt.Errorf("no PDF rasterizer found (mutool/pdftoppm/gs). Install one or set %s, or use pdf_extract_images to extract embedded images", rendererEnv)
 	}
 
-	absIn, err := filepath.Abs(p.FilePath)
+	absIn, err := dsc.PAbs(p.FilePath)
 	if err != nil {
 		return "", fmt.Errorf("resolve file_path: %w", err)
 	}
-	outPrefix := filepath.Join(outAbs, "page")
+	outPrefix := dsc.PJoin(outAbs, "page")
 	cmdArgs := r.renderArgs(absIn, outPrefix, first, last, dpi)
 
 	cmd := exec.Command(r.abs, cmdArgs...)
@@ -181,7 +181,7 @@ func handlePageToImages(ctx context.Context, args json.RawMessage) (string, erro
 	var rendered []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasPrefix(e.Name(), "page-") && strings.HasSuffix(e.Name(), ".png") {
-			rendered = append(rendered, filepath.Join(outAbs, e.Name()))
+			rendered = append(rendered, dsc.PJoin(outAbs, e.Name()))
 		}
 	}
 	if len(rendered) == 0 {

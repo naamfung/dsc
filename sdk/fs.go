@@ -44,7 +44,7 @@ func WorkspaceRoot() string {
 }
 
 // MapWorkspacePath 把模型书写的路径按「虚拟根 = 工作空间根」契约映射为真实路径
-// （WSL 盘符映射、/workspace 前缀、Windows 裸 / 锚定根；规则详见 core.MapWorkspacePath）。
+// （WSL 盘符映射、/workspace 前缀、裸 POSIX 路径保持真实根语义；规则详见 core.MapWorkspacePath）。
 // 源头实现在 core（宿主本身亦有虚拟根诉求），SDK 导入 core 二次封装，第三方插件
 // 无须直接依赖 core 即可在 SDK 层获得工作空间相关方法的完整支持，各插件不再
 // 各自实现归并转换。
@@ -64,15 +64,48 @@ func ResolveWorkspacePath(p string) (string, error) {
 	return resolved, nil
 }
 
-// AbsPath 规范化路径为绝对路径（filepath.Abs）。错误统一包装为
+// AbsPath 规范化路径为绝对路径（core.PAbs，结果一律正斜杆）。错误统一包装为
 // "resolve path <p>: <err>"（路径正斜杆呈现，见 posixPathErr）。
 func AbsPath(path string) (string, error) {
-	abs, err := filepath.Abs(path)
+	abs, err := core.PAbs(path)
 	if err != nil {
 		return "", &posixPathErr{op: "resolve path", path: path, err: err}
 	}
 	return abs, nil
 }
+
+// PosixPath 系列：core.P* 的 SDK 转发。filepath 包在 Windows 上会把路径归一化为
+// 原生反斜杠，违背「内部 POSIX shell 统一正斜杠」约定（AGENTS.md 路径纪律与
+// core/filepath_guard_test.go 哨兵测试）；第三方插件不得直接使用被禁 filepath
+// 函数，一律经此层获得正斜杠结果（先原生计算再归一化，Windows 上 os.* 接受
+// 正斜杠，语义不变）。
+//
+//	PJoin     —— 拼接路径（原生同名函数等价，结果正斜杠）
+//	PAbs      —— 绝对化（原生同名函数等价，结果正斜杠）
+//	PClean    —— 清理路径（原生同名函数等价，结果正斜杠）
+//	PRel      —— 相对化（原生同名函数等价，结果正斜杠）
+//	PSplit    —— 拆分目录与文件（原生同名函数等价，目录正斜杠）
+//	PDir      —— 父目录（原生同名函数等价，结果正斜杠）
+//	PEvalSymlinks —— 解析符号链接（原生同名函数等价，结果正斜杠）
+//	PGlob     —— 通配匹配（原生同名函数等价，结果正斜杠）
+//	PWalkDir  —— 目录遍历（原生同名函数等价，回调路径正斜杠）
+//
+// PSeparator 为统一分隔符（"/"），禁止再取 filepath 包的 Separator 常量
+// （Windows 上为反斜杠）。
+func PJoin(elem ...string) string                    { return core.PJoin(elem...) }
+func PAbs(path string) (string, error)               { return core.PAbs(path) }
+func PClean(path string) string                      { return core.PClean(path) }
+func PRel(basepath, targpath string) (string, error) { return core.PRel(basepath, targpath) }
+func PSplit(path string) (dir, file string)          { return core.PSplit(path) }
+func PDir(path string) string                        { return core.PDir(path) }
+func PEvalSymlinks(path string) (string, error)      { return core.PEvalSymlinks(path) }
+func PGlob(pattern string) ([]string, error)         { return core.PGlob(pattern) }
+func PWalkDir(root string, fn func(path string, d os.DirEntry, err error) error) error {
+	return core.PWalkDir(root, fn)
+}
+
+// PSeparator 统一路径分隔符（所有平台一律正斜杠）。
+const PSeparator = "/"
 
 // ReadFile 读取文件内容。错误统一包装为 "read <path>: <err>"（路径正斜杆呈现，
 // 与内部 POSIX shell 风格一致）；panic 转为错误返回（防御性 recover），绝不

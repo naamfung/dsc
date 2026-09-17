@@ -19,6 +19,7 @@ import (
 	"golang.org/x/term"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/internal/posixpath"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -311,7 +312,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		pwd := r.envGet("PWD")
 		if evalSymlinks {
 			var err error
-			pwd, err = filepath.EvalSymlinks(pwd)
+			pwd, err = posixpath.EvalSymlinks(pwd)
 			if err != nil {
 				exit.fatal(err) // perhaps overly dramatic?
 				return exit
@@ -1136,11 +1137,11 @@ func absPath(dir, path string) string {
 		return ""
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(dir, path)
+		path = posixpath.Join(dir, path)
 	}
-	// Note that [filepath.Join] cleans its result, but an already absolute
+	// Note that joining cleans its result, but an already absolute
 	// path needs cleaning too, such as turning "/a/../b" into "/b".
-	return filepath.Clean(path)
+	return posixpath.Clean(path)
 }
 
 func (r *Runner) absPath(path string) string {

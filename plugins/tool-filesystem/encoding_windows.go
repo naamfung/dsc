@@ -21,6 +21,13 @@ const (
 	mbErrInvalidChars = 0x00000008 // 遇非法字节序列即报错（严格模式）
 )
 
+// systemOEMCodePage 返回系统 OEM 码页（控制台工具的实际输出码页），供测试按
+// 实际系统能力断言（如 zh-CN 的 936/GBK）。经 kernel32.GetOEMCP 惰性调用。
+func systemOEMCodePage() uint16 {
+	r, _, _ := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetOEMCP").Call()
+	return uint16(r)
+}
+
 // decodeSystemCodePage 尝试以系统 OEM/ANSI 码页严格解码 s；任一码页成功即返回。
 func decodeSystemCodePage(s string) (string, bool) {
 	if len(s) == 0 {

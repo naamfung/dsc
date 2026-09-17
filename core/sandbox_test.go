@@ -59,8 +59,8 @@ func TestWorkspacePathToRootBoundary(t *testing.T) {
 
 	cases := []struct{ in, want string }{
 		{"/workspace", "/root/ws"},
-		{"/workspace/a.txt", filepath.Join("/root/ws", "a.txt")},
-		{`\workspace\b.txt`, filepath.Join("/root/ws", "b.txt")},
+		{"/workspace/a.txt", "/root/ws/a.txt"},
+		{`\workspace\b.txt`, "/root/ws/b.txt"},
 		// 前綴後直接接字符 → 唔係別名，維持原樣
 		{"/workspacefoo/x", "/workspacefoo/x"},
 		{"/workspacex", "/workspacex"},

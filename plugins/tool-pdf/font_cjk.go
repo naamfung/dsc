@@ -28,6 +28,8 @@ import (
 	"strings"
 	"sync"
 
+	dsc "dsc-sdk"
+
 	"github.com/pdfcpu/pdfcpu/pkg/font"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
@@ -58,10 +60,10 @@ func bundledFontsDir() string {
 	}
 	var dirs []string
 	if exe, err := os.Executable(); err == nil {
-		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "fonts"))
+		dirs = append(dirs, dsc.PJoin(dsc.PDir(exe), "fonts"))
 	}
 	if wd, err := os.Getwd(); err == nil {
-		dirs = append(dirs, filepath.Join(wd, "fonts"))
+		dirs = append(dirs, dsc.PJoin(wd, "fonts"))
 	}
 	for _, d := range dirs {
 		if st, err := os.Stat(d); err == nil && st.IsDir() {
@@ -92,10 +94,10 @@ func fontRequirementMessage() string {
 		fmt.Fprintf(&b, "当前 %s=%s（该目录不存在或不含 .ttf）。\n", fontsDirEnv, d)
 	} else {
 		if exe, err := os.Executable(); err == nil {
-			fmt.Fprintf(&b, "已探测字体目录：%s\n", filepath.Join(filepath.Dir(exe), "fonts"))
+			fmt.Fprintf(&b, "已探测字体目录：%s\n", dsc.PJoin(dsc.PDir(exe), "fonts"))
 		}
 		if wd, err := os.Getwd(); err == nil {
-			fmt.Fprintf(&b, "已探测字体目录：%s\n", filepath.Join(wd, "fonts"))
+			fmt.Fprintf(&b, "已探测字体目录：%s\n", dsc.PJoin(wd, "fonts"))
 		}
 		fmt.Fprintf(&b, "可用环境变量 %s 覆写字体目录。\n", fontsDirEnv)
 	}
@@ -128,7 +130,7 @@ func scanBundledTTFs() []string {
 		size int64
 	}
 	var entries []fontEntry
-	_ = filepath.WalkDir(fsDir, func(path string, d os.DirEntry, err error) error {
+	_ = dsc.PWalkDir(fsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -170,7 +172,7 @@ func findBundledFont(name string) (string, error) {
 	}
 	target := fontNameStem(name)
 	var matches []string
-	err := filepath.WalkDir(fsDir, func(path string, d os.DirEntry, err error) error {
+	err := dsc.PWalkDir(fsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

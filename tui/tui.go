@@ -2331,7 +2331,7 @@ func getExecutableDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Dir(exePath), nil
+	return core.PDir(exePath), nil
 }
 
 // listSkills 扫描 skills 目录，按内置（builtin/）与外置（installed/）分组返回展示行。
@@ -2343,14 +2343,14 @@ func listSkills() []string {
 		if err != nil {
 			exeDir = "."
 		}
-		dir = filepath.Join(exeDir, "skills")
+		dir = core.PJoin(exeDir, "skills")
 	}
 	var out []string
-	if builtin := scanSkillSection(filepath.Join(dir, "builtin")); len(builtin) > 0 {
+	if builtin := scanSkillSection(core.PJoin(dir, "builtin")); len(builtin) > 0 {
 		out = append(out, "内置技能（"+fmt.Sprint(len(builtin))+"）：")
 		out = append(out, builtin...)
 	}
-	if installed := scanSkillSection(filepath.Join(dir, "installed")); len(installed) > 0 {
+	if installed := scanSkillSection(core.PJoin(dir, "installed")); len(installed) > 0 {
 		if len(out) > 0 {
 			out = append(out, "")
 		}
@@ -2370,7 +2370,7 @@ func scanSkillSection(dir string) []string {
 	for _, e := range entries {
 		if e.IsDir() {
 			// 目录布局：<name>/SKILL.md
-			p := filepath.Join(dir, e.Name(), "SKILL.md")
+			p := core.PJoin(dir, e.Name(), "SKILL.md")
 			if info, err := os.Stat(p); err == nil && !info.IsDir() {
 				if name, desc := readSkillFrontmatter(p, e.Name()); name != "" {
 					out = append(out, fmt.Sprintf("  - %s — %s", name, desc))
@@ -2378,7 +2378,7 @@ func scanSkillSection(dir string) []string {
 			}
 		} else if strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 			name := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
-			if n, desc := readSkillFrontmatter(filepath.Join(dir, e.Name()), name); n != "" {
+			if n, desc := readSkillFrontmatter(core.PJoin(dir, e.Name()), name); n != "" {
 				out = append(out, fmt.Sprintf("  - %s — %s", n, desc))
 			}
 		}
@@ -3406,8 +3406,8 @@ func (m *Model) scopeLabel() string {
 	if root == "" {
 		root = "."
 	}
-	name := filepath.Base(filepath.Clean(root))
-	if name == "" || name == "." || name == string(filepath.Separator) {
+	name := filepath.Base(core.PClean(root))
+	if name == "" || name == "." || name == "/" {
 		name = "工作区"
 	}
 	const maxScope = 16

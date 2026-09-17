@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -63,7 +62,7 @@ func (s *SessionSearcher) Rebuild() error {
 			continue
 		}
 		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
-		path := filepath.Join(s.dir, entry.Name())
+		path := PJoin(s.dir, entry.Name())
 		texts, err := extractTexts(path)
 		if err != nil {
 			continue
@@ -111,7 +110,7 @@ func (s *SessionSearcher) Search(ctx context.Context, query string, limit int) (
 			}
 		}
 		if score > 0 {
-			info, _ := os.Stat(filepath.Join(s.dir, sessionID+".jsonl"))
+			info, _ := os.Stat(PJoin(s.dir, sessionID+".jsonl"))
 			var lastMod int64
 			if info != nil {
 				lastMod = info.ModTime().UnixMilli()

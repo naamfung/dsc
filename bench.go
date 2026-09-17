@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -78,26 +77,26 @@ func main() {
 	if err != nil {
 		panic("获取当前程序路径失败: " + err.Error())
 	}
-	workDir := filepath.Dir(exePath)
+	workDir := core.PDir(exePath)
 
 	// 2. 构建 dsc 可执行文件路径（根据操作系统决定是否加 .exe）
 	dscName := "dsc"
 	if runtime.GOOS == "windows" {
 		dscName = "dsc.exe"
 	}
-	dscPath := filepath.Join(workDir, dscName)
+	dscPath := core.PJoin(workDir, dscName)
 
 	// 3. 把 tool-agentic-bench 预置进同级的 config/config.yaml，绕开运行时 load 被
 	//    DSC_APPROVAL=never 拦截的问题（详见 ensureAgenticBenchInConfig）。
-	configPath := filepath.Join(workDir, "config", "config.yaml")
+	configPath := core.PJoin(workDir, "config", "config.yaml")
 	if err := ensureAgenticBenchInConfig(configPath); err != nil {
 		fmt.Fprintf(os.Stderr, "预置 tool-agentic-bench 插件配置失败: %v\n", err)
 		os.Exit(1)
 	}
 
 	// 4. 计算工作空间根目录（上一级目录下的 tmp-test）
-	workspaceRoot := filepath.Join(workDir, "..", "tmp-test")
-	absWorkspace, err := filepath.Abs(workspaceRoot)
+	workspaceRoot := core.PJoin(workDir, "..", "tmp-test")
+	absWorkspace, err := core.PAbs(workspaceRoot)
 	if err == nil {
 		workspaceRoot = absWorkspace
 	}

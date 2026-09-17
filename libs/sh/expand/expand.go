@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/internal"
+	"mvdan.cc/sh/v3/internal/posixpath"
 	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -991,24 +992,23 @@ var (
 	rxGlobStarDotGlob = regexp.MustCompile(`^[^/]*$`)
 )
 
-// pathJoin2 is a simpler version of [filepath.Join] without cleaning the result,
+// pathJoin2 is a simpler version of a cleaning join without cleaning the result,
 // since that's needed for globbing.
 func pathJoin2(elem1, elem2 string) string {
 	if elem1 == "" {
 		return elem2
 	}
-	if strings.HasSuffix(elem1, string(filepath.Separator)) {
+	if strings.HasSuffix(elem1, "/") {
 		return elem1 + elem2
 	}
-	return elem1 + string(filepath.Separator) + elem2
+	return elem1 + "/" + elem2
 }
 
-// pathSplit splits a file path into its elements, retaining empty ones. Before
-// splitting, slashes are replaced with [filepath.Separator], so that splitting
-// Unix paths on Windows works as well.
+// pathSplit splits a file path into its elements, retaining empty ones. Paths
+// are always forward-slash separated (internal POSIX shell contract), so no
+// platform conversion is needed.
 func pathSplit(path string) []string {
-	path = filepath.FromSlash(path)
-	return strings.Split(path, string(filepath.Separator))
+	return strings.Split(path, "/")
 }
 
 func (cfg *Config) glob(base, pat string) ([]string, error) {
@@ -1017,11 +1017,11 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 	if filepath.IsAbs(pat) {
 		if parts[0] == "" {
 			// unix-like
-			matches[0] = string(filepath.Separator)
+			matches[0] = "/"
 		} else {
 			// windows (for some reason it won't work without the
 			// trailing separator)
-			matches[0] = parts[0] + string(filepath.Separator)
+			matches[0] = parts[0] + "/"
 		}
 		parts = parts[1:]
 	}
@@ -1050,7 +1050,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 			for _, dir := range matches {
 				match := dir
 				if !filepath.IsAbs(match) {
-					match = filepath.Join(base, match)
+					match = posixpath.Join(base, match)
 				}
 				match = pathJoin2(match, part)
 				// We can't use [Config.ReadDir2] on the parent and match the directory
@@ -1142,7 +1142,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir bool, matches []string) ([]string, error) {
 	fullDir := dir
 	if !filepath.IsAbs(dir) {
-		fullDir = filepath.Join(base, dir)
+		fullDir = posixpath.Join(base, dir)
 	}
 	infos, err := cfg.ReadDir2(fullDir)
 	if err != nil {
@@ -1159,7 +1159,7 @@ func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir 
 			// does not follow symlinks for each of the directory entries.
 			// ReadDir is somewhat wasteful here, as we only want its error result,
 			// but we could try to reuse its result as per the TODO in [Config.glob].
-			if _, err := cfg.ReadDir2(filepath.Join(fullDir, info.Name())); err != nil {
+			if _, err := cfg.ReadDir2(posixpath.Join(fullDir, info.Name())); err != nil {
 				continue
 			}
 		} else if !mode.IsDir() {

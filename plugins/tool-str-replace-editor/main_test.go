@@ -241,10 +241,9 @@ func TestTopLevelSlashErrOnMissingPath(t *testing.T) {
 
 // TestVirtualRootMappedToWorkspaceRoot 回归测试（虚拟根映射报告场景）：模型按
 // 「虚拟根 = 工作空间根」契约传入 /workspace/docs/architecture.md，必须映射到
-// 工作空间根下的真实文件并成功读出内容——旧实现只剥 /workspace 前缀，裸 / 形态
-// 在 Windows 上经 filepath.Abs 落到进程 cwd 所在盘的盘根（实测 D:/docs），虚拟根
-// 未转换。接入 core.MapWorkspacePath 后（源头 core，SDK 二次封装），裸 / 的
-// Windows 锚定语义由 core/workspace_test.go 纯函数矩阵覆盖，此处验证入口接线。
+// 工作空间根下的真实文件并成功读出内容。裸 / 形态保持真实根语义（Windows 上为
+// 当前盘根，与 Linux 一致），由 core/workspace_test.go 纯函数矩阵覆盖；工作区
+// 文件须显式 /workspace 前缀，此处验证入口接线。
 func TestVirtualRootMappedToWorkspaceRoot(t *testing.T) {
 	newTestWS(t)
 	ws := core.WorkspaceRoot

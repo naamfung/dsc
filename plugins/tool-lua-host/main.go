@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"dsc-sdk"
@@ -69,7 +68,7 @@ func main() {
 		services := &bindings.Services{LLM: ic.LLM(), Tool: ic.Tool(), Notify: ic.Notifier()}
 		dirs := make([]string, 0, len(scriptsDirs))
 		for _, d := range scriptsDirs {
-			dirs = append(dirs, filepath.FromSlash(d))
+			dirs = append(dirs, d)
 		}
 		h := host.New(dirs, services, creation, func(format string, args ...any) {
 			fmt.Printf("[tool-lua-host] "+format+"\n", args...)

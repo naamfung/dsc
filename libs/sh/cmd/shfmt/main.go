@@ -23,6 +23,7 @@ import (
 	"mvdan.cc/editorconfig"
 
 	"mvdan.cc/sh/v3/fileutil"
+	"mvdan.cc/sh/v3/internal/posixpath"
 	"mvdan.cc/sh/v3/syntax"
 	"mvdan.cc/sh/v3/syntax/typedjson"
 )
@@ -265,7 +266,7 @@ For more information and to report bugs, see https://github.com/mvdan/sh.
 	status := 0
 	for _, path := range flag.Args() {
 		explicit := true
-		if err := filepath.WalkDir(path, func(path string, entry fs.DirEntry, err error) error {
+		if err := posixpath.WalkDir(path, func(path string, entry fs.DirEntry, err error) error {
 			defer func() { explicit = false }()
 			if err != nil {
 				return err

@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"dsc/proto"
 )
 
 // TestTokenMeterUpdateUsage 校验：UpdateUsage 正确存储用量并计算提示缓存感知的总量。
@@ -112,6 +114,55 @@ func TestTokenMeterEstimateMessagesTokens(t *testing.T) {
 	got := EstimateMessagesTokens(msgs)
 	if got != 22 {
 		t.Errorf("EstimateMessagesTokens = %d, want 22", got)
+	}
+}
+
+// TestEstimateProtoMessageTokens 校验 proto 版公用启发式与 core.Message 版口径一致：
+// CJK 感知（rune 计数）、角色开销、图像结构引用、工具调用名称+参数；供宿主 pre-step
+// 与压缩插件共用同一估算（回归「各持私有字节/4 估算导致压力判定漂移」）。
+func TestEstimateProtoMessageTokens(t *testing.T) {
+	// 纯 ASCII 文本：max(bytes/4, runes) = runes → 5 + 4 = 9（同 core.Message 版）
+	got := EstimateProtoMessageTokens(&proto.Message{Role: "user", Content: "hello"})
+	if got != 9 {
+		t.Errorf("ascii user msg = %d, want 9", got)
+	}
+	// CJK：每字 1 token（rune 计数），3 字 + 4 = 7
+	got = EstimateProtoMessageTokens(&proto.Message{Role: "user", Content: "你好啊"})
+	if got != 7 {
+		t.Errorf("cjk user msg = %d, want 7", got)
+	}
+	// tool 角色 +6；工具调用 name+args 估算 +8
+	got = EstimateProtoMessageTokens(&proto.Message{
+		Role:    "tool",
+		Content: "ok", // 2 + 6 = 8
+	})
+	if got != 8 {
+		t.Errorf("tool msg = %d, want 8", got)
+	}
+	// 图像按结构引用计价（对齐 DSH estimateStructuralBlock，当时有效/过期无效）：
+	// "dsc-shot://a"（12 字符）→ 4 + ceil(12/4) = 7；1 + 4 + 7 = 12
+	got = EstimateProtoMessageTokens(&proto.Message{
+		Role:    "user",
+		Content: "x",
+		Images:  []string{"dsc-shot://a"},
+	})
+	if got != 12 {
+		t.Errorf("image msg = %d, want 12", got)
+	}
+	got = EstimateProtoMessageTokens(&proto.Message{
+		Role:      "assistant",
+		ToolCalls: []*proto.ToolCall{{Name: "shell", ArgumentsJson: `{"cmd":"ls"}`}},
+	}) // content 空 0 + 4 + EstimateTextTokens(`shell{"cmd":"ls"}`)(17) + 8 = 29
+	if got != 29 {
+		t.Errorf("tool-call msg = %d, want 29", got)
+	}
+	// 列表求和
+	msgs := []*proto.Message{
+		{Role: "user", Content: "hello"}, // 9
+		{Role: "tool", Content: "ok"},    // 8
+	}
+	if got := EstimateProtoMessagesTokens(msgs); got != 17 {
+		t.Errorf("EstimateProtoMessagesTokens = %d, want 17", got)
 	}
 }
 

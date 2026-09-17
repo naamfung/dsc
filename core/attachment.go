@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -44,7 +43,7 @@ func AttachmentDir() string {
 		return d
 	}
 	if exe, err := os.Executable(); err == nil {
-		return filepath.Join(filepath.Dir(exe), "attachments")
+		return PJoin(PDir(exe), "attachments")
 	}
 	return "attachments"
 }
@@ -57,7 +56,7 @@ func saveAttachment(dir, prefix string, data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	name := hex.EncodeToString(sum[:])
 	ref := prefix + name
-	path := filepath.Join(dir, name)
+	path := PJoin(dir, name)
 	if fi, err := os.Stat(path); err == nil {
 		if fi.Size() == int64(len(data)) {
 			return ref, nil
@@ -84,12 +83,12 @@ func ScreenshotDir() string {
 	temp := strings.TrimSpace(os.Getenv("DSC_TEMP_DIR"))
 	if temp == "" {
 		if exe, err := os.Executable(); err == nil {
-			temp = filepath.Join(filepath.Dir(exe), "temp")
+			temp = PJoin(PDir(exe), "temp")
 		} else {
 			temp = "temp"
 		}
 	}
-	return filepath.Join(temp, "screenshots")
+	return PJoin(temp, "screenshots")
 }
 
 // SaveImageAttachment 把图片字节以内容寻址方式写入附件库并返回引用
@@ -130,7 +129,7 @@ func ResolveImageRef(ref string) (string, error) {
 	default:
 		return "", fmt.Errorf("不支持的图像引用: %s", ref)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ref))
+	data, err := os.ReadFile(PJoin(dir, ref))
 	if err != nil {
 		return "", fmt.Errorf("读取图像附件 %s 失败: %w", ref, err)
 	}
@@ -145,7 +144,7 @@ func ResolveTextRef(ref string) (string, error) {
 		return "", fmt.Errorf("不支持的文本引用: %s", ref)
 	}
 	sha := strings.TrimPrefix(ref, TextRefPrefix)
-	data, err := os.ReadFile(filepath.Join(AttachmentDir(), sha))
+	data, err := os.ReadFile(PJoin(AttachmentDir(), sha))
 	if err != nil {
 		return "", fmt.Errorf("读取文本附件 %s 失败: %w", sha, err)
 	}

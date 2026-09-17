@@ -24,7 +24,7 @@ func TestAttachmentDirDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(filepath.Dir(exeDir), "attachments")
+	want := PJoin(PDir(exeDir), "attachments")
 	if dir != want {
 		t.Fatalf("AttachmentDir() = %q, want %q", dir, want)
 	}

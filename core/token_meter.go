@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"sync"
 	"unicode/utf8"
+
+	"dsc/proto"
 )
 
 // Token 计量服务（对齐 DSH/Cordis 的 ctx.tokenMeter 服务）。
@@ -141,9 +143,26 @@ func EstimateMessagesTokens(messages []*Message) int {
 	return total
 }
 
+// imageStructuralTokens 单个图像引用的启发式成本（对齐 DSH tokenMeter 的
+// estimateStructuralBlock：BLOCK_OVERHEAD + 引用 JSON / 4）。
+//
+// 图像的特殊性——「当时有效，过期无效」：DSC 消息面只承载 dsc-img:// 引用
+// （字节计量在附件/Provider 解析层，引用本身无字节可计）。真实图像 token 按
+// provider 路由计价（尺寸相关、上限由 provider 决定，如 DeepSeek 单图 1024），
+// 经最近一次请求的 provider usage 锚点进入压力（当时有效）；过期图像由
+// image-offload 驻留按 count 预算最旧退役为占位文本，不再逐请求重放（过期无效）。
+// 故启发式只计结构引用成本——若按固定上限（如 384）永久计入历史图像，工具截图
+// 随轮次线性累积的图像密集会话会被持续高估，误判超阈值而提前压缩文本历史。
+func imageStructuralTokens(ref string) int {
+	if ref == "" {
+		return 0
+	}
+	return 4 + (len(ref)+3)/4 // BLOCK_OVERHEAD + ceil(引用字符 / 4)
+}
+
 // EstimateMessageTokens 估算单条消息的 token 数（对齐 DSH estimateMessage）。
 // 文本估算 + 每条消息的固定结构开销（角色、tool_call_id 等）；
-// 工具调用额外计入名称与参数；图像按固定上限估算。
+// 工具调用额外计入名称与参数；图像按结构引用计价（见 imageStructuralTokens）。
 func EstimateMessageTokens(msg *Message) int {
 	if msg == nil {
 		return 0
@@ -155,10 +174,7 @@ func EstimateMessageTokens(msg *Message) int {
 		toks += 4 // role + delimiter 开销
 	}
 	for _, img := range msg.Images {
-		if img == "" {
-			continue
-		}
-		toks += 384 // 单图 token 上限（视觉模型按尺寸换算）
+		toks += imageStructuralTokens(img)
 	}
 	for _, tc := range msg.ToolCalls {
 		// 工具调用开销：name + arguments（合并估算避免 name 重复计入）
@@ -178,6 +194,41 @@ func EstimateTextTokens(s string) int {
 		return byBytes
 	}
 	return runes
+}
+
+// EstimateProtoMessageTokens 估算单条 proto 消息的 token 数（proto 版
+// EstimateMessageTokens）：复用 EstimateTextTokens（CJK 感知）+ 每条消息的
+// 结构开销（角色/tool_call_id）+ 图像结构引用 + 工具调用名称与参数。供宿主
+// pre-step、压缩插件等经 proto.ChatRequest.Messages 判定压力的路径共用同一
+// 公用启发式，避免各处自造粗略字节/4 估算（不含工具定义、CJK 低估）造成
+// 压力判定漂移——真实用量已超阈值而压缩不触发。
+func EstimateProtoMessageTokens(m *proto.Message) int {
+	if m == nil {
+		return 0
+	}
+	toks := EstimateTextTokens(m.GetContent())
+	if m.GetRole() == "tool" {
+		toks += 6 // tool 角色 + tool_call_id 开销
+	} else {
+		toks += 4 // role + delimiter 开销
+	}
+	for _, img := range m.GetImages() {
+		toks += imageStructuralTokens(img)
+	}
+	for _, tc := range m.GetToolCalls() {
+		toks += EstimateTextTokens(tc.GetName()+tc.GetArgumentsJson()) + 8
+	}
+	return toks
+}
+
+// EstimateProtoMessagesTokens 估算 proto 消息列表的总 token 数（proto 版
+// EstimateMessagesTokens，含 system 前缀消息）。
+func EstimateProtoMessagesTokens(msgs []*proto.Message) int {
+	total := 0
+	for _, m := range msgs {
+		total += EstimateProtoMessageTokens(m)
+	}
+	return total
 }
 
 // EstimateToolTokens 估算工具定义的 token 数（system prompt 中的工具目录）。

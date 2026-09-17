@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 
@@ -26,7 +25,7 @@ func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry,
 			ext = ".exe"
 		}
 		ag = &core.PluginEntry{Name: "agent-react-loop", Type: "agent", Enabled: true,
-			BinaryPath: filepath.ToSlash(filepath.Join("./plugins", "agent-react-loop", "agent-react-loop"+ext))}
+			BinaryPath: core.PJoin("./plugins", "agent-react-loop", "agent-react-loop"+ext)}
 	}
 	agentEnv := map[string]string{"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow)}
 	if presetCfg != nil && presetCfg.Persona != "" {
@@ -107,7 +106,7 @@ func assemblePluginSet(mainCfg, presetCfg *core.Config, contextWindow int, headl
 			llmName = "openai"
 		}
 		llmEntries = []core.PluginEntry{{Name: llmName, Type: "llm", Enabled: true,
-			BinaryPath: filepath.ToSlash(filepath.Join("./plugins", "llm-"+llmName, "llm-"+llmName+modelExt()))}}
+			BinaryPath: core.PJoin("./plugins", "llm-"+llmName, "llm-"+llmName+modelExt())}}
 	}
 	var agentEntry *core.PluginEntry
 	if mainCfg != nil {

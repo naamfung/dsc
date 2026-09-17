@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 
 	"dsc/cron"
 )
@@ -18,7 +17,7 @@ func (m *Manager) StartCron() error {
 	if m.cronScheduler != nil {
 		return fmt.Errorf("cron: scheduler already started")
 	}
-	store, err := cron.NewStore(filepath.Join(m.config.ExecDir, "cron"))
+	store, err := cron.NewStore(PJoin(m.config.ExecDir, "cron"))
 	if err != nil {
 		return fmt.Errorf("cron: %w", err)
 	}
@@ -27,7 +26,7 @@ func (m *Manager) StartCron() error {
 		return fmt.Errorf("cron: %w", err)
 	}
 	m.cronScheduler = sch
-	m.logger.Info("cron scheduler started", "dir", filepath.Join(m.config.ExecDir, "cron"))
+	m.logger.Info("cron scheduler started", "dir", PJoin(m.config.ExecDir, "cron"))
 	return nil
 }
 

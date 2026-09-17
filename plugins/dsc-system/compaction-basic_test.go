@@ -73,6 +73,27 @@ func mustPreStepSession(t *testing.T, s *compactionBasicServer, sess string, msg
 	return res
 }
 
+// mustPreStepUsage 携带 last_usage_tokens（宿主透传的上次服务端上报用量）的 pre-step。
+func mustPreStepUsage(t *testing.T, s *compactionBasicServer, sess string, msgs []*proto.Message, lastUsage int) string {
+	t.Helper()
+	msgsJSON, err := json.Marshal(msgs)
+	if err != nil {
+		t.Fatalf("marshal msgs: %v", err)
+	}
+	evJSON, err := json.Marshal(map[string]any{
+		"agent": "agent-react-loop", "session": sess, "messages_json": string(msgsJSON),
+		"last_usage_tokens": lastUsage,
+	})
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	res, err := s.handleHostEvent(context.Background(), "agent/pre-step", string(evJSON))
+	if err != nil {
+		t.Fatalf("pre-step: %v", err)
+	}
+	return res
+}
+
 // parseRewrite 解析 {"messages": [...]} 改写结果（非空且含至少一条消息）。
 func parseRewrite(t *testing.T, res string) []*proto.Message {
 	t.Helper()
@@ -109,13 +130,13 @@ func TestCompactionBasicPressureLLMSummary(t *testing.T) {
 	fake := &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
 	s.llm = fake
 
-	msgs := bigMsgs(16, 6000) // 每条 1500 token，共 24000
+	msgs := bigMsgs(16, 1200) // 每条 1204 token（CJK 感知估算），共 19264
 	res := mustPreStep(t, s, msgs)
 	if res == "" {
 		t.Fatalf("over-threshold pre-step must rewrite")
 	}
 	got := parseRewrite(t, res)
-	// 保留尾部：预算 1600，单条 1500 → 只留最后 1 条（1500≤1600、3000>1600 →
+	// 保留尾部：预算 1600，单条 1204 → 只留最后 1 条（1204≤1600、2408>1600 →
 	// retainIdx=15）；改写 = 1 摘要 + 1 条尾段
 	if len(got) != 2 {
 		t.Fatalf("rewrite = %d messages, want 2 (summary + tail)", len(got))
@@ -147,7 +168,7 @@ func TestCompactionBasicFingerprintMismatchResets(t *testing.T) {
 	s := newTestCompactionBasicServer(t, 10000)
 	fake := &fakeCompactionBasicLLM{content: "S1"}
 	s.llm = fake
-	msgs := bigMsgs(16, 6000)
+	msgs := bigMsgs(16, 1200)
 	if res := mustPreStep(t, s, msgs); res == "" {
 		t.Fatalf("must rewrite")
 	}
@@ -167,7 +188,7 @@ func TestCompactionBasicFingerprintMismatchResets(t *testing.T) {
 // TestCompactionBasicTruncateFallback LLM 未互联：截断式退化摘要（首条+末条拼接）。
 func TestCompactionBasicTruncateFallback(t *testing.T) {
 	s := newTestCompactionBasicServer(t, 10000) // llm 为 nil
-	msgs := bigMsgs(16, 6000)
+	msgs := bigMsgs(16, 1200)
 	res := mustPreStep(t, s, msgs)
 	got := parseRewrite(t, res)
 	if len(got) != 2 {
@@ -182,7 +203,7 @@ func TestCompactionBasicTruncateFallback(t *testing.T) {
 func TestCompactionBasicLLMFailureDegrades(t *testing.T) {
 	s := newTestCompactionBasicServer(t, 10000)
 	s.llm = &fakeCompactionBasicLLM{err: errors.New("provider down")}
-	msgs := bigMsgs(16, 6000)
+	msgs := bigMsgs(16, 1200)
 	res := mustPreStep(t, s, msgs)
 	if res == "" {
 		t.Fatalf("failure must degrade to truncate rewrite")
@@ -195,9 +216,9 @@ func TestCompactionBasicLLMFailureDegrades(t *testing.T) {
 // TestCompactionBasicEmergencyRetainLast 溢出紧急压缩：保留最后 1 条、截断式摘要、
 // 返回 {"retry": true}；非溢出错误码不触发。
 func TestCompactionBasicEmergencyRetainLast(t *testing.T) {
-	s := newTestCompactionBasicServer(t, 1000) // 阈值 800：估算 1800 ≥ 阈值
-	s.retainMin = 2000                         // 保留预算盖过全部消息 → pre-step 不动作（全部落保留区）
-	msgs := bigMsgs(6, 1200)                   // 每条 300 token，共 1800
+	s := newTestCompactionBasicServer(t, 1000) // 阈值 800：估算 7224 ≥ 阈值
+	s.retainMin = 10000                        // 保留预算盖过全部消息 → pre-step 不动作（全部落保留区）
+	msgs := bigMsgs(6, 1200)                   // 每条 1204 token（CJK 感知估算），共 7224
 	// 第一次 pre-step：估算超阈值但保留区覆盖全部 → 不改写
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("all-in-retain pre-step must not rewrite, got %q", res)
@@ -234,5 +255,47 @@ func TestCompactionBasicSmallHistoryNoOp(t *testing.T) {
 	msgs := bigMsgs(3, 400) // 300 token << 8000
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("small history must not rewrite, got %q", res)
+	}
+}
+
+// TestCompactionBasicTriggersOnReportedUsage 回归「纯启发式低估导致压缩不触发」：
+// 字节启发式估算（不含工具定义、CJK 每字 3 字节被 /4 低估）把真实用量显著估低
+// （实测真实 83.56% 而插件估算仅 60.08%），但宿主已透传上次服务端上报用量
+// （last_usage_tokens）超阈值时，必须触发压缩改写。
+func TestCompactionBasicTriggersOnReportedUsage(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000) // 阈值 8000
+	s.llm = &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
+
+	msgs := bigMsgs(8, 1200) // 每条 1204 token（CJK 感知估算），共 9632
+	res := mustPreStepUsage(t, s, "sess-u1", msgs, 9000)
+	if res == "" {
+		t.Fatalf("上报用量 9000 >= 阈值 8000 时必须触发压缩")
+	}
+	got := parseRewrite(t, res)
+	if len(got) >= len(msgs) || !strings.Contains(got[0].GetContent(), "LLM-SUMMARY") {
+		t.Fatalf("rewrite 未落地：%d msgs, head=%q", len(got), got[0].GetContent())
+	}
+}
+
+// TestCompactionBasicGrowthSinceReportedUsage 增量回归（对齐 DSH tokenMeter
+// projectedTokens = pressureTokens + surfaceTokens - sampledSurfaceTokens）：
+// 上次上报低于阈值，但自上次请求以来消息显著增长（启发式增量补足差量）时必须触发；
+// 无增量且低于阈值时不得误触发。
+func TestCompactionBasicGrowthSinceReportedUsage(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000) // 阈值 8000
+	s.llm = &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
+
+	msgs1 := bigMsgs(4, 1200) // 每条 1204，共 4816
+	if res := mustPreStepUsage(t, s, "sess-g1", msgs1, 7000); res != "" {
+		t.Fatalf("上报 7000 < 阈值 8000 且无增量时不应改写, got %q", res)
+	}
+	msgs2 := append(append([]*proto.Message{}, msgs1...), bigMsgs(4, 1200)...) // 增量 +4816 估算
+	res := mustPreStepUsage(t, s, "sess-g1", msgs2, 7000)
+	if res == "" {
+		t.Fatalf("上报 7000 + 增量 4816 = 11816 >= 阈值 8000，必须触发压缩")
+	}
+	got := parseRewrite(t, res)
+	if len(got) >= len(msgs2) || !strings.Contains(got[0].GetContent(), "LLM-SUMMARY") {
+		t.Fatalf("rewrite 未落地：%d msgs, head=%q", len(got), got[0].GetContent())
 	}
 }

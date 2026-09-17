@@ -5,6 +5,8 @@ package core
 
 import (
 	"path/filepath"
+
+	"github.com/hashicorp/go-plugin/internal/pathx"
 )
 
 // Discover discovers plugins that are in a given directory.
@@ -21,11 +23,11 @@ func Discover(glob, dir string) ([]string, error) {
 
 	// Make the directory absolute if it isn't already
 	if !filepath.IsAbs(dir) {
-		dir, err = filepath.Abs(dir)
+		dir, err = pathx.Abs(dir)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return filepath.Glob(filepath.Join(dir, glob))
+	return pathx.Glob(pathx.Join(dir, glob))
 }

@@ -22,7 +22,7 @@ func pluginsBackupDir(pluginsDir string) string {
 // maxModTime 返回目录树内最新修改时间（用于判断是否需要刷新快照）。
 func maxModTime(dir string) (time.Time, error) {
 	var latest time.Time
-	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+	err := PWalk(dir, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // 跳过无法访问的条目
 		}
@@ -93,7 +93,7 @@ func RequiredPluginDirBases(merged *Config) map[string]bool {
 			}
 			continue
 		}
-		dir := filepath.Dir(filepath.FromSlash(p.BinaryPath))
+		dir := PDir(p.BinaryPath)
 		base := filepath.Base(dir)
 		if base != "." && base != "" {
 			keep[base] = true
@@ -128,15 +128,15 @@ func ReportOrphanPlugins(pluginsDir string, keep map[string]bool, logger hclog.L
 // copyDirTolerant 递归拷贝目录树，但单个文件因被占用/共享冲突而无法写时跳过该文件
 // 而非整体失败（供插件目录恢复用：运行中进程会锁住自身 .exe，但无需覆盖）。
 func copyDirTolerant(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	return PWalk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // 无法访问的条目跳过
 		}
-		rel, err := filepath.Rel(src, path)
+		rel, err := PRel(src, path)
 		if err != nil {
 			return nil
 		}
-		target := filepath.Join(dst, rel)
+		target := PJoin(dst, rel)
 		if info.IsDir() {
 			return os.MkdirAll(target, 0755)
 		}

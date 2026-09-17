@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -43,7 +42,7 @@ func NewStore(dir string) (*Store, error) {
 		return nil, fmt.Errorf("cron: create dir: %w", err)
 	}
 	s := &Store{
-		path: filepath.Join(dir, "cron.json"),
+		path: posixJoin(dir, "cron.json"),
 		jobs: make(map[string]*Job),
 	}
 	if err := s.load(); err != nil {

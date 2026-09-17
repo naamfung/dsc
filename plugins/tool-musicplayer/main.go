@@ -78,12 +78,12 @@ func defaultSrcFile() string {
 	if err != nil {
 		return ".dsc-musicplayer-src"
 	}
-	return filepath.Join(home, ".dsc", "musicplayer_src.txt")
+	return dsc.PJoin(home, ".dsc", "musicplayer_src.txt")
 }
 
 // saveDefaultSrc 写入默认播放目录；目录不变时跳过写盘。
 func saveDefaultSrc(path string) error {
-	clean := filepath.Clean(path)
+	clean := dsc.PClean(path)
 	if info, err := os.Stat(clean); err != nil || !info.IsDir() {
 		return fmt.Errorf("默认播放目录不存在: %s", clean)
 	}
@@ -91,7 +91,7 @@ func saveDefaultSrc(path string) error {
 	if old := loadDefaultSrc(); old == clean {
 		return nil
 	}
-	_ = dsc.MkdirAll(filepath.Dir(file))
+	_ = dsc.MkdirAll(dsc.PDir(file))
 	return dsc.WriteFile(file, []byte(clean))
 }
 
@@ -260,7 +260,7 @@ func collectAudioFiles(path string) ([]string, error) {
 		if e.IsDir() || !isSupported(filepath.Ext(e.Name())) {
 			continue
 		}
-		files = append(files, filepath.Join(path, e.Name()))
+		files = append(files, dsc.PJoin(path, e.Name()))
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("目录 %s 中没有 .mp3/.wav 文件", path)
@@ -568,7 +568,7 @@ func main() {
 			if err := saveDefaultSrc(p.Path); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("已设定默认播放目录: %s", filepath.Clean(p.Path)), nil
+			return fmt.Sprintf("已设定默认播放目录: %s", dsc.PClean(p.Path)), nil
 		},
 	})
 

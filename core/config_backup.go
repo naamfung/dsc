@@ -34,7 +34,7 @@ func backupDir(file string) string {
 	if base != "config" {
 		sub = backupPresetDir
 	}
-	return filepath.Join(filepath.Dir(file), sub)
+	return PJoin(PDir(file), sub)
 }
 
 // backupName 由源文件名.prefix 派生备份文件名：<base>.<ts>.yaml。
@@ -56,7 +56,7 @@ func BackupGoodFile(file string, logger hclog.Logger) (string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("backup good file: mkdir %s: %w", dir, err)
 	}
-	path := filepath.Join(dir, backupName(file))
+	path := PJoin(dir, backupName(file))
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return "", fmt.Errorf("backup good file: write %s: %w", path, err)
 	}
@@ -80,7 +80,7 @@ func trimBackups(dir, prefix string) {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	for i := backupKeep; i < len(names); i++ {
-		_ = os.Remove(filepath.Join(dir, names[i]))
+		_ = os.Remove(PJoin(dir, names[i]))
 	}
 }
 
@@ -106,7 +106,7 @@ func LatestGoodBackup(file string) (string, error) {
 	if best == "" {
 		return "", nil
 	}
-	return filepath.Join(backupDir(file), best), nil
+	return PJoin(backupDir(file), best), nil
 }
 
 // RestoreGoodFile 用一份备份覆盖源文件（保证启动可回读正常版本）。
@@ -115,7 +115,7 @@ func RestoreGoodFile(file, backup string, logger hclog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("restore file: read backup %s: %w", backup, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
+	if err := os.MkdirAll(PDir(file), 0755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(file, data, 0644); err != nil {

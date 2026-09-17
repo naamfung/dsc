@@ -8,3 +8,8 @@ package main
 func decodeSystemCodePage(string) (string, bool) {
 	return "", false
 }
+
+// systemOEMCodePage 非 Windows 平台无码页概念，返回 0。
+func systemOEMCodePage() uint16 {
+	return 0
+}

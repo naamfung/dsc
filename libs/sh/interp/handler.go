@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/internal/posixpath"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -249,7 +250,7 @@ func runScriptENOEXEC(ctx context.Context, hc HandlerContext, killTimeout time.D
 
 func checkStat(dir, file string, checkExec bool) (string, error) {
 	if !filepath.IsAbs(file) {
-		file = filepath.Join(dir, file)
+		file = posixpath.Join(dir, file)
 	}
 	info, err := os.Stat(file)
 	if err != nil {
@@ -337,9 +338,9 @@ func lookPathDir(cwd string, env expand.Environ, file string, find findAny) (str
 		switch elem {
 		case "", ".":
 			// otherwise "foo" won't be "./foo"
-			path = "." + string(filepath.Separator) + file
+			path = "./" + file
 		default:
-			path = filepath.Join(elem, file)
+			path = posixpath.Join(elem, file)
 		}
 		if f, err := find(cwd, path, exts); err == nil {
 			return f, nil
@@ -408,7 +409,7 @@ func DefaultOpenHandler() OpenHandlerFunc {
 			// TODO(mvdan): Why? Is this Wine's fault?
 			flag &^= os.O_TRUNC
 		} else if path != "" && !filepath.IsAbs(path) {
-			path = filepath.Join(mc.Dir, path)
+			path = posixpath.Join(mc.Dir, path)
 		}
 		return os.OpenFile(path, flag, perm)
 	}

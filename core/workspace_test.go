@@ -17,34 +17,24 @@ func setWorkspaceRoot(t *testing.T, root string) {
 }
 
 // TestMapWorkspacePathForWorkspaces 前缀规则（所有平台一致）：/workspace → 根；
-// 前缀后必须是分隔符或结尾（/workspacefoo 不作别名）；反斜杆形态同样识别。
-// /workspacefoo 与 /workspacex 的边界外溢在 Windows 上被裸 / 规则接住（锚定根），
-// Linux/macOS 原样返回。
+// 前缀后必须是分隔符或结尾（/workspacefoo 不作别名，保持真实根语义）；反斜杆
+// 形态同样识别。相对路径与盘符路径不受影响。
 func TestMapWorkspacePathForWorkspaces(t *testing.T) {
 	common := []struct{ in, want string }{
 		{"/workspace", "G:/ws"},
 		{"/workspace/", "G:/ws"},
 		{"/workspace/a/b.txt", "G:/ws/a/b.txt"},
 		{`\workspace\x`, "G:/ws/x"},
+		// 边界：/workspacefoo 不作别名（所有平台，真实根语义下原样返回）
+		{"/workspacefoo/x", "/workspacefoo/x"},
+		{"/workspacex", "/workspacex"},
 		// 相对路径与盘符路径不受影响
 		{"rel/x.txt", "rel/x.txt"},
 		{"C:/out/x.txt", "C:/out/x.txt"},
 		{`C:\out\x.txt`, `C:\out\x.txt`},
 	}
-	windowsOnly := []struct{ in, want string }{
-		{"/workspacefoo/x", "G:/ws/workspacefoo/x"},
-		{"/workspacex", "G:/ws/workspacex"},
-	}
-	posixOnly := []struct{ in, want string }{
-		{"/workspacefoo/x", "/workspacefoo/x"},
-		{"/workspacex", "/workspacex"},
-	}
 	for _, goos := range []string{"linux", "darwin", "windows"} {
-		extra := posixOnly
-		if goos == "windows" {
-			extra = windowsOnly
-		}
-		for _, c := range append(common, extra...) {
+		for _, c := range common {
 			if got := mapWorkspacePathFor(c.in, "G:/ws", goos); got != c.want {
 				t.Errorf("goos=%s mapWorkspacePathFor(%q) = %q, want %q", goos, c.in, got, c.want)
 			}
@@ -52,45 +42,28 @@ func TestMapWorkspacePathForWorkspaces(t *testing.T) {
 	}
 }
 
-// TestMapWorkspacePathForBarePosixRoot 裸 / 前缀规则（仅 Windows）：锚定工作空间根。
-// 真实案例：str_replace_editor 收到 /docs/architecture.md，经 filepath.Abs 落到
-// 进程 cwd 所在盘的盘根（D:/docs），而非 <workspace>/docs/architecture.md——
-// 虚拟根未转换。规则 3 修复之。例外：/dev/null（mvdan 重定向特判依赖）与
-// // UNC 前缀不改写。Linux/macOS 上 / 是真实根，不启用。
+// TestMapWorkspacePathForBarePosixRoot 裸 POSIX 绝对路径保持原样（所有平台，真实根
+// 语义）：Linux/macOS 上 / 是真实根；Windows 上无盘符裸 /x 或 \x 不再锚定工作区根，
+// 由下游 filepath.Abs 解析为当前盘根（与 Linux 真实根行为一致）。/workspace 与
+// /mnt/<drive> 是显式别名；/dev/null（shell 重定向特判）与 // UNC 前缀保持原样。
 func TestMapWorkspacePathForBarePosixRoot(t *testing.T) {
-	windows := []struct{ in, want string }{
-		{"/", "G:/ws"},
-		{"/docs/architecture.md", "G:/ws/docs/architecture.md"},
-		{"/Agents/pkg/fs/src/index.ts", "G:/ws/Agents/pkg/fs/src/index.ts"},
-		{`\docs\a.md`, "G:/ws/docs/a.md"},
-		{"/dev/null", "/dev/null"},
-		{"//server/share", "//server/share"},
-		{`\\server\share`, `\\server\share`},
-	}
-	nonWindows := []struct{ in, want string }{
-		{"/", "/"},
-		{"/docs/architecture.md", "/docs/architecture.md"},
-		{"/dev/null", "/dev/null"},
-		{"//server/share", "//server/share"},
-	}
-	for _, tc := range []struct {
-		goos  string
-		cases []struct{ in, want string }
-	}{
-		{"windows", windows},
-		{"linux", nonWindows},
-		{"darwin", nonWindows},
-	} {
-		for _, c := range tc.cases {
-			if got := mapWorkspacePathFor(c.in, "G:/ws", tc.goos); got != c.want {
-				t.Errorf("goos=%s mapWorkspacePathFor(%q) = %q, want %q", tc.goos, c.in, got, c.want)
+	for _, goos := range []string{"windows", "linux", "darwin"} {
+		for _, c := range []struct{ in, want string }{
+			{"/", "/"},
+			{"/docs/architecture.md", "/docs/architecture.md"},
+			{"/dev/null", "/dev/null"},
+			{"//server/share", "//server/share"},
+		} {
+			if got := mapWorkspacePathFor(c.in, "G:/ws", goos); got != c.want {
+				t.Errorf("goos=%s mapWorkspacePathFor(%q) = %q, want %q", goos, c.in, got, c.want)
 			}
 		}
 	}
 }
 
-// TestMapWorkspacePathForWSL WSL 风格路径 /mnt/<drive>/... → <drive>:/（仅 Windows，
-// 且先于裸 / 规则）；非法盘符（/mnt/zz）落入裸 / 规则。Linux/macOS 原样返回。
+// TestMapWorkspacePathForWSL WSL 风格路径 /mnt/<drive>/... → <drive>:/（仅 Windows）；
+// 非法盘符（/mnt/zz）不匹配映射，保持原样（真实根语义，不再落入工作区根）。
+// Linux/macOS 原样返回。
 func TestMapWorkspacePathForWSL(t *testing.T) {
 	if got := mapWorkspacePathFor("/mnt/c/Users/foo", "G:/ws", "windows"); got != "C:/Users/foo" {
 		t.Errorf("windows WSL map = %q, want C:/Users/foo", got)
@@ -98,8 +71,8 @@ func TestMapWorkspacePathForWSL(t *testing.T) {
 	if got := mapWorkspacePathFor("/mnt/c", "G:/ws", "windows"); got != "C:/" {
 		t.Errorf("windows /mnt/c = %q, want C:/", got)
 	}
-	if got := mapWorkspacePathFor("/mnt/zz/x", "G:/ws", "windows"); got != "G:/ws/mnt/zz/x" {
-		t.Errorf("windows 非法盘符应落入裸 / 规则: got %q", got)
+	if got := mapWorkspacePathFor("/mnt/zz/x", "G:/ws", "windows"); got != "/mnt/zz/x" {
+		t.Errorf("windows 非法盘符应原样（真实根语义）: got %q", got)
 	}
 	for _, goos := range []string{"linux", "darwin"} {
 		if got := mapWorkspacePathFor("/mnt/c/Users/foo", "G:/ws", goos); got != "/mnt/c/Users/foo" {
@@ -154,20 +127,29 @@ func TestResolveWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bare root resolve: %v", err)
 	}
-	// Linux 上 /docs 是真实根语义（规则 3 仅 Windows 启用），原样求净；
-	// Windows 的虚拟根锚定由 TestResolveWorkspacePathWindowsBareRoot 覆盖。
-	if abs != "/docs/architecture.md" {
-		t.Errorf("bare / = %q, want /docs/architecture.md（Linux 真实根语义）", abs)
+	// 真实根语义（所有平台）：/docs 是根下的路径，不得锚定工作空间根。Linux/macOS
+	// 上 / 是真实根、原样求净；Windows 上无盘符裸 / 由 filepath.Abs 解析为当前盘根
+	//（纯函数分支由 TestMapWorkspacePathForBarePosixRoot 覆盖）。
+	wantAbs, err := filepath.Abs("/docs/architecture.md")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	if abs != wantAbs {
+		t.Errorf("bare / = %q, want %q（真实根语义，非工作区锚定）", abs, wantAbs)
+	}
+	if abs == filepath.Join(root, "docs", "architecture.md") {
+		t.Errorf("bare / 不得再锚定工作空间根（真实根语义）: %q", abs)
 	}
 }
 
-// TestResolveWorkspacePathWindowsBareRoot 报告场景的 Windows 语义回归（经纯函数
-// 注入 goos=windows 验证，Linux 测试机亦可覆盖）：/docs/architecture.md 必须锚定
-// 工作空间根，绝不落到盘根 D:/docs。
+// TestResolveWorkspacePathWindowsBareRoot 报告场景的 Windows 真实根语义回归（经纯函数
+// 注入 goos=windows 验证，Linux 测试机亦可覆盖）：/docs/architecture.md 保持原样
+// 传递（映射层不再锚定工作区根），由下游 filepath.Abs 解析为当前盘根——与 Linux
+// 把 /docs 解析到真实根行为一致（「错了也一致」）。
 func TestResolveWorkspacePathWindowsBareRoot(t *testing.T) {
 	got := mapWorkspacePathFor("/docs/architecture.md", "G:/Agents/deepseek-harness", "windows")
-	if got != "G:/Agents/deepseek-harness/docs/architecture.md" {
-		t.Fatalf("报告场景回归: got %q, want G:/Agents/deepseek-harness/docs/architecture.md", got)
+	if got != "/docs/architecture.md" {
+		t.Fatalf("Windows 裸 / 必须原样传递（真实根语义）: got %q", got)
 	}
 }
 

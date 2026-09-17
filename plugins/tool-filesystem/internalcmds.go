@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"dsc-sdk"
 	"dsc/core"
 	"mvdan.cc/sh/v3/interp"
 )
@@ -130,7 +131,7 @@ func res(hc interp.HandlerContext, p string) string {
 	if filepath.IsAbs(p) {
 		return p
 	}
-	return filepath.Join(hc.Dir, p)
+	return dsc.PJoin(hc.Dir, p)
 }
 
 // openContentFiles 打开文件列表（"-" 表示 stdin）读写；返回待 close 句柄。
@@ -570,7 +571,7 @@ func copyOrMove(ctx context.Context, hc interp.HandlerContext, ops []string, rec
 		// 目标程序：多源/目标为目录→并入该目录。
 		dstPath := res(hc, dst)
 		if dstIsDir {
-			dstPath = filepath.Join(dstPath, filepath.Base(src))
+			dstPath = dsc.PJoin(dstPath, filepath.Base(src))
 		}
 		if fi.IsDir() && !recursive {
 			fmt.Fprintf(hc.Stderr, "%s: %s: is a directory (not copied); use -r\n", verb, s)
@@ -596,7 +597,7 @@ func copyOrMove(ctx context.Context, hc interp.HandlerContext, ops []string, rec
 
 // moveEntry 移动：优先 os.Rename；跨设备失败时降级为 拷贝+删除。
 func moveEntry(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(dsc.PDir(dst), 0o755); err != nil {
 		return err
 	}
 	if err := os.Rename(src, dst); err == nil {
@@ -618,15 +619,15 @@ func copyEntry(src, dst string, fi os.FileInfo) error {
 		}
 	}
 	if fi.IsDir() {
-		return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		return dsc.PWalkDir(src, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			rel, _ := filepath.Rel(src, p)
+			rel, _ := dsc.PRel(src, p)
 			if rel == "." {
 				return os.MkdirAll(dst, 0o755)
 			}
-			dp := filepath.Join(dst, rel)
+			dp := dsc.PJoin(dst, rel)
 			if d.IsDir() {
 				return os.MkdirAll(dp, 0o755)
 			}
@@ -654,7 +655,7 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(dsc.PDir(dst), 0o755); err != nil {
 		return err
 	}
 	out, err := os.Create(dst)
@@ -1134,7 +1135,7 @@ func treeWalk(ctx context.Context, hc interp.HandlerContext, dir, prefix string,
 		if last {
 			child = prefix + "    "
 		}
-		if err := treeWalk(ctx, hc, filepath.Join(dir, it.name), child, depth, level+1, excludes, all, dirsOnly, dirs, files); err != nil {
+		if err := treeWalk(ctx, hc, dsc.PJoin(dir, it.name), child, depth, level+1, excludes, all, dirsOnly, dirs, files); err != nil {
 			return err
 		}
 	}

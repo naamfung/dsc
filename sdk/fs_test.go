@@ -142,7 +142,13 @@ func TestMapWorkspacePathDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveWorkspacePath: %v", err)
 	}
-	if want := filepath.Join("/tmp/myws", "docs", "a.md"); got != want {
+	// 相对路径锚定工作空间根并绝对化；want 与实现同取 filepath.Abs（Windows 上
+	// 为 POSIX 形态的 root 补当前盘符，Linux 上原样）。
+	want, err := filepath.Abs(filepath.Join("/tmp/myws", "docs", "a.md"))
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	if got != want {
 		t.Fatalf("ResolveWorkspacePath = %q, want %q", got, want)
 	}
 }

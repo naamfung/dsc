@@ -543,9 +543,9 @@ func TestCompactionBasicE2E(t *testing.T) {
 	ctx := context.Background()
 	hook := proto.NewPluginHookServiceClient(conn)
 
-	// 3. pre-step：6 条约 300 token 的消息（共 1800 ≥ 800）——未走紧急压缩前
+	// 3. pre-step：6 条约 304 token 的消息（CJK 感知估算，共 1824 ≥ 800）——未走紧急压缩前
 	//    不改写（默认保留预算 1024 未覆盖全部时不触发该分支，此处窗口 1000 下
-	//    保留预算 max(160,1024)=1024 < 1800，会直接压缩；为验证紧急路径，
+	//    保留预算 max(160,1024)=1024 < 1824，会直接压缩；为验证紧急路径，
 	//    用更低估算让首步走「未达阈值」分支不可行——改验：首步直接压缩也可，
 	//    但为覆盖 request-error 路径，这里先跑 pre-step 缓存消息列表即可。
 	msgs := make([]*proto.Message, 0, 6)
@@ -554,7 +554,7 @@ func TestCompactionBasicE2E(t *testing.T) {
 		if i%2 == 1 {
 			role = "assistant"
 		}
-		msgs = append(msgs, &proto.Message{Role: role, Content: strings.Repeat("x", 1200)})
+		msgs = append(msgs, &proto.Message{Role: role, Content: strings.Repeat("x", 300)})
 	}
 	msgsJSON, err := json.Marshal(msgs)
 	if err != nil {
@@ -585,7 +585,7 @@ func TestCompactionBasicE2E(t *testing.T) {
 		return resp.GetResultJson()
 	}
 
-	// 4. 首步 pre-step：窗口 1000、保留预算 1024 → 保留区盖到 3 条（900），
+	// 4. 首步 pre-step：窗口 1000、保留预算 1024 → 保留区盖到 3 条（912 ≤ 1024），
 	//    第 4 条越界 → 直接压缩 [0,3) 为截断式摘要（LLM 未互联）
 	first := preStep()
 	if first == "" {
@@ -727,21 +727,23 @@ func TestImageOffloadE2E(t *testing.T) {
 		t.Fatalf("A: newest must stay verbatim: %+v", got[2])
 	}
 
-	// 3. 场景 B：链式——压缩窗口 1000 + 卸载预算 1；压缩先改写 [0,3) 为摘要，
+	// 3. 场景 B：链式——压缩窗口 1000 + 卸载预算 1；图像按结构引用计价（每条约 +8
+	//    token，不再固定 384 高估历史图像），文本压力驱动压缩先改写 [0,13) 为摘要
+	//    （保留预算 1024：尾段 3 条带图消息 312×3=936 ≤ 1024、第 4 条越界 → retainIdx=13），
 	//    卸载再作用于改写结果（尾段三图退役最旧两张，最新一张保持在场）
-	msgsB := make([]*proto.Message, 0, 6)
-	for i := 0; i < 6; i++ {
+	msgsB := make([]*proto.Message, 0, 16)
+	for i := 0; i < 16; i++ {
 		role := "user"
 		if i%2 == 1 {
 			role = "assistant"
 		}
-		m := &proto.Message{Role: role, Content: strings.Repeat("x", 1200)}
+		m := &proto.Message{Role: role, Content: strings.Repeat("x", 300)}
 		switch i {
-		case 3:
+		case 13:
 			m.Images = []string{imgC}
-		case 4:
+		case 14:
 			m.Images = []string{imgD}
-		case 5:
+		case 15:
 			m.Images = []string{imgB}
 		}
 		msgsB = append(msgsB, m)
@@ -750,7 +752,7 @@ func TestImageOffloadE2E(t *testing.T) {
 		"DSC_COMPACTION_BASIC_CONTEXT_WINDOW=1000",
 		"DSC_MAX_REQUEST_IMAGES=1",
 	)
-	res = preStep(t, hookB, "e2e-image-offload-chain", msgsB, 1800)
+	res = preStep(t, hookB, "e2e-image-offload-chain", msgsB, 100)
 	got = parse(t, res)
 	if len(got) != 4 {
 		t.Fatalf("B: messages = %d, want 4 (summary + 3 tail)", len(got))
@@ -759,12 +761,12 @@ func TestImageOffloadE2E(t *testing.T) {
 		t.Fatalf("B: head must be truncate summary, got %q", got[0].GetContent())
 	}
 	if !strings.Contains(got[1].Content, "[image omitted to fit request image limits; "+imgC+"]") || len(got[1].Images) != 0 {
-		t.Fatalf("B: msg3 image must be offloaded: %+v", got[1])
+		t.Fatalf("B: msg13 image must be offloaded: %+v", got[1])
 	}
 	if !strings.Contains(got[2].Content, "[image omitted to fit request image limits; "+imgD+"]") || len(got[2].Images) != 0 {
-		t.Fatalf("B: msg4 image must be offloaded: %+v", got[2])
+		t.Fatalf("B: msg14 image must be offloaded: %+v", got[2])
 	}
-	if len(got[3].Images) != 1 || got[3].Images[0] != imgB || !strings.Contains(got[3].Content, strings.Repeat("x", 1200)) {
+	if len(got[3].Images) != 1 || got[3].Images[0] != imgB || !strings.Contains(got[3].Content, strings.Repeat("x", 300)) {
 		t.Fatalf("B: newest image + tail verbatim must stay: %+v", got[3])
 	}
 }

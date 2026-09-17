@@ -2,7 +2,6 @@ package core
 
 import (
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -65,7 +64,7 @@ func (pw *ProfileWatcher) Watch(paths ...string) error {
 	defer pw.mu.Unlock()
 	for _, p := range paths {
 		// 确保父目录被监视（fsnotify 监视目录，文件创建/删除事件需要目录级监视）
-		dir := filepath.Dir(p)
+		dir := PDir(p)
 		if err := pw.watcher.Add(dir); err != nil {
 			pw.logger.Warn("profile watcher: failed to watch dir", "dir", dir, "error", err)
 		}

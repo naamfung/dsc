@@ -88,10 +88,10 @@ func loadConfig(path string) (*core.Config, error) {
 // 参与決定根（避免 ./workspace 把根推到子目錄）。
 func resolveWorkspaceRoot(cwd, cfgRoot string) string {
 	if filepath.IsAbs(cfgRoot) {
-		return filepath.Clean(cfgRoot)
+		return core.PClean(cfgRoot)
 	}
 	if env := os.Getenv("DSC_WORKSPACE_ROOT"); env != "" {
-		return filepath.Clean(env)
+		return core.PClean(env)
 	}
 	if cwd == "" {
 		if wd, err := os.Getwd(); err == nil {
@@ -119,17 +119,17 @@ func getExecutableDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Dir(exePath), nil
+	return core.PDir(exePath), nil
 }
 
 // statBinaryPath 根據 execDir 与可能的相對/絕對 binaryPath，返回用於 os.Stat 檢查的絕對路徑
 func statBinaryPath(execDir, cfgPath string, defaultRel string) string {
 	p := cfgPath
 	if p == "" {
-		p = filepath.Join(execDir, defaultRel)
+		p = core.PJoin(execDir, defaultRel)
 	} else {
 		if !filepath.IsAbs(p) {
-			p = filepath.Join(execDir, p)
+			p = core.PJoin(execDir, p)
 		}
 	}
 	return p
@@ -258,22 +258,22 @@ func main() {
 	// DSC_ATTACHMENT_DIR 时注入 <ExecDir>/attachments，宿主与各插件进程
 	//（buildEnv 继承宿主环境）路径天然一致。
 	if os.Getenv("DSC_ATTACHMENT_DIR") == "" {
-		os.Setenv("DSC_ATTACHMENT_DIR", filepath.Join(execDir, "attachments"))
+		os.Setenv("DSC_ATTACHMENT_DIR", core.PJoin(execDir, "attachments"))
 	}
 
 	// 临时目录（操作截图等 24 小时生命周期的工具产物，宿主启动时对 temp/
 	// 内超时子目录统一清理，见 core/manager.go cleanupOldTempDirs）：未显式
 	// 配置 DSC_TEMP_DIR 时注入 <ExecDir>/temp，插件进程继承后引用解析路径一致。
 	if os.Getenv("DSC_TEMP_DIR") == "" {
-		os.Setenv("DSC_TEMP_DIR", filepath.Join(execDir, "temp"))
+		os.Setenv("DSC_TEMP_DIR", core.PJoin(execDir, "temp"))
 	}
 
 	// dsc setup：交互式配置向导（不加载插件，直接读写 config.yaml）。
 	// 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
 	if isSetupCommand(os.Args[1:]) {
 		os.Exit(runSetup(bufio.NewScanner(os.Stdin), os.Stdout,
-			filepath.Join(execDir, "config", "config.yaml"),
-			filepath.Join(execDir, "plugins")))
+			core.PJoin(execDir, "config", "config.yaml"),
+			core.PJoin(execDir, "plugins")))
 	}
 
 	// 啟動目錄（cwd）：默認 workspace 根。用戶在哪个目录启动 dsc，
@@ -447,7 +447,7 @@ func main() {
 	logger.Info("starting dsc", "mode", mode)
 
 	// 加載 preset 配置文件
-	presetPath := filepath.Join(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
+	presetPath := core.PJoin(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
 	presetCfg, err := loadConfig(presetPath)
 	if err != nil {
 		// 如果 preset 配置文件不存在或加載失敗，回退到默認 config.yaml
@@ -462,7 +462,7 @@ func main() {
 	// 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
 	// 沙箱策略（read-only / workspace-write / full-access）由 TUI /sandbox 命令
 	// 运行时切换，见 core.Manager.SetSandboxPolicy。
-	mainCfg, err := loadConfig(filepath.Join(execDir, "config", "config.yaml"))
+	mainCfg, err := loadConfig(core.PJoin(execDir, "config", "config.yaml"))
 	if err == nil && mainCfg != nil {
 		core.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
 	}
@@ -492,7 +492,7 @@ func main() {
 	logger.Info("core broker conn timeout", "timeout", os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT"))
 
 	mgr := core.NewManager(&core.ManagerConfig{
-		PluginDir:       filepath.Join(execDir, "plugins"),
+		PluginDir:       core.PJoin(execDir, "plugins"),
 		ExecDir:         execDir,
 		Handshake:       core.Handshake,
 		Logger:          logger,
@@ -509,7 +509,7 @@ func main() {
 	installShutdownSignals(mgr)
 	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
 	// 使运行期增删的插件在进程重启后依旧保留
-	mgr.SetConfigPath(filepath.Join(execDir, "config", "config.yaml"))
+	mgr.SetConfigPath(core.PJoin(execDir, "config", "config.yaml"))
 
 	// 外部脚本钩子（-hooks hooks.json）：严格 LUA 脚本（go-lua 进程内解释）或
 	// 原生可执行文件（直接 exec 不经 shell），在工具流水线 BeforeTool/AfterTool
@@ -658,8 +658,8 @@ func main() {
 	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
 	// 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
 	// 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
-	mainConfigPath := filepath.Join(execDir, "config", "config.yaml")
-	pluginsDir := filepath.Join(execDir, "plugins")
+	mainConfigPath := core.PJoin(execDir, "config", "config.yaml")
+	pluginsDir := core.PJoin(execDir, "plugins")
 	pluginsSnap := pluginsDir + "-backup"
 	loadErr := mgr.LoadFromConfig(merged)
 	if loadErr != nil {

@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"dsc/proto"
 )
@@ -148,5 +150,54 @@ func TestLLMRouteOrderSkipsUnloaded(t *testing.T) {
 	}
 	if len(order) != 1 || order[0] != "a" {
 		t.Fatalf("order = %v, want [a] (unloaded skipped)", order)
+	}
+}
+
+// TestApplyPreStepHookCarriesLastUsageTokens 回归「纯启发式低估导致压缩不触发」：
+// 宿主按会话记录最近一次成功请求的上报 prompt 用量，并在 agent/pre-step 事件透传
+// （last_usage_tokens）；压缩插件以该精确底数判定压力，而非仅靠字节启发式估算。
+// 覆盖跨层字段保真：Manager 记录 → llmAggregateServer.applyPreStepHook → 插件事件 JSON。
+func TestApplyPreStepHookCarriesLastUsageTokens(t *testing.T) {
+	m := newRouterManager()
+	m.recordSessionUsage("sess-x", 90000)
+
+	f := &fakeHook{events: make(chan *proto.OnEventRequest, 1)}
+	m.toolHookClients["p1"] = f
+	m.toolHookOrder = []string{"p1"}
+
+	srv := &llmAggregateServer{m: m}
+	req := &proto.ChatRequest{
+		SessionId: "sess-x",
+		Messages:  []*proto.Message{{Role: "user", Content: "hi"}},
+	}
+	out := srv.applyPreStepHook(context.Background(), req)
+	if out == nil || len(out.Messages) != 1 || out.Messages[0].Content != "hi" {
+		t.Fatalf("无改写插件时请求必须原样通过, got %+v", out)
+	}
+	select {
+	case ev := <-f.events:
+		if ev.GetName() != string(EventAgentPreStep) {
+			t.Fatalf("event name = %s", ev.GetName())
+		}
+		var payload AgentPreStepEvent
+		if err := json.Unmarshal([]byte(ev.GetDataJson()), &payload); err != nil {
+			t.Fatalf("parse event: %v", err)
+		}
+		if payload.LastUsageTokens != 90000 {
+			t.Fatalf("last_usage_tokens = %d, want 90000", payload.LastUsageTokens)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pre-step event not dispatched to hook")
+	}
+}
+
+// TestRecordSessionUsageRequiresPositive 空会话 id / 非正用量不记录（内部调用与非流式请求
+// 不污染会话状态），lastSessionPrompt 返回 0 由插件退回启发式。
+func TestRecordSessionUsageRequiresPositive(t *testing.T) {
+	m := newRouterManager()
+	m.recordSessionUsage("", 90000)
+	m.recordSessionUsage("sess-y", 0)
+	if got := m.lastSessionPrompt("sess-y"); got != 0 {
+		t.Fatalf("lastSessionPrompt = %d, want 0", got)
 	}
 }

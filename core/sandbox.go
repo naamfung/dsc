@@ -119,7 +119,7 @@ func workspacePathToRoot(p string) string {
 		if rest == "" {
 			return WorkspaceRoot
 		}
-		return filepath.Join(WorkspaceRoot, strings.TrimLeft(rest, `/\\`))
+		return PJoin(WorkspaceRoot, strings.TrimLeft(rest, `/\\`))
 	}
 	return p
 }
@@ -128,11 +128,11 @@ func workspacePathToRoot(p string) string {
 // （失败时回退绝对化结果）。Windows 下盘符/路径大小写不敏感且可能存在 8.3 短名、
 // 符号链接等别名，统一解析可避免真实路径与根因大小写/别名差异被误判为越界。
 func canonicalWorkspaceRoot() string {
-	abs, err := filepath.Abs(WorkspaceRoot)
+	abs, err := PAbs(WorkspaceRoot)
 	if err != nil {
 		return WorkspaceRoot
 	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
+	if real, err := PEvalSymlinks(abs); err == nil {
 		return real
 	}
 	return abs
@@ -155,13 +155,13 @@ func inWorkspace(path string) bool {
 	driveLessRoot := runtime.GOOS == "windows" && !filepath.IsAbs(p) &&
 		(strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`))
 	if !filepath.IsAbs(p) && !driveLessRoot {
-		p = filepath.Join(WorkspaceRoot, p)
+		p = PJoin(WorkspaceRoot, p)
 	}
-	abs, err := filepath.Abs(p)
+	abs, err := PAbs(p)
 	if err != nil {
 		return false
 	}
-	root, rerr := filepath.Abs(WorkspaceRoot)
+	root, rerr := PAbs(WorkspaceRoot)
 	if rerr != nil {
 		root = WorkspaceRoot
 	}

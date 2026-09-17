@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -135,7 +134,7 @@ func (cs *CredentialStore) ListKeys(ctx context.Context, pluginName string) ([]s
 
 // credFilePath 返回插件凭据文件路径。
 func (cs *CredentialStore) credFilePath(pluginName string) string {
-	return filepath.Join(cs.dir, pluginName+".json")
+	return PJoin(cs.dir, pluginName+".json")
 }
 
 // loadFromFile 从文件加载插件凭据。

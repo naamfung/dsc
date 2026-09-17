@@ -61,7 +61,7 @@ func versionedCandidatesInDir(dir, base string) (string, *version.Version) {
 		}
 		if v.GreaterThan(bestV) {
 			bestV = v
-			best = filepath.Join(dir, e.Name())
+			best = PJoin(dir, e.Name())
 		}
 	}
 	return best, bestV
@@ -74,7 +74,7 @@ func ResolveLatestBinary(binaryPath string) string {
 	if binaryPath == "" {
 		return ""
 	}
-	dir := filepath.Dir(binaryPath)
+	dir := PDir(binaryPath)
 	if dir == "" || dir == "." {
 		return binaryPath
 	}

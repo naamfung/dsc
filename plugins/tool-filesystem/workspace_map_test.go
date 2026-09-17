@@ -120,12 +120,10 @@ func TestMapWorkspaceAST(t *testing.T) {
 	}
 }
 
-// TestMapWorkspacePathBarePosixRoot 验证 Windows 上裸 POSIX 绝对路径统一锚定
-// 工作区根（虚拟根语义）：真实案例中模型 `find /` 被 MSYS 外部命令解释为盘符根，
-// 遍历了整个 D:\ 盘（$RECYCLE.BIN、System Volume Information），既浪费上下文又
-// 越出工作区。映射后 `/` 与 `/x` 与内建工具的 Join 行为一致。例外：/dev/null 保持
-// 原样（mvdan DefaultOpenHandler 在 Windows 特判重定向到 NUL）；// 开头的 UNC
-// 路径不改写。Linux/macOS 上 / 是真实根，不启用本映射。
+// TestMapWorkspacePathBarePosixRoot 裸 POSIX 绝对路径保持原样（所有平台，真实根语义）：
+// Windows 上不再把 `/` 与 `/x` 锚定工作区根，由下游 filepath.Abs 解析为当前盘根
+// （与 Linux 把 /x 解析到真实根行为一致）；/workspace 与 /mnt/<drive> 是显式别名；
+// /dev/null（mvdan DefaultOpenHandler 特判重定向到 NUL）与 // UNC 前缀保持原样。
 func TestMapWorkspacePathBarePosixRoot(t *testing.T) {
 	setRoot(t, "/tmp/myws")
 
@@ -138,14 +136,14 @@ func TestMapWorkspacePathBarePosixRoot(t *testing.T) {
 	}
 	if runtime.GOOS == "windows" {
 		cases = []struct{ in, want string }{
-			{"/", "/tmp/myws"},
-			{"/foo/bar.txt", "/tmp/myws/foo/bar.txt"},
-			{"/Agents", "/tmp/myws/Agents"},
+			{"/", "/"},
+			{"/foo/bar.txt", "/foo/bar.txt"},
+			{"/Agents", "/Agents"},
 			{"/dev/null", "/dev/null"},
 			{"//server/share", "//server/share"},
 			{"/mnt/d/x", "D:/x"},
 			{"/workspace/x", "/tmp/myws/x"},
-			{"/workspacefoo/x", "/tmp/myws/workspacefoo/x"},
+			{"/workspacefoo/x", "/workspacefoo/x"},
 		}
 	}
 	for _, c := range cases {
@@ -155,21 +153,15 @@ func TestMapWorkspacePathBarePosixRoot(t *testing.T) {
 	}
 }
 
-// TestMapWorkspaceASTBareRoot 校验 AST 层：裸 `/` 与裸 POSIX 路径在 Windows 上被
-// 重写（find / 不再遍历盘根），/dev/null 重定向保持原样。
+// TestMapWorkspaceASTBareRoot 校验 AST 层：裸 `/` 与裸 POSIX 路径保持原样（不再改写
+// 为工作区根），/dev/null 重定向保持原样。
 func TestMapWorkspaceASTBareRoot(t *testing.T) {
 	setRoot(t, "/tmp/myws")
 
 	cases := []struct{ in, want string }{
 		{`find / -maxdepth 2`, `find / -maxdepth 2`},
+		{`cd / && pwd`, `cd / && pwd`},
 		{`echo hi 2>/dev/null`, `echo hi 2>/dev/null`},
-	}
-	if runtime.GOOS == "windows" {
-		cases = []struct{ in, want string }{
-			{`find / -maxdepth 2`, `find /tmp/myws -maxdepth 2`},
-			{`cd / && pwd`, `cd /tmp/myws && pwd`},
-			{`echo hi 2>/dev/null`, `echo hi 2>/dev/null`},
-		}
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
