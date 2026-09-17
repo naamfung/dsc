@@ -2,8 +2,10 @@
 //
 // 独立开发者只需引入本包（及其底层 dsc/proto 依赖），声明式地注册工具、LLM、
 // Agent、钩子与互通回调，即可产出宿主零改动即可加载的插件二进制。
-// 宿主按目录名 <type>-<name> 发现插件（见 core/manager.go validatePluginDirectoryName），
-// 因此构建产物应放到宿主 plugins/ 目录（或经 ADMIN API /plugins/load 动态注入）。
+// 宿主按目录名发现插件：专用类型（llm/agent/tool/policy）取 <type>-<name> 惯例，
+// 通用（dsc）类型不设前缀门槛、任意合规名称皆可（见 core/manager.go
+// validatePluginDirectoryName）；构建产物应放到宿主 plugins/ 目录
+// （或经 ADMIN API /plugins/load 动态注入）。
 package dsc
 
 import (

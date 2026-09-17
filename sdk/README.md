@@ -53,7 +53,7 @@ cd examples/tool-simple && go build -o my-tool.exe .
 | `dsc.TypeLLM` | `sdk.LLM(impl)` | 实现 `plugin.LLMProvider`（Chat / ChatStream / Name / Version / HealthCheck） |
 | `dsc.TypeAgent` | `sdk.Agent(impl)` | 实现 `plugin.Agent`（Run / RunStream / RegisterServices / InjectMessage 等 11 个方法） |
 | `dsc.TypePolicy` | `sdk.Policy(impl)` | 实现 `proto.FsObservationPolicyServiceServer`（宿主桥接到工具流水线） |
-| `dsc.TypeDsc` | `sdk.Tool(...)` / `sdk.ToolProvider(...)` / `sdk.Hook(...)` / `sdk.Context(...)` 等可选 | 通用/纯后台插件：不注册 llm/agent/policy 服务；**可注册工具**——宿主经 ListTools 探测并登记为 tool provider（工具集为空时跳过登记，零行为变化）；可加钩子订阅宿主事件广播；目录前缀 `dsc-` |
+| `dsc.TypeDsc` | `sdk.Tool(...)` / `sdk.ToolProvider(...)` / `sdk.Hook(...)` / `sdk.Context(...)` 等可选 | 通用/纯后台插件：不注册 llm/agent/policy 服务；**可注册工具**——宿主经 ListTools 探测并登记为 tool provider（工具集为空时跳过登记，零行为变化）；可加钩子订阅宿主事件广播；目录名不限前缀（`dsc-*` 惯例保留，不再强制） |
 
 所有类型的元数据（Type/Name/Version/APIVersion）由 SDK 自动提供，宿主加载时校验
 `APIVersion ∈ [1.0, 2.0)`。
@@ -247,7 +247,7 @@ abs, err := dsc.AbsPath(path)                      // 绝对路径规范化
 
 ```go
 dsc.SafeGoroutine(func() {
-	// 后台任务；panic 被 recover 并连同调用栈打到 stderr，绝不 crash 插件进程
+        // 后台任务；panic 被 recover 并连同调用栈打到 stderr，绝不 crash 插件进程
 })
 ```
 

@@ -1908,7 +1908,12 @@ func getPluginDirectoryName(binaryPath string) string {
 	return baseDir
 }
 
-// validatePluginDirectoryName 校驗插件目錄名是否符合規範：<類別>-<名稱>
+// validatePluginDirectoryName 校驗插件目錄名是否符合規範：
+//   - 專用類型（llm/agent/tool/policy）：<類別>-<名稱>，前綴承載類型語義；
+//   - 通用（dsc）類型：不設前綴門檻——類型由插件自聲明（PluginInfo.Type）與 config
+//     顯式指定，目錄名只是名字（對齊 DSH/Cordis「插件類型與服務正交」：
+//     「不確定前綴時可用 dsc-*」的通用形態，任意合規名稱皆可作 dsc 類型插件，
+//     dsc-* 僅為慣例而非強制）。
 func validatePluginDirectoryName(coreType, dirName string) error {
 	prefix := ""
 	switch coreType {
@@ -1921,7 +1926,8 @@ func validatePluginDirectoryName(coreType, dirName string) error {
 	case "policy":
 		prefix = "policy-"
 	case "dsc":
-		prefix = "dsc-"
+		// 通用類型：前綴可選（dsc-* 慣例保留但不再強制），名稱整體走字符集校驗
+		prefix = ""
 	default:
 		return fmt.Errorf("unknown core type '%s', cannot validate directory name '%s'", coreType, dirName)
 	}

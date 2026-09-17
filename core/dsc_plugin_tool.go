@@ -487,14 +487,16 @@ func (m *Manager) listPluginDiskNames() []string {
 	return out
 }
 
-// inferPluginTypeFromDir 从目录名 <type>-<name> 推断插件类型；无法识别返回空串。
+// inferPluginTypeFromDir 从目录名 <type>-<name> 推断插件类型；无法识别前缀时
+// 兜底为通用（dsc）类型——对齐「不确定前缀时可用 dsc-*」：dsc 是通用形态，
+// 类型由声明承载，目录名不再强制前缀。
 func inferPluginTypeFromDir(base string) string {
 	for _, p := range []string{"tool-", "llm-", "agent-", "policy-", "dsc-"} {
 		if strings.HasPrefix(base, p) {
 			return strings.TrimSuffix(p, "-")
 		}
 	}
-	return ""
+	return "dsc"
 }
 
 func (t *listDscPluginsTool) ExecuteWithView(ctx context.Context, args json.RawMessage, result string) (string, string, error) {
