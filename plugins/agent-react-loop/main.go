@@ -422,9 +422,10 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		//   而非把全部历史折叠成单一摘要。
 		// - 历史注入设置了条数上限（historyInjection >= 0）时跳过压缩：注入条数本身就是
 		//   上下文的硬边界，压缩会与截断重复且其 surface 索引基于全量历史，不再适用。
-		// - 若宿主有 compaction 后端插件（如 billion-context），后端在 pre-step 事件中
-		//   以更低阈值（45%）主动 nudge 模型压缩，使 80% 阈值正常情况下不被触发。
-		//   后端卸载后内联压缩自动恢复为唯一压缩路径——不依赖 env 或动态状态同步，
+		// - 若宿主有 compaction 后端插件，后端在 pre-step 事件中以自身策略阈值
+		//   接管压缩（能力声明驱动，接管与阈值无关；如 billion-context 的 45%
+		//   nudge 提醒 / dsc-system compaction-basic 的 80% 压力改写）。后端卸载后
+		//   内联压缩自动恢复为唯一压缩路径——不依赖 env 或动态状态同步，
 		//   避免了"动态加载/卸载与 env 快照不同步"的问题。两者作为双重安全网：
 		//   后端负责日常压缩（model-driven），内联压缩负责兜底（rule-driven）。
 		compacted := false
@@ -502,8 +503,9 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 			return availableTools[i].Name < availableTools[j].Name
 		})
 
-		// 调用 LLM（流式或非流式）；请求前对图像引用做预算卸载（最旧优先
-		// 退役为占位文本，瞬态投影不改会话存储，见 image_offload.go）
+		// 调用 LLM（流式或非流式）；请求面图像预算卸载已外置 dsc-system
+		// image-offload 驻留（agent/pre-step 瀑布改写，策略归还插件）——
+		// 本循环零请求前预处理，消息列表按会话派生原样下发
 		//
 		// 会话归属与新用户输入标记随请求透传（宿主在 agent/pre-step 事件载荷
 		// 中转发，对齐 DSH agent/pre-step 的 inbox claim 语义）：回合开场输入
@@ -512,7 +514,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 		// 上下文，跨插话的重复不是循环）。
 		newUserInput := firstRequest || iterPendingInjects > seenInjects
 		req := &proto.ChatRequest{
-			Messages:     offloadRequestImages(msgs, maxRequestImages()),
+			Messages:     msgs,
 			Tools:        availableTools,
 			SessionId:    sess.ID(),
 			NewUserInput: newUserInput,
@@ -1417,7 +1419,7 @@ func (a *ReactLoopAgent) ensureConnected(llmID, toolID uint32) (proto.LLMService
 }
 
 func (a *ReactLoopAgent) Name(ctx context.Context) string    { return "react-agent" }
-func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.2.0" } // 重复提醒外置 dsc-system；pre-step 会话归属与新用户输入标记
+func (a *ReactLoopAgent) Version(ctx context.Context) string { return "1.3.0" } // 请求面图像预算卸载外置 dsc-system image-offload 驻留（pre-step 瀑布投影）；本循环零请求前预处理
 
 // InjectMessage 将一条用户消息实时注入到当前运行中会话的历史末端。
 // 运行中的 runLoop 每步都从会话 surface 重新派生请求历史（DeriveMessages），

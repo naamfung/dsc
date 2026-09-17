@@ -647,3 +647,133 @@ func TestCompactionBasicE2E(t *testing.T) {
 		t.Fatalf("session state file must persist: %v", err)
 	}
 }
+
+// TestImageOffloadE2E 请求面图像预算卸载端到端（真实 Hook 多路复用链）：
+// A) 纯卸载——压缩未触发时直接投影消息列表（占位文本 + 最旧清空）；
+// B) 链式——压缩改写 [0,3) 后，卸载作用于改写结果（结构改写在前、请求面投影在后）。
+func TestImageOffloadE2E(t *testing.T) {
+	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "dsc-system.exe")
+	if out, err := exec.Command("go", "build", "-o", exe, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	spawn := func(env ...string) proto.PluginHookServiceClient {
+		t.Helper()
+		cmd := exec.Command(exe)
+		cmd.Env = append(os.Environ(), env...)
+		client := plugin.NewClient(&plugin.ClientConfig{
+			HandshakeConfig:  core.Handshake,
+			Plugins:          map[string]plugin.Plugin{},
+			AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+			Cmd:              cmd,
+		})
+		t.Cleanup(client.Kill)
+		rpcClient, err := client.Client()
+		if err != nil {
+			t.Fatalf("client: %v", err)
+		}
+		grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+		if !ok {
+			t.Fatalf("unexpected client type %T", rpcClient)
+		}
+		return proto.NewPluginHookServiceClient(grpcClient.Conn)
+	}
+	preStep := func(t2 *testing.T, hook proto.PluginHookServiceClient, session string, msgs []*proto.Message, tokenCount int) string {
+		t2.Helper()
+		ctx := context.Background()
+		msgsJSON, err := json.Marshal(msgs)
+		if err != nil {
+			t2.Fatalf("marshal msgs: %v", err)
+		}
+		data, err := json.Marshal(map[string]any{
+			"agent": "agent-react-loop", "session": session,
+			"messages_json": string(msgsJSON), "token_count": tokenCount,
+		})
+		if err != nil {
+			t2.Fatalf("marshal event: %v", err)
+		}
+		resp, err := hook.OnEvent(ctx, &proto.OnEventRequest{Name: "agent/pre-step", DataJson: string(data)})
+		if err != nil {
+			t2.Fatalf("pre-step OnEvent: %v", err)
+		}
+		return resp.GetResultJson()
+	}
+	parse := func(t2 *testing.T, res string) []*proto.Message {
+		t2.Helper()
+		var out struct {
+			Messages []*proto.Message `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(res), &out); err != nil {
+			t2.Fatalf("parse rewrite %q: %v", res, err)
+		}
+		return out.Messages
+	}
+
+	// 2. 场景 A：纯卸载（预算 2，总量 4 → 最旧两张退役）
+	imgA, imgB, imgC, imgD := "dsc-shot://e2e-a", "dsc-shot://e2e-b", "dsc-shot://e2e-c", "dsc-shot://e2e-d"
+	msgsA := []*proto.Message{
+		{Role: "user", Content: "u0", Images: []string{imgA}},
+		{Role: "tool", Content: "t1", Images: []string{imgB, imgC}},
+		{Role: "tool", Content: "t2", Images: []string{imgD}},
+	}
+	hookA := spawn("DSC_MAX_REQUEST_IMAGES=2")
+	res := preStep(t, hookA, "e2e-image-offload", msgsA, 100)
+	got := parse(t, res)
+	if len(got) != 3 {
+		t.Fatalf("A: messages = %d, want 3", len(got))
+	}
+	if len(got[0].Images) != 0 || !strings.Contains(got[0].Content, "[image omitted to fit request image limits; "+imgA+"]") {
+		t.Fatalf("A: oldest not offloaded: %+v", got[0])
+	}
+	if len(got[1].Images) != 1 || got[1].Images[0] != imgC || !strings.Contains(got[1].Content, "[image omitted to fit request image limits; "+imgB+"]") {
+		t.Fatalf("A: second oldest not offloaded: %+v", got[1])
+	}
+	if len(got[2].Images) != 1 || got[2].Images[0] != imgD || got[2].Content != "t2" {
+		t.Fatalf("A: newest must stay verbatim: %+v", got[2])
+	}
+
+	// 3. 场景 B：链式——压缩窗口 1000 + 卸载预算 1；压缩先改写 [0,3) 为摘要，
+	//    卸载再作用于改写结果（尾段三图退役最旧两张，最新一张保持在场）
+	msgsB := make([]*proto.Message, 0, 6)
+	for i := 0; i < 6; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		m := &proto.Message{Role: role, Content: strings.Repeat("x", 1200)}
+		switch i {
+		case 3:
+			m.Images = []string{imgC}
+		case 4:
+			m.Images = []string{imgD}
+		case 5:
+			m.Images = []string{imgB}
+		}
+		msgsB = append(msgsB, m)
+	}
+	stateDir := filepath.Join(dir, "compaction-basic-state")
+	hookB := spawn(
+		"DSC_COMPACTION_BASIC_CONTEXT_WINDOW=1000",
+		"DSC_COMPACTION_BASIC_DIR="+stateDir,
+		"DSC_MAX_REQUEST_IMAGES=1",
+	)
+	res = preStep(t, hookB, "e2e-image-offload-chain", msgsB, 1800)
+	got = parse(t, res)
+	if len(got) != 4 {
+		t.Fatalf("B: messages = %d, want 4 (summary + 3 tail)", len(got))
+	}
+	if !strings.Contains(got[0].Content, "[压缩摘要]") {
+		t.Fatalf("B: head must be truncate summary, got %q", got[0].GetContent())
+	}
+	if !strings.Contains(got[1].Content, "[image omitted to fit request image limits; "+imgC+"]") || len(got[1].Images) != 0 {
+		t.Fatalf("B: msg3 image must be offloaded: %+v", got[1])
+	}
+	if !strings.Contains(got[2].Content, "[image omitted to fit request image limits; "+imgD+"]") || len(got[2].Images) != 0 {
+		t.Fatalf("B: msg4 image must be offloaded: %+v", got[2])
+	}
+	if len(got[3].Images) != 1 || got[3].Images[0] != imgB || !strings.Contains(got[3].Content, strings.Repeat("x", 1200)) {
+		t.Fatalf("B: newest image + tail verbatim must stay: %+v", got[3])
+	}
+}

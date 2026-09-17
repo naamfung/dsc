@@ -177,10 +177,11 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
   时等比降采样——不透明图重编码为 JPEG、带透明度保留 PNG；未超限原样透传；
   引用失效（截图过期/附件缺失）降级为稳定占位文本，模型由此知道该处曾有图；
 
-- 请求面图像预算卸载（对齐 DSH RequestImageOffloadPolicy）：历史中的图像引用数
-  超过单请求上限（默认 12，`DSC_MAX_REQUEST_IMAGES` 覆盖，`0`=不限制）时按
-  最旧优先退役为占位文本——最新观察永远在场，token 与费用不随 CU 截图轮次
-  线性膨胀；卸载是纯瞬态投影，会话日志原样保留；
+- 请求面图像预算卸载（对齐 DSH RequestImageOffloadPolicy，`dsc-system` 驻留
+  image-offload，agent/pre-step 槽）：历史中的图像引用数超过单请求上限（默认 12，
+  `DSC_MAX_REQUEST_IMAGES` 覆盖，`0`=不限制）时按最旧优先退役为占位文本——最新
+  观察永远在场，token 与费用不随 CU 截图轮次线性膨胀；卸载是纯瞬态投影，会话
+  日志原样保留（自 agent-react-loop 抽取迁入：策略归还插件，agent 请求组装零预处理）；
 
 - 单图超过约 20 MiB 且端点指向 DeepSeek 时自动上传 Files API（`purpose=user_data`）
   并以 `file_id` 引用（Anthropic 端点自动附带 `anthropic-beta: files-api-2025-04-14` 头）；
@@ -234,7 +235,7 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 
 ### Policy 插件
 
-- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）timeout 超时决策（自 `policy-timeout` 迁入，对齐 DSH timeout-policy：tool/execute 槽为 shell/subagent 裁决「活跃续命」执行域——空闲预算 DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT 可调、0s 禁用，宿主机械安装看门狗与活动信号通道，无状态）spill 外置决策（自 `policy-spill` 迁入，对齐 DSH spill-policy：tool/post-execute 槽把超阈值纯文本结果全文外置为文件并 replace 为「头尾预览 + 定位符 + view 取回指引」，阈值 DSC_SPILL_THRESHOLD 可调、0 禁用，存储按会话分目录、编号跨重启续接，尽力而为不把成功调用变失败）skill 技能工具（自 `tool-skill` 迁入：skill / install_skill / uninstall_skill 三工具经 ToolServiceServer 叠加——TypeDsc 恒注册工具服务，宿主 ListTools 探测非空后同时登记为 tool provider；ContextFn 注入技能索引到 system prompt，DSC_SKILLS_DIR 可调）与重复工具调用提醒（advisory 形态，见特性条目）与基础上下文压缩（自宿主 core/compaction.go 迁入，对齐 DSH compaction-basic：agent/pre-step 压力驱动改写消息列表 + agent/request-error 溢出紧急压缩重试，LLM 摘要经 interconnect 互通、未互联退化截断式，per-session 状态指纹复用，config.yaml compaction: dsc-system 选为后端——压缩策略与状态全归插件，宿主零压缩代码）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
+- `dsc-system`（核心插件混合体：**通用 dsc 类型**，单一程序承载多个驻留策略插件——各驻留插件的声明、逻辑与文件独立分离（每插件独立文件，装配只在 main.go），仅共用包名与编译产物；经 `PluginInfo.services` 服务正交声明（"policy"）获宿主机械桥接工具流水线。现有驻留：fs-observation 读前改写策略（自 `policy-fs-observation` 迁入，对齐 DSH fs-observation-policy：str_replace/insert 前必须有本会话内先读记录、外部修改后 sha256 新鲜度拦截、per-session 属主隔离）timeout 超时决策（自 `policy-timeout` 迁入，对齐 DSH timeout-policy：tool/execute 槽为 shell/subagent 裁决「活跃续命」执行域——空闲预算 DSC_SHELL_TIMEOUT / DSC_SUBAGENT_IDLE_TIMEOUT 可调、0s 禁用，宿主机械安装看门狗与活动信号通道，无状态）spill 外置决策（自 `policy-spill` 迁入，对齐 DSH spill-policy：tool/post-execute 槽把超阈值纯文本结果全文外置为文件并 replace 为「头尾预览 + 定位符 + view 取回指引」，阈值 DSC_SPILL_THRESHOLD 可调、0 禁用，存储按会话分目录、编号跨重启续接，尽力而为不把成功调用变失败）skill 技能工具（自 `tool-skill` 迁入：skill / install_skill / uninstall_skill 三工具经 ToolServiceServer 叠加——TypeDsc 恒注册工具服务，宿主 ListTools 探测非空后同时登记为 tool provider；ContextFn 注入技能索引到 system prompt，DSC_SKILLS_DIR 可调）与重复工具调用提醒（advisory 形态，见特性条目）与基础上下文压缩（自宿主 core/compaction.go 迁入，对齐 DSH compaction-basic：agent/pre-step 压力驱动改写消息列表 + agent/request-error 溢出紧急压缩重试，LLM 摘要经 interconnect 互通、未互联退化截断式，per-session 状态指纹复用，config.yaml compaction: dsc-system 选为后端——压缩策略与状态全归插件，宿主零压缩代码）与请求面图像预算卸载（自 agent-react-loop/image_offload.go 迁入，对齐 DSH RequestImageOffloadPolicy count 预算：agent/pre-step 槽把超预算最旧图像引用退役为占位文本——纯瞬态投影，DSC_MAX_REQUEST_IMAGES 可调、0 不限制）；内部多策略瀑布按驻留声明顺序扇出（deny 占槽短路、replace 结果前馈、notice 聚合）；后续核心插件逐步迁移至此）
 
 ### DSC 通用插件
 

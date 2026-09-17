@@ -20,6 +20,10 @@
 //     compaction-basic：agent/pre-step 压力驱动改写消息列表 + agent/request-error
 //     溢出紧急压缩重试；LLM 摘要经 interconnect，未互联退化截断式；
 //     config.yaml compaction: dsc-system 选其为本插件后端）
+//   - image-offload.go 请求面图像预算卸载（自 agent-react-loop/image_offload.go
+//     抽取迁入，对齐 DSH RequestImageOffloadPolicy count 预算：agent/pre-step 槽
+//     把超预算最旧图像引用退役为占位文本，纯瞬态投影不改会话存储；
+//     DSC_MAX_REQUEST_IMAGES 可调、0 不限制）
 //   - reminder.go       重复工具调用提醒（对齐 DSH guard/repeat-tool-reminder，
 //     advisory 形态：只产出 notice，不否决/不改写）
 //   - skill.go          技能工具（自 tool-skill 迁入：skill / install_skill /
@@ -33,6 +37,7 @@ import (
 	"os"
 
 	"dsc-sdk"
+	"dsc/core"
 	"dsc/proto"
 )
 
@@ -47,11 +52,12 @@ func main() {
 		os.Exit(2)
 	}
 	compactionBasicServer := newCompactionBasicServer()
+	imageOffloadServer := newImageOffloadServer()
 
 	skillStore, skillInstalledDir := newSkillResident()
 	sdk := dsc.New(dsc.Config{
 		Name:    "dsc-system",
-		Version: "1.5.3",
+		Version: "1.6.0",
 		Type:    dsc.TypeDsc,
 		// 声明压缩后端能力：config.yaml 的 compaction: dsc-system 选中时，
 		// 宿主 registerDscCoreLocked 验证此声明并标记后端生效
@@ -70,12 +76,39 @@ func main() {
 	//     上下文，跨插话的重复不是循环）；恒返回空，不影响其他驻留的改写结果
 	//   - compaction-basic：agent/pre-step 压缩改写消息列表 + agent/request-error
 	//     溢出紧急压缩重试（改写结果非空时优先透传给宿主）
+	//   - image-offload：agent/pre-step 请求面图像预算卸载（链式改写：作用于
+	//     压缩改写后的列表——结构改写在前、请求面投影在后，对齐原 agent 内联次序）
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) (string, error) {
-			if res, err := reminderServer.handleHostEvent(ctx, eventType, dataJSON); res != "" || err != nil {
-				return res, err
+			// reminder 只消费 pre-step 副作用（重置重复链），恒返回空
+			if _, err := reminderServer.handleHostEvent(ctx, eventType, dataJSON); err != nil {
+				return "", err
 			}
-			return compactionBasicServer.handleHostEvent(ctx, eventType, dataJSON)
+			res, err := compactionBasicServer.handleHostEvent(ctx, eventType, dataJSON)
+			if err != nil {
+				return "", err
+			}
+			if eventType != string(core.EventAgentPreStep) {
+				return res, nil // request-error 结果（retry 等）原样透传，卸载不参与
+			}
+			// pre-step：压缩改写结果回拼载荷，交 image-offload 在改写后的列表上投影；
+			// 压缩零改写时卸载直接作用于原载荷（两驻留独立生效，结果取链末端）
+			payload := dataJSON
+			if res != "" {
+				p, err := chainPreStep(dataJSON, res)
+				if err != nil {
+					return "", err
+				}
+				payload = p
+			}
+			out, err := imageOffloadServer.handleHostEvent(ctx, eventType, payload)
+			if err != nil {
+				return "", err
+			}
+			if out == "" {
+				return res, nil // 卸载零改写：透传压缩结果（零改写零丢失）
+			}
+			return out, nil
 		},
 	})
 	// 互通：缓存宿主聚合 LLM 客户端供压缩摘要生成（未互联时截断式退化）
