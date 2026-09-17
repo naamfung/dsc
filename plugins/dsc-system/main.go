@@ -32,10 +32,10 @@ import (
 )
 
 func main() {
-	fsObs := newFsObservationServer()
-	timeout := newTimeoutServer()
-	spill := newSpillServer()
-	reminder, err := newReminderServer()
+	fsObservationServer := newFsObservationServer()
+	timeoutServer := newTimeoutServer()
+	spillServer := newSpillServer()
+	reminderServer, err := newReminderServer()
 	if err != nil {
 		// fail-loud（对齐 DSH 插件装载校验）：配置非法启动即退出，绝不静默回退
 		fmt.Fprintf(os.Stderr, "dsc-system: %v\n", err)
@@ -51,11 +51,11 @@ func main() {
 	// 通用类型叠加 policy 服务：宿主按 PluginInfo.services 的 "policy" 声明，
 	// 把内部策略瀑布（多驻留扇出合并）桥接到工具流水线——与独立 policy 插件同一桥。
 	// 驻留顺序对齐原 preset 中独立插件的声明顺序（瀑布语义同构）。
-	sdk.Policy(&policyPipeline{residents: []proto.PolicyServiceServer{fsObs, timeout, spill, reminder}})
+	sdk.Policy(&policyPipeline{residents: []proto.PolicyServiceServer{fsObservationServer, timeoutServer, spillServer, reminderServer}})
 	// hook 订阅宿主事件：agent/pre-step 的「新用户输入」重置重复链
 	//（对齐 DSH repeat-tool-reminder 的 agent/pre-step reset hook——用户插话
 	// 改变了上下文，跨插话的重复不是循环）。
-	sdk.Hook(dsc.Hook{OnEvent: reminder.handleHostEvent})
+	sdk.Hook(dsc.Hook{OnEvent: reminderServer.handleHostEvent})
 	// 工具服务叠加：skill 驻留的三个模型可见工具（宿主 ListTools 探测非空
 	// 工具集后把本进程同时登记为 tool provider——服务正交）。
 	for _, t := range newSkillTools(skillStore, skillInstalledDir) {
