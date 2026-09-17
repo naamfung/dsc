@@ -16,6 +16,10 @@
 //     tool/execute 槽裁决活跃续命执行域）
 //   - spill.go          外置决策（自 policy-spill 迁入，对齐 DSH spill-policy：
 //     tool/post-execute 槽超长结果外置为文件 + replace 预览替换）
+//   - compaction.go     基础上下文压缩（自宿主 core/compaction.go 迁入，对齐 DSH
+//     compaction-basic：agent/pre-step 压力驱动改写消息列表 + agent/request-error
+//     溢出紧急压缩重试；LLM 摘要经 interconnect，未互联退化截断式；
+//     config.yaml compaction: dsc-system 选其为本插件后端）
 //   - reminder.go       重复工具调用提醒（对齐 DSH guard/repeat-tool-reminder，
 //     advisory 形态：只产出 notice，不否决/不改写）
 //   - skill.go          技能工具（自 tool-skill 迁入：skill / install_skill /
@@ -24,6 +28,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -41,21 +46,43 @@ func main() {
 		fmt.Fprintf(os.Stderr, "dsc-system: %v\n", err)
 		os.Exit(2)
 	}
+	compactionServer := newCompactionServer()
 
 	skillStore, skillInstalledDir := newSkillResident()
 	sdk := dsc.New(dsc.Config{
 		Name:    "dsc-system",
-		Version: "1.4.0",
+		Version: "1.5.0",
 		Type:    dsc.TypeDsc,
+		// 声明压缩后端能力：config.yaml 的 compaction: dsc-system 选中时，
+		// 宿主 registerDscCoreLocked 验证此声明并标记后端生效
+		//（对齐 DSH preset compaction group 的能力验证）。
+		Provides: map[string]string{
+			"compaction": "true",
+		},
 	})
 	// 通用类型叠加 policy 服务：宿主按 PluginInfo.services 的 "policy" 声明，
 	// 把内部策略瀑布（多驻留扇出合并）桥接到工具流水线——与独立 policy 插件同一桥。
 	// 驻留顺序对齐原 preset 中独立插件的声明顺序（瀑布语义同构）。
 	sdk.Policy(&policyPipeline{residents: []proto.PolicyServiceServer{fsObservationServer, timeoutServer, spillServer, reminderServer}})
-	// hook 订阅宿主事件：agent/pre-step 的「新用户输入」重置重复链
-	//（对齐 DSH repeat-tool-reminder 的 agent/pre-step reset hook——用户插话
-	// 改变了上下文，跨插话的重复不是循环）。
-	sdk.Hook(dsc.Hook{OnEvent: reminderServer.handleHostEvent})
+	// hook 订阅宿主事件（SDK 每插件一个 Hook，多驻留在此多路复用）：
+	//   - reminder：agent/pre-step 的「新用户输入」重置重复链（对齐 DSH
+	//     repeat-tool-reminder 的 agent/pre-step reset hook——用户插话改变了
+	//     上下文，跨插话的重复不是循环）；恒返回空，不影响其他驻留的改写结果
+	//   - compaction：agent/pre-step 压缩改写消息列表 + agent/request-error
+	//     溢出紧急压缩重试（改写结果非空时优先透传给宿主）
+	sdk.Hook(dsc.Hook{
+		OnEvent: func(ctx context.Context, eventType, dataJSON string) (string, error) {
+			if res, err := reminderServer.handleHostEvent(ctx, eventType, dataJSON); res != "" || err != nil {
+				return res, err
+			}
+			return compactionServer.handleHostEvent(ctx, eventType, dataJSON)
+		},
+	})
+	// 互通：缓存宿主聚合 LLM 客户端供压缩摘要生成（未互联时截断式退化）
+	sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
+		compactionServer.attachLLM(ic.LLM())
+		return nil
+	})
 	// 工具服务叠加：skill 驻留的三个模型可见工具（宿主 ListTools 探测非空
 	// 工具集后把本进程同时登记为 tool provider——服务正交）。
 	for _, t := range newSkillTools(skillStore, skillInstalledDir) {

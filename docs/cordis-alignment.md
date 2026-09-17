@@ -67,14 +67,14 @@ DSH 的 `systemPrompt` 是全局 Service，section 有 `order` 字段排序。DS
 
 | DSH Cordis | DSC 等价 | 位置 |
 |------------|---------|------|
-| `extends Service` + `super(ctx, 'compaction')` | `CompactionEngine` interface | `core/compaction.go` |
-| `declare module Context { ctx.compaction: CompactionEngine }` | `Manager.compaction` 字段 + `SetCompactionEngine`/`HasCompactionEngine` | `core/compaction.go` + `core/manager.go` |
+| `extends Service` + `super(ctx, 'compaction')` | 基础压缩驻留 compactionServer（对齐 compaction-basic） | `plugins/dsc-system/compaction.go` |
+| `declare module Context { ctx.compaction: CompactionEngine }` | config.yaml `compaction` 字段选后端 + Provides compaction 能力验证（agent/pre-step 事件接管） | `core/config.go` + `core/manager.go` + `plugins/dsc-system/compaction.go` |
 | preset YAML 挂 compaction-basic | `config.yaml` 的 `compaction` 字段显式声明 | `core/config.go` |
 | `static inject = ['llm', 'tokenMeter']` | 插件经 `Config.Requires` 声明依赖 | `sdk/sdk.go` |
 
 ### 当前状态
 
-`CompactionEngine` 是唯一实现 Service 模式的接口。当前压缩后端接管经 `agent/pre-step` 事件机制（非 Service 调用），`SetCompactionEngine`/`HasCompactionEngine` 预留供未来 Service 注入路径。
+压缩后端已完全插件化：基础压缩引擎为 `dsc-system` 驻留（自宿主 core/compaction.go 迁入，宿主零压缩代码），接管经 `agent/pre-step` 事件机制（非 Service 调用）；config.yaml `compaction` 字段显式选后端（`dsc-system` / `dsc-billion-context`），宿主仅验证 Provides compaction 能力声明。
 
 ## 7. Scope / Fiber（DSC 无等价物）
 

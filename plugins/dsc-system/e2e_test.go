@@ -506,3 +506,144 @@ func TestSkillE2E(t *testing.T) {
 		t.Fatalf("BeforeTool(空钩子) = %+v, err %v", bt, err)
 	}
 }
+
+// TestCompactionE2E 端到端验证基础压缩驻留（自宿主 core/compaction.go 迁入）：
+// spawn dsc-system exe，经 gRPC PluginHookService.OnEvent 走宿主 agent/pre-step /
+// agent/request-error 同款调用——溢出紧急压缩返回 {"retry": true}、重试的 pre-step
+// 返回 {"messages": [...]} 改写（LLM 未互联 → 截断式退化路径）、非溢出错误码忽略。
+func TestCompactionE2E(t *testing.T) {
+	// 1. 构建插件 exe（独立 module 的完整独立开发者路径）
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "dsc-system.exe")
+	if out, err := exec.Command("go", "build", "-o", exe, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+
+	// 2. 拉起插件进程：小窗口（阈值 450）+ 状态目录隔离到临时区
+	stateDir := filepath.Join(dir, "compaction-state")
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(),
+		"DSC_COMPACTION_CONTEXT_WINDOW=1000",
+		"DSC_COMPACTION_DIR="+stateDir,
+	)
+	client := plugin.NewClient(&plugin.ClientConfig{
+		HandshakeConfig:  core.Handshake,
+		Plugins:          map[string]plugin.Plugin{},
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
+		Cmd:              cmd,
+	})
+	defer client.Kill()
+	rpcClient, err := client.Client()
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	grpcClient, ok := rpcClient.(*plugin.GRPCClient)
+	if !ok {
+		t.Fatalf("unexpected client type %T", rpcClient)
+	}
+	conn := grpcClient.Conn
+	ctx := context.Background()
+	hook := proto.NewPluginHookServiceClient(conn)
+
+	// 3. pre-step：6 条约 300 token 的消息（共 1800 ≥ 450）——未走紧急压缩前
+	//    不改写（默认保留预算 1024 未覆盖全部时不触发该分支，此处窗口 1000 下
+	//    保留预算 max(160,1024)=1024 < 1800，会直接压缩；为验证紧急路径，
+	//    用更低估算让首步走「未达阈值」分支不可行——改验：首步直接压缩也可，
+	//    但为覆盖 request-error 路径，这里先跑 pre-step 缓存消息列表即可。
+	msgs := make([]*proto.Message, 0, 6)
+	for i := 0; i < 6; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		msgs = append(msgs, &proto.Message{Role: role, Content: strings.Repeat("x", 1200)})
+	}
+	msgsJSON, err := json.Marshal(msgs)
+	if err != nil {
+		t.Fatalf("marshal msgs: %v", err)
+	}
+	preStep := func() string {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"agent": "agent-react-loop", "session": "e2e-compaction",
+			"messages_json": string(msgsJSON), "token_count": 1800,
+		})
+		if err != nil {
+			t.Fatalf("marshal event: %v", err)
+		}
+		resp, err := hook.OnEvent(ctx, &proto.OnEventRequest{Name: "agent/pre-step", DataJson: string(data)})
+		if err != nil {
+			t.Fatalf("pre-step OnEvent: %v", err)
+		}
+		return resp.GetResultJson()
+	}
+	requestError := func(code string) string {
+		t.Helper()
+		resp, err := hook.OnEvent(ctx, &proto.OnEventRequest{Name: "agent/request-error",
+			DataJson: `{"agent":"a","code":"` + code + `"}`})
+		if err != nil {
+			t.Fatalf("request-error OnEvent: %v", err)
+		}
+		return resp.GetResultJson()
+	}
+
+	// 4. 首步 pre-step：窗口 1000、保留预算 1024 → 保留区盖到 3 条（900），
+	//    第 4 条越界 → 直接压缩 [0,3) 为截断式摘要（LLM 未互联）
+	first := preStep()
+	if first == "" {
+		t.Fatalf("over-threshold pre-step must rewrite")
+	}
+	var rewritten struct {
+		Messages []*proto.Message `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(first), &rewritten); err != nil {
+		t.Fatalf("parse rewrite: %v", err)
+	}
+	if len(rewritten.Messages) != 4 {
+		t.Fatalf("rewrite = %d messages, want 4 (summary + 3 tail)", len(rewritten.Messages))
+	}
+	if !strings.Contains(rewritten.Messages[0].GetContent(), "[压缩摘要]") {
+		t.Fatalf("head must be truncate summary (LLM 未互联), got %q", rewritten.Messages[0].GetContent())
+	}
+	if rewritten.Messages[3].GetContent() != msgs[5].GetContent() {
+		t.Fatalf("tail must preserve last message verbatim")
+	}
+
+	// 5. 同载荷重放：指纹命中复用状态，改写确定性一致
+	if again := preStep(); again != first {
+		t.Fatalf("replay must be deterministic")
+	}
+
+	// 6. 紧急路径：窗口 1000 场景下 [0,3) 已压缩，request-error 压缩 [3,5)
+	//    （保留最后 1 条）→ {"retry": true}
+	if res := requestError("context_window_exceeded"); res != `{"retry": true}` {
+		t.Fatalf("emergency must request retry, got %q", res)
+	}
+	// 重试的 pre-step：累计两条摘要 + 尾段
+	second := preStep()
+	var afterRetry struct {
+		Messages []*proto.Message `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(second), &afterRetry); err != nil {
+		t.Fatalf("parse rewrite after retry: %v", err)
+	}
+	if len(afterRetry.Messages) != 3 {
+		t.Fatalf("after emergency rewrite = %d messages, want 3 (2 summaries + last)", len(afterRetry.Messages))
+	}
+	if !strings.Contains(afterRetry.Messages[1].GetContent(), "emergency") {
+		t.Fatalf("second summary must be emergency-marked, got %q", afterRetry.Messages[1].GetContent())
+	}
+	if afterRetry.Messages[2].GetContent() != msgs[5].GetContent() {
+		t.Fatalf("last message must be preserved")
+	}
+
+	// 7. 非溢出错误码：忽略
+	if res := requestError("rate_limited"); res != "" {
+		t.Fatalf("non-overflow code must be ignored, got %q", res)
+	}
+
+	// 8. 状态落盘（per-session 状态文件存在）
+	if _, err := os.Stat(filepath.Join(stateDir, "e2e-compaction.json")); err != nil {
+		t.Fatalf("session state file must persist: %v", err)
+	}
+}

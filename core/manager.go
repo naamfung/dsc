@@ -150,14 +150,10 @@ type Manager struct {
 	// logFanout 宿主/插件日志扇出，供 ADMIN /logs SSE 消费；由 ManagerConfig 注入。
 	logFanout *LogFanout
 
-	// compaction 上下文压缩引擎（对齐 DSH ctx.compaction Service）。
-	// 默认 nil：agent-react-loop 走内联 compactHistory 路径（向后兼容）。
-	// 非 nil 时（如压缩后端插件注入），agent 经 HasCompactionEngine
-	// 检测到后端存在，跳过内联压缩改由插件接管——对齐 DSH 的 CompactionEngine 后端替换模式。
-	compaction CompactionEngine
 	// compactionBackend config.yaml 中显式声明的压缩后端插件名（对齐 DSH preset
-	// 的 compaction group）。registerDscCoreLocked 检测插件名匹配时设
-	// 空串 = 默认（agent 走内联压缩，后端经 pre-step 事件接管）。
+	// 的 compaction group）。registerDscCoreLocked 检测插件名匹配时验证其
+	// Provides compaction 能力声明；空串 = 默认（agent 走内联压缩，后端经
+	// pre-step 事件接管——压缩引擎已插件化，见 plugins/dsc-system/compaction.go）。
 	compactionBackend string
 }
 
