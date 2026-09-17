@@ -101,8 +101,8 @@ func fontRequirementMessage() string {
 	}
 	b.WriteString("下载指引（任选其一，仅 .ttf 格式；.otf/CFF 不受支持）：\n")
 	b.WriteString("  1. Noto Sans SC（Google 开源，OFL-1.1，推荐）: https://fonts.google.com/noto/specimen/Noto+Sans+SC\n")
-	b.WriteString("  2. Source Han Sans SC 思源黑体（Adobe+Google 开源，OFL-1.1，需 TrueType 版）: https://github.com/adobe-fonts/source-han-sans\n")
-	b.WriteString("  3. HarmonyOS Sans SC 鸿蒙黑体（华为开源，OFL-1.1）: https://developer.huawei.com/cn/design/harmonyos-symbol/\n")
+	b.WriteString("  2. Source Han Sans SC 思源黑体（Adobe+Google 开源，OFL-1.1，需 TrueType 版）: https://github.com/adobe-fonts/source-han-sans/releases\n")
+	b.WriteString("  3. HarmonyOS Sans SC 鸿蒙黑体（华为开源，OFL-1.1）: https://developer.huawei.com.cn/images/download/general/HarmonyOS-Sans.zip\n")
 	b.WriteString("下载后放入上述任一 fonts 目录（如 NotoSansSC-Regular.ttf）再重新启动；详见插件 fonts/字体下载.txt。")
 	return b.String()
 }
