@@ -840,9 +840,9 @@ func main() {
 		// （success/error，约 0.29s）。-input 单发回合结束后宿主随即回收插件子进程
 		// （Windows 上为强杀，不跑 defer），可能导致音效被截断。已加载通知插件且非
 		// headless（CI 单发无需报声）时，短暂宽限让音效播完再关闭；headless 保持快速退出。
-		// 按能力探测（completion_sound），任何声明该能力的插件均触发宽限，避免绑死
+		// 按能力探测（notify），任何声明该能力的插件均触发宽限，避免绑死
 		// 具体插件名（对齐 AGENTS.md §8：宿主核心不得硬编码插件名）。
-		if !headless && mgr.HasPluginProvidingCapability("completion_sound") {
+		if !headless && mgr.HasPluginProvidingCapability("notify") {
 			const completionSoundGrace = 800 * time.Millisecond
 			logger.Info("draining completion sound", "grace", completionSoundGrace.String())
 			time.Sleep(completionSoundGrace)

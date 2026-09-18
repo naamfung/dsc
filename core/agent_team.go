@@ -10,15 +10,20 @@ import (
 
 // Agent Team 实验性多代理团队（对齐 DSH packages/experimental/agent-team）。
 //
-// DSH 的 Agent Team 允许在一个会话中运行多个代理，共享任务板与持久消息——
-// 代理间经共享任务板协调工作，消息可跨代理持久化传递。
+// DSH 的 Agent Team 是 experimental 包，经 ctx.agentTeams 能力 seam 暴露——
+// 允许在一个会话中运行多个代理，共享任务板与持久消息：代理间经共享任务板
+// 协调工作，消息可跨代理持久化传递。DSH 的 profile bundle
+// （packages/experimental/agent-team-profile）引用它，tool-agent-team
+// 提供模型可调用的 team 管理工具。
 //
 // DSC 的适配：AgentTeam 管理多个子代理实例，共享 TaskBoard：
 //   - 子代理经 workflow/subagent 机制扇出
 //   - TaskBoard 经内存共享（线程安全），代理间经它协调任务分配
 //   - 消息经 MessageQueue 持久化传递（代理间异步通信）
 //
-// 当前为实验性实现——基础的任务板 + 消息传递，后续可扩展为完整的团队编排。
+// 当前为实验性实现——基础的任务板 + 消息传递，未接入主流程（无 admin API
+// 端点、无工具桥接、无 profile 引用）。后续接入路径：admin API /teams/*
+// 暴露 + tool-agent-team 插件桥接（对齐 DSH tool-agent-team）。
 
 // TaskStatus 任务状态。
 type TaskStatus string

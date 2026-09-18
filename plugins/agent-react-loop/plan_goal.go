@@ -563,9 +563,15 @@ func goalViewSpec(g *session.GoalSnapshot, activation bool, rounds int) string {
 	return string(b)
 }
 
-// goalRoundDriver 同会话 goal 续行驱动器判定（对齐 DSH goal-round-driver）：
+// goalRoundDriver 同会话 goal 续行驱动器判定（对齐 DSH packages/goal/goal-round-driver）：
 // phase 为 active、已启用续行（armed）且 Round 预算未耗尽时准入下一轮。
 // 人类消息不消耗预算；pause/complete/blocked/clear 停用续行后天然阻止。
+//
+// DSH 的 goal-round-driver 是独立包（inject: agents/goals/sessions），含完整
+// 调度状态机（queued/claimed/admitted 三态 + checkpoint）。DSC 当前为内联纯函数
+// 判定，状态由 ReactLoopAgent struct 的 goalRounds/goalActivation 字段承载；
+// 未来若需复杂调度状态机可抽为 core 模块（core/goal_round_driver.go 曾尝试抽出
+// 但因与内联版重复且未接入被删除）。
 func goalRoundDriver(goal *session.GoalSnapshot, activation bool, rounds int) bool {
 	if goal == nil {
 		return false
