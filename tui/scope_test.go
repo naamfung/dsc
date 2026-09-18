@@ -15,8 +15,8 @@ import (
 // 不再因 full-access 而把目录名替换为「文件系统」——
 // full-access 仅意味写权限放开，不意味当前目录改变。
 //
-// 跨平台：Windows 上反斜杠是路径分隔符，Linux/macOS 上 filepath.Base
-// 不会拆反斜杠路径——故按 runtime.GOOS 选路径分隔符，避免 Linux 上误判。
+// 跨平台：Windows 上反斜杆是路径分隔符，Linux/macOS 上 filepath.Base
+// 不会拆反斜杆路径——故按 runtime.GOOS 选路径分隔符，避免 Linux 上误判。
 func TestScopeLabel(t *testing.T) {
 	orig := core.WorkspaceRoot
 	defer func() { core.WorkspaceRoot = orig }()

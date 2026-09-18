@@ -75,23 +75,23 @@ func AbsPath(path string) (string, error) {
 }
 
 // PosixPath 系列：core.P* 的 SDK 转发。filepath 包在 Windows 上会把路径归一化为
-// 原生反斜杠，违背「内部 POSIX shell 统一正斜杠」约定（AGENTS.md 路径纪律与
+// 原生反斜杆，违背「内部 POSIX shell 统一正斜杆」约定（AGENTS.md 路径纪律与
 // core/filepath_guard_test.go 哨兵测试）；第三方插件不得直接使用被禁 filepath
-// 函数，一律经此层获得正斜杠结果（先原生计算再归一化，Windows 上 os.* 接受
-// 正斜杠，语义不变）。
+// 函数，一律经此层获得正斜杆结果（先原生计算再归一化，Windows 上 os.* 接受
+// 正斜杆，语义不变）。
 //
-//	PJoin     —— 拼接路径（原生同名函数等价，结果正斜杠）
-//	PAbs      —— 绝对化（原生同名函数等价，结果正斜杠）
-//	PClean    —— 清理路径（原生同名函数等价，结果正斜杠）
-//	PRel      —— 相对化（原生同名函数等价，结果正斜杠）
-//	PSplit    —— 拆分目录与文件（原生同名函数等价，目录正斜杠）
-//	PDir      —— 父目录（原生同名函数等价，结果正斜杠）
-//	PEvalSymlinks —— 解析符号链接（原生同名函数等价，结果正斜杠）
-//	PGlob     —— 通配匹配（原生同名函数等价，结果正斜杠）
-//	PWalkDir  —— 目录遍历（原生同名函数等价，回调路径正斜杠）
+//	PJoin     —— 拼接路径（原生同名函数等价，结果正斜杆）
+//	PAbs      —— 绝对化（原生同名函数等价，结果正斜杆）
+//	PClean    —— 清理路径（原生同名函数等价，结果正斜杆）
+//	PRel      —— 相对化（原生同名函数等价，结果正斜杆）
+//	PSplit    —— 拆分目录与文件（原生同名函数等价，目录正斜杆）
+//	PDir      —— 父目录（原生同名函数等价，结果正斜杆）
+//	PEvalSymlinks —— 解析符号链接（原生同名函数等价，结果正斜杆）
+//	PGlob     —— 通配匹配（原生同名函数等价，结果正斜杆）
+//	PWalkDir  —— 目录遍历（原生同名函数等价，回调路径正斜杆）
 //
 // PSeparator 为统一分隔符（"/"），禁止再取 filepath 包的 Separator 常量
-// （Windows 上为反斜杠）。
+// （Windows 上为反斜杆）。
 func PJoin(elem ...string) string                    { return core.PJoin(elem...) }
 func PAbs(path string) (string, error)               { return core.PAbs(path) }
 func PClean(path string) string                      { return core.PClean(path) }
@@ -104,7 +104,7 @@ func PWalkDir(root string, fn func(path string, d os.DirEntry, err error) error)
 	return core.PWalkDir(root, fn)
 }
 
-// PSeparator 统一路径分隔符（所有平台一律正斜杠）。
+// PSeparator 统一路径分隔符（所有平台一律正斜杆）。
 const PSeparator = "/"
 
 // ReadFile 读取文件内容。错误统一包装为 "read <path>: <err>"（路径正斜杆呈现，

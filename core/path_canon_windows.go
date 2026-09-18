@@ -40,7 +40,7 @@ func canonicalExistingOS(p string) (string, error) {
 	if n == 0 || int(n) > len(buf) {
 		return PEvalSymlinks(p)
 	}
-	// Win32 API 返回原生反斜杠形态，统一归一化为正斜杠（与 CanonicalPath 其余
+	// Win32 API 返回原生反斜杆形态，统一归一化为正斜杆（与 CanonicalPath 其余
 	// 分支的 P* 输出一致）。
 	return filepath.ToSlash(normWinPath(syscall.UTF16ToString(buf[:n]))), nil
 }

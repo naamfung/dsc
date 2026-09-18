@@ -18,10 +18,10 @@ import (
 
 // withinBase 判斷 real 路徑是否在 base 目錄（含 base 自身）之內。
 // Windows 文件系統大小寫不敏感，故忽略大小寫比較（對齊宿主 containsPath）。
-// 路徑分隔符一律用 "/"（正斜杠）：safePath 的入参 real/realBase 来自 dsc.PAbs /
+// 路徑分隔符一律用 "/"（正斜杆）：safePath 的入参 real/realBase 来自 dsc.PAbs /
 // dsc.PJoin / dsc.PClean / core.CanonicalPath，这些 P* 函数在 Windows 上也
-// 返回正斜杠结果（与 AGENTS.md 规则 11「内部 POSIX shell 统一正斜杠」一致）。
-// 不得使用 string(os.PathSeparator)——Windows 上是反斜杠，与 P* 返回的正斜杠
+// 返回正斜杆结果（与 AGENTS.md 规则 11「内部 POSIX shell 统一正斜杆」一致）。
+// 不得使用 string(os.PathSeparator)——Windows 上是反斜杆，与 P* 返回的正斜杆
 // 不匹配，会让 withinBase 永远返回 false，导致所有相对路径都被拒绝
 // （报 "permission denied"，实测场景：模型传 G:/Dev/quark-go/README.md，
 // 经 MapWorkspacePath + 相对路径归并为 README.md，safePath 走相对分支，

@@ -21,7 +21,7 @@ func TestParseRequiresCapability(t *testing.T) {
 		{"requires/tool/cron", "tool", "cron", true},
 		{"requires/llm/", "", "", false},        // 空 cap
 		{"requires//foo", "", "", false},        // 空 type
-		{"requires/llm/foo/bar", "", "", false}, // cap 含斜杠
+		{"requires/llm/foo/bar", "", "", false}, // cap 含斜杆
 		{"supports_images", "", "", false},      // 普通能力键（无 requires/ 前缀）
 		{"", "", "", false},
 		{"requires", "", "", false},     // 仅前缀

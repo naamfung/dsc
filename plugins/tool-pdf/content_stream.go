@@ -163,7 +163,7 @@ func (t *tokenizer) readStringLiteral() {
 						b.WriteByte(byte(n))
 					}
 				} else {
-					// 非法转义：忽略反斜杠，保留后续字符（PDF 规范）
+					// 非法转义：忽略反斜杆，保留后续字符（PDF 规范）
 					b.WriteByte(esc)
 					t.pos++
 				}

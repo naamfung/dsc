@@ -219,8 +219,8 @@ func TestSlashErr(t *testing.T) {
 // *os.PathError——历史回归即漏在此分支：内嵌反斜杆原生路径未经归一直接透传
 // （Windows 实测表现为「GetFileAttributesEx D:\Agents\...: The system cannot
 // find the file specified.」）。经包级入口 strReplaceEditor 顶层归一后，错误
-// 文本不得再含任何反斜杆；路径反斜杠同样不得残留在错误信息里。Linux 上传入
-// 的反斜杠被 filepath.Abs 原样保留进 PathError.Path，同样能验证归一链路。
+// 文本不得再含任何反斜杆；路径反斜杆同样不得残留在错误信息里。Linux 上传入
+// 的反斜杆被 filepath.Abs 原样保留进 PathError.Path，同样能验证归一链路。
 func TestTopLevelSlashErrOnMissingPath(t *testing.T) {
 	newTestWS(t)
 
@@ -242,9 +242,9 @@ func TestTopLevelSlashErrOnMissingPath(t *testing.T) {
 // TestWithinBaseForwardSlash 回归测试：withinBase 必须用 "/" 而非
 // string(os.PathSeparator) 作为路径分隔符。safePath 的入参来自 dsc.PAbs /
 // dsc.PJoin / dsc.PClean / core.CanonicalPath，这些 P* 函数在 Windows 上
-// 也返回正斜杠结果。若 withinBase 用 string(os.PathSeparator)（Windows 上
-// 是反斜杠），前缀检查永远失败，导致所有相对路径都被拒绝（报
-// "permission denied"）。此测试在所有平台上断言正斜杠路径的前缀检查生效。
+// 也返回正斜杆结果。若 withinBase 用 string(os.PathSeparator)（Windows 上
+// 是反斜杆），前缀检查永远失败，导致所有相对路径都被拒绝（报
+// "permission denied"）。此测试在所有平台上断言正斜杆路径的前缀检查生效。
 func TestWithinBaseForwardSlash(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -256,7 +256,7 @@ func TestWithinBaseForwardSlash(t *testing.T) {
 		{"forward slash equal", "/tmp/ws", "/tmp/ws", true},
 		{"forward slash sibling", "/tmp/other/README.md", "/tmp/ws", false},
 		{"forward slash not prefix", "/tmp/ws-other/README.md", "/tmp/ws", false},
-		// Windows 盘符正斜杠形式（P* 函数返回形态）
+		// Windows 盘符正斜杆形式（P* 函数返回形态）
 		{"windows drive forward slash", "G:/Dev/quark-go/README.md", "G:/Dev/quark-go", true},
 		{"windows drive forward slash equal", "G:/Dev/quark-go", "G:/Dev/quark-go", true},
 	}

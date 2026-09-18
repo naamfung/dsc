@@ -12,7 +12,7 @@ import (
 // DefaultSessionID 应等于 SessionKeyForProject(WorkspaceRoot)，使 TUI 当前会话标识
 // 与 agent 存档文件名（项目隔离）吻合，不再出现映射不到存档的假 "default"。
 //
-// 平台注意：SessionKeyForProject 在不同平台对反斜杠的处理不同——Linux/macOS 上
+// 平台注意：SessionKeyForProject 在不同平台对反斜杆的处理不同——Linux/macOS 上
 // `\` 是有效文件名字符（filepath.ToSlash 不转换），Windows 上才是分隔符。故
 // Windows 路径样例（如 C:\Users\...）只在 Windows 上断言其转换结果；Linux/macOS
 // 上用平台本地的样例（/home/user/DeepClean、/mnt/c/...），避免跨平台误失败。

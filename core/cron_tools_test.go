@@ -48,7 +48,7 @@ func TestCronAddRejectsBadInput(t *testing.T) {
 		`{}`,
 		`{"name":"", "cron":"0 8 * * *", "prompt":"x"}`,
 		`{"name":"bad name", "cron":"0 8 * * *", "prompt":"x"}`, // 名含空格
-		`{"name":"a/b", "cron":"0 8 * * *", "prompt":"x"}`,      // 名含斜杠
+		`{"name":"a/b", "cron":"0 8 * * *", "prompt":"x"}`,      // 名含斜杆
 		`{"name":"ok", "cron":"", "prompt":"x"}`,                // 空 cron
 		`{"name":"ok", "cron":"0 8 * * *", "prompt":""}`,        // 空 prompt
 	}

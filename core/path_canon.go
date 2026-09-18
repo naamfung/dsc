@@ -50,7 +50,7 @@ func CanonicalPath(p string) (string, error) {
 }
 
 // containsPath 判断 sub 是否位于 base 之下（含相等）。Windows 大小写不敏感。
-// 两侧先经 PClean 归一化为正斜杠再比较（分隔符判断统一用 "/"）。
+// 两侧先经 PClean 归一化为正斜杆再比较（分隔符判断统一用 "/"）。
 func containsPath(base, sub string) bool {
 	base = PClean(base)
 	sub = PClean(sub)

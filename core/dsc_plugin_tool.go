@@ -432,8 +432,8 @@ func pluginBinaryStemValid(dir, stem string) bool {
 }
 
 // diskPluginBinary 在插件目录内查找首个符合命名约定的可执行文件路径；无则返回空串。
-// 返回的路径统一用正斜杠（filepath.ToSlash），避免 Windows 反斜杠误导模型——
-// 宿主 SHELL 是标准 POSIX，内置工具结果一律以正斜杠对外。
+// 返回的路径统一用正斜杆（filepath.ToSlash），避免 Windows 反斜杆误导模型——
+// 宿主 SHELL 是标准 POSIX，内置工具结果一律以正斜杆对外。
 func (m *Manager) diskPluginBinary(name string) string {
 	dir := PJoin(m.pluginsRoot(), name)
 	ents, err := os.ReadDir(dir)

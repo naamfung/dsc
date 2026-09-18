@@ -27,13 +27,13 @@ import (
 //	/mnt/c/Users/Administrator/Desktop/DeepClean → mnt-c-Users-Administrator-Desktop-DeepClean
 //	/home/jor/DeepClean → home-jor-DeepClean
 func SessionKeyForProject(projectRoot string) string {
-	// 先统一反斜杠为正斜杠（跨平台：仅靠平台相关转换函数无法处理另一平台的
-	// 反斜杠输入，须显式归一，见 AGENTS.md 路径纪律）
+	// 先统一反斜杆为正斜杆（跨平台：仅靠平台相关转换函数无法处理另一平台的
+	// 反斜杆输入，须显式归一，见 AGENTS.md 路径纪律）
 	p := strings.ReplaceAll(projectRoot, "\\", "/")
 	p = strings.TrimPrefix(p, "/")
 	p = strings.ReplaceAll(p, ":", "-")
 	p = strings.ReplaceAll(p, "/", "-")
-	// 清理 Windows 文件名非法字符（<>:"/\|?*；冒号与斜杠已在上方替换）
+	// 清理 Windows 文件名非法字符（<>:"/\|?*；冒号与斜杆已在上方替换）
 	for _, r := range []rune{'<', '>', '"', '|', '?', '*'} {
 		p = strings.ReplaceAll(p, string(r), "-")
 	}
