@@ -173,6 +173,18 @@ type Manager struct {
 	// 经 admin API /feedback/* 暴露给外部工具（如 webui 反馈面板）。filePath 通常
 	// = ExecDir/feedback.jsonl，懒初始化。盘活 core/feedback.go 死模块。
 	feedbackStore *FeedbackStore
+
+	// lspClients LSP 客户端实例表（对齐 DSH packages/lsp/lsp + lsp-stdio + tool-lsp）。
+	// 经 admin API /lsp/* 管理生命周期，LSPTool 经 ToolRegistry 注册供模型调用。
+	// key = serverID（如 "go"、"typescript"）。盘活 core/lsp.go 死模块。
+	lspClients map[string]*LSPClient
+	// lspToolRegistered 标记 LSPTool 是否已注册到 ToolRegistry（避免重复注册）。
+	lspToolRegistered bool
+
+	// mcpClients MCP 客户端实例表（对齐 DSH packages/mcp/mcp-client）。
+	// 经 admin API /mcp/* 管理生命周期，discoverTools 自动注册 mcp__<server>__<rawName>
+	// 工具到 ToolRegistry。盘活 core/mcp_client.go 死模块。key = serverName。
+	mcpClients map[string]*MCPClient
 }
 
 type ManagerConfig struct {

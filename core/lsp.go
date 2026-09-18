@@ -197,13 +197,22 @@ func severityLabel(severity int) string {
 }
 
 // LSPTool 模型可调用的 LSP 诊断工具（对齐 DSH tool-lsp）。
+// client 非 nil 时查询该客户端；client 为 nil 时聚合 Manager 所有已启动 LSPClient
+// （由 admin API /lsp/start 注册的实例）的诊断缓存——支持多 LSP 服务器并存。
 type LSPTool struct {
-	client *LSPClient
+	client  *LSPClient
+	manager *Manager // client 为 nil 时用此聚合所有 lspClients
 }
 
-// NewLSPTool 创建 LSP 诊断工具。
+// NewLSPTool 创建 LSP 诊断工具。client 非 nil 时绑定单实例；
+// client 为 nil 时须配合 SetManager 注入聚合源。
 func NewLSPTool(client *LSPClient) *LSPTool {
 	return &LSPTool{client: client}
+}
+
+// SetManager 注入 Manager 供 client=nil 时聚合所有 LSPClient 诊断。
+func (t *LSPTool) SetManager(m *Manager) {
+	t.manager = m
 }
 
 func (t *LSPTool) Name() string { return "lsp_diagnostics" }
@@ -231,19 +240,42 @@ func (t *LSPTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if p.FilePath != "" {
-		diags, err := t.client.GetDiagnostics(ctx, p.FilePath)
+	// client 非 nil：单实例查询
+	if t.client != nil {
+		if p.FilePath != "" {
+			diags, err := t.client.GetDiagnostics(ctx, p.FilePath)
+			if err != nil {
+				return "", err
+			}
+			return FormatDiagnostics(p.FilePath, diags), nil
+		}
+		allDiags, err := t.client.GetAllDiagnostics(ctx)
 		if err != nil {
 			return "", err
 		}
-		return FormatDiagnostics(p.FilePath, diags), nil
+		var sb strings.Builder
+		for filePath, diags := range allDiags {
+			sb.WriteString(FormatDiagnostics(filePath, diags))
+			sb.WriteString("\n")
+		}
+		if sb.Len() == 0 {
+			return "No diagnostics available. Make sure the LSP server is running.", nil
+		}
+		return sb.String(), nil
 	}
 
-	allDiags, err := t.client.GetAllDiagnostics(ctx)
+	// client 为 nil：聚合 Manager 所有已启动 LSPClient
+	if t.manager == nil {
+		return "No diagnostics available. No LSP server configured.", nil
+	}
+	allDiags, err := t.manager.lspDiagnosticsAll(ctx, p.FilePath)
 	if err != nil {
 		return "", err
 	}
-
+	if p.FilePath != "" {
+		diags := allDiags[p.FilePath]
+		return FormatDiagnostics(p.FilePath, diags), nil
+	}
 	var sb strings.Builder
 	for filePath, diags := range allDiags {
 		sb.WriteString(FormatDiagnostics(filePath, diags))

@@ -90,6 +90,18 @@ func (m *Manager) StartAdmin(addr string) string {
 	fb.Use(adminAuth)
 	m.registerFeedbackAdminRoutes(fb)
 
+	// LSP 管理（认证与 /plugins 一致）——盘活 core/lsp.go 死模块，
+	// 对齐 DSH packages/lsp/lsp + lsp-stdio + tool-lsp 的能力暴露面。
+	lsp := e.Group("/lsp")
+	lsp.Use(adminAuth)
+	m.registerLSPAdminRoutes(lsp)
+
+	// MCP 管理（认证与 /plugins 一致）——盘活 core/mcp_client.go 死模块，
+	// 对齐 DSH packages/mcp/mcp-client 的能力暴露面。
+	mcp := e.Group("/mcp")
+	mcp.Use(adminAuth)
+	m.registerMCPAdminRoutes(mcp)
+
 	// 端口冲突自动自增重试：若指定端口已被占用，逐次自增端口重试，
 	// 最多 100 次。每次冲突记 warn 日志（仅在 -log 开启时输出到日志文件/SSE）。
 	// 多实例同时启动 DSC 时不再因 9999 端口冲突而启动失败。
