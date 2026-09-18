@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	dsc "dsc-sdk"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
@@ -66,12 +68,29 @@ func dbPath() string {
 }
 
 // initDB 初始化数据库：常规表自动迁移 + FTS5 虚拟表与同步触发器。
+//
+// gorm 默认 logger 写入 os.Stdout（log.New(os.Stdout, "\r\n", ...)），
+// 而 go-plugin 握手协议用 stdout 传递 "1|1|tcp|addr|grpc|" 行——
+// gorm 任何警告（schema drift / slow query / error）的 "\r\n" 前缀
+// 都会让 host 的 scanner 读到空行作为握手信息，报 "Unrecognized remote
+// core message: " 并强杀进程（exit status 1）。本插件是 go-plugin 子进程，
+// stdout 在 plugin.Serve 打印握手行之前不得有任何输出。将 logger 重定向
+// 到 os.Stderr，保留诊断信息同时不污染握手通道。
 func initDB(path string) error {
 	if err := dsc.MkdirAll(dsc.PDir(path)); err != nil {
 		return err
 	}
 	var err error
-	DB, err = gorm.Open(sqlite.Open(path), &gorm.Config{})
+	DB, err = gorm.Open(sqlite.Open(path), &gorm.Config{
+		Logger: logger.New(
+			log.New(os.Stderr, "\r\n", log.LstdFlags),
+			logger.Config{
+				SlowThreshold: 200 * time.Millisecond,
+				LogLevel:      logger.Warn,
+				Colorful:      false,
+			},
+		),
+	})
 	if err != nil {
 		return err
 	}
