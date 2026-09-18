@@ -143,7 +143,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - **DSH 獨特**：內核級沙箱（真實 OS 邊界，不可信代碼經 `ctx.shell` 隔離）；跨能力族統一的可寫根集合（`writableRoots` 與 Seatbelt profile 共享，防止 fs 圍欄與 runner 漂移）；文件身份（dev/ino）圍欄回退；TokenMeter 精確計量；API 代理層（`api-proxy`：歷史分頁、子代理、投影）。
 
-- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行「N 輪 M 步 · 每秒 X 詞元 · 初速 Y 詞元 · 已用 N% · 緩存命中 N%」實時指標帶，速率語義對齊 DSH turn-metrics：每秒=解碼吞吐、初速=含首響等待的起步速率，兩讀數差距即 TTFT 體感）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；外部腳本鉤子（`-hooks`：嚴格 LUA 由本地 go-lua 進程內解釋或原生可執行文件直接 exec，BeforeTool/AfterTool 可 veto/改寫，對齊 DSH hooks 橋接且規避視窗腳本引擎碎片問題）；Windows 全部子進程（插件、LSP 服務器、外部鉤子、shell 外部命令、PDF 渲染器等）以 `CREATE_NO_WINDOW` 隱藏控制檯啟動，杜絕 TUI 中彈出新終端窗口；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
+- **DSC 獨特**：純 Go + go-plugin/gRPC 全棧；TUI 交互（拖選複製、流式期間滾動、狀態行「N 輪 M 步 · 每秒 X 詞元 · 初速 Y 詞元 · 已用 N% · 緩存命中 N%」實時指標帶，速率語義對齊 DSH turn-metrics：每秒=解碼吞吐、初速=含首響等待的起步速率，兩讀數差距即 TTFT 體感）；Windows 兼容的工具級沙箱攔截（pre-execute 三檔策略 + junction 穿越與解釋器逃逸的 fail-closed 封堵）；外部腳本鉤子（`-hooks`：嚴格 LUA 由本地 go-lua 進程內解釋或原生可執行文件直接 exec，BeforeTool/AfterTool 可 veto/改寫，對齊 DSH hooks 橋接且規避視窗腳本引擎碎片問題）；Windows 全部子進程（插件、LSP 服務器、外部鉤子、shell 外部命令、PDF 渲染器等）以 `CREATE_NO_WINDOW` 隱藏控制檯啟動，杜絕 TUI 中彈出新終端窗口；**宿主存活看門狗**（宿主經 `DSC_HOST_PID` env 注入自身 PID，SDK 在 `Serve` 前啟動看門狗 goroutine 定時經內核級 PID 檢測——POSIX Signal(0)/Windows GetExitCodeProcess——宿主是否存活，連續 3 次（間隔 5s）檢測失敗即 `os.Exit(0)` 主動退出，補上 go-plugin 原生機制缺失的「插件→宿主」存活檢測方向：宿主崩潰/OOM/被強殺時插件不會殘留為孤兒進程；對齊 DSH Node.js 子進程的父進程 PID 監控 `process.ppid + process.kill(ppid, 0)`）；提示緩存感知的容量與壓縮判定；`/settings history` 歷史注入控制；事件溯源多會話 + `/session` 管理；cron 調度；`-debugger` 管理 API；`-input` 重定向多輪自動化；`-headless` 精简单发（仿 DSH harness headless）。
 
 ## 支持的插件
 

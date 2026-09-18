@@ -219,6 +219,10 @@ func injectRuntimeEnv(merged *core.Config, mode, workspaceRoot, sandboxPolicy st
 		e.Env["DSC_WORKSPACE_ROOT"] = workspaceRoot
 		e.Env["DSC_SANDBOX_POLICY"] = sandboxPolicy
 		e.Env["DSC_APPROVAL_POLICY"] = approvalPolicy
+		// DSC_HOST_PID：宿主进程 PID，供插件 hostLivenessWatchdog（sdk/host_watchdog.go）
+		// 定时检测宿主是否存活——宿主崩溃/OOM/被强杀时插件主动退出，避免残留孤儿进程。
+		// 对齐 DSH Node.js 子进程的父进程 PID 监控（process.ppid + process.kill(ppid, 0)）。
+		e.Env["DSC_HOST_PID"] = strconv.Itoa(os.Getpid())
 	}
 }
 

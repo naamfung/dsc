@@ -267,6 +267,10 @@ func (s *SDK) Serve() {
 		fmt.Fprintf(os.Stderr, "dsc-sdk: %v\n", err)
 		os.Exit(2)
 	}
+	// 宿主存活看门狗：定时检测宿主进程是否存活，宿主崩溃/被强杀时插件主动退出。
+	// 在 plugin.Serve 之前启动（watchdog 在独立 goroutine，不阻塞）。
+	// DSC_HOST_PID env 缺席时静默跳过（兼容旧宿主）。
+	startHostWatchdog()
 	ctx := context.Background()
 	if s.onStart != nil {
 		if err := s.onStart(ctx); err != nil {
