@@ -40,7 +40,7 @@ var state = &benchState{results: map[string]CaseResult{}, caseStart: map[string]
 // 天然落在其内）；未注入时回退当前工作目录。bench 无人值守运行时建议把
 // workspace 指向一个干净的临时目录。
 func benchRoot() string {
-	if r := os.Getenv("DSC_WORKSPACE_ROOT"); r != "" {
+	if r := dsc.WorkspaceRoot(); r != "" {
 		return r
 	}
 	if wd, err := os.Getwd(); err == nil {

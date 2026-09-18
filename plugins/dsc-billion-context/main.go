@@ -51,19 +51,14 @@ type BillionContext struct {
 
 func main() {
 	// 从环境变量读取配置
-	execDir := os.Getenv("DSC_EXEC_DIR")
-	if execDir == "" {
-		execDir, _ = os.Getwd()
-	}
+	execDir := dsc.ExecDir()
 	stateDir := dsc.PJoin(execDir, "billion-context")
 	store := bcadapter.NewStateStore(stateDir)
 
 	// 上下文窗口（默认 128K，可经 DSC_CONTEXT_WINDOW 覆盖）
 	contextWindow := 131072
-	if w := os.Getenv("DSC_CONTEXT_WINDOW"); w != "" {
-		if n, err := parseInt(w); err == nil && n > 0 {
-			contextWindow = n
-		}
+	if n := dsc.ContextWindow(); n > 0 {
+		contextWindow = n
 	}
 
 	bc := &BillionContext{

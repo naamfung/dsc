@@ -43,6 +43,25 @@ func ReadEnv() Env {
 	}
 }
 
+// ExecDir 返回宿主可执行目录（DSC_EXEC_DIR；缺席回退当前进程 cwd）。
+// 宿主在 spawn 插件子进程时注入 DSC_EXEC_DIR，插件据此定位与 exe 同级的
+// 资源（fonts/、temp/、credentials/ 等），而非插件进程自身的 os.Getwd()
+// （后者在测试场景下可能指向任意目录）。
+func ExecDir() string {
+	if d := strings.TrimSpace(os.Getenv("DSC_EXEC_DIR")); d != "" {
+		return d
+	}
+	d, _ := os.Getwd()
+	return d
+}
+
+// ContextWindow 返回宿主注入的有效上下文窗口大小（DSC_CONTEXT_WINDOW，token 数）。
+// 缺席或非法返回 0（由调用方决定回退策略，如默认 131072）。
+// 消除各插件散落的 `if v := os.Getenv("DSC_CONTEXT_WINDOW"); v != "" { ... }` 模式。
+func ContextWindow() int {
+	return envInt("DSC_CONTEXT_WINDOW")
+}
+
 func envInt(key string) int {
 	v, _ := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
 	return v

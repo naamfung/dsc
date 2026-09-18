@@ -285,7 +285,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
 	// 历史以事件追加进 session（对齐 DSH：模型可见即已记录），不再维护独立消息数组。
 	a.sessMu.Lock()
 	if a.sess == nil {
-		projectKey := session.SessionKeyForProject(os.Getenv("DSC_WORKSPACE_ROOT"))
+		projectKey := session.SessionKeyForProject(dsc.WorkspaceRoot())
 		restored, err := a.store.Ensure(projectKey)
 		if err != nil {
 			a.sessMu.Unlock()
@@ -1187,7 +1187,7 @@ func oneLinePrompt(s string) string {
 // 真实根路径（对齐 DSH renderPolicyContext 以真实路径呈现根的约定）；/workspace
 // 仍作为该根的别名被编辑器工具与 sandbox 接受，但 shell 等原生命令只能访问真实路径。
 func (a *ReactLoopAgent) sandboxPolicyContext() string {
-	ws := os.Getenv("DSC_WORKSPACE_ROOT")
+	ws := dsc.WorkspaceRoot()
 	if ws == "" {
 		ws = "."
 	}
@@ -1570,10 +1570,8 @@ func newAgent() (*ReactLoopAgent, error) {
 		Output: os.Stderr,
 	})
 	// 讀取宿主傳入的上下文窗口容量（DSC_CONTEXT_WINDOW，token 數）
-	if v := os.Getenv("DSC_CONTEXT_WINDOW"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			agent.contextWindow = n
-		}
+	if n := dsc.ContextWindow(); n > 0 {
+		agent.contextWindow = n
 	}
 	// 讀取宿主傳入的單輪模式標記（DSC_SINGLE_TURN=1，-input 自動化測試入口使用）
 	if v := os.Getenv("DSC_SINGLE_TURN"); v == "1" || strings.EqualFold(v, "true") {

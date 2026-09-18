@@ -3,10 +3,69 @@ package main
 import (
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 
 	core "dsc/core"
+	"github.com/hashicorp/go-hclog"
 )
+
+// discoverFirstLLMPlugin 扫描 plugins/ 目录，按名升序返回首个 llm-* 目录的
+// provider 名（如 "anthropic"）。无任何 llm-* 目录返回空串。
+// 与 setup.go discoverLLMProviders 同款发现机制，但此处仅返回首个供兜底。
+// 对齐 AGENTS.md §8：宿主核心不得硬编码插件名——发现机制是目录名驱动的，
+// 不预设具体 provider。
+func discoverFirstLLMPlugin() string {
+	pluginsDir := "./plugins"
+	entries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		return ""
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "llm-") {
+			continue
+		}
+		names = append(names, strings.TrimPrefix(name, "llm-"))
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return names[0]
+}
+
+// discoverFirstAgentPlugin 扫描 plugins/ 目录，按名升序返回首个 agent-* 目录的
+// agent 名（如 "react-loop"）。无任何 agent-* 目录返回空串。
+// 与 discoverFirstLLMPlugin 同款发现机制，对齐 AGENTS.md §8。
+func discoverFirstAgentPlugin() string {
+	pluginsDir := "./plugins"
+	entries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		return ""
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "agent-") {
+			continue
+		}
+		names = append(names, strings.TrimPrefix(name, "agent-"))
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return names[0]
+}
 
 // assembleMerged 把 config.yaml（llm/agent）+ preset（tool/policy/dsc）合并成
 // 交给 Manager 声明式加载的插件集，并做两件关键事：
@@ -20,12 +79,18 @@ func assembleMerged(llmEntries []core.PluginEntry, agentEntry *core.PluginEntry,
 
 	ag := agentEntry
 	if ag == nil {
-		ext := ""
-		if runtime.GOOS == "windows" {
-			ext = ".exe"
+		ext := modelExt()
+		// 发现机制：扫描 plugins/ 目录取首个 agent-* 目录（按名升序），
+		// 不再硬编码 "agent-react-loop"（对齐 AGENTS.md §8）。
+		agentName := discoverFirstAgentPlugin()
+		if agentName == "" {
+			// 与 main.go LLM 兜底同款 fail-loud：log.Fatal 退出。
+			logger := hclog.New(&hclog.LoggerOptions{Output: os.Stderr})
+			logger.Error("no agent plugin configured: declare an agent entry in config.yaml or install a plugin under plugins/agent-*/")
+			os.Exit(1)
 		}
-		ag = &core.PluginEntry{Name: "agent-react-loop", Type: "agent", Enabled: true,
-			BinaryPath: core.PJoin("./plugins", "agent-react-loop", "agent-react-loop"+ext)}
+		ag = &core.PluginEntry{Name: agentName, Type: "agent", Enabled: true,
+			BinaryPath: core.PJoin("./plugins", "agent-"+agentName, "agent-"+agentName+ext)}
 	}
 	agentEnv := map[string]string{"DSC_CONTEXT_WINDOW": strconv.Itoa(contextWindow)}
 	if presetCfg != nil && presetCfg.Persona != "" {
@@ -103,7 +168,16 @@ func assemblePluginSet(mainCfg, presetCfg *core.Config, contextWindow int, headl
 			llmName = mainCfg.DefaultLLM
 		}
 		if llmName == "" {
-			llmName = "openai"
+			// 未显式配置 LLM provider 时，扫描 plugins/ 目录发现首个 llm-*
+			// 目录（按名升序），与 setup.go discoverLLMProviders 一致——
+			// 发现机制而非硬编码 "openai"（对齐 AGENTS.md §8：宿主核心不得
+			// 硬编码插件名）。无任何 llm-* 目录时返回空，下方 fail-loud 拦截。
+			llmName = discoverFirstLLMPlugin()
+		}
+		if llmName == "" {
+			logger := hclog.New(&hclog.LoggerOptions{Output: os.Stderr})
+			logger.Error("no LLM provider configured: set default_llm in config.yaml, LLM_PROVIDER env, or install a plugin under plugins/llm-*/")
+			os.Exit(1)
 		}
 		llmEntries = []core.PluginEntry{{Name: llmName, Type: "llm", Enabled: true,
 			BinaryPath: core.PJoin("./plugins", "llm-"+llmName, "llm-"+llmName+modelExt())}}

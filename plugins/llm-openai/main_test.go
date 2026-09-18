@@ -105,7 +105,7 @@ func TestVisionEnabled(t *testing.T) {
 		w.Write([]byte(`{"data":[{"id":"Agentic-Turbo","input_modalities":["text","image"]}]}`))
 	}))
 	defer srvImage.Close()
-	if !visionEnabled(srvImage.URL, "Agentic-Turbo") {
+	if !visionEnabled(srvImage.URL, "Agentic-Turbo", false) {
 		t.Fatal("server reporting image modality should auto-enable")
 	}
 
@@ -115,7 +115,7 @@ func TestVisionEnabled(t *testing.T) {
 		w.Write([]byte(`{"data":[{"id":"Agentic-Turbo","input_modalities":["text"]}]}`))
 	}))
 	defer srvText.Close()
-	if visionEnabled(srvText.URL, "Agentic-Turbo") {
+	if visionEnabled(srvText.URL, "Agentic-Turbo", false) {
 		t.Fatal("server reporting text-only should auto-disable")
 	}
 
@@ -125,17 +125,17 @@ func TestVisionEnabled(t *testing.T) {
 		w.Write([]byte(`{"data":[{"id":"Agentic-Turbo"}]}`))
 	}))
 	defer srvUnknown.Close()
-	if !visionEnabled(srvUnknown.URL, "Agentic-Turbo") {
+	if !visionEnabled(srvUnknown.URL, "Agentic-Turbo", false) {
 		t.Fatal("server not reporting modalities should default to allow")
 	}
 
 	// DSC_NO_VISION=1 强制关闭（逃生口）
 	t.Setenv("DSC_NO_VISION", "1")
-	if visionEnabled(srvImage.URL, "Agentic-Turbo") {
+	if visionEnabled(srvImage.URL, "Agentic-Turbo", false) {
 		t.Fatal("DSC_NO_VISION=1 should force disable")
 	}
 	t.Setenv("DSC_NO_VISION", "0")
-	if !visionEnabled(srvImage.URL, "Agentic-Turbo") {
+	if !visionEnabled(srvImage.URL, "Agentic-Turbo", false) {
 		t.Fatal("DSC_NO_VISION=0 should keep auto-detect")
 	}
 }

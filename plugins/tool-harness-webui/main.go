@@ -57,6 +57,9 @@ func webuiAddr() string {
 // ---------- HTTP 服务（探路版） ----------
 
 // health 探查宿主 admin 可达性与 agent 名。
+// agent 名来自宿主可选注入的 DSC_AGENT_NAME env var；未注入时返回空串，
+// 前端可经 admin API /plugins/list 查询 type=agent 的插件条目名获取。
+// 不再硬编码兑底为 "agent-react-loop"（避免绑死具体插件名）。
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	hd.mu.RLock()
 	type snap struct {
@@ -67,9 +70,6 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	s := snap{Admin: hd.adminURL, Agent: hd.agent}
 	hd.mu.RUnlock()
-	if s.Agent == "" {
-		s.Agent = "agent-react-loop"
-	}
 	// 代理一次 admin 可达性确认（用始终开放的 /plugins/list，而非 -debugger 才开放的
 	// /debugger/agent，避免 health 误报离线）。
 	base := hd.adminURL
@@ -260,12 +260,11 @@ func main() {
 	// 互通握手：宿主挂载聚合服务后回调，后台启动独立 HTTP 服务
 	// （不阻塞 gRPC 握手；host ListTools 时端口已监听）。
 	sdk.SetInterconnect(func(ctx context.Context, ic *dsc.Interconnect) error {
-		// 探知宿主 agent 名（来自环境注入，与 agent-react-loop 一致）
+		// 探知宿主 agent 名（来自宿主可选注入的 DSC_AGENT_NAME env var）。
+		// 未注入时留空串——health 端点不再硬编码兑底为 "agent-react-loop"；
+		// 前端可经 admin API /plugins/list 查询 type=agent 的插件条目名获取。
 		hd.mu.Lock()
-		hd.agent = os.Getenv("DSC_AGENT_NAME")
-		if hd.agent == "" {
-			hd.agent = "agent-react-loop"
-		}
+		hd.agent = strings.TrimSpace(os.Getenv("DSC_AGENT_NAME"))
 		hd.ic = ic
 		hd.mu.Unlock()
 		dsc.SafeGoroutine(func() {

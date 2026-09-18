@@ -78,6 +78,18 @@ func (m *Manager) StartAdmin(addr string) string {
 	crons.Post("/remove", m.handleCronRemove)
 	crons.Post("/enable", m.handleCronEnable)
 
+	// 凭据管理（认证与 /plugins 一致）——盘活 core/credentials.go 死模块，
+	// 对齐 DSH packages/credentials/credentials 的 admin 暴露面。
+	creds := e.Group("/credentials")
+	creds.Use(adminAuth)
+	m.registerCredentialAdminRoutes(creds)
+
+	// 反馈管理（认证与 /plugins 一致）——盘活 core/feedback.go 死模块，
+	// 对齐 DSH packages/feedback/message-feedback 的 admin 暴露面。
+	fb := e.Group("/feedback")
+	fb.Use(adminAuth)
+	m.registerFeedbackAdminRoutes(fb)
+
 	// 端口冲突自动自增重试：若指定端口已被占用，逐次自增端口重试，
 	// 最多 100 次。每次冲突记 warn 日志（仅在 -log 开启时输出到日志文件/SSE）。
 	// 多实例同时启动 DSC 时不再因 9999 端口冲突而启动失败。

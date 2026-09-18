@@ -378,7 +378,13 @@ func main() {
 		// 声明提供 "notify" 能力：其他插件若需经此插件发布用户通知（音效/桌面提示）
 		// 可经 Requires: [{Type:"dsc", Capability:"notify"}] 声明依赖。对齐 DSH/Cordis
 		// 的 provide + inject 能力边界模型——不依赖具体插件名匹配。
-		Provides: map[string]string{"notify": "true"},
+		// 同时声明 "completion_sound" 能力：宿主在 -input 单发回合结束前据此判定是否
+		// 宽限音效播完（mgr.HasPluginProvidingCapability("completion_sound")，见 main.go），
+		// 而非按名探测 dsc-notify（避免绑死具体插件名）。
+		Provides: map[string]string{
+			"notify":           "true",
+			"completion_sound": "true",
+		},
 	})
 	sdk.Hook(dsc.Hook{
 		OnEvent: func(ctx context.Context, eventType, dataJSON string) (string, error) {

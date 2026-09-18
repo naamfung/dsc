@@ -163,6 +163,16 @@ type Manager struct {
 	// Provides compaction 能力声明；空串 = 默认（agent 走内联压缩，后端经
 	// pre-step 事件接管——压缩引擎已插件化，见 plugins/dsc-system/compaction-basic.go）。
 	compactionBackend string
+
+	// credentialStore 插件凭据存储（对齐 DSH packages/credentials/credentials）：
+	// 经 admin API /credentials/* 暴露给外部工具（如 webui 凭据编辑器），插件进程
+	// 经 Interconnect.Credential() 查询。dir 通常 = ExecDir/credentials，懒初始化。
+	credentialStore *CredentialStore
+
+	// feedbackStore 用户反馈存储（对齐 DSH packages/feedback/message-feedback）：
+	// 经 admin API /feedback/* 暴露给外部工具（如 webui 反馈面板）。filePath 通常
+	// = ExecDir/feedback.jsonl，懒初始化。盘活 core/feedback.go 死模块。
+	feedbackStore *FeedbackStore
 }
 
 type ManagerConfig struct {

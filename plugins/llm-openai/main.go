@@ -8,11 +8,10 @@ import (
 	"log"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
-	"dsc-sdk"
+	dsc "dsc-sdk"
 	"dsc/core"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -73,7 +72,12 @@ func usageFromOpenAI(u *openai.Usage) *core.Usage {
 // visionEnabled 是否启用图像输入：默认按模型能力自动判断（服务端在 /models
 // 上报 input_modalities 含 image 时启用；未上报则默认放行，对齐 DSH）。
 // DSC_NO_VISION=1 可显式强制关闭（自动判断失灵时的逃生口）。
-func visionEnabled(baseURL, model string) bool {
+// env 解析仍在本函数内（测试可直接调）；生产路径用 dsc.LoadLLMConfig 拿
+// cfg.VisionEnabled 后传 envNoVisionOverride=true 跳过重复读 env。
+func visionEnabled(baseURL, model string, envNoVisionOverride bool) bool {
+	if envNoVisionOverride {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_NO_VISION"))) {
 	case "1", "true", "on", "yes":
 		return false
@@ -330,27 +334,6 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []core.Message, tool
 	return result, nil
 }
 
-// parsePositiveInt 解析正整数 env 值；缺席/非法/非正返回 0。
-func parsePositiveInt(v string) int {
-	if v == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
-}
-
-// maxTokensFromEnv 解析输出上限 env：显式 OPENAI_MAX_OUTPUT_TOKENS 优先，
-// 其次宿主注入的 DSC_MAX_OUTPUT_TOKENS；均缺席或非法为 0（请求不携带）。
-func maxTokensFromEnv() int {
-	if n := parsePositiveInt(os.Getenv("OPENAI_MAX_OUTPUT_TOKENS")); n > 0 {
-		return n
-	}
-	return parsePositiveInt(os.Getenv("DSC_MAX_OUTPUT_TOKENS"))
-}
-
 // resolveMaxTokens 计算本请求实际携带的 max_tokens：请求级参数（压缩等场景的
 // 窗口净余值）优先，其次插件级默认（显式 env > 宿主注入），<=0 表示不携带。
 func (p *OpenAIProvider) resolveMaxTokens(requestMaxTokens int) int {
@@ -534,29 +517,29 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []core.Message
 }
 
 func main() {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	cfg := dsc.LoadLLMConfig("openai")
+	apiKey := cfg.APIKey
 	if apiKey == "" {
 		// 對於 llama.cpp server，API key 通常是可選的或接受任意值
 		apiKey = "sk-laamaafung-not-used"
 	}
-	baseURL := os.Getenv("OPENAI_BASE_URL")
+	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.deepseek.com"
+	}
+	model := cfg.Model
+	if model == "" {
+		model = "deepseek-v4-flash"
 	}
 
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
 
-	model := os.Getenv("OPENAI_MODEL")
-	if model == "" {
-		model = "deepseek-v4-flash"
-	}
-
 	provider := &OpenAIProvider{
 		client:    openai.NewClientWithConfig(config),
 		model:     model,
-		maxTokens: maxTokensFromEnv(),
-		vision:    visionEnabled(baseURL, model),
+		maxTokens: int(cfg.MaxOutputTokens),
+		vision:    visionEnabled(baseURL, model, !cfg.VisionEnabled),
 		filesAPI:  isDeepSeekEndpoint(baseURL),
 		fileCache: map[string]string{},
 	}

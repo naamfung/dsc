@@ -553,14 +553,19 @@ func main() {
 		}
 	}
 
-	// 若 config.yaml 未声明任何启用的 LLM，则按 环境变量 → DefaultLLM → openai 回退构造默认条目
+	// 若 config.yaml 未声明任何启用的 LLM，则按 环境变量 → DefaultLLM → 发现机制回退构造默认条目
 	if len(llmEntries) == 0 {
 		llmName := os.Getenv("LLM_PROVIDER")
 		if llmName == "" && mainCfg != nil {
 			llmName = mainCfg.DefaultLLM
 		}
 		if llmName == "" {
-			llmName = "openai"
+			// 发现机制：扫描 plugins/llm-* 目录取首个（与 setup.go 一致），
+			// 不再硬编码 "openai"（对齐 AGENTS.md §8）。
+			llmName = discoverFirstLLMPlugin()
+		}
+		if llmName == "" {
+			fail("no LLM provider configured: set default_llm in config.yaml, LLM_PROVIDER env, or install a plugin under plugins/llm-*/")
 		}
 		llmEntries = append(llmEntries, core.PluginEntry{
 			Name:       llmName,
@@ -786,7 +791,9 @@ func main() {
 	// 供 notify 等程序性插件订阅；对齐 DSH agent-loop 原生发 agent/status）
 	agentName := mgr.GetMainAgentName()
 	if agentName == "" {
-		agentName = "agent-react-loop"
+		// 发现机制兜底：扫描 plugins/agent-* 目录取首个（与 assembleMerged 一致），
+		// 不再硬编码 "agent-react-loop"（对齐 AGENTS.md §8）。
+		agentName = "agent-" + discoverFirstAgentPlugin()
 	}
 	agent, ok := mgr.EventAgent()
 	if !ok {
@@ -833,7 +840,9 @@ func main() {
 		// （success/error，约 0.29s）。-input 单发回合结束后宿主随即回收插件子进程
 		// （Windows 上为强杀，不跑 defer），可能导致音效被截断。已加载通知插件且非
 		// headless（CI 单发无需报声）时，短暂宽限让音效播完再关闭；headless 保持快速退出。
-		if !headless && mgr.HasPlugin("dsc-notify") {
+		// 按能力探测（completion_sound），任何声明该能力的插件均触发宽限，避免绑死
+		// 具体插件名（对齐 AGENTS.md §8：宿主核心不得硬编码插件名）。
+		if !headless && mgr.HasPluginProvidingCapability("completion_sound") {
 			const completionSoundGrace = 800 * time.Millisecond
 			logger.Info("draining completion sound", "grace", completionSoundGrace.String())
 			time.Sleep(completionSoundGrace)

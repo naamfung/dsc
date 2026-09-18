@@ -208,7 +208,12 @@ func (p *AnthropicProvider) buildMessageParams(messages []core.Message, tools []
 // visionEnabled 是否启用图像输入：默认按模型能力自动判断（服务端在 /models
 // 上报 input_modalities 含 image 时启用；未上报则默认放行，对齐 DSH）。
 // DSC_NO_VISION=1 可显式强制关闭（自动判断失灵时的逃生口）。
-func visionEnabled(baseURL, model string) bool {
+// env 解析仍在本函数内（测试可直接调）；生产路径用 dsc.LoadLLMConfig 拿
+// cfg.VisionEnabled 后传 envNoVisionOverride=true 跳过重复读 env。
+func visionEnabled(baseURL, model string, envNoVisionOverride bool) bool {
+	if envNoVisionOverride {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_NO_VISION"))) {
 	case "1", "true", "on", "yes":
 		return false
@@ -510,27 +515,6 @@ func usageFromAnthropic(u *anthropic.Usage) *core.Usage {
 	}
 }
 
-// parsePositiveInt64 解析正整数 env 值；缺席/非法/非正返回 0。
-func parsePositiveInt64(v string) int64 {
-	if v == "" {
-		return 0
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
-}
-
-// maxTokensFromEnv 解析输出上限 env：显式 ANTHROPIC_MAX_OUTPUT_TOKENS 优先，
-// 其次宿主注入的 DSC_MAX_OUTPUT_TOKENS；均缺席或非法为 0（请求不携带）。
-func maxTokensFromEnv() int64 {
-	if n := parsePositiveInt64(os.Getenv("ANTHROPIC_MAX_OUTPUT_TOKENS")); n > 0 {
-		return n
-	}
-	return parsePositiveInt64(os.Getenv("DSC_MAX_OUTPUT_TOKENS"))
-}
-
 // resolveMaxTokens 计算本请求实际携带的 max_tokens：请求级参数（压缩等场景的
 // 窗口净余值）优先，其次插件级默认（显式 env > 宿主注入），<=0 表示不携带
 // （omitZeroMaxTokens 摘除零值，等模型自然结束）。
@@ -637,16 +621,17 @@ func (p *AnthropicProvider) HealthCheck(ctx context.Context) error {
 }
 
 func main() {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	cfg := dsc.LoadLLMConfig("anthropic")
+	apiKey := cfg.APIKey
 	if apiKey == "" {
 		// 对于 llama.cpp server 或测试，可忽略
 		apiKey = "sk-laamaafung-not-used"
 	}
-	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
+	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.deepseek.com/anthropic"
 	}
-	model := os.Getenv("ANTHROPIC_MODEL")
+	model := cfg.Model
 	if model == "" {
 		model = "deepseek-v4-flash"
 	}
@@ -675,7 +660,7 @@ func main() {
 	// context_window），对抗 anthropic 兼容口对缺席 max_tokens 自填 4096 类保守默认；
 	// ANTHROPIC_MAX_OUTPUT_TOKENS 显式配置优先（部署方收紧/放宽的手段，显式 0=不
 	// 携带）；均缺席时 0 = 请求不携带，零值字段由 omitZeroMaxTokens 中间件摘除。
-	maxTokens := maxTokensFromEnv()
+	maxTokens := cfg.MaxOutputTokens
 
 	provider := &AnthropicProvider{
 		client:         anthropic.NewClient(opts...),
@@ -683,7 +668,7 @@ func main() {
 		thinking:       thinking,
 		thinkingBudget: thinkingBudget,
 		maxTokens:      maxTokens,
-		vision:         visionEnabled(baseURL, model),
+		vision:         visionEnabled(baseURL, model, !cfg.VisionEnabled),
 		filesAPI:       isDeepSeekEndpoint(baseURL),
 		fileCache:      map[string]string{},
 		apiKey:         apiKey,
