@@ -61,6 +61,11 @@ type PluginEntry struct {
 	Enabled bool `json:"enabled" yaml:"enabled" default:"true"`
 	// 可選：傳遞給插件子進程的額外環境變量（合併宿主環境，插件值優先）
 	Env map[string]string `json:"env" yaml:"env"`
+	// Config 插件配置（对齐 DSH cordis.yml 的 config 字段）：
+	// 供 -patch overlay 注入插件特定配置（如 MCP 客户端的 serverName/transport/
+	// command/args/env）。宿主按 type 分发：tool/dsc 类型的 Config["mcp"] 含
+	// MCP 客户端配置时，启动时自动连接。空则忽略。
+	Config map[string]any `json:"config,omitempty" yaml:"config,omitempty"`
 }
 
 // LoadConfig 從指定路徑加載配置

@@ -299,3 +299,20 @@ func (m *Manager) handleMCPList(c *vodka.Context) error {
 // LSPTool.client 非 nil 时查询单实例；client 为 nil 时经 Manager.lspDiagnosticsAll
 // 聚合所有已启动 LSPClient 的诊断缓存（由 admin API /lsp/start 注册的实例）。
 // SetManager 在 ensureLSPToolRegistered 中注入，无需修改 LSPTool 自身签名。
+
+// RegisterMCPClient 注册一个已连接的 MCPClient 到 Manager.mcpClients。
+// 供 main.go 的 autoConnectMCPFromConfig（-patch 注入的 MCP 配置自动连接）
+// 与 admin API /mcp/connect 共用同一注册路径。
+func (m *Manager) RegisterMCPClient(serverName string, client *MCPClient) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureMCPClients()
+	m.mcpClients[serverName] = client
+}
+
+// ToolCount 返回 MCP 客户端已发现的工具数量（供日志输出）。
+func (c *MCPClient) ToolCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.tools)
+}

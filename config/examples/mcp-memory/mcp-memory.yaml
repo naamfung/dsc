@@ -1,0 +1,16 @@
+# MCP Memory Server 配置示例（HTTP 传输）
+#
+# 用法：
+#   dsc -patch config/examples/mcp-memory/mcp-memory.yaml
+#
+# 启动时自动连接 MCP 服务器，工具注册为 mcp__memory__<rawName>。
+# 模型可经这些工具名调用 MCP 服务器的功能。
+#
+# 对齐 DSH apps/cli/config/examples/mcp-memory/mcp-reference-memory.cordis.yml。
+# DSC 当前支持 HTTP/SSE 传输；stdio 传输（DSH 主流）留待后续扩展。
+- name: mcp-memory
+  type: dsc
+  config:
+    mcp:
+      server_name: memory
+      endpoint: http://localhost:3100/mcp

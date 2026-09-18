@@ -286,12 +286,13 @@ func main() {
 	// 解析啟動參數
 	logToScreen := false
 	logToFile := ""
-	mode := "standard"    // 默認標準模式
-	inputText := ""       // -input：一次性提示文本（自動化測試入口，不經 TUI）
-	debuggerOpen := false // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
-	adminAddr := ""       // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
-	headless := false     // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
-	hooksPath := ""       // -hooks：外部脚本钩子配置（hooks.json：严格 LUA / 原生可执行）
+	mode := "standard"      // 默認標準模式
+	inputText := ""         // -input：一次性提示文本（自動化測試入口，不經 TUI）
+	debuggerOpen := false   // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
+	adminAddr := ""         // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
+	headless := false       // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
+	hooksPath := ""         // -hooks：外部脚本钩子配置（hooks.json：严格 LUA / 原生可执行）
+	var patchFiles []string // -patch：配置 overlay 文件列表（可重复，按顺序合并）
 
 	// DSC_LOG_LEVEL：宿主运行日志级别（debug|info|warn|error，默认 info）。
 	// 仅在 -log 启用（文件或屏幕）时有意义；无 -log 时默认静默（io.Discard）设计
@@ -346,6 +347,14 @@ func main() {
 		} else if arg == "-hooks" {
 			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 				hooksPath = os.Args[i+1]
+			}
+		} else if arg == "-patch" {
+			// -patch <file.yaml>：加载 patch overlay 文件（可重复指定，按顺序合并）。
+			// 对齐 DSH --patch overlay 机制（Go 风格单 - 选项）。
+			// patch 文件含插件条目配置（如 MCP 客户端的 serverName/transport/command），
+			// 合并到 config.yaml 后启动时自动应用（如自动连接 MCP 服务器）。
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				patchFiles = append(patchFiles, os.Args[i+1])
 			}
 		}
 	}
@@ -465,6 +474,25 @@ func main() {
 	mainCfg, err := loadConfig(core.PJoin(execDir, "config", "config.yaml"))
 	if err == nil && mainCfg != nil {
 		core.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
+	}
+
+	// -patch overlay 合并：加载所有 patch 文件并合并到 mainCfg（对齐 DSH --patch）。
+	// patch 文件含插件条目配置（如 MCP 客户端），合并后启动时自动应用。
+	if len(patchFiles) > 0 {
+		overlays, perr := core.LoadPatchFiles(patchFiles)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "load patch overlay failed: %v\n", perr)
+			os.Exit(1)
+		}
+		if len(overlays) > 0 {
+			for _, ov := range overlays {
+				logger.Info("applying patch overlay", "source", ov.Source, "entries", len(ov.Entries))
+			}
+			if mainCfg == nil {
+				mainCfg = &core.Config{}
+			}
+			mainCfg = core.ApplyPatchOverlays(mainCfg, overlays)
+		}
 	}
 	// 打印统一用正斜杆（ToSlash），与模型 system prompt 中注入的工作区路径格式一致，
 	// 避免 Windows 下日志显示反斜杆路径造成人类与模型所见不一致。
@@ -734,6 +762,11 @@ func main() {
 	// 后台监听/调度仅在常规模式启用；-headless 精简无头模式不开端口、不起常驻轮询，
 	// 对齐 harness headless「进程只存活于单发、不留任何后台」的契约。
 	if !headless {
+		// -patch overlay 注入的 MCP 客户端配置：扫描 merged.Plugins 中含
+		// config.mcp 的条目，启动时自动连接（对齐 DSH cordis.yml 的 mcp-client
+		// 插件实例化）。每个条目的 config.mcp 字段含 server_name/endpoint 等。
+		autoConnectMCPFromConfig(mgr, merged, logger)
+
 		// 版本化二进制自动热重载（config.yaml hot_reload: true 时启用）：fsnotify + 周期扫描
 		if err := mgr.StartHotReloadWatcher(); err != nil {
 			logger.Warn("failed to start hot-reload watcher", "err", err)
