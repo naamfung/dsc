@@ -239,6 +239,61 @@ func TestTopLevelSlashErrOnMissingPath(t *testing.T) {
 	}
 }
 
+// TestWithinBaseForwardSlash 回归测试：withinBase 必须用 "/" 而非
+// string(os.PathSeparator) 作为路径分隔符。safePath 的入参来自 dsc.PAbs /
+// dsc.PJoin / dsc.PClean / core.CanonicalPath，这些 P* 函数在 Windows 上
+// 也返回正斜杠结果。若 withinBase 用 string(os.PathSeparator)（Windows 上
+// 是反斜杠），前缀检查永远失败，导致所有相对路径都被拒绝（报
+// "permission denied"）。此测试在所有平台上断言正斜杠路径的前缀检查生效。
+func TestWithinBaseForwardSlash(t *testing.T) {
+	cases := []struct {
+		name   string
+		real   string
+		base   string
+		expect bool
+	}{
+		{"forward slash child", "/tmp/ws/README.md", "/tmp/ws", true},
+		{"forward slash equal", "/tmp/ws", "/tmp/ws", true},
+		{"forward slash sibling", "/tmp/other/README.md", "/tmp/ws", false},
+		{"forward slash not prefix", "/tmp/ws-other/README.md", "/tmp/ws", false},
+		// Windows 盘符正斜杠形式（P* 函数返回形态）
+		{"windows drive forward slash", "G:/Dev/quark-go/README.md", "G:/Dev/quark-go", true},
+		{"windows drive forward slash equal", "G:/Dev/quark-go", "G:/Dev/quark-go", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := withinBase(c.real, c.base)
+			if got != c.expect {
+				t.Errorf("withinBase(%q, %q) = %v, want %v", c.real, c.base, got, c.expect)
+			}
+		})
+	}
+}
+
+// TestViewByAbsolutePathInsideWorkspace 回归测试（真实复现报告场景）：
+// 模型传入 workspace 内文件的真实绝对路径（如 G:/Dev/quark-go/README.md），
+// 经 MapWorkspacePath + filepath.Rel 归并为相对路径后，safePath 走相对分支，
+// withinBase 前缀检查必须通过（不得报 "permission denied"）。Linux 上用
+// /tmp/xxx/workspace/README.md 等价覆盖。
+func TestViewByAbsolutePathInsideWorkspace(t *testing.T) {
+	dir := newTestWS(t)
+	ws := filepath.Join(dir, "workspace")
+	content := "# README\nabsolute path view works"
+	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 用 workspace 内文件的真实绝对路径调用 view
+	out, err := strReplaceEditor(context.Background(),
+		[]byte(`{"command":"view","path":`+strconv.Quote(filepath.Join(ws, "README.md"))+`}`))
+	if err != nil {
+		t.Fatalf("view by absolute path inside workspace should succeed, got error: %v", err)
+	}
+	if !strings.Contains(out, "absolute path view works") {
+		t.Fatalf("view output missing file content, got %q", out)
+	}
+}
+
 // TestVirtualRootMappedToWorkspaceRoot 回归测试（虚拟根映射报告场景）：模型按
 // 「虚拟根 = 工作空间根」契约传入 /workspace/docs/architecture.md，必须映射到
 // 工作空间根下的真实文件并成功读出内容。裸 / 形态保持真实根语义（Windows 上为
