@@ -2229,13 +2229,13 @@ func resultGutter(body string) string {
 // 内置斜杆命令列表（当前为宿主可直接执行的命令）。一级菜单只展示各命令入口；
 // 分组命令（如 /settings）以单个入口呈现，选中进入后（输入 "<入口> " 前缀）再展示其
 // 子命令（见 slashGroups），使一级菜单保持精简。
+// 注意：/mode 条目不在静态列表中——它们由 (Model).slashCommandItems() 根据
+// presets 目录下的 <name>.yaml 文件动态生成，用户新增 preset（如 thin.yaml）
+// 时自动出现 /mode thin。
 var slashCommands = []compItem{
         {label: "/help", insert: "/help", hint: "显示帮助与快捷键"},
         {label: "/clear", insert: "/clear", hint: "清空聊天记录"},
         {label: "/skills", insert: "/skills", hint: "列出所有已安装的技能"},
-        {label: "/mode minimal", insert: "/mode minimal", hint: "切换至极简模式"},
-        {label: "/mode standard", insert: "/mode standard", hint: "切换至标准模式"},
-        {label: "/mode creation", insert: "/mode creation", hint: "切换至创造模式（可经 tool-lua-host 创造 LUA 插件）"},
         {label: "/sandbox read-only", insert: "/sandbox read-only", hint: "沙箱只读：拒绝一切文件写"},
         {label: "/sandbox workspace", insert: "/sandbox workspace", hint: "沙箱工作区写：仅允许 workspace 内写（默认）"},
         {label: "/sandbox full-access", insert: "/sandbox full-access", hint: "沙箱全开：整个文件系统皆可写"},
@@ -2252,6 +2252,65 @@ var slashCommands = []compItem{
         {label: "/session delete", insert: "/session delete ", hint: "删除指定会话（如 /session delete session-3）"},
         {label: "/export", insert: "/export", hint: "导出当前会话为 Markdown 文件"},
         {label: "/exit", insert: "/exit", hint: "退出聊天"},
+}
+
+// slashCommandItems 返回斜杆命令菜单项：静态基础命令 + 动态 /mode 项。
+// /mode 项由 Manager.ListModes() 列出 presets 目录下的 <name>.yaml 文件得来，
+// 用户新增 preset 配置时（如 thin.yaml）斜杆命令菜单自动追加 /mode thin。
+// Manager 不可用或 presets 目录为空时，回退到内置默认模式列表，保证菜单
+// 在 minimal 启动 / 配置缺失场景下仍可用。
+func (m *Model) slashCommandItems() []compItem {
+        modes := m.availableModes()
+        modeItems := make([]compItem, 0, len(modes))
+        for _, mode := range modes {
+                modeItems = append(modeItems, compItem{
+                        label: "/mode " + mode,
+                        insert: "/mode " + mode,
+                        hint:   modeHint(mode),
+                })
+        }
+        // 把 /mode 项插到 /skills 之后、/sandbox 之前，保持原有位置习惯
+        out := make([]compItem, 0, len(slashCommands)+len(modeItems))
+        inserted := false
+        for _, it := range slashCommands {
+                if !inserted && strings.HasPrefix(it.label, "/sandbox") {
+                        out = append(out, modeItems...)
+                        inserted = true
+                }
+                out = append(out, it)
+        }
+        if !inserted {
+                out = append(out, modeItems...)
+        }
+        return out
+}
+
+// availableModes 返回可用模式名（presets 目录下 <name>.yaml 去扩展名）。
+// Manager 不可用时回退到内置默认：minimal / standard / creation。空目录
+// 同样回退到默认，避免菜单突然空掉让用户误以为命令坏掉。
+func (m *Model) availableModes() []string {
+        if m.manager != nil {
+                if modes := m.manager.ListModes(); len(modes) > 0 {
+                        return modes
+                }
+        }
+        return []string{"minimal", "standard", "creation"}
+}
+
+// modeHint 返回模式对应的中文提示。已知模式用语义化描述，未知模式
+// （用户新增的 preset）回退到通用提示。
+func modeHint(mode string) string {
+        switch mode {
+        case "minimal":
+                return "切换至极简模式"
+        case "standard":
+                return "切换至标准模式"
+        case "creation":
+                return "切换至创造模式（可经 tool-lua-host 创造 LUA 插件）"
+        case "ptc":
+                return "引导用 run_code 写 Lua 一把过组合多步"
+        }
+        return "切换至 " + mode + " 模式"
 }
 
 // slashGroup 斜杆命令分组：entry 为一级菜单入口（descend=true，选中后保持菜单打开
@@ -2393,6 +2452,106 @@ func scanSkillSection(dir string) []string {
         return out
 }
 
+// execModeSwitch 切换工作模式的统一入口：调用 Manager.SwitchMode 应用 preset
+// 配置、写回 config.yaml 持久化、更新标题栏当前模式。已知模式（minimal/
+// standard/creation/ptc）有定制化的中文提示文案；未知模式（用户新增的 preset）
+// 用通用文案，避免每加一个 preset 都要改代码。
+func (m *Model) execModeSwitch(mode string) {
+        defer func() {
+                m.input.SetValue("")
+                m.completion = completion{}
+                m.syncInputHeight()
+                m.render()
+                m.virtualGotoBottom()
+        }()
+        if m.manager == nil {
+                m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+                return
+        }
+        if err := m.manager.SwitchMode(mode); err != nil {
+                m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
+                return
+        }
+        m.mode = mode // 實時反映標題欄模式
+        if err := core.UpdateMode(mode, core.ConfigPath); err != nil {
+                m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
+                return
+        }
+        m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n" + modeSwitchMessage(mode))
+}
+
+// modeSwitchMessage 返回模式切换成功后的提示文案。已知模式用语义化描述，
+// 未知模式（用户新增 preset）回退到通用文案 "已切換至 <mode> 模式"。
+func modeSwitchMessage(mode string) string {
+        switch mode {
+        case "minimal":
+                return "已切換至極簡模式 (minimal)。"
+        case "standard":
+                return "已切換至標準模式 (standard)。"
+        case "creation":
+                return "已切換至創造模式 (creation)：可經 tool-lua-host 跨寫 LUA 插件（參考 lua-core-creator 技能）。"
+        case "ptc":
+                return "已切換至 PTC 模式 (ptc)：引导用 run_code 写 Lua 一把过组合多步。"
+        }
+        return "已切換至 " + mode + " 模式。可用 presets/" + mode + ".yaml 自定義此模式行為。"
+}
+
+// buildHelpText 构造 /help 输出文本。/mode 行由 availableModes() 动态生成——
+// 用户新增 preset 配置（如 thin.yaml）时帮助文本自动追加 "  /mode thin ..."
+// 一行，对齐斜杆命令菜单的动态行为。
+func (m *Model) buildHelpText() string {
+        lines := []string{
+                "快捷键:",
+                "  Enter        发送消息",
+                "  Ctrl+J       换行（终端协议不区分 Ctrl+Enter 与 Enter，故用 LF 键）",
+                "  ↑/↓          翻阅历史命令（单行输入时）",
+                "  Ctrl+V       粘贴剪贴板内容",
+                "  /            在输入框首字符唤起命令菜单",
+                "  Ctrl+C       有选区复制 / 运行中中断 / 否则清空输入",
+                "  Ctrl+Q       退出",
+                "",
+                "鼠标:",
+                "  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
+                "  /settings mouse off 可释放鼠标给终端（终端原生选中/复制，模型工作时也可用）；on 恢复应用内捕获；状态栏会显示当前状态。",
+                "",
+                "斜杆命令:",
+                "  /help        显示本帮助",
+                "  /clear       清空聊天记录",
+                "  /skills      列出所有已安装的技能",
+        }
+        // /mode 行动态生成：列出所有可用模式（来自 presets 目录）
+        for _, mode := range m.availableModes() {
+                lines = append(lines, "  /mode "+mode+"   "+modeHint(mode))
+        }
+        lines = append(lines,
+                "  /sandbox read-only   沙箱只读（拒绝一切文件写操作）",
+                "  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
+                "  /sandbox full-access 沙箱全开（整个文件系统皆可写）",
+                "  （/sandbox on / off 为 read-only / full-access 的兼容别名）",
+                "  /approval ask     审批经评审通道询问（默认）",
+                "  /approval never   审批自动拒绝、不问人",
+                "  /jobs        列出后台任务（含 workflow）与状态",
+                "  /jobs output <id>  读取后台任务输出（如 /jobs output workflow-1）",
+                "  /jobs kill <id> [reason]  取消后台任务",
+                "  /sessions    列出所有会话",
+                "  /crons       列出所有定时任务",
+                "  /cron add <cron> <prompt>  添加定时任务（cron 为 5 段表达式，如 0 8 * * *）",
+                "  /cron remove <id>  删除定时任务",
+                "  /cron on|off <id>  启用/停用定时任务",
+                "  /plan       进入 plan 模式（先探索与设计，再经 exit_plan_mode 呈现完整计划）",
+                "  /plan off   退出 plan 模式",
+                "  /settings history <N|off|unlimited>  历史注入条数：控制模型预填充长度",
+                "    （N 为注入最近 N 条；off 不注入历史；unlimited/on 不限制，默认）",
+                "  /settings mouse on|off  切换鼠标捕获（on 恢复应用内捕获；off 释放给终端原生选中/复制）",
+                "  /session <id>  切换到指定会话（如 /session session-3）",
+                "  /session new  新建会话并切换",
+                "  /session delete <id>  删除指定会话",
+                "  /export    导出当前会话为 Markdown 文件",
+                "  /exit        退出聊天",
+        )
+        return strings.Join(lines, "\n")
+}
+
 // runSlashCommand 处理斜杆命令；返回是否已处理以及要执行的命令。
 func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
         // 仅真正的斜杆命令（以 "/" 开头）才记录调用；普通消息不得被误判为斜杆命令，
@@ -2406,52 +2565,7 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
         }
         switch cmd {
         case "/help":
-                help := strings.Join([]string{
-                        "快捷键:",
-                        "  Enter        发送消息",
-                        "  Ctrl+J       换行（终端协议不区分 Ctrl+Enter 与 Enter，故用 LF 键）",
-                        "  ↑/↓          翻阅历史命令（单行输入时）",
-                        "  Ctrl+V       粘贴剪贴板内容",
-                        "  /            在输入框首字符唤起命令菜单",
-                        "  Ctrl+C       有选区复制 / 运行中中断 / 否则清空输入",
-                        "  Ctrl+Q       退出",
-                        "",
-                        "鼠标:",
-                        "  在正文区按住左键拖拽即可选中文字，松开自动复制到剪贴板；滚轮滚动消息；输入框区域不可选中。",
-                        "  /settings mouse off 可释放鼠标给终端（终端原生选中/复制，模型工作时也可用）；on 恢复应用内捕获；状态栏会显示当前状态。",
-                        "",
-                        "斜杆命令:",
-                        "  /help        显示本帮助",
-                        "  /clear       清空聊天记录",
-                        "  /skills      列出所有已安装的技能",
-                        "  /mode minimal   切换至极简模式",
-                        "  /mode standard  切换至标准模式",
-                        "  /mode creation  切换至创造模式（可经 tool-lua-host 创造 LUA 插件，lua-core-creator 技能提供指导）",
-                        "  /sandbox read-only   沙箱只读（拒绝一切文件写操作）",
-                        "  /sandbox workspace   沙箱工作区写（仅允许 workspace 内写，默认）",
-                        "  /sandbox full-access 沙箱全开（整个文件系统皆可写）",
-                        "  （/sandbox on / off 为 read-only / full-access 的兼容别名）",
-                        "  /approval ask     审批经评审通道询问（默认）",
-                        "  /approval never   审批自动拒绝、不问人",
-                        "  /jobs        列出后台任务（含 workflow）与状态",
-                        "  /jobs output <id>  读取后台任务输出（如 /jobs output workflow-1）",
-                        "  /jobs kill <id> [reason]  取消后台任务",
-                        "  /sessions    列出所有会话",
-                        "  /crons       列出所有定时任务",
-                        "  /cron add <cron> <prompt>  添加定时任务（cron 为 5 段表达式，如 0 8 * * *）",
-                        "  /cron remove <id>  删除定时任务",
-                        "  /cron on|off <id>  启用/停用定时任务",
-                        "  /plan       进入 plan 模式（先探索与设计，再经 exit_plan_mode 呈现完整计划）",
-                        "  /plan off   退出 plan 模式",
-                        "  /settings history <N|off|unlimited>  历史注入条数：控制模型预填充长度",
-                        "    （N 为注入最近 N 条；off 不注入历史；unlimited/on 不限制，默认）",
-                        "  /settings mouse on|off  切换鼠标捕获（on 恢复应用内捕获；off 释放给终端原生选中/复制）",
-                        "  /session <id>  切换到指定会话（如 /session session-3）",
-                        "  /session new  新建会话并切换",
-                        "  /session delete <id>  删除指定会话",
-                        "  /export    导出当前会话为 Markdown 文件",
-                        "  /exit        退出聊天",
-                }, "\n")
+                help := m.buildHelpText()
                 m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 帮助") + "\n" + help)
                 m.input.SetValue("")
                 m.completion = completion{}
@@ -2481,98 +2595,29 @@ func (m *Model) runSlashCommand(cmd string) (bool, tea.Cmd) {
                 m.render()
                 m.virtualGotoBottom()
                 return true, nil
-        case "/mode minimal":
-                if m.manager != nil {
-                        err := m.manager.SwitchMode("minimal")
-                        if err != nil {
-                                m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
-                        } else {
-                                m.mode = "minimal" // 實時反映標題欄模式
-                                err := core.UpdateMode("minimal", core.ConfigPath)
-                                if err != nil {
-                                        m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
-                                } else {
-                                        m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至極簡模式 (minimal)。")
-                                }
-                        }
-                } else {
-                        m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-                }
-                m.input.SetValue("")
-                m.completion = completion{}
-                m.syncInputHeight()
-                m.render()
-                m.virtualGotoBottom()
+        case "/mode minimal", "/mode standard", "/mode creation", "/mode ptc":
+                // 内置模式分支：保留单独 case 标签以兼容旧测试，但实际执行
+                // 统一经 execModeSwitch，避免文案/逻辑重复。
+                m.execModeSwitch(strings.TrimPrefix(cmd, "/mode "))
                 return true, nil
-        case "/mode standard":
-                if m.manager != nil {
-                        err := m.manager.SwitchMode("standard")
-                        if err != nil {
-                                m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
-                        } else {
-                                m.mode = "standard" // 實時反映標題欄模式
-                                err := core.UpdateMode("standard", core.ConfigPath)
-                                if err != nil {
-                                        m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
-                                } else {
-                                        m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至標準模式 (standard)。")
-                                }
+        default:
+                // 动态 /mode <name> 兜底：用户新增 preset（如 thin.yaml）经此路径
+                // 切换，无需在此加 case 分支。校验模式名格式（非空、无空白），
+                // 实际是否存在由 SwitchMode 读 presets/<name>.yaml 验证。
+                if strings.HasPrefix(cmd, "/mode ") {
+                        mode := strings.TrimSpace(strings.TrimPrefix(cmd, "/mode "))
+                        if mode != "" && !strings.ContainsAny(mode, " \t\n") {
+                                m.execModeSwitch(mode)
+                                return true, nil
                         }
-                } else {
-                        m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
+                        m.appendMessage(errorSty.Render("用法: /mode <name>（name 来自 config/presets/<name>.yaml）"))
+                        m.input.SetValue("")
+                        m.completion = completion{}
+                        m.syncInputHeight()
+                        m.render()
+                        m.virtualGotoBottom()
+                        return true, nil
                 }
-                m.input.SetValue("")
-                m.completion = completion{}
-                m.syncInputHeight()
-                m.render()
-                m.virtualGotoBottom()
-                return true, nil
-        case "/mode creation":
-                if m.manager != nil {
-                        err := m.manager.SwitchMode("creation")
-                        if err != nil {
-                                m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
-                        } else {
-                                m.mode = "creation" // 實時反映標題欄模式
-                                err := core.UpdateMode("creation", core.ConfigPath)
-                                if err != nil {
-                                        m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
-                                } else {
-                                        m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至創造模式 (creation)：可經 tool-lua-host 編寫 LUA 插件（參考 lua-core-creator 技能）。")
-                                }
-                        }
-                } else {
-                        m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-                }
-                m.input.SetValue("")
-                m.completion = completion{}
-                m.syncInputHeight()
-                m.render()
-                m.virtualGotoBottom()
-                return true, nil
-        case "/mode ptc":
-                if m.manager != nil {
-                        err := m.manager.SwitchMode("ptc")
-                        if err != nil {
-                                m.appendMessage(errorSty.Render("切換模式失敗: ") + err.Error())
-                        } else {
-                                m.mode = "ptc" // 實時反映標題欄模式
-                                err := core.UpdateMode("ptc", core.ConfigPath)
-                                if err != nil {
-                                        m.appendMessage(errorSty.Render("保存配置失敗: ") + err.Error())
-                                } else {
-                                        m.appendMessage(assistantNameSty.Render(assistantMark+" DSC · 模式切換") + "\n已切換至 PTC 模式 (ptc)：引导用 run_code 写 Lua 一把过组合多步。")
-                                }
-                        }
-                } else {
-                        m.appendMessage(errorSty.Render("錯誤: 插件管理器不可用"))
-                }
-                m.input.SetValue("")
-                m.completion = completion{}
-                m.syncInputHeight()
-                m.render()
-                m.virtualGotoBottom()
-                return true, nil
         case "/sessions":
                 if m.manager != nil {
                         summaries, err := m.manager.ListSessions()
@@ -2965,8 +3010,8 @@ func (m *Model) updateCompletion() {
         if strings.HasPrefix(val, "/") {
                 var items []compItem
                 if !strings.ContainsAny(val, " \t\n") {
-                        // 一级命令（含分组入口）
-                        items = filterSlash(slashCommands, val)
+                        // 一级命令（含分组入口）——/mode 项在此动态生成
+                        items = filterSlash(m.slashCommandItems(), val)
                 } else if group := slashGroupFor(val); group != nil {
                         // 已进入分组（如 "/settings "）→ 展示其子命令
                         items = filterSlash(group.subs, val)
