@@ -80,6 +80,11 @@ func (m *Model) askProvider(ctx context.Context, req *userquestions.Request) (*u
 // Enter 确认（队列中回答完当前问题后推进下一个）、Esc 放弃；
 // 选中末尾"✎ 其他（手动输入）"项触发自定义文字输入（覆盖层消失、焦点落到主输入框）。
 // c/o 同样可进入自定义输入（键盘快捷通道）。
+//
+// 任何改变 m.question 或 q.customMode 的分支都必须经 syncViewportHeight 同步
+// viewport 实际高度——否则 vpHeight() 计算正确但 m.viewport.Height() 仍为旧值，
+// viewport.View() 输出多余行数把覆盖层推到终端可视区外（AltScreen 截断），
+// 表现为模型提问后部分选项被切掉。
 func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
         q := m.question
         if q == nil || len(q.request.Questions) == 0 {
@@ -99,6 +104,7 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
                 if q.err != nil {
                         q.err <- &userquestions.Error{Code: userquestions.ErrCanceled, Err: fmt.Errorf("user dismissed the question")}
                 }
+                m.syncViewportHeight()
                 m.render()
                 return m, nil
         case "up", "k", "ctrl+p":
@@ -142,6 +148,7 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
         case "enter":
                 if q.answer == nil {
                         m.question = nil
+                        m.syncViewportHeight()
                         m.render()
                         return m, nil
                 }
@@ -153,6 +160,15 @@ func (m *Model) handleQuestionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
                 return m, m.advanceOrSubmit(q)
         }
         return m, nil
+}
+
+// syncViewportHeight 把 vpHeight() 计算结果同步到 viewport 实例的 Height。
+// vpHeight() 依据 m.question / customMode / thinking / completion / todoPanel
+// 动态计算，但 viewport.View() 渲染时用的是 viewport.Height()——若不同步，
+// 覆盖层激活/消失时 viewport 仍按旧高度渲染，行数溢出导致覆盖层被 AltScreen 截断。
+// 等价于 syncInputHeight 的 viewport 同步部分，但不触发滚动跟随。
+func (m *Model) syncViewportHeight() {
+        m.viewport.SetHeight(m.vpHeight())
 }
 
 // enterCustomInputMode 进入自定义文字输入模式：覆盖层消失（customMode=true 时
@@ -181,7 +197,7 @@ func (m *Model) handleCustomInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
                         q.err <- &userquestions.Error{Code: userquestions.ErrCanceled, Err: fmt.Errorf("user dismissed the question")}
                 }
                 m.input.SetValue("")
-                m.syncInputHeight()
+                m.syncViewportHeight()
                 m.render()
                 return m, nil
         case "esc":
@@ -194,13 +210,18 @@ func (m *Model) handleCustomInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
         case "enter":
                 text := strings.TrimSpace(m.input.Value())
                 m.input.SetValue("")
-                m.syncInputHeight()
                 if q.answer == nil || text == "" {
                         // 无通道或空文本：回到选项选择
+                        // 注意：customMode 由 true→false，覆盖层从隐藏变可见，
+                        // vpHeight 收缩，必须重新 syncViewportHeight——若先调
+                        // syncInputHeight（此时 customMode 仍 true）再改 customMode，
+                        // viewport 会保留旧高度把覆盖层挤出可视区。
                         q.customMode = false
+                        m.syncViewportHeight()
                         m.render()
                         return m, nil
                 }
+                m.syncInputHeight() // 输入框高度变化（已清空），同步 viewport
                 q.answers = append(q.answers, m.buildCustomAnswer(q, q.request.Questions[q.current].MultiSelect, text))
                 return m, m.advanceOrSubmit(q)
         default:
@@ -214,18 +235,23 @@ func (m *Model) handleCustomInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // advanceOrSubmit 完成当前问题：队列还有下一个问题则推进并重置状态，
-// 否则提交整个回答并清除覆盖层。
+// 否则提交整个回答并清除覆盖层。任何路径都需 syncViewportHeight——
+// 推进到下一问时覆盖层继续显示但 customMode 可能由 true 转 false
+// （覆盖层从隐藏变可见，vpHeight 收缩）；提交完毕 m.question=nil 时
+// 覆盖层消失，vpHeight 增长，viewport 需重新撑高。
 func (m *Model) advanceOrSubmit(q *pendingQuestion) tea.Cmd {
         if q.current+1 < len(q.request.Questions) {
                 q.current++
                 q.cursor = 0
                 q.multi = nil
                 q.customMode = false
+                m.syncViewportHeight()
                 m.render()
                 return nil
         }
         m.question = nil
         q.answer <- &userquestions.Answer{Answers: q.answers}
+        m.syncViewportHeight()
         m.render()
         return nil
 }
