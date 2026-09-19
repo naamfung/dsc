@@ -22,14 +22,21 @@ const (
 )
 
 func init() {
-        exePath, err := os.Executable()
-        if err != nil {
-                // 若無法獲取可執行文件路徑，則回退到相對路徑
-                ConfigPath = "./config/config.yaml"
-        } else {
-                execDir := PDir(exePath)
-                ConfigPath = PJoin(execDir, "config", "config.yaml")
+        ConfigPath = computeConfigPath(os.Executable())
+}
+
+// computeConfigPath 从可执行文件路径算出默认 config.yaml 路径。
+// 经 PDir + PJoin 链路保证返回正斜杆（无反斜杆污染）——
+// Windows 上 os.Executable() 返回反斜杆路径，PDir/PJoin 内部 toSlash
+// 把反斜杆统一为正斜杆，使所有平台 ConfigPath 恒为 POSIX 风格。
+// 抽出为独立函数便于在 Linux CI 上用 Windows 风格路径输入测试
+// 归一化行为（TestComputeConfigPathWindowsBackslashNormalization）。
+func computeConfigPath(exePath string, exeErr error) string {
+        if exeErr != nil {
+                return "./config/config.yaml"
         }
+        execDir := PDir(exePath)
+        return PJoin(execDir, "config", "config.yaml")
 }
 
 type Config struct {

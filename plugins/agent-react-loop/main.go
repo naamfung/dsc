@@ -143,7 +143,7 @@ type ReactLoopAgent struct {
         maxIterations int
 
         // persona "你是一個…助手" 身份句，由宿主透過 DSC_PRESET_PERSONA 傳入（預設可配）；
-        // 空則回退 DeepSeek 官方默認
+        // 空則回退通用默认（详见 buildSystemPrompt 中的 fallback）
         persona string
 
         // plan/goal 宿主工具状态（对齐 DSH plan-mode + goal 领域）：
@@ -1080,7 +1080,7 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
                 // 身份首行（DSH 风格总开关，品牌名适配为 DSC）
                 "You are an AI agent powered by DSC.",
         }
-        // persona "你是一個…助手" 身份句：预设可配，空則回退 DeepSeek 官方默認
+        // persona "你是一個…助手" 身份句：预设可配，空則回退通用默认
         if p := strings.TrimSpace(a.persona); p != "" {
                 parts = append(parts, p)
         } else {

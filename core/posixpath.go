@@ -8,86 +8,100 @@ package core
 // 计算语义不变，而模型可见路径恒为正斜杆。插件经 SDK 二次转发（sdk/fs.go），
 // 本仓其它模块直接用 core.P*；libs/sh、plugin 等独立模块（无法引入 dsc/core）
 // 使用其本地等价实现。
+//
+// toSlash 用 strings.ReplaceAll 而非 filepath.ToSlash：后者在 Linux 上是 no-op
+// （Separator == '/'，替换 '/' → '/' 不变），无法在 Linux 测试中验证 Windows
+// 反斜杆归一化。改用 strings.ReplaceAll 让 P* 在所有平台上都把反斜杆转正斜杆，
+// 使 Linux CI 能真正测出 Windows 反斜杆污染路径链路的回归。
 
 import (
-	"os"
-	"path/filepath"
+        "os"
+        "path/filepath"
+        "strings"
 )
 
 // PSeparator 统一路径分隔符（所有平台一律正斜杆）。
 const PSeparator = "/"
 
+// toSlash 把路径中的反斜杆统一为正斜杆——跨平台一致行为。
+// 不用 filepath.ToSlash 是因为后者在 Linux 上是 no-op（Separator=='/'），
+// 无法在 Linux 测试中验证 Windows 反斜杆归一化。改用 strings.ReplaceAll
+// 让 Linux 上也能正确处理 Windows 风格路径输入（测试场景与跨平台数据交换）。
+func toSlash(path string) string {
+        return strings.ReplaceAll(path, "\\", "/")
+}
+
 // PJoin 等价 filepath.Join，结果归一化为正斜杆。
 func PJoin(elem ...string) string {
-	return filepath.ToSlash(filepath.Join(elem...))
+        return toSlash(filepath.Join(elem...))
 }
 
 // PAbs 等价 filepath.Abs，结果归一化为正斜杆。
 func PAbs(path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	return filepath.ToSlash(abs), nil
+        abs, err := filepath.Abs(path)
+        if err != nil {
+                return "", err
+        }
+        return toSlash(abs), nil
 }
 
 // PClean 等价 filepath.Clean，结果归一化为正斜杆。
 func PClean(path string) string {
-	return filepath.ToSlash(filepath.Clean(path))
+        return toSlash(filepath.Clean(path))
 }
 
 // PRel 等价 filepath.Rel，结果归一化为正斜杆。
 func PRel(basepath, targpath string) (string, error) {
-	rel, err := filepath.Rel(basepath, targpath)
-	if err != nil {
-		return "", err
-	}
-	return filepath.ToSlash(rel), nil
+        rel, err := filepath.Rel(basepath, targpath)
+        if err != nil {
+                return "", err
+        }
+        return toSlash(rel), nil
 }
 
 // PSplit 等价 filepath.Split，目录部分归一化为正斜杆。
 func PSplit(path string) (dir, file string) {
-	d, f := filepath.Split(path)
-	return filepath.ToSlash(d), f
+        d, f := filepath.Split(path)
+        return toSlash(d), f
 }
 
 // PDir 等价 filepath.Dir，结果归一化为正斜杆（Windows 上 filepath.Dir 对
 // 正斜杆输入也会返回反斜杆，故必须经本函数统一）。
 func PDir(path string) string {
-	return filepath.ToSlash(filepath.Dir(path))
+        return toSlash(filepath.Dir(path))
 }
 
 // PEvalSymlinks 等价 filepath.EvalSymlinks，结果归一化为正斜杆。
 func PEvalSymlinks(path string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-	return filepath.ToSlash(resolved), nil
+        resolved, err := filepath.EvalSymlinks(path)
+        if err != nil {
+                return "", err
+        }
+        return toSlash(resolved), nil
 }
 
 // PGlob 等价 filepath.Glob，匹配结果逐条归一化为正斜杆。
 func PGlob(pattern string) ([]string, error) {
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
-	}
-	for i, m := range matches {
-		matches[i] = filepath.ToSlash(m)
-	}
-	return matches, nil
+        matches, err := filepath.Glob(pattern)
+        if err != nil {
+                return nil, err
+        }
+        for i, m := range matches {
+                matches[i] = toSlash(m)
+        }
+        return matches, nil
 }
 
 // PWalkDir 等价 filepath.WalkDir，回调收到的 path 归一化为正斜杆。
 func PWalkDir(root string, fn func(path string, d os.DirEntry, err error) error) error {
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		return fn(filepath.ToSlash(path), d, err)
-	})
+        return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+                return fn(toSlash(path), d, err)
+        })
 }
 
 // PWalk 等价 filepath.Walk，回调收到的 path 归一化为正斜杆。
 func PWalk(root string, fn func(path string, info os.FileInfo, err error) error) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		return fn(filepath.ToSlash(path), info, err)
-	})
+        return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+                return fn(toSlash(path), info, err)
+        })
 }
