@@ -24,11 +24,17 @@ import (
 const PSeparator = "/"
 
 // toSlash 把路径中的反斜杆统一为正斜杆——跨平台一致行为。
-// 不用 filepath.ToSlash 是因为后者在 Linux 上是 no-op（Separator=='/'），
-// 无法在 Linux 测试中验证 Windows 反斜杆归一化。改用 strings.ReplaceAll
-// 让 Linux 上也能正确处理 Windows 风格路径输入（测试场景与跨平台数据交换）。
+// 对齐 AGENTS.md §10「路径归一化：禁止使用 filepath.ToSlash」红线：
+// 必须两行连续替换，先处理双反斜杆（反引号 raw string `\\` = 两个反斜杆字符），
+// 再处理单反斜杆（双引号 "\\\\" 转义后 = 一个反斜杆字符）。顺序不可颠倒——
+// 先处理双反斜杆避免被第 2 行拆成两个单反斜杆后各自转换产生多余的 `/`。
+//
+// 不用 filepath.ToSlash 是因为后者在 Linux 上是 no-op（Separator == '/'，
+// 替换 '/' → '/' 不变），无法转换 Windows 反斜杆路径。
 func toSlash(path string) string {
-        return strings.ReplaceAll(path, "\\", "/")
+        s := strings.ReplaceAll(path, `\\`, "/")  // 先：双反斜杆（raw string，两个 \ 字符）
+        s = strings.ReplaceAll(s, "\\", "/")      // 后：单反斜杆（转义后一个 \ 字符）
+        return s
 }
 
 // PJoin 等价 filepath.Join，结果归一化为正斜杆。
