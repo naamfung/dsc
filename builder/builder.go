@@ -1,25 +1,25 @@
 package main
 
 import (
-	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
+        "fmt"
+        "io"
+        "os"
+        "os/exec"
+        "path/filepath"
+        "runtime"
+        "strings"
 )
 
 const (
-	colorRed    = "\033[0;31m"
-	colorGreen  = "\033[0;32m"
-	colorYellow = "\033[0;33m"
-	colorBlue   = "\033[0;34m"
-	colorNC     = "\033[0m"
+        colorRed    = "\033[0;31m"
+        colorGreen  = "\033[0;32m"
+        colorYellow = "\033[0;33m"
+        colorBlue   = "\033[0;34m"
+        colorNC     = "\033[0m"
 )
 
 func printColored(color, msg string) {
-	fmt.Print(color + msg + colorNC)
+        fmt.Print(color + msg + colorNC)
 }
 
 func printInfo(msg string)    { printColored(colorBlue, msg) }
@@ -29,123 +29,123 @@ func printError(msg string)   { printColored(colorRed, msg) }
 
 // platform 定义目标平台
 type platform struct {
-	Name    string // 用户友好的名称（命令行参数用），也是发布目录名的一部分
-	GOOS    string
-	GOARCH  string
-	Suffix  string // 可执行文件后缀（Windows 为 .exe）
-	HostDir string // 宿主主程序在发布目录里的文件名（不含框架下的绝对路径）
+        Name    string // 用户友好的名称（命令行参数用），也是发布目录名的一部分
+        GOOS    string
+        GOARCH  string
+        Suffix  string // 可执行文件后缀（Windows 为 .exe）
+        HostDir string // 宿主主程序在发布目录里的文件名（不含框架下的绝对路径）
 }
 
 // 目标平台集（对齐 AGENTS.md 七端）：freebsd-amd64 与 ghostbsd 共享同一二进制口径。
 var platforms = []platform{
-	{Name: "linux-amd64", GOOS: "linux", GOARCH: "amd64", HostDir: "dsc"},
-	{Name: "linux-arm64", GOOS: "linux", GOARCH: "arm64", HostDir: "dsc"},
-	{Name: "linux-loong64", GOOS: "linux", GOARCH: "loong64", HostDir: "dsc"},
-	{Name: "darwin-amd64", GOOS: "darwin", GOARCH: "amd64", HostDir: "dsc"},
-	{Name: "darwin-arm64", GOOS: "darwin", GOARCH: "arm64", HostDir: "dsc"},
-	{Name: "windows-amd64", GOOS: "windows", GOARCH: "amd64", HostDir: "dsc.exe", Suffix: ".exe"},
-	{Name: "freebsd-amd64", GOOS: "freebsd", GOARCH: "amd64", HostDir: "dsc"},
+        {Name: "linux-amd64", GOOS: "linux", GOARCH: "amd64", HostDir: "dsc"},
+        {Name: "linux-arm64", GOOS: "linux", GOARCH: "arm64", HostDir: "dsc"},
+        {Name: "linux-loong64", GOOS: "linux", GOARCH: "loong64", HostDir: "dsc"},
+        {Name: "darwin-amd64", GOOS: "darwin", GOARCH: "amd64", HostDir: "dsc"},
+        {Name: "darwin-arm64", GOOS: "darwin", GOARCH: "arm64", HostDir: "dsc"},
+        {Name: "windows-amd64", GOOS: "windows", GOARCH: "amd64", HostDir: "dsc.exe", Suffix: ".exe"},
+        {Name: "freebsd-amd64", GOOS: "freebsd", GOARCH: "amd64", HostDir: "dsc"},
 }
 
 // publicPlugins 发布于发布包内的对外插件；目录缺失时自动跳过。
 var publicPlugins = []string{
-	"agent-react-loop",
-	"llm-openai",
-	"llm-anthropic",
-	"llm-ollama",
-	"tool-filesystem",
-	"tool-str-replace-editor",
-	"dsc-billion-context",
-	"tool-browser-use",
-	"tool-computer-use",
-	"tool-lisp-eval",
-	"tool-pdf",
-	"tool-memory-service",
-	"dsc-notify",
-	"tool-lua-host",
-	"tool-agentic-bench",
-	"dsc-system",
-	"tool-ssh",
-	"tool-musicplayer",
-	"tool-harness-webui",
+        "agent-react-loop",
+        "llm-openai",
+        "llm-anthropic",
+        "llm-ollama",
+        "tool-filesystem",
+        "tool-str-replace-editor",
+        "dsc-billion-context",
+        "tool-browser-use",
+        "tool-computer-use",
+        "tool-lisp-eval",
+        "tool-pdf",
+        "tool-memory-service",
+        "dsc-notify",
+        "tool-lua-host",
+        "tool-agentic-bench",
+        "dsc-system",
+        "tool-ssh",
+        "tool-musicplayer",
+        "tool-harness-webui",
 }
 
 // cgoPlugins 依赖 CGO 的插件（robotgo 链接 X11）：只能在「与运行时平台一致」的
 // 本机环境构建（CGO_ENABLED=1 + 平台工具链），无法交叉编译。buildPlatform 对
 // 其余平台跳过（发布目录不含该插件），对宿主平台以 goBuildNative 构建。
 var cgoPlugins = map[string]bool{
-	"tool-computer-use": true,
+        "tool-computer-use": true,
 }
 
 // internalPlugins 本机内部专用插件（如粤语、2FA、小说），默认不进入发布包；
 // 经 --include-internal 显式才打包（避免随发布泄露内部工具）。目录缺失时自动跳过。
 var internalPlugins = []string{
-	"tool-jyutzyun",
-	"tool-2fa-master",
-	"tool-novelforge",
+        "tool-jyutzyun",
+        "tool-2fa-master",
+        "tool-novelforge",
 }
 
 func main() {
-	progName := filepath.Base(os.Args[0])
+        progName := filepath.Base(os.Args[0])
 
-	// 切换到脚本所在目录，并据此定位仓库根（builder 的父目录）
-	exePath, err := os.Executable()
-	if err != nil {
-		exePath = os.Args[0]
-	}
-	scriptDir := filepath.Dir(exePath)
-	repoRoot := filepath.Dir(scriptDir)
-	if err := os.Chdir(scriptDir); err != nil {
-		fmt.Printf("切换目录失败: %v\n", err)
-		os.Exit(1)
-	}
+        // 切换到脚本所在目录，并据此定位仓库根（builder 的父目录）
+        exePath, err := os.Executable()
+        if err != nil {
+                exePath = os.Args[0]
+        }
+        scriptDir := filepath.Dir(exePath)
+        repoRoot := filepath.Dir(scriptDir)
+        if err := os.Chdir(scriptDir); err != nil {
+                fmt.Printf("切换目录失败: %v\n", err)
+                os.Exit(1)
+        }
 
-	// 处理帮助命令
-	if len(os.Args) >= 2 {
-		arg := os.Args[1]
-		if arg == "help" || arg == "--help" || arg == "-h" {
-			printHelp(progName)
-			os.Exit(0)
-		}
-	}
+        // 处理帮助命令
+        if len(os.Args) >= 2 {
+                arg := os.Args[1]
+                if arg == "help" || arg == "--help" || arg == "-h" {
+                        printHelp(progName)
+                        os.Exit(0)
+                }
+        }
 
-	// 处理 clean 命令
-	if len(os.Args) >= 2 && (os.Args[1] == "clean" || os.Args[1] == "--clean" || os.Args[1] == "-clean") {
-		clean(repoRoot)
-		os.Exit(0)
-	}
+        // 处理 clean 命令
+        if len(os.Args) >= 2 && (os.Args[1] == "clean" || os.Args[1] == "--clean" || os.Args[1] == "-clean") {
+                clean(repoRoot)
+                os.Exit(0)
+        }
 
-	// 处理 cross 命令（跨平台打包）
-	if len(os.Args) >= 2 && (os.Args[1] == "cross" || os.Args[1] == "--cross" || os.Args[1] == "-cross") {
-		crossBuild(repoRoot, os.Args[2:])
-		os.Exit(0)
-	}
+        // 处理 cross 命令（跨平台打包）
+        if len(os.Args) >= 2 && (os.Args[1] == "cross" || os.Args[1] == "--cross" || os.Args[1] == "-cross") {
+                crossBuild(repoRoot, os.Args[2:])
+                os.Exit(0)
+        }
 
-	// 默认行为：打包当前平台
-	printInfo(fmt.Sprintf("=== DSC 发布构建器 ===\n\n仓库根: %s\n", repoRoot))
-	host := hostPlatform()
-	if host == nil {
-		printError(fmt.Sprintf("错误: 当前平台 %s/%s 不在定义的目标平台内\n", runtime.GOOS, runtime.GOARCH))
-		os.Exit(1)
-	}
-	printInfo(fmt.Sprintf("当前平台: %s (%s/%s)\n\n", host.Name, host.GOOS, host.GOARCH))
-	// 单平台默认打包只重建当前平台目录，不动其它平台的发布目录（clean 命令可整体清空 dist）
-	buildPlatform(repoRoot, *host, false)
-	printSuccess(fmt.Sprintf("\n=== 打包完成: dist/dsc-for-%s ===\n", host.Name))
+        // 默认行为：打包当前平台
+        printInfo(fmt.Sprintf("=== DSC 发布构建器 ===\n\n仓库根: %s\n", repoRoot))
+        host := hostPlatform()
+        if host == nil {
+                printError(fmt.Sprintf("错误: 当前平台 %s/%s 不在定义的目标平台内\n", runtime.GOOS, runtime.GOARCH))
+                os.Exit(1)
+        }
+        printInfo(fmt.Sprintf("当前平台: %s (%s/%s)\n\n", host.Name, host.GOOS, host.GOARCH))
+        // 单平台默认打包只重建当前平台目录，不动其它平台的发布目录（clean 命令可整体清空 dist）
+        buildPlatform(repoRoot, *host, false)
+        printSuccess(fmt.Sprintf("\n=== 打包完成: dist/dsc-for-%s ===\n", host.Name))
 }
 
 // hostPlatform 由当前 GOOS/GOARCH 匹配目标平台定义。
 func hostPlatform() *platform {
-	for i := range platforms {
-		if platforms[i].GOOS == runtime.GOOS && platforms[i].GOARCH == runtime.GOARCH {
-			return &platforms[i]
-		}
-	}
-	return nil
+        for i := range platforms {
+                if platforms[i].GOOS == runtime.GOOS && platforms[i].GOARCH == runtime.GOARCH {
+                        return &platforms[i]
+                }
+        }
+        return nil
 }
 
 func printHelp(progName string) {
-	fmt.Printf(`DSC 发布构建器
+        fmt.Printf(`DSC 发布构建器
 
 用法:
   %s                    打包当前平台到 dist/dsc-for-<platform>/
@@ -191,198 +191,198 @@ func printHelp(progName string) {
   %s cross --include-internal      # 连同内部插件一起打包
   %s                              # 仅打包当前平台
 `,
-		progName, progName, progName, progName,
-		progName, progName, progName, progName)
+                progName, progName, progName, progName,
+                progName, progName, progName, progName)
 }
 
 // clean 清理所有发布产物（dist/ 与之前错位产生的 plugins/*/dist）
 func clean(repoRoot string) {
-	printInfo("=== DSC 发布清理 ===\n\n")
-	removeAll(filepath.Join(repoRoot, "dist"))
-	// 清理历史版本可能错位落到插件目录内的 dist（防御性）
-	matches, _ := filepath.Glob(filepath.Join(repoRoot, "plugins", "*", "dist"))
-	for _, m := range matches {
-		removeAll(m)
-	}
-	fmt.Println("清理完成！")
+        printInfo("=== DSC 发布清理 ===\n\n")
+        removeAll(filepath.Join(repoRoot, "dist"))
+        // 清理历史版本可能错位落到插件目录内的 dist（防御性）
+        matches, _ := filepath.Glob(filepath.Join(repoRoot, "plugins", "*", "dist"))
+        for _, m := range matches {
+                removeAll(m)
+        }
+        fmt.Println("清理完成！")
 }
 
 // crossBuild 跨平台打包
 func crossBuild(repoRoot string, args []string) {
-	printInfo(fmt.Sprintf("=== DSC 跨平台打包（无需 Docker） ===\n仓库根: %s\n\n", repoRoot))
+        printInfo(fmt.Sprintf("=== DSC 跨平台打包（无需 Docker） ===\n仓库根: %s\n\n", repoRoot))
 
-	buildAll := true
-	includeInternal := false
-	var selectedPlatforms []string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--help", "-h":
-			printHelp(filepath.Base(os.Args[0]))
-			return
-		case "--include-internal":
-			includeInternal = true
-		case "--platforms", "-p":
-			if i+1 < len(args) {
-				buildAll = false
-				selectedPlatforms = strings.Split(args[i+1], ",")
-				i++
-			} else {
-				printError("错误: --platforms 需要指定平台列表\n")
-				os.Exit(1)
-			}
-		default:
-			printError(fmt.Sprintf("未知参数: %s\n", args[i]))
-			printHelp(filepath.Base(os.Args[0]))
-			os.Exit(1)
-		}
-	}
+        buildAll := true
+        includeInternal := false
+        var selectedPlatforms []string
+        for i := 0; i < len(args); i++ {
+                switch args[i] {
+                case "--help", "-h":
+                        printHelp(filepath.Base(os.Args[0]))
+                        return
+                case "--include-internal":
+                        includeInternal = true
+                case "--platforms", "-p":
+                        if i+1 < len(args) {
+                                buildAll = false
+                                selectedPlatforms = strings.Split(args[i+1], ",")
+                                i++
+                        } else {
+                                printError("错误: --platforms 需要指定平台列表\n")
+                                os.Exit(1)
+                        }
+                default:
+                        printError(fmt.Sprintf("未知参数: %s\n", args[i]))
+                        printHelp(filepath.Base(os.Args[0]))
+                        os.Exit(1)
+                }
+        }
 
-	// 确定目标平台，按 Name 去重
-	var targets []platform
-	if buildAll {
-		targets = platforms
-	} else {
-		seen := map[string]bool{}
-		for _, name := range selectedPlatforms {
-			for _, p := range platforms {
-				if p.Name == name && !seen[p.Name] {
-					seen[p.Name] = true
-					targets = append(targets, p)
-					break
-				}
-			}
-			if !seen[name] {
-				printWarning(fmt.Sprintf("警告: 未知平台 '%s'，已跳过\n", name))
-			}
-		}
-		if len(targets) == 0 {
-			printError("错误: 没有有效的平台可供打包\n")
-			os.Exit(1)
-		}
-	}
+        // 确定目标平台，按 Name 去重
+        var targets []platform
+        if buildAll {
+                targets = platforms
+        } else {
+                seen := map[string]bool{}
+                for _, name := range selectedPlatforms {
+                        for _, p := range platforms {
+                                if p.Name == name && !seen[p.Name] {
+                                        seen[p.Name] = true
+                                        targets = append(targets, p)
+                                        break
+                                }
+                        }
+                        if !seen[name] {
+                                printWarning(fmt.Sprintf("警告: 未知平台 '%s'，已跳过\n", name))
+                        }
+                }
+                if len(targets) == 0 {
+                        printError("错误: 没有有效的平台可供打包\n")
+                        os.Exit(1)
+                }
+        }
 
-	// 构建所有平台时才整体清空 dist/（本轮全部平台都会重建）；--platforms 指定子集
-	// 时不动其它平台目录，仅由 buildPlatform 重建各自目录
-	if buildAll {
-		removeAll(filepath.Join(repoRoot, "dist"))
-	}
+        // 构建所有平台时才整体清空 dist/（本轮全部平台都会重建）；--platforms 指定子集
+        // 时不动其它平台目录，仅由 buildPlatform 重建各自目录
+        if buildAll {
+                removeAll(filepath.Join(repoRoot, "dist"))
+        }
 
-	fmt.Printf("Go 版本: %s\n", goVersion())
-	fmt.Printf("Git Commit: %s\n", gitCommit(repoRoot))
-	if includeInternal {
-		fmt.Printf("内部专用插件: 纳入发布包\n")
-	} else {
-		fmt.Printf("内部专用插件: 默认排除（--include-internal 可加入）\n")
-	}
-	fmt.Println()
+        fmt.Printf("Go 版本: %s\n", goVersion())
+        fmt.Printf("Git Commit: %s\n", gitCommit(repoRoot))
+        if includeInternal {
+                fmt.Printf("内部专用插件: 纳入发布包\n")
+        } else {
+                fmt.Printf("内部专用插件: 默认排除（--include-internal 可加入）\n")
+        }
+        fmt.Println()
 
-	successCount := 0
-	for _, p := range targets {
-		if buildPlatform(repoRoot, p, includeInternal) {
-			successCount++
-		}
-	}
+        successCount := 0
+        for _, p := range targets {
+                if buildPlatform(repoRoot, p, includeInternal) {
+                        successCount++
+                }
+        }
 
-	printInfo("\n=== 全部完成 ===\n")
-	fmt.Printf("成功打包 %d / %d 个平台\n", successCount, len(targets))
-	if successCount > 0 {
-		dirs, _ := filepath.Glob(filepath.Join(repoRoot, "dist", "dsc-for-*"))
-		for _, d := range dirs {
-			if info, err := os.Stat(d); err == nil && info.IsDir() {
-				size := dirSize(d)
-				fmt.Printf("  - %s (%d MB)\n", filepath.Base(d), size/1024/1024)
-			}
-		}
-	}
+        printInfo("\n=== 全部完成 ===\n")
+        fmt.Printf("成功打包 %d / %d 个平台\n", successCount, len(targets))
+        if successCount > 0 {
+                dirs, _ := filepath.Glob(filepath.Join(repoRoot, "dist", "dsc-for-*"))
+                for _, d := range dirs {
+                        if info, err := os.Stat(d); err == nil && info.IsDir() {
+                                size := dirSize(d)
+                                fmt.Printf("  - %s (%d MB)\n", filepath.Base(d), size/1024/1024)
+                        }
+                }
+        }
 }
 
 // buildPlatform 打包单个平台，返回是否成功。
 func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
-	releaseDir := filepath.Join(repoRoot, "dist", "dsc-for-"+p.Name)
-	printInfo(fmt.Sprintf("\n→ 打包 %s (%s/%s) ...\n", p.Name, p.GOOS, p.GOARCH))
+        releaseDir := filepath.Join(repoRoot, "dist", "dsc-for-"+p.Name)
+        printInfo(fmt.Sprintf("\n→ 打包 %s (%s/%s) ...\n", p.Name, p.GOOS, p.GOARCH))
 
-	binExt := func(name string) string { return name + p.Suffix }
+        binExt := func(name string) string { return name + p.Suffix }
 
-	// 先清空该平台发布目录，避免上次构建残留（如旧备份目录、旧二进制）混入
-	removeAll(releaseDir)
+        // 先清空该平台发布目录，避免上次构建残留（如旧备份目录、旧二进制）混入
+        removeAll(releaseDir)
 
-	// 1. 准备发布目录骨架
-	mustMkdirs(releaseDir,
-		filepath.Join(releaseDir, "config", "presets"),
-		filepath.Join(releaseDir, "plugins"),
-		filepath.Join(releaseDir, "skills", "builtin"),
-		filepath.Join(releaseDir, "skills", "installed"),
-	)
+        // 1. 准备发布目录骨架
+        mustMkdirs(releaseDir,
+                filepath.Join(releaseDir, "config", "presets"),
+                filepath.Join(releaseDir, "plugins"),
+                filepath.Join(releaseDir, "skills", "builtin"),
+                filepath.Join(releaseDir, "skills", "installed"),
+        )
 
-	// 2. 拷贝运行时资源（config 模板、skills、文档）
-	copyFileStrict(filepath.Join(repoRoot, "config", "config.example.yaml"), filepath.Join(releaseDir, "config", "config.example.yaml"))
-	copyDir(filepath.Join(repoRoot, "config", "presets"), filepath.Join(releaseDir, "config", "presets"))
-	copyDir(filepath.Join(repoRoot, "skills", "builtin"), filepath.Join(releaseDir, "skills", "builtin"))
-	copyDir(filepath.Join(repoRoot, "skills", "installed"), filepath.Join(releaseDir, "skills", "installed"))
-	copyFileStrict(filepath.Join(repoRoot, "LICENSE"), filepath.Join(releaseDir, "LICENSE"))
-	copyFileStrict(filepath.Join(repoRoot, "README.md"), filepath.Join(releaseDir, "README.md"))
+        // 2. 拷贝运行时资源（config 模板、skills、文档）
+        copyFileStrict(filepath.Join(repoRoot, "config", "config.example.yaml"), filepath.Join(releaseDir, "config", "config.example.yaml"))
+        copyDir(filepath.Join(repoRoot, "config", "presets"), filepath.Join(releaseDir, "config", "presets"))
+        copyDir(filepath.Join(repoRoot, "skills", "builtin"), filepath.Join(releaseDir, "skills", "builtin"))
+        copyDir(filepath.Join(repoRoot, "skills", "installed"), filepath.Join(releaseDir, "skills", "installed"))
+        copyFileStrict(filepath.Join(repoRoot, "LICENSE"), filepath.Join(releaseDir, "LICENSE"))
+        copyFileStrict(filepath.Join(repoRoot, "README.md"), filepath.Join(releaseDir, "README.md"))
 
-	// 3. 编译宿主主程序 → 发布目录根
-	if !hasTool("upx") {
-		printInfo("（未检测到 upx，跳过 UPX 压缩）\n")
-	} else {
-		printInfo("检测到 upx，构建产物将 UPX 压缩（--best）\n")
-	}
-	hostOut := filepath.Join(releaseDir, binExt("dsc"))
-	if err := goBuild(repoRoot, hostOut, p); err != nil {
-		printError(fmt.Sprintf("  ✗ 宿主编译失败: %v\n", err))
-		return false
-	}
-	printSuccess(fmt.Sprintf("  ✓ 宿主: %s\n", relativeHost(repoRoot, hostOut)))
-	pack(hostOut)
+        // 3. 编译宿主主程序 → 发布目录根
+        if !hasTool("upx") {
+                printInfo("（未检测到 upx，跳过 UPX 压缩）\n")
+        } else {
+                printInfo("检测到 upx，构建产物将 UPX 压缩（--best）\n")
+        }
+        hostOut := filepath.Join(releaseDir, binExt("dsc"))
+        if err := goBuild(repoRoot, hostOut, p); err != nil {
+                printError(fmt.Sprintf("  ✗ 宿主编译失败: %v\n", err))
+                return false
+        }
+        printSuccess(fmt.Sprintf("  ✓ 宿主: %s\n", relativeHost(repoRoot, hostOut)))
+        pack(hostOut)
 
-	// 4. 编译各插件 → plugins/<name>/<name>[.exe]
-	plugins := append([]string{}, publicPlugins...)
-	if includeInternal {
-		plugins = append(plugins, internalPlugins...)
-	}
-	builtPlugins := 0
-	skippedPlugins := []string{}
-	for _, name := range plugins {
-		pdir := filepath.Join(repoRoot, "plugins", name)
-		if _, err := os.Stat(pdir); err != nil {
-			continue
-		}
-		out := filepath.Join(releaseDir, "plugins", name, binExt(name))
-		if cgoPlugins[name] {
-			if p.GOOS != runtime.GOOS || p.GOARCH != runtime.GOARCH {
-				printWarning(fmt.Sprintf("  - 跳过 %s：CGO 插件不支持交叉编译到 %s/%s（仅本机平台随包）\n", name, p.GOOS, p.GOARCH))
-				skippedPlugins = append(skippedPlugins, name)
-				continue
-			}
-			if err := goBuildNative(pdir, out); err != nil {
-				printError(fmt.Sprintf("  ✗ 插件 %s 本机 CGO 编译失败: %v\n", name, err))
-				continue
-			}
-			printSuccess(fmt.Sprintf("  ✓ 插件(cgo): %s\n", name))
-			pack(out)
-			builtPlugins++
-			continue
-		}
-		if name == "tool-harness-webui" {
-			if !buildWebUIAssets(repoRoot) {
-				printWarning(fmt.Sprintf("  - 跳过 tool-harness-webui：需宿主平台 bun 构建前端\n"))
-				skippedPlugins = append(skippedPlugins, name)
-				continue
-			}
-		}
-		if err := goBuild(pdir, out, p); err != nil {
-			printError(fmt.Sprintf("  ✗ 插件 %s 编译失败: %v\n", name, err))
-			continue
-		}
-		printSuccess(fmt.Sprintf("  ✓ 插件: %s\n", name))
-		pack(out)
-		builtPlugins++
-	}
-	if len(skippedPlugins) > 0 {
-		fmt.Printf("  （跳过平台不适用插件: %s）\n", strings.Join(skippedPlugins, ", "))
-	}
-	return true
+        // 4. 编译各插件 → plugins/<name>/<name>[.exe]
+        plugins := append([]string{}, publicPlugins...)
+        if includeInternal {
+                plugins = append(plugins, internalPlugins...)
+        }
+        builtPlugins := 0
+        skippedPlugins := []string{}
+        for _, name := range plugins {
+                pdir := filepath.Join(repoRoot, "plugins", name)
+                if _, err := os.Stat(pdir); err != nil {
+                        continue
+                }
+                out := filepath.Join(releaseDir, "plugins", name, binExt(name))
+                if cgoPlugins[name] {
+                        if p.GOOS != runtime.GOOS || p.GOARCH != runtime.GOARCH {
+                                printWarning(fmt.Sprintf("  - 跳过 %s：CGO 插件不支持交叉编译到 %s/%s（仅本机平台随包）\n", name, p.GOOS, p.GOARCH))
+                                skippedPlugins = append(skippedPlugins, name)
+                                continue
+                        }
+                        if err := goBuildNative(pdir, out); err != nil {
+                                printError(fmt.Sprintf("  ✗ 插件 %s 本机 CGO 编译失败: %v\n", name, err))
+                                continue
+                        }
+                        printSuccess(fmt.Sprintf("  ✓ 插件(cgo): %s\n", name))
+                        pack(out)
+                        builtPlugins++
+                        continue
+                }
+                if name == "tool-harness-webui" {
+                        if !buildWebUIAssets(repoRoot) {
+                                printWarning(fmt.Sprintf("  - 跳过 tool-harness-webui：需宿主平台 bun 构建前端\n"))
+                                skippedPlugins = append(skippedPlugins, name)
+                                continue
+                        }
+                }
+                if err := goBuild(pdir, out, p); err != nil {
+                        printError(fmt.Sprintf("  ✗ 插件 %s 编译失败: %v\n", name, err))
+                        continue
+                }
+                printSuccess(fmt.Sprintf("  ✓ 插件: %s\n", name))
+                pack(out)
+                builtPlugins++
+        }
+        if len(skippedPlugins) > 0 {
+                fmt.Printf("  （跳过平台不适用插件: %s）\n", strings.Join(skippedPlugins, ", "))
+        }
+        return true
 }
 
 // goBuild 以目标平台环境在 dir 目录交叉编译到 out。跨平台一律 CGO_ENABLED=0；
@@ -391,50 +391,153 @@ func buildPlatform(repoRoot string, p platform, includeInternal bool) bool {
 // 交叉编译时，purego 的 //go:cgo_export_dynamic 指令只允许在 cgo 生成代码中出现，
 // 该 flag 以 -std 标记构建 freebsd 的 fakecgo 引导文件（oto README 同款要求）。
 func goBuild(dir, out string, p platform) error {
-	// -gcflags 必须在 package 参数（.）之前，否则 go 把它当 import path 解析
-	args := []string{"build", "-ldflags=-s -w"}
-	if p.GOOS == "freebsd" {
-		args = append(args, "-gcflags=github.com/ebitengine/purego/internal/fakecgo=-std")
-	}
-	args = append(args, "-o", out, ".")
-	cmd := exec.Command("go", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GOOS="+p.GOOS,
-		"GOARCH="+p.GOARCH,
-		"CGO_ENABLED=0",
-	)
-	// 交错输出，便于在目标平台文件名上保留后缀
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+        // -gcflags 必须在 package 参数（.）之前，否则 go 把它当 import path 解析
+        args := []string{"build", "-ldflags=-s -w"}
+        if p.GOOS == "freebsd" {
+                args = append(args, "-gcflags=github.com/ebitengine/purego/internal/fakecgo=-std")
+        }
+        args = append(args, "-o", out, ".")
+        cmd := exec.Command("go", args...)
+        cmd.Dir = dir
+        cmd.Env = append(os.Environ(),
+                "GOOS="+p.GOOS,
+                "GOARCH="+p.GOARCH,
+                "CGO_ENABLED=0",
+        )
+        // 交错输出，便于在目标平台文件名上保留后缀
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+        return cmd.Run()
 }
 
 // goBuildNative 本机 CGO 构建（tool-computer-use 等 cgo 插件）：不交叉、不强制
-// CGO_ENABLED=0，完整继承调用方环境（X11 头文件路径等经 CGO_CPPFLAGS 注入），
-// 与开发者手动 go build 同语义。
+// CGO_ENABLED=0，完整继承调用方环境。
+//
+// X11 开发头文件自动获取（对齐 plugins/tool-computer-use/build.sh 的逻辑）：
+// 若系统已安装 libX11-dev/libxtst-dev/libxi-dev/libxext-dev，直接构建。
+// 若未安装且无 root 权限，自动 apt-get download 下载 .deb 包解压到临时目录，
+// 经 CGO_CPPFLAGS/CGO_LDFLAGS 注入路径构建。
+//
+// 编译器自动检测（对齐 build.sh）：
+//   - 环境变量 CC 已设 → 用其值（如 CC="zig cc"）
+//   - zig 在 PATH → 自动用 "zig cc"（zig 自带 C 工具链，无需系统 gcc）
+//   - 默认 → gcc（系统标准 C 编译器）
 func goBuildNative(dir, out string) error {
-	cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+        cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
+        cmd.Dir = dir
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+
+        // 初始化环境变量（继承调用方环境）
+        cmd.Env = os.Environ()
+
+        // Linux 平台：检测并自动获取 X11 开发头文件
+        if runtime.GOOS == "linux" {
+                ensureX11DevHeaders(cmd)
+        }
+
+        // 编译器自动检测：CC 环境变量 > zig > gcc
+        if cc := os.Getenv("CC"); cc != "" {
+                cmd.Env = appendEnv(cmd.Env, "CC", cc)
+        } else if hasTool("zig") {
+                cmd.Env = appendEnv(cmd.Env, "CC", "zig cc")
+        }
+        // 若 CC 未设且无 zig，go 默认用 gcc（无需显式设置）
+
+        return cmd.Run()
+}
+
+// ensureX11DevHeaders 检测系统是否已安装 X11 开发头文件（libX11-dev/libxtst-dev/
+// libxi-dev/libxext-dev）。若缺失，自动 apt-get download 下载 .deb 包解压到临时目录，
+// 经 CGO_CPPFLAGS/CGO_LDFLAGS 注入到 cmd.Env。已有则跳过（零开销）。
+func ensureX11DevHeaders(cmd *exec.Cmd) {
+        // 检查关键头文件是否已存在于系统路径
+        if fileExists("/usr/include/X11/extensions/XTest.h") {
+                return // 系统已安装 dev 包，零干预
+        }
+
+        // 无 root 环境下自动下载 .deb 包
+        tmpDir, err := os.MkdirTemp("", "x11-dev-headers-*")
+        if err != nil {
+                printWarning(fmt.Sprintf("  (warn: 创建临时目录失败，X11 头文件自动获取跳过: %v)\n", err))
+                return
+        }
+        // 不立即清理——构建期间需保持路径有效（调用方 defer cleanup 时会清理 /tmp 下的临时目录）
+
+        extractDir := filepath.Join(tmpDir, "extract")
+        packages := []string{"libxtst-dev", "libxi-dev", "libxext-dev"}
+        for _, pkg := range packages {
+                downloadAndExtractDeb(pkg, tmpDir, extractDir)
+        }
+
+        // 设置 CGO 编译路径
+        incDir := filepath.Join(extractDir, "usr", "include")
+        libDir := filepath.Join(extractDir, "usr", "lib", "x86_64-linux-gnu")
+        if fileExists(incDir) {
+                cmd.Env = appendEnv(cmd.Env, "CGO_CPPFLAGS", "-I"+incDir)
+        }
+        if fileExists(libDir) {
+                cmd.Env = appendEnv(cmd.Env, "CGO_LDFLAGS", "-L"+libDir+" -lXext")
+        }
+}
+
+// downloadAndExtractDeb 下载并解压单个 .deb 包到 extractDir。
+func downloadAndExtractDeb(pkg, workDir, extractDir string) {
+        // apt-get download 需要在 workDir 执行（.deb 文件下载到当前目录）
+        dlCmd := exec.Command("apt-get", "download", pkg)
+        dlCmd.Dir = workDir
+        dlCmd.Stdout = os.Stdout
+        dlCmd.Stderr = os.Stderr
+        if err := dlCmd.Run(); err != nil {
+                printWarning(fmt.Sprintf("  (warn: 无法下载 %s: %v)\n", pkg, err))
+                return
+        }
+        // 找到下载的 .deb 文件并解压
+        matches, _ := filepath.Glob(filepath.Join(workDir, pkg+"*.deb"))
+        if len(matches) == 0 {
+                printWarning(fmt.Sprintf("  (warn: %s .deb 文件未找到)\n", pkg))
+                return
+        }
+        extCmd := exec.Command("dpkg-deb", "-x", matches[0], extractDir)
+        extCmd.Stdout = os.Stdout
+        extCmd.Stderr = os.Stderr
+        if err := extCmd.Run(); err != nil {
+                printWarning(fmt.Sprintf("  (warn: 解压 %s 失败: %v)\n", pkg, err))
+        }
+}
+
+// fileExists 检测文件或目录是否存在。
+func fileExists(path string) bool {
+        _, err := os.Stat(path)
+        return err == nil
+}
+
+// appendEnv 向 env 切片追加/更新环境变量（KEY=value 形式）。
+func appendEnv(env []string, key, value string) []string {
+        prefix := key + "="
+        for i, e := range env {
+                if strings.HasPrefix(e, prefix) {
+                        env[i] = prefix + value
+                        return env
+                }
+        }
+        return append(env, prefix+value)
 }
 
 // pack UPX 压缩单个二进制到 --best；未检测到 upx 或文件不存在/压缩失败时均保留原文件。
 func pack(path string) {
-	if !hasTool("upx") {
-		return
-	}
-	if fi, err := os.Stat(path); err != nil || fi.IsDir() {
-		return
-	}
-	cmd := exec.Command("upx", "--best", path)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		printWarning(fmt.Sprintf("  (warn: UPX 压缩失败，保留原始二进制: %s)\n", path))
-	}
+        if !hasTool("upx") {
+                return
+        }
+        if fi, err := os.Stat(path); err != nil || fi.IsDir() {
+                return
+        }
+        cmd := exec.Command("upx", "--best", path)
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+        if err := cmd.Run(); err != nil {
+                printWarning(fmt.Sprintf("  (warn: UPX 压缩失败，保留原始二进制: %s)\n", path))
+        }
 }
 
 // buildWebUIAssets 用 bun 原生构建 harness-webui 前端静态资源（go:embed 用）。
@@ -442,173 +545,173 @@ func pack(path string) {
 var webuiBuilt bool
 
 func buildWebUIAssets(repoRoot string) bool {
-	if webuiBuilt {
-		return true
-	}
-	// 前端构建由 bun 原生可执行完成，不依赖 bash/shell（构建环境未必有 bash）
-	if !hasTool("bun") {
-		return false
-	}
-	webuiDir := filepath.Join(repoRoot, "plugins", "tool-harness-webui", "webui")
-	if _, err := os.Stat(filepath.Join(webuiDir, "package.json")); err != nil {
-		return false
-	}
-	printInfo("  构建 harness-webui 前端 (bun)...\n")
-	// 依赖安装（先尝试 frozen-lockfile，diff 时回退普通 install）；静默，失败仅告警
-	installCmd := exec.Command("bun", "install", "--frozen-lockfile")
-	installCmd.Dir = webuiDir
-	if err := runSilent(installCmd); err != nil {
-		fallback := exec.Command("bun", "install")
-		fallback.Dir = webuiDir
-		if retryErr := runSilent(fallback); retryErr != nil {
-			printWarning(fmt.Sprintf("  前端依赖安装失败: %v\n", retryErr))
-			return false
-		}
-	}
-	// 同步 SvelteKit 配置（生成 .svelte-kit/tsconfig.json 等）；失败仅告警，不中断
-	syncCmd := exec.Command("bun", "x", "svelte-kit", "sync")
-	syncCmd.Dir = webuiDir
-	if err := runSilent(syncCmd); err != nil {
-		printWarning(fmt.Sprintf("  svelte-kit sync 失败: %v，继续构建...\n", err))
-	}
-	// 构建前端静态资源（go:embed 用）；输出构建进度
-	buildCmd := exec.Command("bun", "run", "build")
-	buildCmd.Dir = webuiDir
-	buildCmd.Stdout = os.Stdout
-	buildCmd.Stderr = os.Stderr
-	if err := buildCmd.Run(); err != nil {
-		printWarning(fmt.Sprintf("  前端构建失败: %v\n", err))
-		return false
-	}
-	webuiBuilt = true
-	return true
+        if webuiBuilt {
+                return true
+        }
+        // 前端构建由 bun 原生可执行完成，不依赖 bash/shell（构建环境未必有 bash）
+        if !hasTool("bun") {
+                return false
+        }
+        webuiDir := filepath.Join(repoRoot, "plugins", "tool-harness-webui", "webui")
+        if _, err := os.Stat(filepath.Join(webuiDir, "package.json")); err != nil {
+                return false
+        }
+        printInfo("  构建 harness-webui 前端 (bun)...\n")
+        // 依赖安装（先尝试 frozen-lockfile，diff 时回退普通 install）；静默，失败仅告警
+        installCmd := exec.Command("bun", "install", "--frozen-lockfile")
+        installCmd.Dir = webuiDir
+        if err := runSilent(installCmd); err != nil {
+                fallback := exec.Command("bun", "install")
+                fallback.Dir = webuiDir
+                if retryErr := runSilent(fallback); retryErr != nil {
+                        printWarning(fmt.Sprintf("  前端依赖安装失败: %v\n", retryErr))
+                        return false
+                }
+        }
+        // 同步 SvelteKit 配置（生成 .svelte-kit/tsconfig.json 等）；失败仅告警，不中断
+        syncCmd := exec.Command("bun", "x", "svelte-kit", "sync")
+        syncCmd.Dir = webuiDir
+        if err := runSilent(syncCmd); err != nil {
+                printWarning(fmt.Sprintf("  svelte-kit sync 失败: %v，继续构建...\n", err))
+        }
+        // 构建前端静态资源（go:embed 用）；输出构建进度
+        buildCmd := exec.Command("bun", "run", "build")
+        buildCmd.Dir = webuiDir
+        buildCmd.Stdout = os.Stdout
+        buildCmd.Stderr = os.Stderr
+        if err := buildCmd.Run(); err != nil {
+                printWarning(fmt.Sprintf("  前端构建失败: %v\n", err))
+                return false
+        }
+        webuiBuilt = true
+        return true
 }
 
 // runSilent 在命令已配好 cwd 的情况下静默执行（丢弃 stdout/stderr），仅返回错误。
 func runSilent(cmd *exec.Cmd) error {
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run()
+        cmd.Stdout = io.Discard
+        cmd.Stderr = io.Discard
+        return cmd.Run()
 }
 
 // ========== 工具函数 ==========
 
 func hasTool(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+        _, err := exec.LookPath(name)
+        return err == nil
 }
 
 func mustMkdirs(paths ...string) {
-	for _, p := range paths {
-		if err := os.MkdirAll(p, 0755); err != nil {
-			printError(fmt.Sprintf("无法创建目录 %s: %v\n", p, err))
-			os.Exit(1)
-		}
-	}
+        for _, p := range paths {
+                if err := os.MkdirAll(p, 0755); err != nil {
+                        printError(fmt.Sprintf("无法创建目录 %s: %v\n", p, err))
+                        os.Exit(1)
+                }
+        }
 }
 
 func removeAll(paths ...string) {
-	for _, p := range paths {
-		os.RemoveAll(p)
-	}
+        for _, p := range paths {
+                os.RemoveAll(p)
+        }
 }
 
 // copyFileStrict 严格拷贝单个文件，源不存在则报错退出（发布必需的资源）。
 func copyFileStrict(src, dst string) {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		printError(fmt.Sprintf("缺少发布资源 %s: %v\n", src, err))
-		os.Exit(1)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		printError(fmt.Sprintf("无法创建目录 %s: %v\n", filepath.Dir(dst), err))
-		os.Exit(1)
-	}
-	if err := os.WriteFile(dst, data, 0644); err != nil {
-		printError(fmt.Sprintf("写入 %s 失败: %v\n", dst, err))
-		os.Exit(1)
-	}
+        data, err := os.ReadFile(src)
+        if err != nil {
+                printError(fmt.Sprintf("缺少发布资源 %s: %v\n", src, err))
+                os.Exit(1)
+        }
+        if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+                printError(fmt.Sprintf("无法创建目录 %s: %v\n", filepath.Dir(dst), err))
+                os.Exit(1)
+        }
+        if err := os.WriteFile(dst, data, 0644); err != nil {
+                printError(fmt.Sprintf("写入 %s 失败: %v\n", dst, err))
+                os.Exit(1)
+        }
 }
 
 // isBackupDir 判为备份性质目录：目录名含 "backup"（如 config-backups、preset-backups
 // 等配置自愈产生的备份），发布时一律排除，不进入发布包。
 func isBackupDir(name string) bool {
-	return strings.Contains(strings.ToLower(name), "backup")
+        return strings.Contains(strings.ToLower(name), "backup")
 }
 
 // copyDir 递归拷贝目录（含空目录结构），跳过任何备份性质目录；源不存在则忽略。
 func copyDir(src, dst string) {
-	info, err := os.Stat(src)
-	if err != nil || !info.IsDir() {
-		return
-	}
-	_ = filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		// 跳过备份性质目录整棵，不复制其内容
-		if fi.IsDir() && path != src && isBackupDir(fi.Name()) {
-			return filepath.SkipDir
-		}
-		rel, _ := filepath.Rel(src, path)
-		target := filepath.Join(dst, rel)
-		if fi.IsDir() {
-			_ = os.MkdirAll(target, 0755)
-			return nil
-		}
-		_ = os.MkdirAll(filepath.Dir(target), 0755)
-		return copyFile(path, target, fi)
-	})
+        info, err := os.Stat(src)
+        if err != nil || !info.IsDir() {
+                return
+        }
+        _ = filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
+                if err != nil {
+                        return nil
+                }
+                // 跳过备份性质目录整棵，不复制其内容
+                if fi.IsDir() && path != src && isBackupDir(fi.Name()) {
+                        return filepath.SkipDir
+                }
+                rel, _ := filepath.Rel(src, path)
+                target := filepath.Join(dst, rel)
+                if fi.IsDir() {
+                        _ = os.MkdirAll(target, 0755)
+                        return nil
+                }
+                _ = os.MkdirAll(filepath.Dir(target), 0755)
+                return copyFile(path, target, fi)
+        })
 }
 
 func copyFile(src, dst string, fi os.FileInfo) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode())
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+        in, err := os.Open(src)
+        if err != nil {
+                return err
+        }
+        defer in.Close()
+        out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode())
+        if err != nil {
+                return err
+        }
+        defer out.Close()
+        _, err = io.Copy(out, in)
+        return err
 }
 
 func dirSize(dir string) int64 {
-	var total int64
-	_ = filepath.Walk(dir, func(_ string, fi os.FileInfo, _ error) error {
-		if fi != nil && !fi.IsDir() {
-			total += fi.Size()
-		}
-		return nil
-	})
-	return total
+        var total int64
+        _ = filepath.Walk(dir, func(_ string, fi os.FileInfo, _ error) error {
+                if fi != nil && !fi.IsDir() {
+                        total += fi.Size()
+                }
+                return nil
+        })
+        return total
 }
 
 func relativeHost(repoRoot, p string) string {
-	rel, err := filepath.Rel(repoRoot, p)
-	if err != nil {
-		return p
-	}
-	return rel
+        rel, err := filepath.Rel(repoRoot, p)
+        if err != nil {
+                return p
+        }
+        return rel
 }
 
 func goVersion() string {
-	if out, err := exec.Command("go", "version").Output(); err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return "unknown"
+        if out, err := exec.Command("go", "version").Output(); err == nil {
+                return strings.TrimSpace(string(out))
+        }
+        return "unknown"
 }
 
 func gitCommit(repoRoot string) string {
-	if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
-		return "unknown"
-	}
-	if out, err := exec.Command("git", "rev-parse", "--short=7", "HEAD").Output(); err != nil {
-		return "unknown"
-	} else {
-		return strings.TrimSpace(string(out))
-	}
+        if _, err := os.Stat(filepath.Join(repoRoot, ".git")); err != nil {
+                return "unknown"
+        }
+        if out, err := exec.Command("git", "rev-parse", "--short=7", "HEAD").Output(); err != nil {
+                return "unknown"
+        } else {
+                return strings.TrimSpace(string(out))
+        }
 }
