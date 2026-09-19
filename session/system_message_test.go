@@ -19,7 +19,7 @@ func TestSystemMessageAppendBecomeNode0(t *testing.T) {
 		t.Errorf("node 0 seq = %d, want 0 (system/message)", nodes[0])
 	}
 
-	msgs := s.DeriveMessages("")
+	msgs := s.DeriveMessages()
 	if len(msgs) != 2 {
 		t.Fatalf("derived msgs = %d, want 2", len(msgs))
 	}
@@ -66,7 +66,7 @@ func TestSystemMessageReplaceNode0(t *testing.T) {
 		t.Errorf("replaceGen = %d, want 1", s.ReplaceGeneration())
 	}
 
-	msgs := s.DeriveMessages("")
+	msgs := s.DeriveMessages()
 	if msgs[0].Content != "v2" {
 		t.Errorf("msgs[0] content = %q, want v2", msgs[0].Content)
 	}
@@ -125,7 +125,7 @@ func TestProjectSystemPromptEmptyContentPlaceholder(t *testing.T) {
 	}
 	s.Append(SystemMessage, &SystemMessageData{Turn: 2, Step: 0, Content: "now non-empty"}, op2)
 
-	msgs := s.DeriveMessages("")
+	msgs := s.DeriveMessages()
 	if len(msgs) != 1 {
 		t.Fatalf("derived msgs = %d, want 1 (just the non-empty system)", len(msgs))
 	}
@@ -142,7 +142,7 @@ func TestEmptySystemMessageProjectsToNil(t *testing.T) {
 	s.Append(UserMessage, &UserMessageData{Content: "hi"}, &SurfaceOp{Op: SurfaceAppend})
 
 	// surface 2 节点，但空 system 投影为 nil → 派生消息只有 1 条（user）
-	msgs := s.DeriveMessages("")
+	msgs := s.DeriveMessages()
 	if len(msgs) != 1 {
 		t.Fatalf("derived msgs = %d, want 1 (empty system projects to nil)", len(msgs))
 	}

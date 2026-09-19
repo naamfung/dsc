@@ -101,9 +101,6 @@ type ReactLoopAgent struct {
         // replace node 0）——system prompt 进入事件日志，对齐 DSH v3
         // system/message surface node 0 设计。
         sysPrompt string
-        // lastCommittedPrompt 上次已提交到事件日志的 system prompt 内容，
-        // 用于避免重复 commit（同样的 prompt 不重复 emit 事件）。
-        lastCommittedPrompt string
 
         // hasCompactionBackend 宿主是否有 compaction 后端插件接管（经 ListContext 标记检测）。
         // 有后端时跳过内联 compactHistory（后端在 pre-step 以自身策略阈值接管）；
@@ -421,7 +418,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                 // 保证「已发送给模型的消息」与「已消费的注入」原子一致，避免注入恰好落在
                 // 两者之间被漏检。
                 a.sessMu.Lock()
-                msgs := sess.DeriveMessagesLimited("", a.historyInjection)
+                msgs := sess.DeriveMessagesLimited(a.historyInjection)
                 iterPendingInjects := a.pendingInjects
                 a.sessMu.Unlock()
 
@@ -504,7 +501,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                 // 历史的注入在收尾时被误判为新注入而重复发送）
                 if compacted {
                         a.sessMu.Lock()
-                        msgs = sess.DeriveMessagesLimited("", a.historyInjection)
+                        msgs = sess.DeriveMessagesLimited(a.historyInjection)
                         iterPendingInjects = a.pendingInjects
                         a.sessMu.Unlock()
                 }
@@ -1125,8 +1122,7 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 //
 // 该方法在每轮 buildSystemPrompt 之后调用，让事件日志成为 system prompt 变更
 // 的唯一事实源——resume/fork 后 surface 已含 system/message 节点，无需重新
-// buildSystemPrompt 即可恢复 prompt；模型派生消息时由 surface node 0 派生
-// （DeriveMessagesLimited 不再依赖 a.sysPrompt 参数）。
+// buildSystemPrompt 即可恢复 prompt；模型派生消息时由 surface node 0 派生。
 //
 // turn/step 用于事件载荷定位：本次 prompt 版本是在哪个回合的哪一步发布的。
 // 调用方需先确保 a.turnCounter / a.stepCounter 已对齐当前回合/步骤。
@@ -1137,7 +1133,6 @@ func (a *ReactLoopAgent) commitSystemPrompt(turn, step int) {
         op, _ := a.sess.ProjectSystemPrompt(a.sysPrompt)
         if op == nil {
                 // surface 已有相同内容的 system 节点，无需提交
-                a.lastCommittedPrompt = a.sysPrompt
                 return
         }
         a.sess.Append(session.SystemMessage, &session.SystemMessageData{
@@ -1145,7 +1140,6 @@ func (a *ReactLoopAgent) commitSystemPrompt(turn, step int) {
                 Step:    step,
                 Content: a.sysPrompt,
         }, op)
-        a.lastCommittedPrompt = a.sysPrompt
 }
 
 // ptcEnabled 是否开启 PTC 呈现模式：环境变量 DSC_PTC，或处于 ptc preset（DSC_MODE=ptc）。
@@ -1499,7 +1493,7 @@ func (a *ReactLoopAgent) DebugSnapshot(ctx context.Context) (*core.AgentDebugSna
         }
 
         // 派生的请求历史（与下次 LLM 请求一致，含实时注入的消息与历史注入条数限制）
-        for _, m := range a.sess.DeriveMessagesLimited("", a.historyInjection) {
+        for _, m := range a.sess.DeriveMessagesLimited(a.historyInjection) {
                 snap.Messages = append(snap.Messages, &core.AgentDebugMessage{Role: m.Role, Content: m.Content})
         }
         return snap, nil

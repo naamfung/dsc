@@ -36,7 +36,7 @@ func TestInjectMessageVisibleOnNextDerive(t *testing.T) {
 	}
 
 	// 下一次派生的请求历史（即下一次 LLM 请求的 messages）应包含注入的文本
-	msgs := a.sess.DeriveMessages("sys")
+	msgs := a.sess.DeriveMessages()
 	found := false
 	for _, msg := range msgs {
 		if strings.Contains(msg.Content, "顺便再打印当前时间") {

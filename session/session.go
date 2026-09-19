@@ -310,13 +310,9 @@ func (s *Session) applySurfaceLocked(ev *Event) {
 }
 
 // DeriveMessages 从 surface 投影派生模型消息历史（[]*proto.Message，兼容 LLM 调用）。
-//
-// 对齐 DSH v3：system prompt 由 surface node 0（system/message）派生，
-// 不再由 sysPrompt 参数前置——参数保留是为兼容旧调用方（如测试），
-// 仅在 surface 无 system/message 节点时作为回退使用。
-// 推荐新代码传 "" 让 surface 全权负责 system prompt 派生。
-func (s *Session) DeriveMessages(sysPrompt string) []*proto.Message {
-        return s.DeriveMessagesLimited(sysPrompt, -1)
+// system prompt 由 surface node 0（system/message）派生，对齐 DSH v3。
+func (s *Session) DeriveMessages() []*proto.Message {
+        return s.DeriveMessagesLimited(-1)
 }
 
 // DeriveMessagesLimited 派生模型消息历史，并限制历史注入条数（对齐 DSH 会话级
@@ -326,34 +322,24 @@ func (s *Session) DeriveMessages(sysPrompt string) []*proto.Message {
 // 配对完整，Anthropic 要求 messages 以 user 开头），且当前轮总是完整保留。
 // 事件日志本身不受影响（append-only，历史始终可完整恢复）。
 //
-// sysPrompt 参数已弃用（对齐 DSH v3：system prompt 由 surface system/message
-// 节点派生）。非空时仅在 surface 无 system/message 节点的回退路径使用；
-// 推荐 agent-react-loop 改为 emit SystemMessage 事件 + 传 ""。
-func (s *Session) DeriveMessagesLimited(sysPrompt string, injectCount int) []*proto.Message {
+// system prompt 由 surface node 0（system/message）派生：空 content 节点投影为
+// nil（保留位置但不派生消息），非空 content 派生为 system 消息前置。
+// surface 完全无 system/message 节点时无 system 消息前置——这违反 v3 不变量，
+// 调用方应先经 migrateV2ToV3 或主动 emit SystemMessage 让 node 0 入位。
+func (s *Session) DeriveMessagesLimited(injectCount int) []*proto.Message {
         s.mu.Lock()
         defer s.mu.Unlock()
         msgs := make([]*proto.Message, 0, len(s.surfaceNodes)+1)
-        // 优先从 surface node 0 派生 system prompt（v3 设计）；surface 无 system 节点
-        // 时回退到 sysPrompt 参数（兼容旧调用方与未迁移的 v2 会话）。
-        surfaceSys := ""
-        if len(s.surfaceNodes) > 0 {
-                if d, ok := s.events[s.surfaceNodes[0]].Data.(*SystemMessageData); ok {
-                        surfaceSys = d.Content
-                }
-        }
-        if surfaceSys != "" {
-                msgs = append(msgs, &proto.Message{Role: "system", Content: surfaceSys})
-        } else if sysPrompt != "" {
-                msgs = append(msgs, &proto.Message{Role: "system", Content: sysPrompt})
-        }
-        // 决定是否在 surface 遍历中跳过 node 0：当 node 0 是 system/message
-        // 且其内容已前置为 msgs[0] 时，避免重复派生（非空 system 节点）。
-        // 空 system 节点未派生为 msgs[0]（投影 nil），但 surface 遍历时
-        // deriveEventMessage 也会返回 nil——不重复派生也不重复追加，安全。
+        // 从 surface node 0 派生 system prompt（v3 设计：surface 全权负责）
         skipNode0System := false
         if len(s.surfaceNodes) > 0 {
-                if d, ok := s.events[s.surfaceNodes[0]].Data.(*SystemMessageData); ok && d.Content != "" {
-                        skipNode0System = true
+                if d, ok := s.events[s.surfaceNodes[0]].Data.(*SystemMessageData); ok {
+                        if d.Content != "" {
+                                msgs = append(msgs, &proto.Message{Role: "system", Content: d.Content})
+                                skipNode0System = true
+                        }
+                        // 空 content 节点：不派生 system 消息，但保留位置（遍历时 deriveEventMessage
+                        // 也会返回 nil，重复 nil 不追加，安全）
                 }
         }
         if injectCount >= 0 {

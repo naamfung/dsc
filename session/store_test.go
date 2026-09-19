@@ -32,7 +32,7 @@ func TestStoreCreateLoadSave(t *testing.T) {
 	if loaded.Len() != sess.Len() {
 		t.Fatalf("loaded len = %d, want %d", loaded.Len(), sess.Len())
 	}
-	msgs := loaded.DeriveMessages("")
+	msgs := loaded.DeriveMessages()
 	if len(msgs) != 2 || msgs[0].Content != "hello world" {
 		t.Fatalf("derived = %+v, want 2 messages with first 'hello world'", msgs)
 	}

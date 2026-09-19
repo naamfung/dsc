@@ -92,7 +92,7 @@ func TestPreDispatchCompactionOnRestore(t *testing.T) {
 		a.sess.Append(session.AssistantMessage, &session.AssistantMessageData{Content: big},
 			&session.SurfaceOp{Op: session.SurfaceAppend})
 	}
-	if got := core.EstimateProtoMessagesTokens(a.sess.DeriveMessages(a.sysPrompt)); got < a.contextWindow*8/10 {
+	if got := core.EstimateProtoMessagesTokens(a.sess.DeriveMessages()); got < a.contextWindow*8/10 {
 		t.Fatalf("预置历史估算 = %d token, 需 >= %d 才能触发压缩", got, a.contextWindow*8/10)
 	}
 
@@ -183,7 +183,7 @@ func TestCompactionNotTriggeredOnAccurateUsage(t *testing.T) {
 		a.sess.Append(session.AssistantMessage, &session.AssistantMessageData{Content: big},
 			&session.SurfaceOp{Op: session.SurfaceAppend})
 	}
-	if got := core.EstimateProtoMessagesTokens(a.sess.DeriveMessages(a.sysPrompt)); got < a.contextWindow*8/10 {
+	if got := core.EstimateProtoMessagesTokens(a.sess.DeriveMessages()); got < a.contextWindow*8/10 {
 		t.Fatalf("预置历史估算 = %d token, 需 >= %d 才能验证「估算虚高不触发压缩」", got, a.contextWindow*8/10)
 	}
 
