@@ -126,8 +126,3 @@ func RestoreGoodFile(file, backup string, logger hclog.Logger) error {
 	}
 	return nil
 }
-
-// BackupGoodConfig 为方便 Manager 内部使用提供的封装：备份 persistConfigPath()。
-func (m *Manager) BackupGoodConfig() (string, error) {
-	return BackupGoodFile(m.persistConfigPath(), m.logger)
-}

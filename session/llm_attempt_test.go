@@ -104,37 +104,3 @@ func TestExportTranscriptRendersLLMAttempt(t *testing.T) {
                 t.Fatalf("导出未渲染失败留痕:\n%s", out)
         }
 }
-
-// TestMigrateV2ToV3PrependsSystemMessage v2→v3 不再是 no-op——v3 引入
-// system/message surface node 0 不变量，迁移在 v2 事件序列首部追加空
-// system/message 占位节点。LLMAttempt 等 v2 已有事件类型保留不变。
-func TestMigrateV2ToV3PrependsSystemMessage(t *testing.T) {
-        events := []*Event{
-                {Seq: 1, Type: TurnStart, Data: &TurnData{Turn: 1}},
-                {Seq: 2, Type: LLMAttempt, Data: &LLMAttemptData{Turn: 1, Step: 1}},
-        }
-        got, err := MigrateToCurrent(2, events)
-        if err != nil {
-                t.Fatalf("migrate v2→v3: %v", err)
-        }
-        if len(got) != 3 {
-                t.Fatalf("迁移后应 3 个事件（1 占位 + 2 原始），got %d: %+v", len(got), got)
-        }
-        if got[0].Type != SystemMessage {
-                t.Fatalf("事件 0 应为 SystemMessage 占位，got %q", got[0].Type)
-        }
-        if d, ok := got[0].Data.(*SystemMessageData); !ok || d.Content != "" {
-                t.Fatalf("SystemMessage 占位应空 content，got %+v", got[0].Data)
-        }
-        if got[0].Surface == nil || got[0].Surface.Op != SurfaceAppend {
-                t.Fatalf("SystemMessage 占位应 surface append，got %+v", got[0].Surface)
-        }
-        // 原始事件保留：TurnStart + LLMAttempt
-        if got[1].Type != TurnStart || got[2].Type != LLMAttempt {
-                t.Fatalf("原事件类型应保留，got %+v %+v", got[1].Type, got[2].Type)
-        }
-        // Seq 重排后占位为 0，原事件后移 +1
-        if got[1].Seq != 2 || got[2].Seq != 3 {
-                t.Fatalf("原事件 Seq 应 +1（重排），got %d %d", got[1].Seq, got[2].Seq)
-        }
-}

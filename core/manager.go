@@ -11,7 +11,6 @@ import (
         "regexp"
         "runtime"
         "sort"
-        "strconv"
         "strings"
         "sync"
         "sync/atomic"
@@ -466,77 +465,7 @@ func (m *Manager) monitorExit(name string, client *plugin.Client) {
 }
 
 // Load 加載一個插件（啟動子進程）
-func (m *Manager) Load(name string, binaryPath string) error {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-
-        // 跨平台處理二進制路徑
-        binaryPath = normalizeBinaryPath(binaryPath)
-
-        // 如果已加載，先卸載
-        if _, exists := m.plugins[name]; exists {
-                m.unloadLocked(name)
-        }
-        m.trackStateLocked(name, "dsc")
-
-        // 創建插件客戶端
-        cmd := exec.Command(binaryPath)
-        if m.config.ExecDir != "" {
-                cmd.Dir = m.config.ExecDir
-        }
-        client := plugin.NewClient(&plugin.ClientConfig{
-                HandshakeConfig: m.config.Handshake,
-                Plugins: map[string]plugin.Plugin{
-                        "dsc_core": &DSCPluginGRPC{},
-                },
-                Cmd:              cmd,
-                AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-                Logger:           m.coreLogger,
-                SyncStderr:       m.logFanout,
-        })
-
-        // 建立 RPC 連接
-        rpcClient, err := client.Client()
-        if err != nil {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, err.Error())
-                return fmt.Errorf("failed to connect to core: %w", err)
-        }
-        m.transitionLocked(name, StateConnecting, "")
-
-        // 獲取插件實例
-        raw, err := rpcClient.Dispense("dsc_core")
-        if err != nil {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, err.Error())
-                return fmt.Errorf("failed to dispense core: %w", err)
-        }
-
-        impl, ok := raw.(DSCPlugin)
-        if !ok {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, "core does not implement DSCPlugin interface")
-                return fmt.Errorf("core does not implement DSCPlugin interface")
-        }
-
-        m.clients[name] = client
-        m.plugins[name] = impl
-        m.typeMap[name] = "dsc"
-        m.recordLoadedBinaryLocked(name, binaryPath)
-        m.transitionLocked(name, StateReady, "")
-        go m.monitorExit(name, client)
-
-        m.logger.Info("core loaded", "name", name)
-        return nil
-}
-
 // Unload 卸載插件（殺死子進程，釋放資源）
-func (m *Manager) Unload(name string) error {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-        return m.unloadLocked(name)
-}
-
 func (m *Manager) unloadLocked(name string) error {
         if client, exists := m.clients[name]; exists {
                 m.transitionLocked(name, StateUnloading, "")
@@ -553,102 +482,9 @@ func (m *Manager) unloadLocked(name string) error {
 }
 
 // Get 獲取已加載的插件實例
-func (m *Manager) Get(name string) (DSCPlugin, bool) {
-        m.mu.RLock()
-        defer m.mu.RUnlock()
-        p, ok := m.plugins[name]
-        return p, ok
-}
-
 // List 列出所有已加載插件
-func (m *Manager) List() []string {
-        m.mu.RLock()
-        defer m.mu.RUnlock()
-        names := make([]string, 0, len(m.plugins))
-        for name := range m.plugins {
-                names = append(names, name)
-        }
-        return names
-}
-
 // LoadAgent 加載一個 Agent 插件（啟動子進程）
-func (m *Manager) LoadAgent(name string, binaryPath string, serviceID uint32) error {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-
-        if serviceID == 0 {
-                return fmt.Errorf("serviceID must not be 0")
-        }
-
-        // 跨平台處理二進制路徑
-        binaryPath = normalizeBinaryPath(binaryPath)
-
-        // 如果已加載，先卸載
-        if _, exists := m.agents[name]; exists {
-                m.unloadAgentLocked(name)
-        }
-        m.trackStateLocked(name, "agent")
-
-        // 構建命令，加入 -llm-service-id 參數
-        cmdArgs := []string{"-llm-service-id", strconv.FormatUint(uint64(serviceID), 10)}
-        cmd := exec.Command(binaryPath, cmdArgs...)
-        if m.config.ExecDir != "" {
-                cmd.Dir = m.config.ExecDir
-        }
-
-        // 創建插件客戶端
-        client := plugin.NewClient(&plugin.ClientConfig{
-                HandshakeConfig: m.config.Handshake,
-                Plugins: map[string]plugin.Plugin{
-                        "agent": &AgentGRPCPlugin{},
-                },
-                Cmd:              cmd,
-                AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-                Logger:           m.coreLogger,
-                SyncStderr:       m.logFanout,
-        })
-
-        // 建立 RPC 連接
-        rpcClient, err := client.Client()
-        if err != nil {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, err.Error())
-                return fmt.Errorf("failed to connect to agent core: %w", err)
-        }
-        m.transitionLocked(name, StateConnecting, "")
-
-        // 獲取插件實例
-        raw, err := rpcClient.Dispense("agent")
-        if err != nil {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, err.Error())
-                return fmt.Errorf("failed to dispense agent core: %w", err)
-        }
-
-        impl, ok := raw.(Agent)
-        if !ok {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, "core does not implement Agent interface")
-                return fmt.Errorf("core does not implement Agent interface")
-        }
-
-        m.clients[name] = client
-        m.agents[name] = impl
-        m.typeMap[name] = "agent"
-        m.transitionLocked(name, StateReady, "")
-        go m.monitorExit(name, client)
-
-        m.logger.Info("agent core loaded", "name", name)
-        return nil
-}
-
 // UnloadAgent 卸載 Agent 插件（殺死子進程，釋放資源）
-func (m *Manager) UnloadAgent(name string) error {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-        return m.unloadAgentLocked(name)
-}
-
 func (m *Manager) unloadAgentLocked(name string) error {
         if client, exists := m.clients[name]; exists {
                 m.transitionLocked(name, StateUnloading, "")
@@ -676,104 +512,7 @@ func (m *Manager) GetAgent(name string) (Agent, bool) {
 // LoadAgentAndGetBroker 加載 Agent 插件，並返回其 GRPCBroker 和 serviceID 以供宿主註冊服務。
 // env 為傳遞給 Agent 插件子進程的自定義環境變量（與宿主環境合併，插件值優先）。
 // 該方法會將 Agent 納入 Manager 管理，支持後續熱重載。
-func (m *Manager) LoadAgentAndGetBroker(name, binaryPath string, env map[string]string) (*plugin.GRPCBroker, uint32, error) {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-
-        // 校驗插件目錄命名規範
-        dirName := getPluginDirectoryName(binaryPath)
-        if err := validatePluginDirectoryName("agent", dirName); err != nil {
-                return nil, 0, fmt.Errorf("invalid Agent core directory name '%s': %w", dirName, err)
-        }
-
-        // 如果已加載，先卸載
-        if _, exists := m.agents[name]; exists {
-                m.unloadAgentLocked(name)
-        }
-        m.trackStateLocked(name, "agent")
-
-        // 創建插件客戶端（先不傳遞 serviceID，稍後通過 broker 生成）
-        cmd := exec.Command(binaryPath)
-        if m.config.ExecDir != "" {
-                cmd.Dir = m.config.ExecDir
-        }
-        if len(env) > 0 {
-                cmd.Env = buildEnv(env, false)
-        }
-        client := plugin.NewClient(&plugin.ClientConfig{
-                HandshakeConfig: m.config.Handshake,
-                Plugins: map[string]plugin.Plugin{
-                        "agent": &AgentGRPCPlugin{},
-                },
-                Cmd:              cmd,
-                AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
-                Logger:           m.coreLogger,
-                SyncStderr:       m.logFanout,
-        })
-
-        rpcClient, err := client.Client()
-        if err != nil {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, err.Error())
-                return nil, 0, fmt.Errorf("failed to connect to agent core: %w", err)
-        }
-        m.transitionLocked(name, StateConnecting, "")
-
-        grpcClient, ok := rpcClient.(*plugin.GRPCClient)
-        if !ok {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, "agent core is not a gRPC client")
-                return nil, 0, fmt.Errorf("agent core is not a gRPC client")
-        }
-
-        broker := grpcClient.Broker()
-        m.broker = broker // 供後續 LoadToolsAndPoliciesFromConfig 等使用
-        serviceID := broker.NextId()
-
-        // 獲取 Agent 實例（用於調用 RPC）
-        raw, err := rpcClient.Dispense("agent")
-        if err != nil {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, err.Error())
-                return nil, 0, fmt.Errorf("failed to dispense agent core: %w", err)
-        }
-
-        impl, ok := raw.(Agent)
-        if !ok {
-                client.Kill()
-                m.transitionLocked(name, StateFailed, "core does not implement Agent interface")
-                return nil, 0, fmt.Errorf("core does not implement Agent interface")
-        }
-
-        m.clients[name] = client
-        m.agents[name] = impl
-        m.typeMap[name] = "agent"
-        m.agentServiceIDs[name] = serviceID
-        // 注册对称清理 hook：卸载/热重载时先优雅关闭 agent，再终止进程
-        ai := impl
-        m.addStopHookLocked(name, func() error {
-                return ai.Shutdown(context.Background(), false)
-        })
-        m.transitionLocked(name, StateActive, "")
-        go m.monitorExit(name, client)
-
-        m.logger.Info("agent core loaded", "name", name, "serviceID", serviceID)
-        return broker, serviceID, nil
-}
-
 // LoadLLM 加載 LLM 插件；env 為傳遞給插件子進程的自定義環境變量（與宿主環境合併，插件值優先）
-func (m *Manager) LoadLLM(name string, binaryPath string, env map[string]string) error {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-        _, err := m.loadLLMEntryLocked(PluginEntry{
-                Name:       name,
-                Type:       "llm",
-                BinaryPath: binaryPath,
-                Env:        env,
-        })
-        return err
-}
-
 // loadLLMEntryLocked 加載 LLM 插件並存儲 provider（需已持有 m.mu）。
 // 供 LoadFromConfig 在声明式加载流程中复用，避免重复加锁。
 func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
@@ -868,20 +607,7 @@ func (m *Manager) loadLLMEntryLocked(entry PluginEntry) (LLMProvider, error) {
 }
 
 // GetLLM 獲取已加載的 LLM 實例
-func (m *Manager) GetLLM(name string) (LLMProvider, bool) {
-        m.mu.RLock()
-        defer m.mu.RUnlock()
-        p, ok := m.llms[name]
-        return p, ok
-}
-
 // UnloadLLM 卸載 LLM 插件
-func (m *Manager) UnloadLLM(name string) error {
-        m.mu.Lock()
-        defer m.mu.Unlock()
-        return m.unloadLLMLocked(name)
-}
-
 func (m *Manager) unloadLLMLocked(name string) error {
         if client, exists := m.clients[name]; exists {
                 m.transitionLocked(name, StateUnloading, "")
@@ -1417,16 +1143,6 @@ func (m *Manager) hotReloadPolicy(name, newBinaryPath string, execDir string, ha
 }
 
 // ListLLMs 列出所有已加載的 LLM 插件
-func (m *Manager) ListLLMs() []string {
-        m.mu.RLock()
-        defer m.mu.RUnlock()
-        names := make([]string, 0, len(m.llms))
-        for name := range m.llms {
-                names = append(names, name)
-        }
-        return names
-}
-
 // Shutdown 關閉所有插件并确保子进程全部退出。
 // 在逐个 Kill 插件子进程后，额外等待所有进程确实退出（最多 10 秒超时），
 // 避免主进程过早退出导致孤儿插件进程残留。
@@ -1484,16 +1200,6 @@ func (m *Manager) Shutdown() {
 }
 
 // ListAgents 列出所有已加載的 Agent 插件
-func (m *Manager) ListAgents() []string {
-        m.mu.RLock()
-        defer m.mu.RUnlock()
-        names := make([]string, 0, len(m.agents))
-        for name := range m.agents {
-                names = append(names, name)
-        }
-        return names
-}
-
 // GetToolRegistry 暴露工具註冊表
 func (m *Manager) GetToolRegistry() *ToolRegistry {
         return m.toolRegistry
@@ -1706,18 +1412,6 @@ type PluginInfoSummary struct {
 // HasPlugin reports whether a plugin with the given name is present (loaded from
 // config), regardless of its runtime state. 供 main 判定是否需为程序性通知插件
 // （如 notify）保留回合完成音效的播放宽限。
-func (m *Manager) HasPlugin(name string) bool {
-        m.mu.RLock()
-        defer m.mu.RUnlock()
-        if _, ok := m.states[name]; ok {
-                return true
-        }
-        if _, ok := m.plugins[name]; ok {
-                return true
-        }
-        return false
-}
-
 // DefaultSessionID 返回默认（项目）会话 id：按统一工作区根路径转换，与 agent
 // 侧 projectKey（SessionKeyForProject(DSC_WORKSPACE_ROOT)）保持一致。TUI 以此初始化
 // 当前会话标识，使「显示/切换/导出」的会话 id 与真实存档文件名吻合，避免出现
@@ -2781,17 +2475,9 @@ func (m *Manager) SwitchMode(mode string) error {
         // 须在锁内，供 AgentDirectTools/ExecuteTool 的读锁一致观测。
         m.ptc = mode == "ptc"
 
-        presetPath := fmt.Sprintf("config/presets/%s.yaml", mode)
-        // 使用基於 ExecDir 或可執行文件所在目錄的絕對路徑
-        if m.config.ExecDir != "" {
-                presetPath = PJoin(m.config.ExecDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
-        } else {
-                // 嘗試獲取可執行文件所在目錄
-                if execPath, err := os.Executable(); err == nil {
-                        execDir := PDir(execPath)
-                        presetPath = PJoin(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
-                }
-        }
+        // preset 路径经 presetsDir() 集中解析（与 ListModes 同源），避免
+        // 三段路径拼接逻辑散落两处。
+        presetPath := PJoin(m.presetsDir(), mode+".yaml")
 
         data, err := os.ReadFile(presetPath)
         if err != nil {
