@@ -39,7 +39,7 @@ func TestSystemMessageReplaceNode0(t *testing.T) {
 	s.Append(UserMessage, &UserMessageData{Content: "hi"}, &SurfaceOp{Op: SurfaceAppend})
 
 	// 渲染出 v2，经 ProjectSystemPrompt 决策
-	op, target := s.ProjectSystemPrompt("v2")
+	op, target := s.ProjectSystemPrompt("v2", false)
 	if op == nil {
 		t.Fatal("ProjectSystemPrompt 应返回 replace op（内容变化）")
 	}
@@ -78,7 +78,7 @@ func TestProjectSystemPromptNoopOnIdenticalContent(t *testing.T) {
 	s := New()
 	s.Append(SystemMessage, &SystemMessageData{Turn: 1, Step: 0, Content: "same"}, &SurfaceOp{Op: SurfaceAppend})
 
-	op, target := s.ProjectSystemPrompt("same")
+	op, target := s.ProjectSystemPrompt("same", false)
 	if op != nil {
 		t.Fatalf("ProjectSystemPrompt on identical content should return nil, got %+v (target=%d)", op, target)
 	}
@@ -91,7 +91,7 @@ func TestProjectSystemPromptNoopOnIdenticalContent(t *testing.T) {
 // ProjectSystemPrompt 返回 append op。
 func TestProjectSystemPromptAppendOnEmptySurface(t *testing.T) {
 	s := New()
-	op, target := s.ProjectSystemPrompt("first prompt")
+	op, target := s.ProjectSystemPrompt("first prompt", false)
 	if op == nil {
 		t.Fatal("ProjectSystemPrompt on empty surface should return append op")
 	}
@@ -109,14 +109,14 @@ func TestProjectSystemPromptAppendOnEmptySurface(t *testing.T) {
 func TestProjectSystemPromptEmptyContentPlaceholder(t *testing.T) {
 	s := New()
 	// 首次渲染空 prompt → append 占位
-	op, _ := s.ProjectSystemPrompt("")
+	op, _ := s.ProjectSystemPrompt("", false)
 	if op == nil || op.Op != SurfaceAppend {
 		t.Fatalf("empty content first render should append, got %+v", op)
 	}
 	s.Append(SystemMessage, &SystemMessageData{Turn: 1, Step: 0, Content: ""}, op)
 
 	// 后续非空 prompt → replace node 0
-	op2, target := s.ProjectSystemPrompt("now non-empty")
+	op2, target := s.ProjectSystemPrompt("now non-empty", false)
 	if op2 == nil || op2.Op != SurfaceReplace {
 		t.Fatalf("non-empty after empty should replace, got %+v", op2)
 	}
@@ -204,5 +204,64 @@ func TestCompactionCanShadowNonHeadSystem(t *testing.T) {
 	nodes := s.SurfaceNodes()
 	if len(nodes) != 2 {
 		t.Fatalf("after compaction, surface = %d nodes, want 2 (head + summary)", len(nodes))
+	}
+}
+
+// TestProjectSystemPromptInHistoryAppend 校验 in-history 路径：
+// surface 有非空 system 节点 + 内容变化 + inHistory=true → 返回 append op
+// （而非 replace node 0）。对齐 DSH in-history：支持读取后续 system 消息
+// 作为有效 prompt 的模型可保留旧 prompt 在缓存历史中，新 prompt 追加到尾部。
+func TestProjectSystemPromptInHistoryAppend(t *testing.T) {
+	s := New()
+	s.Append(SystemMessage, &SystemMessageData{Content: "v1"}, &SurfaceOp{Op: SurfaceAppend})
+	s.Append(UserMessage, &UserMessageData{Content: "hi"}, &SurfaceOp{Op: SurfaceAppend})
+
+	// in-history 路径：内容变化 → append（而非 replace node 0）
+	op, target := s.ProjectSystemPrompt("v2", true)
+	if op == nil {
+		t.Fatal("inHistory=true with content change should return append op")
+	}
+	if op.Op != SurfaceAppend {
+		t.Errorf("op = %q, want append (in-history path)", op.Op)
+	}
+	_ = target // target 是最后一个非空 system 节点的 seq，用于审计
+
+	// 提交后，surface 应有 3 个节点：v1, user, v2
+	s.Append(SystemMessage, &SystemMessageData{Content: "v2"}, op)
+	nodes := s.SurfaceNodes()
+	if len(nodes) != 3 {
+		t.Fatalf("after in-history append, surface = %d nodes, want 3 (v1 + user + v2)", len(nodes))
+	}
+
+	// DeriveMessages 应派生：system v1 + user + system v2
+	// （对齐 DSH in-history：模型读取后续 system 消息作为有效 prompt）
+	msgs := s.DeriveMessages()
+	if len(msgs) != 3 {
+		t.Fatalf("derived %d msgs, want 3 (v1 + user + v2)", len(msgs))
+	}
+	if msgs[0].Role != "system" || msgs[0].Content != "v1" {
+		t.Errorf("msgs[0] = %+v, want system/v1", msgs[0])
+	}
+	if msgs[1].Role != "user" || msgs[1].Content != "hi" {
+		t.Errorf("msgs[1] = %+v, want user/hi", msgs[1])
+	}
+	if msgs[2].Role != "system" || msgs[2].Content != "v2" {
+		t.Errorf("msgs[2] = %+v, want system/v2", msgs[2])
+	}
+}
+
+// TestProjectSystemPromptInHistoryNoopOnIdentical 校验 in-history 路径下
+// 内容相同时返回 nil（no-op）。
+func TestProjectSystemPromptInHistoryNoopOnIdentical(t *testing.T) {
+	s := New()
+	s.Append(SystemMessage, &SystemMessageData{Content: "same"}, &SurfaceOp{Op: SurfaceAppend})
+	s.Append(UserMessage, &UserMessageData{Content: "hi"}, &SurfaceOp{Op: SurfaceAppend})
+	// 第二条 system 节点（mid-history）
+	s.Append(SystemMessage, &SystemMessageData{Content: "same"}, &SurfaceOp{Op: SurfaceAppend})
+
+	// in-history：查找最后一个非空 system 节点，内容相同 → no-op
+	op, _ := s.ProjectSystemPrompt("same", true)
+	if op != nil {
+		t.Fatalf("inHistory=true with identical content should return nil, got %+v", op)
 	}
 }

@@ -286,16 +286,20 @@ func (s *Session) applySurfaceLocked(ev *Event) {
                         // 若 head 不是 system/message（旧 v2 会话首条是 user/message），不强制——
                         // compaction 等可正常覆盖，迁移后此类会话首条已被替换为空 system/message
                 }
-                // 移除 [start, end]（事件 seq 区间）内的 surface 节点，在原位置插入新节点。
-                kept := s.surfaceNodes[:0]
+                // 移除 [start, end]（seq 区间）内的 surface 节点，在首个被移除节点
+                // 的原位置插入新节点。对齐 DSH surface replace 语义：replace 是
+                // 位置覆盖（旧节点影子仍在日志），不是按 seq 值排序插入——
+                // seq 可能在 system replace 后非单调（new system seq > old user seq），
+                // 故不能用 "seq > end" 判定插入点，改用首个被移除节点的位置。
+                kept := make([]int, 0, len(s.surfaceNodes))
                 inserted := false
                 for _, seq := range s.surfaceNodes {
                         if seq >= start && seq <= end {
+                                if !inserted {
+                                        kept = append(kept, ev.Seq)
+                                        inserted = true
+                                }
                                 continue
-                        }
-                        if !inserted && seq > end {
-                                kept = append(kept, ev.Seq)
-                                inserted = true
                         }
                         kept = append(kept, seq)
                 }
@@ -377,36 +381,69 @@ func (s *Session) DeriveMessagesLimited(injectCount int) []*proto.Message {
 }
 
 // ProjectSystemPrompt 决策当前渲染出的 system prompt 应以何种 surface 操作提交。
-// 对齐 DSH SystemPromptProjection：比较 rendered 与 surface 当前存活的 system 节点
+// 对齐 DSH SystemPromptProjection.project()：比较 rendered 与 surface 当前 system 节点
 // 内容，返回应执行的 surface op：
 //   - surface 无 system 节点（len==0 或 node 0 非 system/message）→ append，
 //     新节点将成为 surface node 0
 //   - surface 有 system 节点且 content 与 rendered 相同 → nil（no-op，无需提交）
-//   - surface 有 system 节点但 content 不同 → replace，覆盖该节点（必然是 node 0）
+//   - surface 有 system 节点但 content 不同：
+//     inHistory=false（默认）→ replace node 0（覆盖旧 prompt）
+//     inHistory=true → append 新 system/message 到 surface 尾部
+//     （对齐 DSH in-history：支持读取后续 system 消息作为有效 prompt 的模型
+//     可保留旧 prompt 在缓存历史中，新 prompt 追加到尾部，避免重写 node 0
+//     导致的前缀缓存失效）
 //
 // 调用方据返回值构造 SystemMessage 事件并 Append；空 content 在首现时也提交
 // （作为占位 node 0），后续非空 prompt 才能 replace 而非追加到 user 历史之后。
 // 不持有 s.mu——返回纯数据，由调用方在持锁路径中 Append。
-func (s *Session) ProjectSystemPrompt(rendered string) (op *SurfaceOp, targetSeq int) {
-        s.mu.Lock()
-        defer s.mu.Unlock()
-        if len(s.surfaceNodes) == 0 {
-                // surface 完全空——首条 system/message 以 append 入位
-                return &SurfaceOp{Op: SurfaceAppend}, -1
-        }
-        headSeq := s.surfaceNodes[0]
-        headEv := s.events[headSeq]
-        if headEv.Type != SystemMessage {
-                // node 0 非 system/message（v2 未迁移会话）——append 一条新的 system/message，
-                // 但这违反 v3 不变量；调用方应先经 v2→v3 迁移。仍允许 append 以避免阻塞。
-                return &SurfaceOp{Op: SurfaceAppend}, -1
-        }
-        if d, ok := headEv.Data.(*SystemMessageData); ok && d.Content == rendered {
-                // 内容未变，无需提交
-                return nil, headSeq
-        }
-        // 内容变化——replace node 0（范围恰好 [headSeq, headSeq]）
-        return &SurfaceOp{Op: SurfaceReplace, Start: headSeq, End: headSeq}, headSeq
+func (s *Session) ProjectSystemPrompt(rendered string, inHistory bool) (op *SurfaceOp, targetSeq int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.surfaceNodes) == 0 {
+		// surface 完全空——首条 system/message 以 append 入位
+		return &SurfaceOp{Op: SurfaceAppend}, -1
+	}
+	headSeq := s.surfaceNodes[0]
+	headEv := s.events[headSeq]
+	if headEv.Type != SystemMessage {
+		// node 0 非 system/message（旧会话首条是 user/message）——append 一条新的 system/message
+		return &SurfaceOp{Op: SurfaceAppend}, -1
+	}
+	// 检查 head 节点内容是否与 rendered 相同
+	headUnchanged := false
+	if d, ok := headEv.Data.(*SystemMessageData); ok && d.Content == rendered {
+		headUnchanged = true
+	}
+	// in-history 路径：查找最后一个非空 system 节点（可能是 head 或更后面的 mid-history 节点）
+	if inHistory {
+		// 从末尾向前找最后一个非空 system/message 节点
+		for i := len(s.surfaceNodes) - 1; i >= 0; i-- {
+			seq := s.surfaceNodes[i]
+			ev := s.events[seq]
+			if ev.Type != SystemMessage {
+				continue
+			}
+			if d, ok := ev.Data.(*SystemMessageData); ok {
+				if d.Content == rendered {
+					// 内容未变，无需提交
+					return nil, seq
+				}
+				if d.Content != "" {
+					// 找到最后一个非空 system 节点，内容不同 → append 新节点到尾部
+					// （对齐 DSH in-history：保留旧 prompt 在缓存历史中）
+					return &SurfaceOp{Op: SurfaceAppend}, seq
+				}
+			}
+		}
+		// 无非空 system 节点 → append（首个非空 prompt 入位）
+		return &SurfaceOp{Op: SurfaceAppend}, -1
+	}
+	// 非 in-history 路径（默认）：replace node 0
+	if headUnchanged {
+		return nil, headSeq
+	}
+	// 内容变化——replace node 0（范围恰好 [headSeq, headSeq]）
+	return &SurfaceOp{Op: SurfaceReplace, Start: headSeq, End: headSeq}, headSeq
 }
 
 // deriveMessageRole 返回 surface 事件派生的消息角色（用于截断边界判定）。

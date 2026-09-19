@@ -439,6 +439,16 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                 sess.Append(session.StepStart, &session.StepData{Turn: turnNo, Step: stepNo}, nil)
                 stepOpen = true
 
+                // Per-step system prompt reconciliation（对齐 DSH agent.ts step()）：
+                // 每步 LLM 请求前重建 system prompt 并提交到事件日志——
+                // 检测 plugin 贡献的上下文片段变化（ListContext RPC）、plan 模式
+                // 切换、工具列表变化等。ProjectSystemPrompt 比对 surface 当前
+                // system/message 节点内容，相同则 no-op（不产生事件），不同则
+                // replace node 0。保证事件日志是 system prompt 变更的唯一事实源，
+                // 模型派生消息始终从 surface node 0 派生当前生效的 prompt。
+                a.sysPrompt = a.buildSystemPrompt(ctx, toolClient)
+                a.commitSystemPrompt(turnNo, stepNo)
+
                 // 请求历史由会话 surface 派生（system prompt 前置），不再依赖独立消息数组。
                 // 派生与注入计数快照在同一 sessMu 临界区内完成（与 InjectMessage 互斥），
                 // 保证「已发送给模型的消息」与「已消费的注入」原子一致，避免注入恰好落在
@@ -485,16 +495,14 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                 if retainTokens < compactionRetainMinTokens {
                                         retainTokens = compactionRetainMinTokens
                                 }
-                                // msgs[0] 为 system（若 surface 有非空 system/message 节点，
-                                // 对齐 v3 system prompt surface node 0 设计），其余与 surface 节点一一对应
-                                offset := 0
-                                if len(msgs) > 0 && msgs[0].Role == "system" {
-                                        offset = 1
-                                }
+                                // v3：system prompt 由 surface node 0 派生（不再由 sysPrompt 参数前置）。
+                                // DeriveMessagesLimited 把 system 前置为 msgs[0]，其余 msgs[1..N-1]
+                                // 与 surface nodes[1..N-1] 一一对应（node 0 system 已前置为 msgs[0]）。
+                                // 故 msgs[j] 直接对应 surface node j，无需 offset 调整。
                                 keep := len(nodes) // 首个被逐字保留的节点下标
                                 acc := 0
                                 for j := len(nodes) - 1; j >= 1; j-- {
-                                        acc += core.EstimateProtoMessageTokens(msgs[offset+j])
+                                        acc += core.EstimateProtoMessageTokens(msgs[j])
                                         if acc > retainTokens {
                                                 break
                                         }
@@ -502,6 +510,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                 }
                                 if keep >= len(nodes) {
                                         keep = len(nodes) - 1 // 连最近一条都超预算：压缩到至少保留最后一条
+                                }
+                                // v3 head 不变量：node 0（system/message）永不被压缩
+                                // （对齐 DSH "compaction anchors at the first non-system node;
+                                // node 0 is never inside a compaction range"）。
+                                // 压缩范围从 nodes[1] 起到 nodes[keep-1]，跳过 system node。
+                                if keep <= 1 {
+                                        keep = 2 // 至少保留最后 1 条 + system 不压缩 → keep 最小为 2
                                 }
                                 summary, err := a.compactHistory(ctx, llmClient, msgs, availableTools)
                                 if err != nil {
@@ -511,11 +526,11 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                         return nil, err
                                 }
                                 // 压缩落地（surface replace）：追加 CompactionSummary 事件遮蔽最旧前缀
-                                // [0, keep-1]，尾部 [keep, len-1] 保持逐字。原事件保留在日志（append-only
-                                // 无损，可回放/恢复）。
+                                // [1, keep-1]（跳过 node 0 system），尾部 [keep, len-1] 保持逐字。
+                                // 原事件保留在日志（append-only 无损，可回放/恢复）。
                                 sess.Append(session.CompactionSummary, &session.CompactionSummaryData{
                                         Content: "以下是此前对话的压缩摘要，请基于它继续当前任务：\n" + summary,
-                                }, &session.SurfaceOp{Op: session.SurfaceReplace, Start: nodes[0], End: nodes[keep-1]})
+                                }, &session.SurfaceOp{Op: session.SurfaceReplace, Start: nodes[1], End: nodes[keep-1]})
                                 // 压缩后已用容量无法精确获取，重置为 0（下一轮服务端 usage 会更新为真实值）
                                 a.usageMu.Lock()
                                 a.lastPromptTokens = 0
@@ -1152,11 +1167,22 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
 //
 // turn/step 用于事件载荷定位：本次 prompt 版本是在哪个回合的哪一步发布的。
 // 调用方需先确保 a.turnCounter / a.stepCounter 已对齐当前回合/步骤。
+//
+// inHistory 参数对齐 DSH SystemPromptProjection 的 inHistory 决策：
+//   false（默认）→ replace node 0（覆盖旧 prompt，Anthropic/OpenAI 协议
+//     只读取首条 system 消息作为有效 prompt）
+//   true → append 到 surface 尾部（DeepSeek in-history 协议支持读取
+//     后续 system 消息作为有效 prompt，保留旧 prompt 在缓存历史中）
+// 当前 DSC 的 LLM provider（llm-anthropic、llm-openai）均不支持
+// in-history，故 inHistory 恒为 false。未来若添加 DeepSeek-native
+// provider 声明 systemPromptUpdate='in-history' 能力，可在此传入 true。
 func (a *ReactLoopAgent) commitSystemPrompt(turn, step int) {
         if a.sess == nil {
                 return
         }
-        op, _ := a.sess.ProjectSystemPrompt(a.sysPrompt)
+        // 当前 LLM provider 不支持 in-history system message，恒走 replace 路径。
+        // 未来 DeepSeek-native provider 可改为 a.llmSupportsInHistory。
+        op, _ := a.sess.ProjectSystemPrompt(a.sysPrompt, false)
         if op == nil {
                 // surface 已有相同内容的 system 节点，无需提交
                 return
@@ -1289,10 +1315,11 @@ func (a *ReactLoopAgent) approvalPolicyContext() string {
         }
 }
 
-// compactSystemPrompt 上下文壓縮指令：要求模型只輸出精簡摘要，不添加額外解釋。
-const compactSystemPrompt = "你是对话压缩器。请将下面的对话历史压缩成一段精简但信息完整的摘要，" +
-        "保留用户意图、已执行的工具调用及其结果、以及所有关键的中间结论，以便在后续对话中无需原始记录也能继续。" +
-        "只输出压缩后的摘要，不要输出任何解释、前言或结尾。"
+// compactSystemPrompt 上下文压缩指令：要求模型只输出精简摘要，不添加额外解释。
+// 对齐 DSH compaction-basic summarizer.ts 的 COMPACTION_INSTRUCTION（英文）。
+const compactSystemPrompt = "You are a conversation compactor. Condense the conversation history below into a concise but information-complete summary. " +
+        "Preserve the user's intent, executed tool calls and their results, and all key intermediate conclusions, so the conversation can continue without the original records. " +
+        "Output only the condensed summary, without any explanation, preamble, or closing remarks."
 
 // 用量估算统一走 core 公用启发式（core.EstimateProtoMessageTokens /
 // core.EstimateProtoMessagesTokens，对齐 DSH tokenMeter：CJK 感知
