@@ -1654,6 +1654,11 @@ var toolArgKey = map[string]string{
         "skill":              "name",
         "install_skill":      "name",
         "uninstall_skill":    "name",
+        "load_dsc_plugin":    "name",
+        "unload_dsc_plugin":  "name",
+        "install_dsc_plugin": "name",
+        "uninstall_dsc_plugin": "name",
+        "upgrade_dsc_plugin": "name",
 }
 
 // toolDisplayName 将内部原始工具名统一转换为卡片显示的 PascalCase 名称：
