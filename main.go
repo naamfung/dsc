@@ -288,7 +288,7 @@ func main() {
         // 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
         if isSetupCommand(os.Args[1:]) {
                 os.Exit(runSetup(bufio.NewScanner(os.Stdin), os.Stdout,
-                        core.PJoin(execDir, "config", "config.yaml"),
+                        core.ConfigPath,
                         core.PJoin(execDir, "plugins")))
         }
 
@@ -486,7 +486,7 @@ func main() {
         // 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
         // 沙箱策略（read-only / workspace-write / full-access）由 TUI /sandbox 命令
         // 运行时切换，见 core.Manager.SetSandboxPolicy。
-        mainCfg, err := loadConfig(core.PJoin(execDir, "config", "config.yaml"))
+        mainCfg, err := loadConfig(core.ConfigPath)
         if err == nil && mainCfg != nil {
                 core.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
         }
@@ -544,7 +544,7 @@ func main() {
                 DebuggerEnabled: debuggerOpen,
                 EnableHotReload: mainCfg != nil && mainCfg.HotReload,
                 // PTC 呈现：-mode=ptc 或显式 DSC_PTC 开启（与 agent 侧 ptcEnabled 判定一致）
-                PTC: mode == "ptc" || ptcEnvEnabled(),
+                PTC: mode == core.ModePTC || ptcEnvEnabled(),
         })
         defer mgr.Shutdown()
         // 安装退出信号处理：直接关闭终端等终止信号也能先逐只 Kill 插件子进程再退出，
@@ -552,7 +552,7 @@ func main() {
         installShutdownSignals(mgr)
         // 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
         // 使运行期增删的插件在进程重启后依旧保留
-        mgr.SetConfigPath(core.PJoin(execDir, "config", "config.yaml"))
+        mgr.SetConfigPath(core.ConfigPath)
 
         // 外部脚本钩子（-hooks hooks.json）：严格 LUA 脚本（go-lua 进程内解释）或
         // 原生可执行文件（直接 exec 不经 shell），在工具流水线 BeforeTool/AfterTool
@@ -706,7 +706,7 @@ func main() {
         // 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
         // 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
         // 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
-        mainConfigPath := core.PJoin(execDir, "config", "config.yaml")
+        mainConfigPath := core.ConfigPath
         pluginsDir := core.PJoin(execDir, "plugins")
         pluginsSnap := pluginsDir + "-backup"
         loadErr := mgr.LoadFromConfig(merged)

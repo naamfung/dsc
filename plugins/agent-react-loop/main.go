@@ -21,6 +21,32 @@ import (
         "google.golang.org/grpc"
 )
 
+// 内联压缩配置——经 env 覆盖，与 dsc-system/compaction-basic 的同名 env
+// 对齐（DSC_COMPACTION_BASIC_*）。两处独立阈值是因为：内联压缩是 agent
+// 进程内的兜底（rule-driven），dsc-system 是宿主后端（model-driven）；
+// 后端加载时 agent 跳过内联（见 hasCompactionBackend 检测），故两套阈值
+// 实际不会同时生效，但仍允许各自独立调参以适配不同部署场景。
+//
+// 不抽共享常量到 dsc-sdk 是因为 agent-react-loop 是独立 module
+// （dsc-plugin-agent-react-loop），不能依赖 core——env 名字字符串相同
+// 即已表达对齐意图。
+var (
+        // compactionTriggerRatio 触发阈值比例（默认 0.80）。
+        // prompt tokens >= contextWindow * ratio 时启动压缩。
+        compactionTriggerRatio = dsc.EnvFloat("DSC_COMPACTION_BASIC_THRESHOLD", 0.80)
+        // compactionRetainRatio 保留尾部比例（默认 0.16，对齐 DSH retainRatio 0.16）。
+        compactionRetainRatio = dsc.EnvFloat("DSC_COMPACTION_BASIC_RETAIN_RATIO", 0.16)
+        // compactionRetainMinTokens 保留尾部最少 token 数（默认 1024）。
+        compactionRetainMinTokens = dsc.EnvInt("DSC_COMPACTION_BASIC_RETAIN_MIN", 1024)
+        // compactionInstructionOverheadTokens 压缩请求的指令与结构开销估算（默认 64）。
+        // 用于 compactHistory 计算 max_tokens = contextWindow - inputTokens - overhead
+        // 时的输入 token 估算加成。
+        compactionInstructionOverheadTokens = dsc.EnvInt("DSC_COMPACTION_BASIC_INSTRUCTION_OVERHEAD", 64)
+        // toolMetadataRPCTimeout ListContext / ListTools 等 tool-client 元数据 RPC 超时
+        // （默认 3 秒，超时即跳过该次元数据刷新，不阻塞主循环）。
+        toolMetadataRPCTimeout = 3 * time.Second
+)
+
 type ReactLoopAgent struct {
         // logger 本地 hclog（写 os.Stderr，宿主经 SyncStderr 捕获入日志流，受 -log 门控）。
         // 供 runLoop 等记录运行日志，避免散落 fmt.Fprintf(os.Stderr, …) 直写。
@@ -443,7 +469,7 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                 promptTokens = est
                         }
                 }
-                if a.contextWindow > 0 && a.historyInjection < 0 && promptTokens >= a.contextWindow*8/10 && !a.hasCompactionBackend {
+                if a.contextWindow > 0 && a.historyInjection < 0 && float64(promptTokens) >= float64(a.contextWindow)*compactionTriggerRatio && !a.hasCompactionBackend {
                         if emit != nil {
                                 emit(&core.RunStreamResponse{
                                         Output: fmt.Sprintf("\n[上下文压缩: 已用 %d%% 容量，即将压缩对话历史]\n",
@@ -451,13 +477,13 @@ func (a *ReactLoopAgent) runLoop(ctx context.Context, input string, images []str
                                         Status: "tool",
                                 })
                         }
-                        // 计算保留尾部：默认 16% 窗口（对齐 DSH retainRatio 0.16），从末尾向前累积
-                        // 直至预算用尽；至少 1024 token，且绝不压缩刚追加的当前用户消息（不可分尾部）。
+                        // 计算保留尾部（compactionRetainRatio 比例，至少 compactionRetainMinTokens），
+                        // 从末尾向前累积直至预算用尽；绝不压缩刚追加的当前用户消息（不可分尾部）。
                         nodes := sess.SurfaceNodes()
                         if len(nodes) >= 2 {
-                                retainTokens := a.contextWindow * 16 / 100
-                                if retainTokens < 1024 {
-                                        retainTokens = 1024
+                                retainTokens := int(float64(a.contextWindow) * compactionRetainRatio)
+                                if retainTokens < compactionRetainMinTokens {
+                                        retainTokens = compactionRetainMinTokens
                                 }
                                 // msgs[0] 为 system（若 surface 有非空 system/message 节点，
                                 // 对齐 v3 system prompt surface node 0 设计），其余与 surface 节点一一对应
@@ -1080,7 +1106,7 @@ func (a *ReactLoopAgent) buildSystemPrompt(ctx context.Context, toolClient proto
         parts = append(parts, fmt.Sprintf(goalPolicyPrompt, a.blockedAfterConsecutiveRounds))
 
         // 聚合各工具插件貢獻的上下文片段（如技能索引），失敗或為空則跳過
-        ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+        ctx, cancel := context.WithTimeout(ctx, toolMetadataRPCTimeout)
         resp, err := toolClient.ListContext(ctx, &proto.ListContextRequest{})
         cancel()
         if err == nil {
@@ -1162,7 +1188,7 @@ func (a *ReactLoopAgent) ptcSDKContext(ctx context.Context, toolClient proto.Too
         if !ptcEnabled() {
                 return ""
         }
-        lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+        lctx, cancel := context.WithTimeout(ctx, toolMetadataRPCTimeout)
         resp, err := toolClient.ListTools(lctx, &proto.ListToolsRequest{})
         cancel()
         if err != nil {
@@ -1283,10 +1309,10 @@ func (a *ReactLoopAgent) compactHistory(ctx context.Context, llmClient proto.LLM
         if a.contextWindow <= 0 {
                 return "", nil
         }
-        inputTokens := core.EstimateProtoMessagesTokens(msgs) + 64 // 压缩指令与结构开销
+        inputTokens := core.EstimateProtoMessagesTokens(msgs) + compactionInstructionOverheadTokens
         remaining := a.contextWindow - inputTokens
-        if remaining < 1024 {
-                remaining = 1024
+        if remaining < compactionRetainMinTokens {
+                remaining = compactionRetainMinTokens
         }
         // 壓縮請求：以 system 指令引導 + 派生歷史作為 user 內容
         // （跳過歷史中的 system 消息，避免把基礎指令與技能索引壓進摘要）

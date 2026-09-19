@@ -2473,7 +2473,7 @@ func (m *Manager) SwitchMode(mode string) error {
 
         // run_code 呈现门控随模式同步：ptc → PTC presentation（折叠直接调用）；其余 native。
         // 须在锁内，供 AgentDirectTools/ExecuteTool 的读锁一致观测。
-        m.ptc = mode == "ptc"
+        m.ptc = mode == ModePTC
 
         // preset 路径经 presetsDir() 集中解析（与 ListModes 同源），避免
         // 三段路径拼接逻辑散落两处。

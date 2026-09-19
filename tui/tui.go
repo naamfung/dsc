@@ -2294,20 +2294,20 @@ func (m *Model) availableModes() []string {
                         return modes
                 }
         }
-        return []string{"minimal", "standard", "creation"}
+        return []string{core.ModeMinimal, core.ModeStandard, core.ModeCreation}
 }
 
 // modeHint 返回模式对应的中文提示。已知模式用语义化描述，未知模式
 // （用户新增的 preset）回退到通用提示。
 func modeHint(mode string) string {
         switch mode {
-        case "minimal":
+        case core.ModeMinimal:
                 return "切换至极简模式"
-        case "standard":
+        case core.ModeStandard:
                 return "切换至标准模式"
-        case "creation":
+        case core.ModeCreation:
                 return "切换至创造模式（可经 tool-lua-host 创造 LUA 插件）"
-        case "ptc":
+        case core.ModePTC:
                 return "引导用 run_code 写 Lua 一把过组合多步"
         }
         return "切换至 " + mode + " 模式"
@@ -2484,13 +2484,13 @@ func (m *Model) execModeSwitch(mode string) {
 // 未知模式（用户新增 preset）回退到通用文案 "已切換至 <mode> 模式"。
 func modeSwitchMessage(mode string) string {
         switch mode {
-        case "minimal":
+        case core.ModeMinimal:
                 return "已切換至極簡模式 (minimal)。"
-        case "standard":
+        case core.ModeStandard:
                 return "已切換至標準模式 (standard)。"
-        case "creation":
+        case core.ModeCreation:
                 return "已切換至創造模式 (creation)：可經 tool-lua-host 跨寫 LUA 插件（參考 lua-core-creator 技能）。"
-        case "ptc":
+        case core.ModePTC:
                 return "已切換至 PTC 模式 (ptc)：引导用 run_code 写 Lua 一把过组合多步。"
         }
         return "已切換至 " + mode + " 模式。可用 presets/" + mode + ".yaml 自定義此模式行為。"
@@ -3173,13 +3173,13 @@ func padToWidth(s string, w int) string {
 // displayMode 返回展示用预设模式名（首字母大写；未知时返回原值）。
 func (m *Model) displayMode() string {
         switch m.mode {
-        case "minimal":
+        case core.ModeMinimal:
                 return "Minimal"
-        case "standard":
+        case core.ModeStandard:
                 return "Standard"
-        case "creation":
+        case core.ModeCreation:
                 return "Creation"
-        case "ptc":
+        case core.ModePTC:
                 return "PTC"
         }
         return m.mode
