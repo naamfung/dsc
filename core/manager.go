@@ -1712,6 +1712,15 @@ func (m *Manager) LoadFromConfig(cfg *Config) error {
                                 m.logger.Warn("multiple agent plugins found, using first one", "first", agentEntry.Name, "ignored", entry.Name)
                         }
                 } else if entry.Type == "llm" || entry.Type == "tool" || entry.Type == "policy" || entry.Type == "dsc" {
+                        // MCP 配置条目（type=dsc + config.mcp）是纯配置声明，由 main.go 的
+                        // autoConnectMCPFromConfig 后续处理（连接 MCP 服务器、注册 mcp__ 工具）。
+                        // 此类条目无二进制可加载，不走 loadPluginWithBroker——否则会被
+                        // validatePluginDirectoryName 校验目录名前缀（dsc-）失败。
+                        if _, hasMCP := entry.Config["mcp"]; hasMCP {
+                                m.logger.Info("skipping MCP config entry in plugin load (handled by autoConnectMCPFromConfig)",
+                                        "name", entry.Name, "type", entry.Type)
+                                continue
+                        }
                         providerEntries = append(providerEntries, entry)
                 }
         }
