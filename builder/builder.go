@@ -413,109 +413,136 @@ func goBuild(dir, out string, p platform) error {
 // goBuildNative 本机 CGO 构建（tool-computer-use 等 cgo 插件）：不交叉、不强制
 // CGO_ENABLED=0，完整继承调用方环境。
 //
-// X11 开发头文件自动获取（对齐 plugins/tool-computer-use/build.sh 的逻辑）：
-// 若系统已安装 libX11-dev/libxtst-dev/libxi-dev/libxext-dev，直接构建。
-// 若未安装且无 root 权限，自动 apt-get download 下载 .deb 包解压到临时目录，
-// 经 CGO_CPPFLAGS/CGO_LDFLAGS 注入路径构建。
+// X11 开发头文件自动获取（对齐 plugins/tool-computer-use/build.sh）：
+// Linux 上若缺 X11 dev 头文件，自动下载解压（deb 系 apt-get / Alpine apk）。
 //
-// 编译器自动检测（对齐 build.sh）：
-//   - 环境变量 CC 已设 → 用其值（如 CC="zig cc"）
-//   - zig 在 PATH → 自动用 "zig cc"（zig 自带 C 工具链，无需系统 gcc）
-//   - 默认 → gcc（系统标准 C 编译器）
+// 编译器退化链（对齐 build.sh）：
+//   1. 环境变量 CC 已设 → 用其值
+//   2. zig 在 PATH → 用 "zig cc"
+//   3. 上一步失败 → 退化用 gcc
+//   4. gcc 也不可用 → 返回最后一次错误
+//
+// 退化逻辑确保 zig 安装损坏时不阻塞发布流程。
 func goBuildNative(dir, out string) error {
-        cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
-        cmd.Dir = dir
-        cmd.Stdout = os.Stdout
-        cmd.Stderr = os.Stderr
-
-        // 初始化环境变量（继承调用方环境）
-        cmd.Env = os.Environ()
-
         // Linux 平台：检测并自动获取 X11 开发头文件
+        var cgoCPPFlags, cgoLDFlags string
         if runtime.GOOS == "linux" {
-                ensureX11DevHeaders(cmd)
+                cgoCPPFlags, cgoLDFlags = detectX11DevHeaders()
         }
 
-        // 编译器自动检测：CC 环境变量 > zig > gcc
+        // 构建编译器候选链（去重）
+        var compilers []string
+        seen := map[string]bool{}
+        addCompiler := func(cc string) {
+                if cc == "" || seen[cc] {
+                        return
+                }
+                seen[cc] = true
+                compilers = append(compilers, cc)
+        }
         if cc := os.Getenv("CC"); cc != "" {
-                cmd.Env = appendEnv(cmd.Env, "CC", cc)
-        } else if hasTool("zig") {
-                cmd.Env = appendEnv(cmd.Env, "CC", "zig cc")
+                addCompiler(cc)
         }
-        // 若 CC 未设且无 zig，go 默认用 gcc（无需显式设置）
+        if hasTool("zig") {
+                addCompiler("zig cc")
+        }
+        if hasTool("gcc") {
+                addCompiler("gcc")
+        }
+        // 若 CC 未设、无 zig 且无 gcc，go 默认用系统 cc
+        if len(compilers) == 0 {
+                compilers = append(compilers, "")
+        }
 
-        return cmd.Run()
+        // 按候选链逐个尝试，首个成功即返回
+        var lastErr error
+        for _, cc := range compilers {
+                label := cc
+                if label == "" {
+                        label = "go default (cc)"
+                }
+                printInfo(fmt.Sprintf("  → 尝试编译器: %s\n", label))
+
+                cmd := exec.Command("go", "build", "-ldflags=-s -w", "-o", out, ".")
+                cmd.Dir = dir
+                cmd.Stdout = os.Stdout
+                cmd.Stderr = os.Stderr
+                cmd.Env = os.Environ()
+                if cc != "" {
+                        cmd.Env = appendEnv(cmd.Env, "CC", cc)
+                }
+                if cgoCPPFlags != "" {
+                        cmd.Env = appendEnv(cmd.Env, "CGO_CPPFLAGS", cgoCPPFlags)
+                }
+                if cgoLDFlags != "" {
+                        cmd.Env = appendEnv(cmd.Env, "CGO_LDFLAGS", cgoLDFlags)
+                }
+
+                if err := cmd.Run(); err != nil {
+                        lastErr = err
+                        printWarning(fmt.Sprintf("  ✗ %s 编译失败，尝试下一个编译器...\n", label))
+                        os.Remove(out) // 清理残缺产物
+                        continue
+                }
+
+                printSuccess(fmt.Sprintf("  ✓ %s 编译成功\n", label))
+                return nil
+        }
+        return fmt.Errorf("所有编译器均失败，最后错误: %w", lastErr)
 }
 
-// ensureX11DevHeaders 检测系统是否已安装 X11 开发头文件（libX11-dev/libxtst-dev/
-// libxi-dev/libxext-dev）。若缺失，按发行版包管理器自动下载并解压到临时目录，
-// 经 CGO_CPPFLAGS/CGO_LDFLAGS 注入到 cmd.Env。已有则跳过（零开销）。
-//
-// 支持的发行版包管理器：
-//   - deb 系（Debian/Ubuntu/Mint/Kali…）：apt-get download + dpkg-deb -x
-//   - apk 系（Alpine/musl）：apk add --no-cache（需 root；无 root 时尝试 apk fetch）
-//
-// 检测顺序：检查关键头文件 → 检测包管理器 → 下载 → 解压 → 注入路径。
-// 无法检测到任何已知包管理器时仅告警，不阻塞构建（让 go build 自身的报错呈现）。
-func ensureX11DevHeaders(cmd *exec.Cmd) {
-        // 检查关键头文件是否已存在于系统路径
+// detectX11DevHeaders 检测系统是否已安装 X11 开发头文件。若缺失，
+// 按发行版包管理器自动下载解压，返回 CGO_CPPFLAGS 和 CGO_LDFLAGS。
+// 已有则返回空串（零开销）。
+func detectX11DevHeaders() (cppFlags, ldFlags string) {
         if fileExists("/usr/include/X11/extensions/XTest.h") {
-                return // 系统已安装 dev 包，零干预
+                return // 系统已安装，零干预
         }
 
         tmpDir, err := os.MkdirTemp("", "x11-dev-headers-*")
         if err != nil {
-                printWarning(fmt.Sprintf("  (warn: 创建临时目录失败，X11 头文件自动获取跳过: %v)\n", err))
+                printWarning(fmt.Sprintf("  (warn: 创建临时目录失败: %v)\n", err))
                 return
         }
-        // 不立即清理——构建期间需保持路径有效
-
         extractDir := filepath.Join(tmpDir, "extract")
 
-        // 按发行版包管理器分流
         switch {
         case hasTool("apt-get") && hasTool("dpkg-deb"):
-                // deb 系（Debian/Ubuntu/Mint/Kali…）
                 fetchX11HeadersDeb(tmpDir, extractDir)
         case hasTool("apk"):
-                // apk 系（Alpine/musl）
                 fetchX11HeadersApk(tmpDir, extractDir)
         default:
-                printWarning("  (warn: 未检测到 apt-get/dpkg-deb 或 apk，无法自动获取 X11 开发头文件。\n")
-                printWarning("    请手动安装：deb 系 → apt install libxtst-dev libxi-dev libxext-dev；\n")
-                printWarning("    Alpine → apk add libxtst-dev libxi-dev libxext-dev)\n")
+                printWarning("  (warn: 未检测到 apt-get/dpkg-deb 或 apk，请手动安装 X11 dev 头文件)\n")
                 return
         }
 
-        // 设置 CGO 编译路径（deb 与 apk 的解压目录结构可能不同，逐个检测）
         incCandidates := []string{
                 filepath.Join(extractDir, "usr", "include"),
-                filepath.Join(extractDir, "include"), // Alpine apk 解压可能无 usr/ 前缀
+                filepath.Join(extractDir, "include"),
         }
         libCandidates := []string{
                 filepath.Join(extractDir, "usr", "lib", "x86_64-linux-gnu"),
                 filepath.Join(extractDir, "usr", "lib"),
-                filepath.Join(extractDir, "lib"), // Alpine musl
+                filepath.Join(extractDir, "lib"),
         }
         for _, inc := range incCandidates {
                 if fileExists(inc) {
-                        cmd.Env = appendEnv(cmd.Env, "CGO_CPPFLAGS", "-I"+inc)
+                        cppFlags = "-I" + inc
                         break
                 }
         }
         for _, lib := range libCandidates {
                 if fileExists(lib) {
-                        cmd.Env = appendEnv(cmd.Env, "CGO_LDFLAGS", "-L"+lib+" -lXext")
+                        ldFlags = "-L" + lib + " -lXext"
                         break
                 }
         }
+        return cppFlags, ldFlags
 }
 
-// fetchX11HeadersDeb 用 apt-get download + dpkg-deb -x 下载解压 X11 dev 包（deb 系）。
+// fetchX11HeadersDeb 用 apt-get download + dpkg-deb -x 下载解压（deb 系）。
 func fetchX11HeadersDeb(workDir, extractDir string) {
-        packages := []string{"libxtst-dev", "libxi-dev", "libxext-dev"}
-        for _, pkg := range packages {
-                // apt-get download 需要在 workDir 执行（.deb 文件下载到当前目录）
+        for _, pkg := range []string{"libxtst-dev", "libxi-dev", "libxext-dev"} {
                 dlCmd := exec.Command("apt-get", "download", pkg)
                 dlCmd.Dir = workDir
                 dlCmd.Stdout = os.Stdout
@@ -524,10 +551,8 @@ func fetchX11HeadersDeb(workDir, extractDir string) {
                         printWarning(fmt.Sprintf("  (warn: apt-get download %s 失败: %v)\n", pkg, err))
                         continue
                 }
-                // 找到下载的 .deb 文件并解压
                 matches, _ := filepath.Glob(filepath.Join(workDir, pkg+"*.deb"))
                 if len(matches) == 0 {
-                        printWarning(fmt.Sprintf("  (warn: %s .deb 文件未找到)\n", pkg))
                         continue
                 }
                 extCmd := exec.Command("dpkg-deb", "-x", matches[0], extractDir)
@@ -539,18 +564,14 @@ func fetchX11HeadersDeb(workDir, extractDir string) {
         }
 }
 
-// fetchX11HeadersApk 用 apk 下载解压 X11 dev 包（Alpine/musl 系）。
-// apk 无 download 子命令的等价物——用 apk fetch（--deps 确保依赖一并下载）+ tar 解压。
-// 若 apk fetch 不可用（老版本或限制），退化为 apk add --no-cache（需 root）。
+// fetchX11HeadersApk 用 apk 下载解压（Alpine/musl 系）。
 func fetchX11HeadersApk(workDir, extractDir string) {
-        packages := []string{"libxtst-dev", "libxi-dev", "libxext-dev"}
-        for _, pkg := range packages {
-                // 尝试 apk fetch（无需 root，下载 .apk 到指定目录）
+        for _, pkg := range []string{"libxtst-dev", "libxi-dev", "libxext-dev"} {
                 fetchCmd := exec.Command("apk", "fetch", "--dest", workDir, pkg)
                 fetchCmd.Stdout = os.Stdout
                 fetchCmd.Stderr = os.Stderr
                 if err := fetchCmd.Run(); err != nil {
-                        // 退化：尝试 apk add（需 root，容器内通常有）
+                        // 退化：apk add（需 root）
                         addCmd := exec.Command("apk", "add", "--no-cache", pkg)
                         addCmd.Stdout = os.Stdout
                         addCmd.Stderr = os.Stderr
@@ -558,19 +579,16 @@ func fetchX11HeadersApk(workDir, extractDir string) {
                                 printWarning(fmt.Sprintf("  (warn: apk fetch/add %s 失败: %v)\n", pkg, err))
                                 continue
                         }
-                        // apk add 装到系统路径，头文件直接可用——跳过解压
-                        continue
+                        continue // apk add 装到系统路径，头文件直接可用
                 }
-                // 解压 .apk 文件（apk 是 gzip tar 包）
+                // 解压 .apk（gzip tar 包）
                 matches, _ := filepath.Glob(filepath.Join(workDir, pkg+"*.apk"))
                 if len(matches) == 0 {
                         matches, _ = filepath.Glob(filepath.Join(workDir, pkg+"-*.apk"))
                 }
                 if len(matches) == 0 {
-                        printWarning(fmt.Sprintf("  (warn: %s .apk 文件未找到)\n", pkg))
                         continue
                 }
-                // .apk 文件是 tar.gz 格式，用 tar 解压
                 extCmd := exec.Command("tar", "-xzf", matches[0], "-C", extractDir)
                 extCmd.Stdout = os.Stdout
                 extCmd.Stderr = os.Stderr
