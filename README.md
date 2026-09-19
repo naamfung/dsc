@@ -153,7 +153,7 @@ DSC 與 DSH 同源於「一切皆插件」的設計哲學，兩者在概念層�
 
 - `llm-anthropic`（Anthropic 兼容端点：DeepSeek anthropic / llama.cpp server 等。**输出上限=有效上下文窗口**：宿主一律注入 `DSC_MAX_OUTPUT_TOKENS`=有效上下文窗口值——探测命中 LLAMACPP 家族端点（`/v1/models` 返回 `meta.n_ctx`，与 anthropic 口同端口）取探测窗口值，探测不到（云端）取配置 `context_window` 值（不正确可随时再设），不分本地/云端、行为一致；anthropic 协议把 max_tokens 视为 required，显式携带窗口值在 llama.cpp 侧受上下文自然钳制、无害，并对抗其对缺席值自填的保守默认（laamaafung 为 4096）；`ANTHROPIC_MAX_OUTPUT_TOKENS` 显式配置优先（SDK 无 omitempty，零值字段由请求中间件摘除，不会以 `"max_tokens":0` 上送）；压缩等请求级参数优先于以上两者。思维链 stderr 调试打印默认关闭——reasoning 本就随流式帧送宿主/TUI，需排查插件本身时设 `DSC_LLM_DEBUG` 才输出）
 
-- `llm-ollama`
+- `llm-ollama`（Ollama 兼容端点：本地 Ollama server。与 `llm-openai`/`llm-anthropic` 同为 LLM provider 插件，经 Ollama Go SDK 直连 `/api/chat`；支持 reasoning/thinking 模型（默认开启，`OLLAMA_THINKING=0` 可关闭），从响应 `Message.Thinking` 提取思维链帧渲染到 TUI；@文本附件引用（`dsc-txt://`）解析为文本串前缀拼入 user 消息 Content）
 
 #### 图像输入（视觉）
 
@@ -240,6 +240,8 @@ TUI 输入框按 `@` 会弹出当前工作区的文件候选筛选列表（对�
 ### DSC 通用插件
 
 - `dsc-notify`（通知音效插件：**通用 dsc 类型**，纯后台程序性驱动、不暴露模型工具——经 Hook.OnEvent 订阅宿主通用 agent 回合事件，成功（`agent/status` idle）播 success、失败（`agent/error`）播 error，无需模型调用；内置音效 success/error/warning/info 与自定义 `.mp3/.wav`）
+
+- `dsc-billion-context`（高级上下文管理插件：**通用 dsc 类型**，以 [acp-kernel](https://github.com/ranxianglei/acp-kernel) 算法接管 DSC 默认的 compaction-basic 压缩机制。Go 原生重实现 acp-kernel 核心（独立重写非移植），经 SDK 通用事件钩子接管：`Hook.OnEvent` 拦截 `agent/pre-step` 改写消息列表、`Hook.ContextFn` 贡献 ACP system prompt（对齐 DSH `ctx.systemPrompt.section`）。**模型驱动压缩**——模型决定何时压、压什么范围，插件编排其他一切。3 层 LSM-tree：T1 标准压缩（消息范围→摘要）、T2 蒸馏（T1 块→T2）、T3 凝结（T2 块→T3）。4 个模型可见工具：`compress`（压缩消息范围为摘要块、用 `bN` 块引用触发蒸馏）、`decompress`（恢复压缩块内容）、`search_context`（在压缩块摘要中搜索关键词）、`acp_status`（查看上下文使用率与可压缩范围）。前缀缓存稳定：summary 原位嵌入（不堆到头部）、不注入 `<acp>` 标签到消息文本、nudge 作为尾部 user 消息。state 持久化：每 session 一个 JSON 文件。config.yaml `compaction: dsc-billion-context` 显式选为后端；提供 `compaction` 能力。详见 `plugins/dsc-billion-context/README.md`）
 
 ## 目錄結構
 
