@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -227,4 +229,197 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// mockMCPServerSSE 模拟新版 streamable-http MCP 服务器：
+// 1. 校验 Accept 头含 application/json 与 text/event-stream（缺则返回 406）
+// 2. 以 text/event-stream（SSE）格式响应 JSON-RPC 结果
+func mockMCPServerSSE(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	e := vodka.New()
+	e.Post("/mcp", func(c *vodka.Context) error {
+		// 校验 Accept 头（MCP 规范 2025-03-26+ streamable-http 要求）
+		accept := c.Request.Header.Get("Accept")
+		if !strings.Contains(accept, "application/json") || !strings.Contains(accept, "text/event-stream") {
+			return vodka.NewHTTPError(http.StatusNotAcceptable, "Not Acceptable: Client must accept both application/json and text/event-stream")
+		}
+
+		var req map[string]any
+		if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			return vodka.NewHTTPError(http.StatusBadRequest, "bad request")
+		}
+
+		method, _ := req["method"].(string)
+		id := req["id"]
+
+		var resp map[string]any
+		switch method {
+		case "initialize":
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result": map[string]any{
+					"protocolVersion": "2025-03-26",
+					"capabilities":     map[string]any{},
+					"serverInfo": map[string]any{
+						"name":    "mock-mcp-sse",
+						"version": "1.0.0",
+					},
+				},
+			}
+		case "notifications/initialized":
+			return c.String("")
+		case "tools/list":
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result": map[string]any{
+					"tools": []map[string]any{
+						{
+							"name":        "ocr",
+							"description": "OCR text recognition",
+							"inputSchema": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"image": map[string]any{
+										"type":        "string",
+										"description": "Image path or base64",
+									},
+								},
+								"required": []string{"image"},
+							},
+						},
+					},
+				},
+			}
+		case "tools/call":
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"result": map[string]any{
+					"content": []map[string]any{
+						{"type": "text", "text": "recognized text from OCR"},
+					},
+				},
+			}
+		default:
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      id,
+				"error":   map[string]any{"code": -32601, "message": "method not found: " + method},
+			}
+		}
+
+		// 以 SSE 格式响应：data: <json>\n\n
+		jsonBytes, _ := json.Marshal(resp)
+		c.Response.Header().Set("Content-Type", "text/event-stream")
+		c.Response.WriteHeader(http.StatusOK)
+		c.Response.Write([]byte("data: " + string(jsonBytes) + "\n\n"))
+		return nil
+	})
+
+	return httptest.NewServer(e)
+}
+
+// TestStreamableHTTPAcceptHeader 校验：MCP 客户端发送 Accept 头含
+// application/json 与 text/event-stream——缺则 streamable-http 服务器返回 406。
+func TestStreamableHTTPAcceptHeader(t *testing.T) {
+	srv := mockMCPServerSSE(t)
+	defer srv.Close()
+
+	cfg := &core.Config{
+		Plugins: []core.PluginEntry{
+			{
+				Name:    "ocr-sse",
+				Type:    "dsc",
+				Enabled: true,
+				Config: map[string]any{
+					"mcp": map[string]any{
+						"server_name": "ocr-sse",
+						"endpoint":    srv.URL + "/mcp",
+					},
+				},
+			},
+		},
+	}
+
+	mgr := core.NewManager(&core.ManagerConfig{
+		Handshake: core.Handshake,
+	})
+
+	autoConnectMCPFromConfig(mgr, cfg, hclog.NewNullLogger())
+
+	client := mgr.GetMCPClient("ocr-sse")
+	if client == nil {
+		t.Fatal("MCP client 'ocr-sse' not registered — streamable-http connect failed")
+	}
+
+	tools := client.Tools()
+	if len(tools) == 0 {
+		t.Fatal("expected at least 1 tool from SSE MCP server, got 0")
+	}
+	t.Logf("OK: streamable-http SSE server connected, discovered %d tool(s)", len(tools))
+	for _, tool := range tools {
+		t.Logf("  tool: name=%s desc=%s", tool.Name, tool.Description)
+	}
+	if tools[0].Name != "mcp__ocr-sse__ocr" {
+		t.Errorf("expected 'mcp__ocr-sse__ocr' tool, got %q", tools[0].Name)
+	}
+}
+
+// TestSSEResponseParsing 校验：ParseSSEResponse 能正确解析 SSE 格式响应
+// （data: <json>\n\n → 提取 JSON 负载）。
+func TestSSEResponseParsing(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr bool
+		wantID  string
+	}{
+		{
+			name:   "single event",
+			body:   "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\n",
+			wantID: "1",
+		},
+		{
+			name:   "event with comment lines",
+			body:   ": comment\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{}}\n\n",
+			wantID: "2",
+		},
+		{
+			name:    "no data line",
+			body:    ": only comment\n\n",
+			wantErr: true,
+		},
+		{
+			name:    "invalid JSON in data",
+			body:    "data: {bad json}\n\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := core.ParseSSEResponse([]byte(tc.body))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				t.Logf("OK: got expected error: %v", err)
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			id, ok := result["id"]
+			if !ok {
+				t.Fatal("response missing 'id' field")
+			}
+			if fmt.Sprintf("%v", id) != tc.wantID {
+				t.Errorf("id = %v, want %s", id, tc.wantID)
+			}
+			t.Logf("OK: parsed SSE response, id=%v", id)
+		})
+	}
 }
