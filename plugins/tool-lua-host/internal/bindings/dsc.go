@@ -81,6 +81,14 @@ func Install(L *lua.LState, s *Services) {
 	L.SetField(dsc, "job", jobT)
 
 	L.SetField(dsc, "register_tool", L.NewFunction(dscRegisterTool(s)))
+
+	// dsc.script：脚本自省。脚本注册的工具名一律带**脚本名前缀**（<脚本名>_<注册名>，
+	// 合成规则见 dsc.QualifyToolName），故脚本引用自身工具时必须能取到自己的名字——
+	// 钩子里比较工具名（如 name == dsc.script.name .. "_ping"）、经 dsc.tool.call 调
+	// 自身工具，都依赖它；把带前缀的名字写死在脚本里会在脚本改名后静默失效。
+	scriptT := L.NewTable()
+	L.SetField(scriptT, "name", lua.LString(scriptName(L)))
+	L.SetField(dsc, "script", scriptT)
 }
 
 // ==================== dsc.llm.chat ====================

@@ -21,8 +21,9 @@ import (
 // ExecuteTool 返回脚本结果（字段保真：name/schema/description/result 全存活）。
 func TestHostLuaChainToolProviderToSDK(t *testing.T) {
 	dir := t.TempDir()
-	// 脚本目录按 lua-host 约定：<cwd>/scripts/<name>/main.lua（cwd 即进程工作目录）
-	scriptDir := filepath.Join(dir, "scripts", "mytool")
+	// 脚本目录按 lua-host 约定：<cwd>/scripts/<name>/main.lua（cwd 即进程工作目录）。
+	// 目录名即脚本名，因而也是其工具名的前缀（见下方 toolName）。
+	scriptDir := filepath.Join(dir, "scripts", "demo")
 	if err := os.MkdirAll(scriptDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +70,9 @@ dsc.register_tool("mytool", { description = "自包含测试工具", parameters 
 		t.Fatalf("SetInterconnect: %v", err)
 	}
 
-	// 脚本注册的 mytool 会被 lua-host 以 `lua_` 前缀暴露（对齐既有 lua_ping 等）
-	const toolName = "lua_mytool"
+	// 脚本注册的工具名 = <脚本名>_<注册名>：脚本名 demo + 注册名 mytool → demo_mytool。
+	// 前缀是脚本名本身，模型据此即可把工具归到来源脚本（list_lua_tools 同名可查）。
+	const toolName = "demo_mytool"
 
 	// 1. ListTools：脚本注册的 mytool 经 ToolProvider → SDK ToolService 可见
 	defs, _, err := listStagedTools(toolClient)

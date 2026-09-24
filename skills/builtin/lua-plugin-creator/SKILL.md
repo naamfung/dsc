@@ -16,9 +16,9 @@ description: 极全面的 LUA 插件创造指南——教模型经 tool-lua-host
       │   tool-lua-host（空壳插件）每秒轮询脚本目录，发现新脚本/变更自动加载或重载
       ▼
   脚本执行：  dsc.register_tool("my_tool", spec, handler)
-      │   注册名自动加前缀 → 宿主可见工具名 = lua_my_tool
+      │   注册名自动加脚本名前缀 → 宿主可见工具名 = <脚本名>_my_tool
       ▼
-宿主调用：  Agent 或任意工具经宿主流水线调用 lua_my_tool → 转发到 tool-lua-host
+宿主调用：  Agent 或任意工具经宿主流水线调用 <脚本名>_my_tool → 转发到 tool-lua-host
       │   → 在你的脚本 VM 上执行 handler(args)，返回结果文本
 ```
 
@@ -55,7 +55,7 @@ description: 极全面的 LUA 插件创造指南——教模型经 tool-lua-host
 dsc.register_tool(name: string, spec: table, handler: function) -> nil
 ```
 
-- `name`：工具名（小写、下划线分词）。对外暴露为 `lua_<name>`。
+- `name`：工具名（小写、下划线分词）。对外暴露为 `<脚本名>_<name>`——前缀是**脚本名本身**（`scripts/` 下的目录名），故模型从工具名即可看出它出自哪个脚本，脚本一多也不会失去归属。脚本内引用自身工具名时用 `dsc.script.name` 拼前缀（见 3.8），别把带前缀的名字写死。
 - `spec`：`{ description = string, parameters = <JSON Schema> }`。`parameters` 用 JSON Schema 描述参数（`type=object`、`properties`、`required`）。
 - `handler`：`function(args: table) -> string | table | nil`。返回字符串直接作为工具结果；返回 table 会序列化为 JSON；返回 nil 结果为空。
 - 重复注册同名工具会报错。
@@ -71,7 +71,7 @@ dsc.register_tool("greet", {
 }, function(args)
     return "你好，" .. args.who .. "！"
 end)
--- 宿主侧工具名：lua_greet
+-- 脚本目录名为 demo 时，宿主侧工具名：demo_greet
 ```
 
 ### 3.2 LLM（宿主聚合，含多 provider 路由）
@@ -179,6 +179,29 @@ local job = dsc.job.spawn(function()
 end)
 ```
 
+### 3.8 脚本自省
+
+```
+dsc.script.name -> string   -- 本脚本名（= scripts/ 下的目录名）
+```
+
+工具名一律带脚本名前缀（`<脚本名>_<注册名>`），所以脚本要引用**自身**的工具名时必须拼前缀，
+而不是写死：
+
+```lua
+local prefix: string = dsc.script.name .. "_"
+
+-- 钩子里比较工具名：宿主传进来的是模型可见的全名（带前缀），故用 prefix 拼
+dsc.hook.before_tool(function(name: string, args: any): any
+    if name == prefix .. "ping" then
+        return false, "", { note = "hooked" }
+    end
+    return false, "", nil
+end)
+```
+
+不这么写的话，脚本改名（目录改名）后钩子会静默失配——工具名变了，写死的字符串不会跟着变。
+
 ---
 
 ## 4. 类型注解（go-lua 类型系统）
@@ -264,8 +287,8 @@ scripts/
 2. **规划**：确定要注册哪些工具、各自参数 Schema、用哪些 dsc 服务。创建模式下应先 `exit_plan_mode` 呈现设计再写码。
 3. **写脚本**：用 `shell`/`str_replace_editor` 创建 `scripts/<插件名>/main.lua`（相对宿主工作目录）。
 4. **验证语法**：脚本加载前会做语法门禁——语法错误会阻止加载并打印错误；类型诊断打印警告。**写完先自查**：`dsc.*` 调用、类型注解、字符串拼接（number 需 `tostring`）、table 字段名。
-5. **等待热加载**：最多 2 秒轮询生效。新工具 `lua_<name>` 自动出现在宿主工具目录。
-6. **验证工具**：在本轮或下一轮调用 `lua_<name>` 做冒烟测试；复杂工具准备多组参数（正常/边界/错误）。
+5. **等待热加载**：最多 2 秒轮询生效。新工具 `<脚本名>_<name>` 自动出现在宿主工具目录。
+6. **验证工具**：在本轮或下一轮调用 `<脚本名>_<name>` 做冒烟测试；复杂工具准备多组参数（正常/边界/错误）。
 7. **迭代**：改 `main.lua` → 2 秒后自动重载 → 重测。删除目录即卸载。
 
 **验证要点**：
@@ -441,7 +464,7 @@ end)
 - [ ] 目录 `scripts/<插件名>/main.lua` 已创建，命名符合规范
 - [ ] 每个工具都有完整 `description` + 参数 Schema
 - [ ] 参数/返回/局部变量写了类型注解
-- [ ] 工具经热加载后 `lua_<工具名>` 可用，正常/边界/错误路径均验证过
+- [ ] 工具经热加载后 `<脚本名>_<工具名>` 可用，正常/边界/错误路径均验证过
 - [ ] 用到的 dsc 服务（llm/tool/store/hook/job/notify）用法正确
 - [ ] 沙箱限制内完成（文件/进程经 dsc.tool.call 转发）
 - [ ] 向用户说明新增了哪些工具、如何调用、注意事项

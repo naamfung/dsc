@@ -91,7 +91,7 @@ func main() {
 		out := []dsc.Tool{
 			{
 				Name:        "list_lua_tools",
-				Description: "List the LUA-script tools currently registered by tool-lua-host (their names and descriptions), without executing any. Read-only.",
+				Description: "List the LUA-script tools currently registered by tool-lua-host (their names and descriptions), without executing any. Each name is <script>_<tool>: the prefix is the name of the script that registered it, so you can attribute any such tool to its origin script. Read-only.",
 				Schema:      json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 				Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
 					hh := holder.get()

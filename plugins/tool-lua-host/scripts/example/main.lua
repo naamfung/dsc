@@ -1,9 +1,16 @@
 -- example：tool-lua-host 演示插件
 -- 演示 dsc 内建：llm.chat / tool.call / notify.emit / store / hook / job
 -- 带 go-lua 类型注解：加载前经类型检查器静态校验
+--
+-- 工具名：脚本里注册的是**短名**（summarize/ping/async），宿主加载时统一加脚本名前缀
+-- 再暴露给模型（本脚本目录名为 example，故模型看到 example_summarize/example_ping/
+-- example_async）。故脚本内引用自身工具名时用 dsc.script.name 拼前缀，别写死。
 
 type SummaryArgs = { prompt: string }
 type PingArgs = { note: string? }
+
+-- 本脚本工具名的前缀（= 脚本名 + "_"）：工具名要带来源，脚本引用自身时按此拼接。
+local prefix: string = dsc.script.name .. "_"
 
 -- ==================== dsc.llm.chat（宿主聚合 LLM） ====================
 
@@ -60,17 +67,18 @@ end)
 
 -- ==================== dsc.hook（脚本注册宿主钩子） ====================
 
--- before_tool：改写 lua_ping 的参数（其余工具不动）
+-- before_tool：改写本脚本 ping 工具的入参（其余工具不动）。
+-- 宿主传进来的是**模型可见的全名**（带脚本名前缀），故用 prefix 拼。
 dsc.hook.before_tool(function(name: string, args: any): any
-    if name == "lua_ping" then
+    if name == prefix .. "ping" then
         return false, "", { note = "hooked" }
     end
     return false, "", nil
 end)
 
--- after_tool：给 lua_ping 结果加后缀
+-- after_tool：给本脚本 ping 工具的结果加后缀
 dsc.hook.after_tool(function(name: string, args: any, result: string, err: string): any
-    if name == "lua_ping" then
+    if name == prefix .. "ping" then
         return result .. " (after-hook)", err
     end
     return result, err

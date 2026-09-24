@@ -59,6 +59,9 @@ func dscType() typ.Type {
 			Param("spec", typ.Any).
 			Param("handler", typ.Any).
 			Build()).
+		Field("script", typ.NewRecord().
+			Field("name", typ.String).
+			Build()).
 		Build()
 }
 

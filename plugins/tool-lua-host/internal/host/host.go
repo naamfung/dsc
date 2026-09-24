@@ -32,7 +32,7 @@ type Host struct {
 	dirs     []string // 脚本目录列表（LUA 脚本以 <dir>/<name>/main.lua 组织，多个目录等价）
 	services *bindings.Services
 	scripts  map[string]*Script
-	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 lua_ 前缀）
+	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含脚本名前缀）
 	stop     chan struct{}
 	logf     func(string, ...any)
 	creation bool // 创造模式：允许热加载新增/变更脚本；否则只运行启动时已存在的脚本
@@ -188,10 +188,15 @@ func (h *Host) unloadLocked(name string) {
 	delete(h.scripts, name)
 }
 
-// registerTool 脚本注册工具的回调：注册名统一加 lua_ 前缀避免与其他插件冲突。
+// registerTool 脚本注册工具的回调：注册名加上脚本名前缀（合成规则见 dsc.QualifyToolName），
+// 既避免与其他脚本/插件重名，也让模型从工具名直接看出它出自哪个脚本——脚本一多，
+// `mytool` 这样的裸名无从归属；曾用的载体代号前缀（lua_）同样说不出是哪个脚本。
 // 注意：由脚本加载路径（scan 已持有 h.mu）调用，此处不再加锁。
 func (h *Host) registerTool(script *Script, name, desc, paramsJSON string, fn *lua.LFunction) error {
-	full := "lua_" + name
+	full, err := dsc.QualifyToolName(script.Name, name)
+	if err != nil {
+		return err
+	}
 	if _, exists := h.tools[full]; exists {
 		return fmt.Errorf("工具 %s 已被注册", full)
 	}
