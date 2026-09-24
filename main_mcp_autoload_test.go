@@ -3,9 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"dsc/core"
@@ -37,7 +37,7 @@ func mockMCPServer(t *testing.T) *httptest.Server {
 				"id":      id,
 				"result": map[string]any{
 					"protocolVersion": "2024-11-05",
-					"capabilities":     map[string]any{},
+					"capabilities":    map[string]any{},
 					"serverInfo": map[string]any{
 						"name":    "mock-mcp",
 						"version": "1.0.0",
@@ -261,7 +261,7 @@ func mockMCPServerSSE(t *testing.T) *httptest.Server {
 				"id":      id,
 				"result": map[string]any{
 					"protocolVersion": "2025-03-26",
-					"capabilities":     map[string]any{},
+					"capabilities":    map[string]any{},
 					"serverInfo": map[string]any{
 						"name":    "mock-mcp-sse",
 						"version": "1.0.0",
