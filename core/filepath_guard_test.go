@@ -34,13 +34,17 @@ func TestFilepathBlacklistGuard(t *testing.T) {
 	}
 	repoRoot := filepath.Dir(filepath.Dir(thisFile))
 
-	// 目录豁免（相对仓库根，"/" 分隔）：仅第三方非直管 vendored 代码与仓库内
-	// 非运行时产物。
-	// libs/vodka、libs/anthropic-sdk-go、libs/go-openai、libs/go-lua、libs/jig-lisp、
+	// 目录豁免（相对仓库根，"/" 分隔）：非直管的 vendored 第三方、语义例外与
+	// 仓库内非运行时产物。
+	// libs/anthropic-sdk-go、libs/go-openai、libs/go-lua、libs/jig-lisp、
 	// libs/toon-go、plugins/tool-2fa-master/vendor：vendored 第三方依赖，非本仓
-	// 维护（改动会造成与上游无谓分叉，runtime 路径链路亦不涉及）。
+	// 直管（改动会造成与上游无谓分叉，runtime 路径链路亦不涉及）。
 	// libs/fasttemplate、libs/bytebufferpool：仅离线构建 vendored 的第三方模板库，
 	// 无路径处理逻辑。
+	// libs/vodka：属本仓自研（Web 框架），归属上按直管论，登记为**语义例外**——
+	// 其 filepath 用法集中在 HTTP 框架内部（静态文件服务、session 文件存储、模板
+	// 加载），不进入模型可见的路径链路，该语境下原生分隔符本就是正确选择（改造
+	// 无收益且会改坏框架内部路径语义）。例外须逐条登记理由（见 AGENTS.md）。
 	// builder：开发者本机构建工具，其路径是构建产物路径，不进入模型可见的运行时
 	// 路径链路（对齐 proc_attr 哨兵测试豁免口径）。
 	// examples / testdata / docs / dist / webui / node_modules / .git：示例、测试
@@ -162,8 +166,8 @@ func TestSlashTerminologyGuard(t *testing.T) {
 	// 用 Unicode 转义避免本测试文件自命中。
 	forbiddenTerm := "\u659c\u6760"
 
-	// 目录豁免（同 TestFilepathBlacklistGuard）：仅第三方非直管 vendored 代码
-	// 与仓库内非运行时产物。
+	// 目录豁免（同 TestFilepathBlacklistGuard 的口径：非直管的 vendored 第三方、
+	// 逐条登记理由的语义例外 libs/vodka、以及仓库内非运行时产物）。
 	skipDirs := map[string]bool{
 		".git":                         true,
 		"node_modules":                 true,

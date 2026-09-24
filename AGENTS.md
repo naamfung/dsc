@@ -28,7 +28,7 @@ gofmt -l .
 
 - 生成代码（`proto/*.pb.go`、`proto/*_grpc.pb.go`）亦须保持 gofmt 整洁；如未按规范排版，一并修正。
 
-- 非本仓库维护的外部依赖（如 `libs/` 下的第三方模块）不强制 git 追踪其内部格式化变更，避免产生无关、不可回溯的噪音提交。
+- 本仓维护的代码一律同等要求 gofmt，`libs/` 亦然：`libs/vodka` 是本仓自研的 Web 框架，`libs/sh`、`libs/cron`、`libs/go-lua` 等是本地维护模块，均须格式化。仅**纯 vendored 的第三方源码**（如 `libs/anthropic-sdk-go`、`libs/go-openai`）不强制 git 追踪其内部格式化变更，避免与上游无谓分叉、产生无关且不可回溯的噪音提交。
 
 ### 2. 有无重复逻辑须要抽取成独立辅助函数
 
@@ -201,7 +201,9 @@ filepath 包在 Windows 上会把路径结果归一化为原生反斜杆（实�
 
 - **正确接入**：本仓主模块（core/session/tui/cron/main 等）用 `core.P*`（PJoin/PAbs/PClean/PRel/PSplit/PDir/PEvalSymlinks/PGlob/PWalkDir/PWalk，先原生计算再归一化为正斜杆）；插件用 SDK 转发 `dsc.P*`；libs/sh、plugin、cron、session 等因独立模块或包级 import 环无法引入 core 的，用其本地等价实现（libs/sh/internal/posixpath、plugin/internal/pathx、cron/posix.go、session/posix.go，均登记守卫测试 fileAllowlist）。`string(filepath.Separator)` 一律用 `"/"`。
 
-- **豁免口径**：目录豁免（skipDirs）仅限第三方非直管 vendored 代码（libs/vodka、libs/anthropic-sdk-go、libs/go-openai、libs/go-lua、libs/jig-lisp、libs/toon-go、libs/fasttemplate、libs/bytebufferpool、plugins/tool-2fa-master/vendor）与仓库内非运行时产物（builder、examples、docs、testdata 等）。**本仓直管的 libs（libs/sh、libs/cron 等）无豁免权**，必须同样遵守黑名单——为第三方非直管 vendored 加白名单可以，直管代码不得以「第三方」名义豁免。
+- **豁免口径**：目录豁免（skipDirs）仅限 (a) 非直管的 vendored 第三方源码（libs/anthropic-sdk-go、libs/go-openai、libs/go-lua、libs/jig-lisp、libs/toon-go、libs/fasttemplate、libs/bytebufferpool、plugins/tool-2fa-master/vendor）；(b) 仓库内非运行时产物（builder、examples、docs、testdata 等）；(c) 逐条登记理由的语义例外（见下）。**本仓直管的 libs（libs/sh、libs/cron 等）无豁免权**，必须同样遵守黑名单——直管代码不得以「第三方」名义豁免。
+
+  `libs/vodka` 属本仓自研（Web 框架），归属上按直管论，但登记为语义例外：其 filepath 用法集中在 HTTP 框架内部（静态文件服务、session 文件存储、模板加载），不进入模型可见的路径链路，且在该语境下原生分隔符本就是正确选择——改造无收益，反而会改坏框架内部的路径语义。例外须像这样逐条登记具体理由，不得笼统以「第三方」「非直管」名义豁免。
 
 ## 文档同步
 
