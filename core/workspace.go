@@ -42,24 +42,32 @@ import (
 // WorkspaceRoot 統一工作空間根目錄（對齊 DSH ctx.sandboxPolicy 的單一根來源）：
 // 宿主進程由 config.yaml 的 workspace_root 解析（見 main.go），
 // 工具插件等子進程則讀取宿主注入的 DSC_WORKSPACE_ROOT 環境變量。
+//
+// 该根是**路径出口**：它会被拼进工具结果、沙箱提示并注入各插件进程，故三条取值
+// 分支一律归一为正斜杆（PClean）——否则 Windows 上 os.Getwd/环境变量带反斜杆时会
+// 污染模型上下文，进而误导模型用反斜杆书写路径。
 var WorkspaceRoot string
 
 func init() {
-	// 子進程：優先取宿主注入的 DSC_WORKSPACE_ROOT，使宿主與各插件進程對工作空間根保持一致。
-	if root := os.Getenv("DSC_WORKSPACE_ROOT"); root != "" {
-		WorkspaceRoot = root
-	}
-	if WorkspaceRoot == "" {
-		// 無注入時，默認以啟動目錄為根（與宿主 resolveWorkspaceRoot 一致：
-		// 在哪个目录启动，就以哪个目录为工作区）。
-		if cwd, err := os.Getwd(); err == nil {
-			WorkspaceRoot = cwd
-		} else if exePath, err := os.Executable(); err == nil {
-			// 無法獲取 cwd 時以可執行文件所在目錄為根（与宿主 Getwd 失败退化一致）
-			WorkspaceRoot = PDir(exePath)
-		} else {
-			WorkspaceRoot = "."
-		}
+	cwd, _ := os.Getwd()
+	exe, _ := os.Executable()
+	WorkspaceRoot = pickWorkspaceRoot(os.Getenv("DSC_WORKSPACE_ROOT"), cwd, exe)
+}
+
+// pickWorkspaceRoot 按「注入环境变量 → 启动目录 → 可执行文件所在目录 → 当前目录」
+// 的回退链选出工作空间根，**每个分支都归一为正斜杆**。
+// 抽成纯函数是为了让回退链可被逐分支断言（init 只在进程启动时跑一次，无法在测试里
+// 覆盖各分支）。
+func pickWorkspaceRoot(envRoot, cwd, exePath string) string {
+	switch {
+	case envRoot != "":
+		return PClean(envRoot)
+	case cwd != "":
+		return PClean(cwd)
+	case exePath != "":
+		return PDir(exePath)
+	default:
+		return "."
 	}
 }
 

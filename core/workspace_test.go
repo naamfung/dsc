@@ -166,3 +166,32 @@ func TestWorkspaceRootFallback(t *testing.T) {
 		t.Errorf("WorkspaceRoot %s 不可访问: %v", WorkspaceRoot, err)
 	}
 }
+
+// TestPickWorkspaceRootAlwaysSlash 钉死工作空间根这条**路径出口**的归一纪律：
+// 它会被拼进工具结果、沙箱提示并注入各插件进程，故回退链的每个分支都必须吐正斜杆
+// ——否则 Windows 上 os.Getwd / 环境变量带反斜杆时，模型上下文里就会出现反斜杆路径，
+// 反过来诱导模型用反斜杆书写路径。
+func TestPickWorkspaceRootAlwaysSlash(t *testing.T) {
+	cases := []struct {
+		name              string
+		envRoot, cwd, exe string
+		want              string
+	}{
+		{"注入环境变量优先", `C:/ws/root`, `D:/cwd`, `E:/bin/dsc.exe`, "C:/ws/root"},
+		{"无注入取启动目录", "", `D:/cwd`, `E:/bin/dsc.exe`, "D:/cwd"},
+		{"二者皆无取可执行文件目录", "", "", `E:/bin/dsc.exe`, "E:/bin"},
+		{"全部未取到回落当前目录", "", "", "", "."},
+		{"已是正斜杆则原样", "/tmp/ws", "", "", "/tmp/ws"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pickWorkspaceRoot(c.envRoot, c.cwd, c.exe)
+			if got != c.want {
+				t.Fatalf("pickWorkspaceRoot(%q, %q, %q) = %q, want %q", c.envRoot, c.cwd, c.exe, got, c.want)
+			}
+			if strings.Contains(got, `\`) {
+				t.Fatalf("工作空间根不得含反斜杆: %q", got)
+			}
+		})
+	}
+}

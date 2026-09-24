@@ -142,12 +142,14 @@ func TestMapWorkspacePathDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveWorkspacePath: %v", err)
 	}
-	// 相对路径锚定工作空间根并绝对化；want 与实现同取 filepath.Abs（Windows 上
-	// 为 POSIX 形态的 root 补当前盘符，Linux 上原样）。
-	want, err := filepath.Abs(filepath.Join("/tmp/myws", "docs", "a.md"))
+	// 相对路径锚定工作空间根并绝对化；结果**一律正斜杆**（仓库 POSIX 路径纪律：路径
+	// 出入口都归一，避免反斜杆污染模型上下文），故期望值亦用 filepath.ToSlash 表达。
+	// want 与实现同取 filepath.Abs（Windows 上为 POSIX 形态的 root 补当前盘符，Linux 上原样）。
+	wantAbs, err := filepath.Abs(filepath.Join("/tmp/myws", "docs", "a.md"))
 	if err != nil {
 		t.Fatalf("abs: %v", err)
 	}
+	want := filepath.ToSlash(wantAbs)
 	if got != want {
 		t.Fatalf("ResolveWorkspacePath = %q, want %q", got, want)
 	}
