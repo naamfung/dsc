@@ -1,27 +1,27 @@
 # tool-pdf
 
-DSC 插件：为模型提供读取 PDF 文件以及创建 PDF 文件的能力。
+DSC 插件：為模型提供讀取 PDF 文件以及創建 PDF 文件的能力。
 
-## 设计
+## 設計
 
-基于 [pdfcpu](https://github.com/pdfcpu/pdfcpu) 库（Apache 2.0）实现 PDF 结构解析与内容流提取，
-自写文本操作符解释器与字体编码解码层（WinAnsi/MacRoman/StandardEncoding + ToUnicode CMap）。
+基於 [pdfcpu](https://github.com/pdfcpu/pdfcpu) 庫（Apache 2.0）實現 PDF 結構解析與內容流提取，
+自寫文本操作符解釋器與字體編碼解碼層（WinAnsi/MacRoman/StandardEncoding + ToUnicode CMap）。
 
-pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节），不提供「文本提取」能力——
-其 `api.ExtractContent` 返回的是 PDF 内容流操作符（如 `[(Hello) -100 (World)] TJ`），不是纯文本。
-本插件填补这最后一层：把操作符序列解释为带位置的文本片段，经字体字典解码为 Unicode，按视觉行重组。
+pdfcpu 本身只解析 PDF 結構（XRefTable、字體字典、內容流字節），不提供「文本提取」能力——
+其 `api.ExtractContent` 返回的是 PDF 內容流操作符（如 `[(Hello) -100 (World)] TJ`），不是純文本。
+本插件填補這最後一層：把操作符序列解釋為帶位置的文本片段，經字體字典解碼為 Unicode，按視覺行重組。
 
-创建侧把自带的 TrueType 中文字体注册进 pdfcpu 的字体嵌入机制，走 Type0 嵌入子集路径渲染中文，
-并按可用行宽做字符级折行（含避头尾 kinsoku 规则）。
+創建側把自帶的 TrueType 中文字體註冊進 pdfcpu 的字體嵌入機制，走 Type0 嵌入子集路徑渲染中文，
+並按可用行寬做字符級折行（含避頭尾 kinsoku 規則）。
 
-### 架构
+### 架構
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  tool-pdf 插件（main.go）                                    │
 │    ├─ handleReadText   ─┐                                    │
 │    ├─ handleInfo         │                                    │
-│    ├─ handleOutline      ├─→ loadPDFContext (缓存 Context)    │
+│    ├─ handleOutline      ├─→ loadPDFContext (緩存 Context)    │
 │    ├─ handleSearch       │       ↓                            │
 │    └─ handleExtractImages┘   pdfcpu ReadValidateAndOptimize │
 │                                                              │
@@ -30,97 +30,97 @@ pdfcpu 本身只解析 PDF 结构（XRefTable、字体字典、内容流字节�
 │    │                              ↓                          │
 │    │     ┌── ToUnicode CMap (parseToUnicodeCMap) ────┐       │
 │    │     ├── Encoding.Differences (parseDifferences) │       │
-│    │     └── 基础编码 (WinAnsi/MacRoman/Standard) ───┘       │
+│    │     └── 基礎編碼 (WinAnsi/MacRoman/Standard) ───┘       │
 │    ├─ tokenizeContentStream (content_stream.go)              │
-│    └─ interpretTextOperators → renderLines (位置感知行重组)  │
+│    └─ interpretTextOperators → renderLines (位置感知行重組)  │
 │                                                              │
 │  font_decoder.go                                            │
 │    └─ decode(bytes) → Unicode string                        │
 │                                                              │
-│  pdf_writer.go + font_cjk.go（创建侧）                      │
-│    ├─ resolveFontName：标准 14 或自带 CJK 字体解析           │
-│    ├─ wrapTextForRender：CJK 按行宽折行（避头尾）            │
+│  pdf_writer.go + font_cjk.go（創建側）                      │
+│    ├─ resolveFontName：標準 14 或自帶 CJK 字體解析           │
+│    ├─ wrapTextForRender：CJK 按行寬折行（避頭尾）            │
 │    └─ createPDFFromText / handleAppendText                  │
-│        标准 14 字体：直接写字符码                             │
-│        CJK 字体：注册 fonts/ 下 .ttf → Embed=GID → 子集嵌入  │
+│        標準 14 字體：直接寫字符碼                             │
+│        CJK 字體：註冊 fonts/ 下 .ttf → Embed=GID → 子集嵌入  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 字体解码优先级（读取侧）
+### 字體解碼優先級（讀取側）
 
-1. **ToUnicode CMap**（最高优先级）：直接给出 Unicode 字符，最可靠
-2. **Encoding.Differences**：覆盖基础编码的字符映射
+1. **ToUnicode CMap**（最高優先級）：直接給出 Unicode 字符，最可靠
+2. **Encoding.Differences**：覆蓋基礎編碼的字符映射
 3. **BaseEncoding**：WinAnsi / MacRoman / StandardEncoding
-4. **默认**：基础 14 字体用 StandardEncoding，其余用 WinAnsi
+4. **默認**：基礎 14 字體用 StandardEncoding，其餘用 WinAnsi
 
-不可识别的字节回退为 `?`，保证不返回错误——便于模型判断是否值得继续。
+不可識別的字節回退為 `?`，保證不返回錯誤——便於模型判斷是否值得繼續。
 
-## 模型可见工具
+## 模型可見工具
 
-### 读取侧（6 个）
-
-| 工具 | 用途 |
-|------|------|
-| `pdf_read_text` | 提取纯文本（按页或选页，支持 WinAnsi/MacRoman/CJK ToUnicode CMap 字体解码） |
-| `pdf_extract_tables` | 检测并输出表格结构（列对齐网格，列间以竖线分隔） |
-| `pdf_info` | 元数据（页数、版本、页面尺寸、加密状态、标题/作者/主题/关键词） |
-| `pdf_outline` | 书签大纲（目录树） |
-| `pdf_search` | 全文搜索关键词（返回命中页号与上下文片段） |
-| `pdf_extract_images` | 提取嵌入图片到本地目录 |
-
-### 创建与整理侧（6 个）
+### 讀取側（6 個）
 
 | 工具 | 用途 |
 |------|------|
-| `pdf_create_text` | 从纯文本创建 PDF（自动分页与 CJK 折行，标准 14 字体 + 内置 CJK 字体，A4/Letter/Legal 纸张） |
-| `pdf_images_to_pdf` | 图片列表转 PDF（每张图一页，支持 JPG/PNG/TIFF/WEBP） |
-| `pdf_append_text` | 向已有 PDF 末尾追加文本页（保留原内容，支持 CJK 字体与折行） |
-| `pdf_merge_pdfs` | 合并多个 PDF 为一个（保序，可选分隔页） |
-| `pdf_split_pdfs` | 按页拆分为多个 PDF（默认每页一段，可指定 span） |
-| `pdf_extract_pages` | 从 PDF 抽选页生成新 PDF（如 `"1,3,5-7"`） |
+| `pdf_read_text` | 提取純文本（按頁或選頁，支持 WinAnsi/MacRoman/CJK ToUnicode CMap 字體解碼） |
+| `pdf_extract_tables` | 檢測並輸出表格結構（列對齊網格，列間以豎線分隔） |
+| `pdf_info` | 元數據（頁數、版本、頁面尺寸、加密狀態、標題/作者/主題/關鍵詞） |
+| `pdf_outline` | 書籤大綱（目錄樹） |
+| `pdf_search` | 全文搜索關鍵詞（返回命中頁號與上下文片段） |
+| `pdf_extract_images` | 提取嵌入圖片到本地目錄 |
 
-> 页面转图（`pdf_to_images`）**当前临时禁用**：其依赖外部渲染器（mutool / pdftoppm / Ghostscript），
-> 未真机验证。实现保留在 `pdf_render.go`，恢复时取消 `main.go` 中注册块注释即可。
+### 創建與整理側（6 個）
 
-## 创建 PDF 字体支持
+| 工具 | 用途 |
+|------|------|
+| `pdf_create_text` | 從純文本創建 PDF（自動分頁與 CJK 折行，標準 14 字體 + 內置 CJK 字體，A4/Letter/Legal 紙張） |
+| `pdf_images_to_pdf` | 圖片列表轉 PDF（每張圖一頁，支持 JPG/PNG/TIFF/WEBP） |
+| `pdf_append_text` | 向已有 PDF 末尾追加文本頁（保留原內容，支持 CJK 字體與折行） |
+| `pdf_merge_pdfs` | 合併多個 PDF 為一個（保序，可選分隔頁） |
+| `pdf_split_pdfs` | 按頁拆分為多個 PDF（默認每頁一段，可指定 span） |
+| `pdf_extract_pages` | 從 PDF 抽選頁生成新 PDF（如 `"1,3,5-7"`） |
 
-### 标准 14 字体（无需嵌入，开箱即用）
+> 頁面轉圖（`pdf_to_images`）**當前臨時禁用**：其依賴外部渲染器（mutool / pdftoppm / Ghostscript），
+> 未真機驗證。實現保留在 `pdf_render.go`，恢復時取消 `main.go` 中註冊塊註釋即可。
+
+## 創建 PDF 字體支持
+
+### 標準 14 字體（無需嵌入，開箱即用）
 
 - **Times**: Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic
 - **Helvetica**: Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique
 - **Courier**: Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique
-- **Symbol**: Symbol（希腊字母与数学符号）
-- **ZapfDingbats**: ZapfDingbats（装饰符号）
+- **Symbol**: Symbol（希臘字母與數學符號）
+- **ZapfDingbats**: ZapfDingbats（裝飾符號）
 
-### 内置 CJK 字体（支持中文等字符，自动嵌入）
+### 內置 CJK 字體（支持中文等字符，自動嵌入）
 
-**字体需自行下载（启动强制校验）**：字体体积大，不进公开仓库，`fonts/` 目录中的字体文件未随源码跟踪。
-插件启动时检查 fonts 目录，未检测到任何 `.ttf` 字体（中文渲染必需）则直接 PANIC 拒绝启动并打印下载指引——
-使用本插件必须先下载字体。需按 `fonts/字体下载.txt` 的地址自行下载后放入 `plugins/tool-pdf/fonts/`
-（部署时随插件二进制一起，运行时查找优先级：环境变量 `TOOL_PDF_FONTS_DIR` → 可执行文件同级 `fonts/` →
-工作目录 `fonts/`）。当前推荐 HarmonyOS Sans（简体中文字重）。
+**字體需自行下載（啓動強制校驗）**：字體體積大，不進公開倉庫，`fonts/` 目錄中的字體文件未隨源碼跟蹤。
+插件啓動時檢查 fonts 目錄，未檢測到任何 `.ttf` 字體（中文渲染必需）則直接 PANIC 拒絕啓動並打印下載指引——
+使用本插件必須先下載字體。需按 `fonts/字体下载.txt` 的地址自行下載後放入 `plugins/tool-pdf/fonts/`
+（部署時隨插件二進制一起，運行時查找優先級：環境變量 `TOOL_PDF_FONTS_DIR` → 可執行文件同級 `fonts/` →
+工作目錄 `fonts/`）。當前推薦 HarmonyOS Sans（簡體中文字重）。
 
-`pdf_create_text` / `pdf_append_text` 的 `font` 参数接受这些 `.ttf` 的文件名主干（不含扩展名），
-例如简体中文用 `HarmonyOS_Sans_SC_Regular`。
+`pdf_create_text` / `pdf_append_text` 的 `font` 參數接受這些 `.ttf` 的文件名主幹（不含擴展名），
+例如簡體中文用 `HarmonyOS_Sans_SC_Regular`。
 
-实现方式：把选中的 `.ttf` 安装进 pdfcpu 的「用户字体注册表」（进程级临时目录，不污染用户主页），
-经 `EnsureFontDict` 生成 **Identity-H + CIDToGIDMap Identity** 的 Type0 嵌入子集字体；
-`WriteMultiLine` 以 `Embed` 模式把每个 Unicode 码点编码为 2 字节 GID 并累计 `UsedGIDs`，
-写入前调用 `UpdateUserfonts` 按已用 GID 收尾（子集化、写宽度/CIDSet/ToUnicode）。
-CJK 文本按页面可用行宽做字符级折行，复用 pdfcpu 的 `WordWrapFloat`（自动避头尾，
-禁止行首/行尾悬挂禁则标点）。
+實現方式：把選中的 `.ttf` 安裝進 pdfcpu 的「用户字體註冊表」（進程級臨時目錄，不污染用户主頁），
+經 `EnsureFontDict` 生成 **Identity-H + CIDToGIDMap Identity** 的 Type0 嵌入子集字體；
+`WriteMultiLine` 以 `Embed` 模式把每個 Unicode 碼點編碼為 2 字節 GID 並累計 `UsedGIDs`，
+寫入前調用 `UpdateUserfonts` 按已用 GID 收尾（子集化、寫寬度/CIDSet/ToUnicode）。
+CJK 文本按頁面可用行寬做字符級折行，複用 pdfcpu 的 `WordWrapFloat`（自動避頭尾，
+禁止行首/行尾懸掛禁則標點）。
 
-生成的 PDF 嵌入字体子集并携带 ToUnicode CMap，可被本插件 `pdf_read_text` 及第三方阅读器正常提取中文。
+生成的 PDF 嵌入字體子集並攜帶 ToUnicode CMap，可被本插件 `pdf_read_text` 及第三方閲讀器正常提取中文。
 
 ## 沙箱
 
-所有文件路径必须在工作空间根（`DSC_WORKSPACE_ROOT` 环境变量）内。
-`out_dir` 参数同样受沙箱约束，防止模型写入工作空间外。
-对齐 DSC 沙箱策略（与 `tool-filesystem` 同款校验）。
+所有文件路徑必須在工作空間根（`DSC_WORKSPACE_ROOT` 環境變量）內。
+`out_dir` 參數同樣受沙箱約束，防止模型寫入工作空間外。
+對齊 DSC 沙箱策略（與 `tool-filesystem` 同款校驗）。
 
 ## 配置
 
-在 `config.yaml` 中声明：
+在 `config.yaml` 中聲明：
 
 ```yaml
 plugins:
@@ -130,22 +130,22 @@ plugins:
     binary_path: ./plugins/tool-pdf/tool-pdf
 ```
 
-`fonts/` 目录不进公开仓库，需按「内置 CJK 字体」一节所述自行下载字体文件，并随插件二进制一起部署
-（查找优先级：可执行文件同级 `fonts/` → 工作目录 `fonts/`）。若缺失字体，中文创建会返回「bundled font ... not found」错误。
+`fonts/` 目錄不進公開倉庫，需按「內置 CJK 字體」一節所述自行下載字體文件，並隨插件二進制一起部署
+（查找優先級：可執行文件同級 `fonts/` → 工作目錄 `fonts/`）。若缺失字體，中文創建會返回「bundled font ... not found」錯誤。
 
 ## 限制
 
-- **TJ 字偶间距启发式**：把 TJ 数组的 kerning 按 em 折算成前向间距，只有达到词间隔下限
-  （约 0.22 em）才插空格，且**连续 ≥3 个大间距判定为均匀字距（tracking）不插空格**——
-  明显减少代码字体、装饰性行距的误插。尽管如此仍属启发式，极端字距组合仍可能失准。
-- **CID 字体无 ToUnicode（读取侧）**：缺 ToUnicode 时已提供回退——从内嵌 TrueType
-  （FontFile2）的 cmap 解析 GID→Unicode（Identity CIDToGIDMap 场景），扩大中文可读范围；
-  仅当既无 ToUnicode、又非嵌入 TrueType 时才输出 `?`（可经 `pdf_extract_images` 走视觉路径）。
-- **加密 PDF**：当前不支持密码输入；加密 PDF 的 `pdf_read_text` 会失败。
-- **位置感知**：按 y 聚合行；行内按横向间隙识别多栏并以制表符分隔；`Tm` 的旋转角
-  非零文本单独分区输出（标注 `〔rotate N°〕`），避免混入正常行。不恢复斜排/镜像等复杂版面。
-- **表格提取为启发式**：`pdf_extract_tables` 基于整页 x 对齐聚类，仅覆盖常规报表/发票/
-  日程等对齐列布局，不恢复表格边框、合并单元格。
-- **页面转图暂时禁用**：`pdf_to_images` 依赖外部渲染器且未真机验证，当前未注册；恢复方式见上文。
-- **CJK 分页行距**：用字体真实行高（下限 1.2×字号）计算每页行数，替代固定的 1.5×字号；
-  折行后的行数计入分页。
+- **TJ 字偶間距啓發式**：把 TJ 數組的 kerning 按 em 折算成前向間距，只有達到詞間隔下限
+  （約 0.22 em）才插空格，且**連續 ≥3 個大間距判定為均勻字距（tracking）不插空格**——
+  明顯減少代碼字體、裝飾性行距的誤插。儘管如此仍屬啓發式，極端字距組合仍可能失準。
+- **CID 字體無 ToUnicode（讀取側）**：缺 ToUnicode 時已提供回退——從內嵌 TrueType
+  （FontFile2）的 cmap 解析 GID→Unicode（Identity CIDToGIDMap 場景），擴大中文可讀範圍；
+  僅當既無 ToUnicode、又非嵌入 TrueType 時才輸出 `?`（可經 `pdf_extract_images` 走視覺路徑）。
+- **加密 PDF**：當前不支持密碼輸入；加密 PDF 的 `pdf_read_text` 會失敗。
+- **位置感知**：按 y 聚合行；行內按橫向間隙識別多欄並以製表符分隔；`Tm` 的旋轉角
+  非零文本單獨分區輸出（標註 `〔rotate N°〕`），避免混入正常行。不恢復斜排/鏡像等複雜版面。
+- **表格提取為啓發式**：`pdf_extract_tables` 基於整頁 x 對齊聚類，僅覆蓋常規報表/發票/
+  日程等對齊列布局，不恢復表格邊框、合併單元格。
+- **頁面轉圖暫時禁用**：`pdf_to_images` 依賴外部渲染器且未真機驗證，當前未註冊；恢復方式見上文。
+- **CJK 分頁行距**：用字體真實行高（下限 1.2×字號）計算每頁行數，替代固定的 1.5×字號；
+  折行後的行數計入分頁。

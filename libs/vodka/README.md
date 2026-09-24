@@ -148,7 +148,7 @@ func main() {
 
 	var secret = "secret"
 	var exprires = time.Minute * 1
-	// 给用户返回token之前请先密码验证用户身份
+	// 給用户返回token之前請先密碼驗證用户身份
 	m.Post("/signin/", func(self *vodka.Context) error {
 
 		fmt.Println(self.Response.String())
@@ -276,7 +276,7 @@ func main() {
 		Directory:   "locale",
 		DefaultLang: "zh-CN",
 		Langs:       []string{"en-US", "zh-CN"},
-		Names:       []string{"English", "简体中文"},
+		Names:       []string{"English", "簡體中文"},
 		Redirect:    true,
 	}))
 
@@ -326,7 +326,7 @@ func main() {
 			"title": "你好，世界",
 			"oh":    "no",
 		})
-		self.Set("oh", "yes") //覆盖前面指定KEY
+		self.Set("oh", "yes") //覆蓋前面指定KEY
 		return self.Render("index")
 	})
 
@@ -382,7 +382,7 @@ func main() {
 			"title": "你好，世界",
 			"oh":    "no",
 		})
-		self.Set("oh", "yes") //覆盖前面指定KEY
+		self.Set("oh", "yes") //覆蓋前面指定KEY
 		return self.Render("index")
 	})
 

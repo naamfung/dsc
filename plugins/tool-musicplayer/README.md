@@ -1,19 +1,19 @@
-# musicplayer（DSC 音乐播放工具插件）
+# musicplayer（DSC 音樂播放工具插件）
 
-DSC 宿主上的 tool 类型插件：提供音乐/音频播放工具，支持播放内置音效与本地 MP3/WAV
-文件，全局采样率统一为 44100Hz 立体声 16bit。
+DSC 宿主上的 tool 類型插件：提供音樂/音頻播放工具，支持播放內置音效與本地 MP3/WAV
+文件，全局採樣率統一為 44100Hz 立體聲 16bit。
 
-## 平台说明
+## 平台説明
 
-本插件依赖 `github.com/ebitengine/oto/v3` 音频库输出 PCM。
+本插件依賴 `github.com/ebitengine/oto/v3` 音頻庫輸出 PCM。
 
-- 受支持平台：目标平台集七端全部支持（`darwin/amd64`、`darwin/arm64`、
+- 受支持平台：目標平台集七端全部支持（`darwin/amd64`、`darwin/arm64`、
   `windows/amd64`、`linux/amd64`、`linux/arm64`、`linux/loong64`、`freebsd/amd64`）。
-  oto v3.5.0 起 Unix 侧全部为纯 Go 驱动：Linux/FreeBSD 默认走 PulseAudio（纯 Go
-  客户端），失败时回退 ALSA（purego 运行时动态加载 `libasound.so.2`），编译期不再
-  需要 ALSA 开发头文件与 pkg-config，`CGO_ENABLED=0` 即可交叉编译全部七端。
-- `freebsd/amd64`：以 `CGO_ENABLED=0` 纯 Go 交叉编译时，因 purego fakecgo 的
-  限制须附加 `-gcflags="github.com/ebitengine/purego/internal/fakecgo=-std"`。
-- 运行时依赖：Linux/FreeBSD 播放声音须系统存在 PulseAudio 服务或 ALSA 运行时库
-  （`libasound.so.2`），两者皆无时音频初始化报错；可用 `DSC_MUSICPLAYER_NO_AUDIO=1`
-  跳过音频初始化。
+  oto v3.5.0 起 Unix 側全部為純 Go 驅動：Linux/FreeBSD 默認走 PulseAudio（純 Go
+  客户端），失敗時回退 ALSA（purego 運行時動態加載 `libasound.so.2`），編譯期不再
+  需要 ALSA 開發頭文件與 pkg-config，`CGO_ENABLED=0` 即可交叉編譯全部七端。
+- `freebsd/amd64`：以 `CGO_ENABLED=0` 純 Go 交叉編譯時，因 purego fakecgo 的
+  限制須附加 `-gcflags="github.com/ebitengine/purego/internal/fakecgo=-std"`。
+- 運行時依賴：Linux/FreeBSD 播放聲音須系統存在 PulseAudio 服務或 ALSA 運行時庫
+  （`libasound.so.2`），兩者皆無時音頻初始化報錯；可用 `DSC_MUSICPLAYER_NO_AUDIO=1`
+  跳過音頻初始化。

@@ -29,7 +29,7 @@ prior is a priority queue based on golang container/heap.
 
     func main() {
         pq := prior.NewPriorityQueue()
-        //写入队列
+        //寫入隊列
         type Meta struct {
             Timestamp int64
             Symbol    string
@@ -53,7 +53,7 @@ prior is a priority queue based on golang container/heap.
             pq.AddNode(nil, meta, meta.Price*-1)
         }
 
-        //读取队列
+        //讀取隊列
         for pq.Length() > 0 {
             v := pq.Pop()
             if v == nil {

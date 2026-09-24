@@ -29,7 +29,7 @@ func main() {
 		return self.JSON(data, vodka.StatusOK)
 	})
 
-	// 给用户返回token之前请先密码验证用户身份
+	// 給用户返回token之前請先密碼驗證用户身份
 	m.Post("/signin/", func(self *vodka.Context) error {
 		username := self.Args("username").String()
 		password := self.Args("password").String()

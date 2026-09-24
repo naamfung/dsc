@@ -23,7 +23,7 @@ func main() {
 		Directory:   "locale",
 		DefaultLang: "zh-CN",
 		Langs:       []string{"en-US", "zh-CN"},
-		Names:       []string{"English", "简体中文"},
+		Names:       []string{"English", "簡體中文"},
 		Redirect:    true,
 	}))
 
