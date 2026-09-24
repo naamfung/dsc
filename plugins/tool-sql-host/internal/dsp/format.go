@@ -403,7 +403,7 @@ func (p *Plugin) StateKeys() ([]string, error) {
 	return out, err
 }
 
-// CountState 返回状态键数量（供 list_sql_plugins 概览）。
+// CountState 返回状态键数量（供 list_dsp_plugins 概览）。
 func (p *Plugin) CountState() int {
 	var n int
 	err := p.withDB(func(db *sql.DB) error {

@@ -13,12 +13,12 @@ import (
 )
 
 // listToolName 列出已加载 .dsp 插件的只读工具名。
-const listToolName = "list_sql_plugins"
+const listToolName = "list_dsp_plugins"
 
 // packToolName 打包 .dsp 的工具名（仅创造模式暴露）。
 const packToolName = "pack_dsp"
 
-// baseTools 返回与插件加载状态无关的静态工具（list_sql_plugins，创造模式下加 pack_dsp）。
+// baseTools 返回与插件加载状态无关的静态工具（list_dsp_plugins，创造模式下加 pack_dsp）。
 func baseTools(creation bool) []dsc.Tool {
 	out := []dsc.Tool{listPluginsTool()}
 	if creation {
@@ -31,9 +31,11 @@ func baseTools(creation bool) []dsc.Tool {
 // 自持状态键数、内容哈希），只读，供模型在创建/排查插件前先看清现状。
 func listPluginsTool() dsc.Tool {
 	return dsc.Tool{
-		Name:        listToolName,
-		Description: "List the .dsp plugins currently loaded by tool-sql-host: each is a single SQLite database file (suffix .dsp) that carries its own metadata, code and runtime state. Returns name, path, language, entry, registered tools, state key count, blob count and content hash. Read-only; loads nothing new.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Name: listToolName,
+		Description: "List the .dsp plugins currently loaded by tool-sql-host: each is a single SQLite database file (suffix .dsp, 'dsc's plugin') that carries its own metadata, code and runtime state. " +
+			"Tools registered by those plugins are exposed to you with the dsp_ prefix (dsp = the .dsp carrier these tools come from), e.g. dsp_hello — so the prefix tells you the origin, not that the tool is about SQL. " +
+			"Returns name, path, language, entry, registered tools, state key count, blob count and content hash. Read-only; loads nothing new.",
+		Schema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		Handler: func(ctx context.Context, _ json.RawMessage) (string, error) {
 			h := holder.get()
 			if h == nil {
@@ -100,7 +102,7 @@ func packDspTool() dsc.Tool {
 "name":{"type":"string","description":"插件名（可选，缺省取源目录名或 dsp.yaml 的 name）。仅允许 [A-Za-z0-9_-]。"},
 "language":{"type":"string","description":"载体语言（可选，缺省 lua；当前仅支持 lua）。"},
 "entry":{"type":"string","description":"入口脚本（可选，缺省 main.lua）。"},
-"description":{"type":"string","description":"插件描述（可选，写入 dsp_meta 供 list_sql_plugins 展示）。"},
+"description":{"type":"string","description":"插件描述（可选，写入 dsp_meta 供 list_dsp_plugins 展示）。"},
 "version":{"type":"string","description":"插件版本（可选）。"}
 },"required":["source","output"],"additionalProperties":false}`),
 		Handler: func(_ context.Context, args json.RawMessage) (string, error) {

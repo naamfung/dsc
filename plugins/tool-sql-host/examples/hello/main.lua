@@ -27,7 +27,7 @@ local function hello(args: HelloArgs): string
     if who == nil then
         who = "world"
     end
-    dsc.notify.emit("sql/hello", { who = who, count = n })
+    dsc.notify.emit("dsp/hello", { who = who, count = n })
     return lib.greet(who) .. "（第 " .. tostring(n) .. " 次调用；插件 " .. dsc.plugin.name .. "）"
 end
 

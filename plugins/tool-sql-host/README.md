@@ -22,7 +22,12 @@ SQLite 數據庫，插件的**元數據、代碼與運行期狀態同處一庫**
 
 - 只認後綴為 `.dsp` 的普通文件（SQLite 的 `-journal`/`-wal`/`-shm` 伴生文件天然被排除）。
 - 每個 `.dsp` 一個獨立 LUA VM；插件內腳本經 `dsc.register_tool` 註冊的工具以
-  `sql_` 前綴暴露給宿主，避免與其他插件重名。
+  `dsp_` 前綴暴露給宿主，避免與其他插件重名。前綴表達的是**來源**而非**能力**：這些
+  工具可以是任何事（打招呼、寫筆記…），故不按載體技術取名 `sql_`（會讓模型誤以為與
+  SQL 查詢有關），而用與載體同名的 `dsp_`（`.dsp` = dsc's plugin），並與庫內保留表
+  前綴（`dsp_meta`/`dsp_blobs`/`dsp_state`）同源同義；模型看到 `dsp_<name>` 即知它來自
+  某個 `.dsp` 插件，用 `list_dsp_plugins` 可查到具體歸屬。腳本側的 `dsc.sql.*` 內建
+  仍叫 `sql`——它們命名的是真實 SQL 操作，名副其實。
 - **熱加載**：輪詢（2s）比對**產物哈希**（覆蓋元數據與代碼 blob，不含狀態），
   變化即卸載重載。插件寫自己的狀態不會觸發重載——這正是狀態能與代碼同居一庫的前提。
 - **創造模式門控**：非創造模式（`DSC_MODE`）下僅加載啓動時已存在的插件，禁用熱加載
@@ -84,7 +89,7 @@ go run ./cmd/dsp-pack -o dsp/hello.dsp ./examples/hello
 
 | 內建 | 説明 |
 | :--- | :--- |
-| `dsc.register_tool(name, spec, fn)` | 註冊工具（暴露為 `sql_<name>`） |
+| `dsc.register_tool(name, spec, fn)` | 註冊工具（暴露為 `dsp_<name>`） |
 | `dsc.store.get/set/delete(k[, v])` | 自持狀態 KV，落盤在自身 `.dsp` 的 `dsp_state`，重啓不丟 |
 | `dsc.sql.query(stmt[, params])` | 對自己那個庫做查詢，返回行數組 |
 | `dsc.sql.exec(stmt[, params])` | 對自己那個庫做寫操作，返回受影響行數 |

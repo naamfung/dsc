@@ -82,7 +82,7 @@ func TestE2EWithHostClient(t *testing.T) {
 	if !hasTool(list, listToolName) || !hasTool(list, packToolName) {
 		t.Fatalf("握手前应已有 %s/%s，实际 %v", listToolName, packToolName, toolNameList(list))
 	}
-	if hasTool(list, "sql_hello") {
+	if hasTool(list, "dsp_hello") {
 		t.Fatal("握手前不应加载 .dsp 插件")
 	}
 
@@ -94,26 +94,26 @@ func TestE2EWithHostClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	for _, want := range []string{listToolName, packToolName, "sql_hello", "sql_note", "sql_stats"} {
+	for _, want := range []string{listToolName, packToolName, "dsp_hello", "dsp_note", "dsp_stats"} {
 		if !hasTool(list, want) {
 			t.Fatalf("工具目录缺 %s，实际 %v", want, toolNameList(list))
 		}
 	}
 
 	// 4. 执行 .dsp 内的工具：脚本注册 → ToolProvider → SDK ToolService 全链路。
-	// 用 sql_note（自带表读写，不依赖宿主互通服务）——本测试宿主侧不挂 Notify 服务，
+	// 用 dsp_note（自带表读写，不依赖宿主互通服务）——本测试宿主侧不挂 Notify 服务，
 	// 而 dsc.notify.emit 在未注入时按设计硬报错（事件通知链路由 host 单测以替身覆盖）。
 	resp, err := tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{
-		ToolName: "sql_note", ArgumentsJson: `{"text":"e2e"}`,
+		ToolName: "dsp_note", ArgumentsJson: `{"text":"e2e"}`,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteTool(sql_note): %v", err)
+		t.Fatalf("ExecuteTool(dsp_note): %v", err)
 	}
 	if resp.Error != "" || !strings.Contains(resp.Content, "e2e") || !strings.Contains(resp.Content, "共 1 条") {
-		t.Fatalf("sql_note 结果 = %+v", resp)
+		t.Fatalf("dsp_note 结果 = %+v", resp)
 	}
 
-	// 5. list_sql_plugins：插件的路径/语言/工具数如实反映
+	// 5. list_dsp_plugins：插件的路径/语言/工具数如实反映
 	resp, err = tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{
 		ToolName: listToolName, ArgumentsJson: `{}`,
 	})
@@ -130,13 +130,13 @@ func TestE2EWithHostClient(t *testing.T) {
 		} `json:"plugins"`
 	}
 	if err := json.Unmarshal([]byte(resp.Content), &payload); err != nil {
-		t.Fatalf("list_sql_plugins 结果非法: %v (%s)", err, resp.Content)
+		t.Fatalf("list_dsp_plugins 结果非法: %v (%s)", err, resp.Content)
 	}
 	if payload.Count != 1 || payload.Plugins[0].Name != "hello" || payload.Plugins[0].Language != "lua" {
-		t.Fatalf("list_sql_plugins = %s", resp.Content)
+		t.Fatalf("list_dsp_plugins = %s", resp.Content)
 	}
 	if !strings.HasSuffix(payload.Plugins[0].Path, "hello.dsp") || len(payload.Plugins[0].Tools) != 3 {
-		t.Fatalf("list_sql_plugins 字段不符 = %+v", payload.Plugins[0])
+		t.Fatalf("list_dsp_plugins 字段不符 = %+v", payload.Plugins[0])
 	}
 }
 
@@ -150,7 +150,7 @@ func TestBaseToolsGateByCreationMode(t *testing.T) {
 		t.Fatal("非创造模式不应暴露 pack_dsp")
 	}
 	if !hasToolName(baseTools(false), listToolName) || !hasToolName(baseTools(true), listToolName) {
-		t.Fatal("list_sql_plugins 应始终可用")
+		t.Fatal("list_dsp_plugins 应始终可用")
 	}
 }
 

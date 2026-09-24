@@ -95,8 +95,8 @@ dsc.register_tool("mytool", { description = "自包含测试工具", parameters 
 		t.Fatalf("SetInterconnect: %v", err)
 	}
 
-	// 3. ListTools：.dsp 内脚本注册的 mytool 以 sql_ 前缀经 ToolProvider → SDK 可见
-	const toolName = "sql_mytool"
+	// 3. ListTools：.dsp 内脚本注册的 mytool 以 dsp_ 前缀经 ToolProvider → SDK 可见
+	const toolName = "dsp_mytool"
 	defs, _, err := listStagedTools(toolClient)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)

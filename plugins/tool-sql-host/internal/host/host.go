@@ -31,7 +31,7 @@ type JobEntry struct {
 	Error  string
 }
 
-// PluginInfo 是已加载 .dsp 插件的对外概览（供 list_sql_plugins 展示/审计）。
+// PluginInfo 是已加载 .dsp 插件的对外概览（供 list_dsp_plugins 展示/审计）。
 type PluginInfo struct {
 	Name      string   `json:"name"`
 	Path      string   `json:"path"`
@@ -50,7 +50,7 @@ type Host struct {
 	dirs     []string // 插件目录列表（.dsp 文件散落在目录内，多个目录等价）
 	services *bindings.Services
 	plugins  map[string]*Plugin
-	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 sql_ 前缀）
+	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 dsp_ 前缀）
 	stop     chan struct{}
 	stopOne  sync.Once
 	logf     func(string, ...any)
@@ -265,7 +265,7 @@ func (h *Host) ListTools() []*proto.Tool {
 	return out
 }
 
-// ListPlugins 返回已加载插件的概览（按名升序），供 list_sql_plugins 展示与审计。
+// ListPlugins 返回已加载插件的概览（按名升序），供 list_dsp_plugins 展示与审计。
 func (h *Host) ListPlugins() []PluginInfo {
 	h.mu.Lock()
 	plugins := make([]*Plugin, 0, len(h.plugins))

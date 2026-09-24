@@ -84,7 +84,7 @@ func main() {
 	})
 
 	// 动态工具：插件注册的工具每次 ListTools/ExecuteTool 求值（插件可热加载增删）。
-	// 头部注入静态只读工具 list_sql_plugins；创造模式下再加打包工具 pack_dsp。
+	// 头部注入静态只读工具 list_dsp_plugins；创造模式下再加打包工具 pack_dsp。
 	sdk.ToolProvider(func() []dsc.Tool {
 		h := holder.get()
 		out := baseTools(creationMode())
