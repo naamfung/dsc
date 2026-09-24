@@ -41,16 +41,15 @@ type ToolDef struct {
 	Handler     *lua.LFunction
 }
 
-// ToolPrefix 是插件内脚本注册工具的公共前缀，避免与其他插件的工具重名。
+// 插件注册工具的前缀 = 插件名本身（合成规则见 dsc.QualifyToolName）：什么插件注册的
+// 工具，就带什么前缀。插件一多，`mytool` 这样的裸名让模型无从判断归属；曾用载体代号
+// 当前缀（sql_/dsp_）也不解决——它只说明「某个同技术载体的插件」，说不出是哪一个。
+// 用插件名后，工具名与 list_dsp_plugins 列出的插件名逐字对应（如插件 hello 的 greet
+// → hello_greet），归属一看即知。
 //
-// 取 dsp_ 而非按载体技术取名（如 sql_）：前缀表达的是**来源**而非**能力**。这些工具
-// 是宿主里注册的普通工具（可以是打招呼、写笔记等任何事），叫 sql_ 会让模型以为它们
-// 与 SQL 查询有关；dsp_ 指向载体本身（.dsp = dsc's plugin），与文件后缀、以及库内保留
-// 表前缀（dsp_meta/dsp_blobs/dsp_state）同源同义，模型看到 dsp_<name> 即知「来自某个
-// .dsp 插件」，再用 list_dsp_plugins 即可查到这个工具属于哪个插件。（本仓语境下 dsp 专指
-// .dsp 载体，与 digital signal processing 无关。）
-// 注意：脚本侧的 dsc.sql.* 内建仍叫 sql——它们命名的是真实的 SQL 操作，名副其实。
-const ToolPrefix = "dsp_"
+// 注意：库内保留表（dsp_meta/dsp_blobs/dsp_state/dsp_log）仍用 dsp_ 前缀——那是同一个
+// 库文件内部的命名空间，与下发给模型的工具名无关；脚本侧的 dsc.sql.* 内建也仍叫 sql，
+// 它们命名的是真实的 SQL 操作，名副其实。
 
 // loadPlugin 打开 .dsp 并用其入口脚本装配一个 LUA VM。
 // 语法错误阻止加载；类型诊断仅告警（类型系统 pre-convergence，避免误杀）。

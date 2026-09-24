@@ -6,6 +6,10 @@
 --
 -- 演示：dsc.store.*（自持 KV，重启宿主后计数仍在）/ dsc.sql.*（自有表读写）/
 --       dsc.dsp.require（同一 .dsp 内的另一个脚本 blob）/ dsc.notify.emit（宿主事件）
+--
+-- 工具名：脚本里注册的是**短名**（greet/note/stats），宿主加载时统一加插件名前缀再
+-- 暴露给模型（本插件名 hello，故模型看到 hello_greet/hello_note/hello_stats）。前缀
+-- 由宿主按 dsc.QualifyToolName 合成，脚本不必也不该自己写前缀。
 
 type HelloArgs = { name: string? }
 type NoteArgs = { text: string }
@@ -15,7 +19,7 @@ local lib = dsc.dsp.require("lib")
 -- ==================== 自持状态（dsc.store） ====================
 
 -- 调用计数写在插件自身 .dsp 的 dsp_state 里，随文件一起落盘、重启不丢。
-local function hello(args: HelloArgs): string
+local function greet(args: HelloArgs): string
     local n = dsc.store.get("hello_count")
     if n == nil then
         n = 0
@@ -31,13 +35,13 @@ local function hello(args: HelloArgs): string
     return lib.greet(who) .. "（第 " .. tostring(n) .. " 次调用；插件 " .. dsc.plugin.name .. "）"
 end
 
-dsc.register_tool("hello", {
+dsc.register_tool("greet", {
     description = "打招呼，并把调用次数记在插件自身的 .dsp 状态里（演示 dsc.store 自持状态）",
     parameters = {
         type = "object",
         properties = { name = { type = "string", description = "称呼（缺省 world）" } }
     }
-}, hello)
+}, greet)
 
 -- ==================== 自身库 SQL（dsc.sql） ====================
 

@@ -50,7 +50,7 @@ type Host struct {
 	dirs     []string // 插件目录列表（.dsp 文件散落在目录内，多个目录等价）
 	services *bindings.Services
 	plugins  map[string]*Plugin
-	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含 dsp_ 前缀）
+	tools    map[string]*ToolDef // 全量工具表（key: 注册名，含插件名前缀）
 	stop     chan struct{}
 	stopOne  sync.Once
 	logf     func(string, ...any)
@@ -229,10 +229,14 @@ func (h *Host) unloadLocked(name string) {
 	delete(h.plugins, name)
 }
 
-// registerTool 插件注册工具的回调：注册名统一加 ToolPrefix 前缀避免与其他插件冲突。
+// registerTool 插件注册工具的回调：注册名加上插件名前缀（见 vm.go 顶部说明），
+// 既避免与其他插件重名，也让模型从工具名直接看出它出自哪个插件。
 // 注意：由插件加载路径（scan 已持有 h.mu）调用，此处不再加锁。
 func (h *Host) registerTool(p *Plugin, name, desc, paramsJSON string, fn *lua.LFunction) error {
-	full := ToolPrefix + name
+	full, err := dsc.QualifyToolName(p.Name, name)
+	if err != nil {
+		return err
+	}
 	if _, exists := h.tools[full]; exists {
 		return fmt.Errorf("工具 %s 已被注册", full)
 	}

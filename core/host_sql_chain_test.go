@@ -56,8 +56,9 @@ dsc.register_tool("mytool", { description = "自包含测试工具", parameters 
 	if err := os.MkdirAll(dspDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dspPath := filepath.Join(dspDir, "mytool.dsp")
-	if out, err := exec.Command(packer, "-name", "mytool", "-o", dspPath, src).CombinedOutput(); err != nil {
+	// 插件名 demo、脚本注册名 mytool → 模型可见工具名 demo_mytool（<插件名>_<注册名>）
+	dspPath := filepath.Join(dspDir, "demo.dsp")
+	if out, err := exec.Command(packer, "-name", "demo", "-o", dspPath, src).CombinedOutput(); err != nil {
 		t.Fatalf("dsp-pack: %v\n%s", err, out)
 	}
 	before, err := os.ReadFile(dspPath)
@@ -95,8 +96,8 @@ dsc.register_tool("mytool", { description = "自包含测试工具", parameters 
 		t.Fatalf("SetInterconnect: %v", err)
 	}
 
-	// 3. ListTools：.dsp 内脚本注册的 mytool 以 dsp_ 前缀经 ToolProvider → SDK 可见
-	const toolName = "dsp_mytool"
+	// 3. ListTools：.dsp 内脚本注册的 mytool 经 ToolProvider → SDK 可见，名字带插件名前缀
+	const toolName = "demo_mytool"
 	defs, _, err := listStagedTools(toolClient)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)

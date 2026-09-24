@@ -82,7 +82,7 @@ func TestE2EWithHostClient(t *testing.T) {
 	if !hasTool(list, listToolName) || !hasTool(list, packToolName) {
 		t.Fatalf("握手前应已有 %s/%s，实际 %v", listToolName, packToolName, toolNameList(list))
 	}
-	if hasTool(list, "dsp_hello") {
+	if hasTool(list, "hello_greet") {
 		t.Fatal("握手前不应加载 .dsp 插件")
 	}
 
@@ -94,23 +94,23 @@ func TestE2EWithHostClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	for _, want := range []string{listToolName, packToolName, "dsp_hello", "dsp_note", "dsp_stats"} {
+	for _, want := range []string{listToolName, packToolName, "hello_greet", "hello_note", "hello_stats"} {
 		if !hasTool(list, want) {
 			t.Fatalf("工具目录缺 %s，实际 %v", want, toolNameList(list))
 		}
 	}
 
 	// 4. 执行 .dsp 内的工具：脚本注册 → ToolProvider → SDK ToolService 全链路。
-	// 用 dsp_note（自带表读写，不依赖宿主互通服务）——本测试宿主侧不挂 Notify 服务，
+	// 用 hello_note（自带表读写，不依赖宿主互通服务）——本测试宿主侧不挂 Notify 服务，
 	// 而 dsc.notify.emit 在未注入时按设计硬报错（事件通知链路由 host 单测以替身覆盖）。
 	resp, err := tc.ExecuteTool(ctx, &proto.ExecuteToolRequest{
-		ToolName: "dsp_note", ArgumentsJson: `{"text":"e2e"}`,
+		ToolName: "hello_note", ArgumentsJson: `{"text":"e2e"}`,
 	})
 	if err != nil {
-		t.Fatalf("ExecuteTool(dsp_note): %v", err)
+		t.Fatalf("ExecuteTool(hello_note): %v", err)
 	}
 	if resp.Error != "" || !strings.Contains(resp.Content, "e2e") || !strings.Contains(resp.Content, "共 1 条") {
-		t.Fatalf("dsp_note 结果 = %+v", resp)
+		t.Fatalf("hello_note 结果 = %+v", resp)
 	}
 
 	// 5. list_dsp_plugins：插件的路径/语言/工具数如实反映

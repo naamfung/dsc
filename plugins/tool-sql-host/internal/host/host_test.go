@@ -95,18 +95,18 @@ func TestHostLoadsExample(t *testing.T) {
 	rec := &recorder{}
 	h := newHostWith(t, []string{packExample(t, dir)}, true, &bindings.Services{Notify: rec})
 
-	for _, want := range []string{"dsp_hello", "dsp_note", "dsp_stats"} {
+	for _, want := range []string{"hello_greet", "hello_note", "hello_stats"} {
 		if !h.hasTool(want) {
 			t.Fatalf("工具 %s 未注册，实际：%v", want, toolNames(h))
 		}
 	}
 
-	out, err := h.ExecuteTool("dsp_hello", json.RawMessage(`{"name":"DSC"}`))
+	out, err := h.ExecuteTool("hello_greet", json.RawMessage(`{"name":"DSC"}`))
 	if err != nil {
-		t.Fatalf("dsp_hello: %v", err)
+		t.Fatalf("hello_greet: %v", err)
 	}
 	if !strings.Contains(out, "你好，DSC") || !strings.Contains(out, "第 1 次调用") {
-		t.Fatalf("dsp_hello 结果 = %q", out)
+		t.Fatalf("hello_greet 结果 = %q", out)
 	}
 	// dsc.notify.emit 落到宿主事件总线
 	events := rec.all()
@@ -115,30 +115,30 @@ func TestHostLoadsExample(t *testing.T) {
 	}
 
 	// 自持状态：第二次调用计数递增（状态在插件自身 .dsp 内）
-	out, err = h.ExecuteTool("dsp_hello", json.RawMessage(`{}`))
+	out, err = h.ExecuteTool("hello_greet", json.RawMessage(`{}`))
 	if err != nil {
-		t.Fatalf("dsp_hello #2: %v", err)
+		t.Fatalf("hello_greet #2: %v", err)
 	}
 	if !strings.Contains(out, "第 2 次调用") || !strings.Contains(out, "你好，world") {
-		t.Fatalf("dsp_hello #2 结果 = %q", out)
+		t.Fatalf("hello_greet #2 结果 = %q", out)
 	}
 
 	// 自身库 SQL：自有表 note 由打包期 schema.sql 建立
-	out, err = h.ExecuteTool("dsp_note", json.RawMessage(`{"text":"第一条"}`))
+	out, err = h.ExecuteTool("hello_note", json.RawMessage(`{"text":"第一条"}`))
 	if err != nil {
-		t.Fatalf("dsp_note: %v", err)
+		t.Fatalf("hello_note: %v", err)
 	}
 	if !strings.Contains(out, "第一条") || !strings.Contains(out, "共 1 条") {
-		t.Fatalf("dsp_note 结果 = %q", out)
+		t.Fatalf("hello_note 结果 = %q", out)
 	}
 
 	// 自省
-	out, err = h.ExecuteTool("dsp_stats", json.RawMessage(`{}`))
+	out, err = h.ExecuteTool("hello_stats", json.RawMessage(`{}`))
 	if err != nil {
-		t.Fatalf("dsp_stats: %v", err)
+		t.Fatalf("hello_stats: %v", err)
 	}
 	if !strings.Contains(out, "插件=hello") || !strings.Contains(out, "note") {
-		t.Fatalf("dsp_stats 结果 = %q", out)
+		t.Fatalf("hello_stats 结果 = %q", out)
 	}
 }
 
@@ -149,18 +149,18 @@ func TestStatePersistsAcrossHostRestart(t *testing.T) {
 	pluginDir := packExample(t, dir)
 
 	h1 := newHost(t, []string{pluginDir}, true)
-	if _, err := h1.ExecuteTool("dsp_hello", json.RawMessage(`{}`)); err != nil {
+	if _, err := h1.ExecuteTool("hello_greet", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h1.ExecuteTool("dsp_hello", json.RawMessage(`{}`)); err != nil {
+	if _, err := h1.ExecuteTool("hello_greet", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	h1.Stop()
 
 	h2 := newHost(t, []string{pluginDir}, true)
-	out, err := h2.ExecuteTool("dsp_hello", json.RawMessage(`{}`))
+	out, err := h2.ExecuteTool("hello_greet", json.RawMessage(`{}`))
 	if err != nil {
-		t.Fatalf("重启后 dsp_hello: %v", err)
+		t.Fatalf("重启后 hello_greet: %v", err)
 	}
 	if !strings.Contains(out, "第 3 次调用") {
 		t.Fatalf("状态未随插件文件持久化：%q", out)
@@ -175,7 +175,7 @@ func TestHotReload(t *testing.T) {
 	pluginDir := filepath.Join(dir, "dsp")
 
 	h := newHost(t, []string{pluginDir}, true)
-	assertHasTool(t, h, "dsp_hello", true)
+	assertHasTool(t, h, "demo_hello", true)
 
 	// 重新打包同一 .dsp：新增 world 工具（内容哈希变化 → 轮询重载）
 	src := filepath.Join(dir, "demo-src")
@@ -187,17 +187,17 @@ dsc.register_tool("world", { description = "world" }, function() return "world" 
 	if _, err := dsp.Pack(src, filepath.Join(pluginDir, "demo.dsp"), nil); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return h.hasTool("dsp_world") })
-	out, err := h.ExecuteTool("dsp_world", json.RawMessage(`{}`))
+	waitFor(t, func() bool { return h.hasTool("demo_world") })
+	out, err := h.ExecuteTool("demo_world", json.RawMessage(`{}`))
 	if err != nil || out != "world" {
-		t.Fatalf("重载后 dsp_world = %q/%v", out, err)
+		t.Fatalf("重载后 demo_world = %q/%v", out, err)
 	}
 
 	// 删除 .dsp → 工具卸载
 	if err := os.Remove(filepath.Join(pluginDir, "demo.dsp")); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return !h.hasTool("dsp_hello") })
+	waitFor(t, func() bool { return !h.hasTool("demo_hello") })
 }
 
 // TestRunOnlyMode 验证非创造模式约束：启动时已有插件被加载（可运行），
@@ -208,9 +208,9 @@ func TestRunOnlyMode(t *testing.T) {
 	pluginDir := filepath.Join(dir, "dsp")
 
 	h := newHost(t, []string{pluginDir}, false) // 非创造模式
-	assertHasTool(t, h, "dsp_existing", true)
-	if out, err := h.ExecuteTool("dsp_existing", json.RawMessage(`{}`)); err != nil || out != "ok" {
-		t.Fatalf("dsp_existing = %q/%v", out, err)
+	assertHasTool(t, h, "demo_existing", true)
+	if out, err := h.ExecuteTool("demo_existing", json.RawMessage(`{}`)); err != nil || out != "ok" {
+		t.Fatalf("demo_existing = %q/%v", out, err)
 	}
 
 	// 期间新增另一个 .dsp：非创造模式不生效
@@ -222,11 +222,13 @@ func TestRunOnlyMode(t *testing.T) {
 		[]byte(`dsc.register_tool("brandnew", { description = "n" }, function() return "new" end)`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dsp.Pack(otherSrc, filepath.Join(pluginDir, "other.dsp"), nil); err != nil {
+	// 显式给插件名（不写 dsp.yaml 时会回落到源目录基名「other-src」，而工具名前缀用的是
+	// 插件名，名字里带连字符会让断言读起来像另一个来源）。
+	if _, err := dsp.Pack(otherSrc, filepath.Join(pluginDir, "other.dsp"), &dsp.Manifest{Name: "other"}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(3 * time.Second) // 超过 pollInterval
-	assertHasTool(t, h, "dsp_brandnew", false)
+	assertHasTool(t, h, "other_brandnew", false)
 
 	// 替换已有 .dsp：非创造模式同样不生效
 	src := filepath.Join(dir, "demo-src")
@@ -238,7 +240,7 @@ func TestRunOnlyMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(3 * time.Second)
-	if out, _ := h.ExecuteTool("dsp_existing", json.RawMessage(`{}`)); out != "ok" {
+	if out, _ := h.ExecuteTool("demo_existing", json.RawMessage(`{}`)); out != "ok" {
 		t.Fatalf("非创造模式下插件被热替换：%q", out)
 	}
 }
@@ -257,7 +259,7 @@ func TestUnsupportedLanguageRejected(t *testing.T) {
 	}
 
 	h := newHost(t, []string{pluginDir}, true)
-	if h.hasTool("dsp_x") {
+	if h.hasTool("demo_x") {
 		t.Fatal("非 lua 载体的插件不应注册任何工具")
 	}
 	if len(h.ListPlugins()) != 0 {
@@ -270,7 +272,7 @@ func TestListPluginsOverview(t *testing.T) {
 	dir := t.TempDir()
 	h := newHost(t, []string{packExample(t, dir)}, true)
 
-	if _, err := h.ExecuteTool("dsp_hello", json.RawMessage(`{}`)); err != nil {
+	if _, err := h.ExecuteTool("hello_greet", json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	infos := h.ListPlugins()
@@ -316,7 +318,7 @@ end)`
 	pluginDir := filepath.Join(dir, "dsp")
 
 	h := newHost(t, []string{pluginDir}, true)
-	assertHasTool(t, h, "dsp_counter", true)
+	assertHasTool(t, h, "demo_counter", true)
 
 	// store 初始值（插件加载时 set 的 "k"="v"）落盘在插件自身库
 	p, err := dsp.Open(filepath.Join(pluginDir, "demo.dsp"))
@@ -327,11 +329,11 @@ end)`
 		t.Fatalf("插件自身库中的 k = %v/%v，期望 v", v, ok)
 	}
 
-	out1, err := h.ExecuteTool("dsp_counter", json.RawMessage(`{}`))
+	out1, err := h.ExecuteTool("demo_counter", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("counter #1: %v", err)
 	}
-	out2, err := h.ExecuteTool("dsp_counter", json.RawMessage(`{}`))
+	out2, err := h.ExecuteTool("demo_counter", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("counter #2: %v", err)
 	}

@@ -33,7 +33,7 @@ func listPluginsTool() dsc.Tool {
 	return dsc.Tool{
 		Name: listToolName,
 		Description: "List the .dsp plugins currently loaded by tool-sql-host: each is a single SQLite database file (suffix .dsp, 'dsc's plugin') that carries its own metadata, code and runtime state. " +
-			"Tools registered by those plugins are exposed to you with the dsp_ prefix (dsp = the .dsp carrier these tools come from), e.g. dsp_hello — so the prefix tells you the origin, not that the tool is about SQL. " +
+			"Tools registered by a plugin are exposed to you as <plugin>_<tool>: the prefix is the plugin name (plugin 'hello' registering 'greet' → hello_greet), so it tells you which plugin the tool comes from — it says nothing about SQL. Use this list to attribute any such tool. " +
 			"Returns name, path, language, entry, registered tools, state key count, blob count and content hash. Read-only; loads nothing new.",
 		Schema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		Handler: func(ctx context.Context, _ json.RawMessage) (string, error) {
@@ -99,7 +99,7 @@ func packDspTool() dsc.Tool {
 		Schema: json.RawMessage(`{"type":"object","properties":{
 "source":{"type":"string","description":"插件源目录（含 dsp.yaml 与入口脚本），路径经 dsc 正斜杆约定。"},
 "output":{"type":"string","description":"输出 .dsp 文件路径（后缀必须为 .dsp，如 ./dsp/my-plugin.dsp）。"},
-"name":{"type":"string","description":"插件名（可选，缺省取源目录名或 dsp.yaml 的 name）。仅允许 [A-Za-z0-9_-]。"},
+"name":{"type":"string","description":"插件名（可选，缺省取源目录名或 dsp.yaml 的 name）。仅允许 [A-Za-z0-9_-]。该名同时是本插件注册工具的名前缀（<插件名>_<工具名>），故取短而可辨识的名字。"},
 "language":{"type":"string","description":"载体语言（可选，缺省 lua；当前仅支持 lua）。"},
 "entry":{"type":"string","description":"入口脚本（可选，缺省 main.lua）。"},
 "description":{"type":"string","description":"插件描述（可选，写入 dsp_meta 供 list_dsp_plugins 展示）。"},
