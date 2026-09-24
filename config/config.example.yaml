@@ -58,6 +58,12 @@ plugins:
     type: tool
     binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
     enabled: true
+  # SQL HOST：以 .dsp（dsc's plugin，实质为 SQLite 库）为载体加载插件——元数据、
+  # 代码与运行期状态同处一个文件，插件经 dsc.sql.*/dsc.store.* 读写自身
+  - name: tool-sql-host
+    type: tool
+    binary_path: ./plugins/tool-sql-host/tool-sql-host.exe
+    enabled: true
   - name: tool-str-replace-editor
     type: tool
     binary_path: ./plugins/tool-str-replace-editor/tool-str-replace-editor.exe

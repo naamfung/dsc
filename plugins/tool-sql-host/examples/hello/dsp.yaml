@@ -1,0 +1,5 @@
+name: hello
+language: lua
+entry: main.lua
+description: 示例 .dsp 插件：演示自持状态、自身库 SQL、多文件脚本与宿主互通
+version: 1.0.0

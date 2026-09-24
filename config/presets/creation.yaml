@@ -46,3 +46,10 @@ plugins:
     type: tool
     enabled: true
     binary_path: ./plugins/tool-lua-host/tool-lua-host.exe
+  # ===== SQL HOST：以 .dsp（实质为 SQLite 库）为载体，一个文件即插件全部
+  # （元数据 + 代码 + 运行期状态）；创造模式下 pack_dsp 把源目录打包成 .dsp，
+  # 落在 ./dsp 下即被自动加载 =====
+  - name: tool-sql-host
+    type: tool
+    enabled: true
+    binary_path: ./plugins/tool-sql-host/tool-sql-host.exe
