@@ -78,12 +78,35 @@ func TestResolveImageRefsDedupAndMultipe(t *testing.T) {
 }
 
 // TestResolveRefPathWorkspaceAlias /workspace 虚拟根映射到工作区真实根。
+// 期望值经 ToSlash：解析结果是路径传播的出入口，统一 POSIX 正斜杆（Windows 上
+// filepath.Join 产出反斜杆，直接比较即把错误的「反斜杆期望」固化成契约）。
 func TestResolveRefPathWorkspaceAlias(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DSC_WORKSPACE_ROOT", dir)
 	got := resolveRefPath(dir, "/workspace/sub/x.png")
-	if got != filepath.Join(dir, "sub", "x.png") {
-		t.Fatalf("/workspace alias = %q, want %q", got, filepath.Join(dir, "sub", "x.png"))
+	if want := filepath.ToSlash(filepath.Join(dir, "sub", "x.png")); got != want {
+		t.Fatalf("/workspace alias = %q, want %q", got, want)
+	}
+}
+
+// TestResolveRefPathAlwaysSlash 钉死「路径出入口一律正斜杆」：解析结果会进入
+// 「图片未解析: @<路径>」之类可见提示并被后续读写，任何分支都不得吐反斜杆
+// （否则模型照抄反斜杆写路径，跨平台行为漂移）。覆盖 /workspace 别名（含
+// Windows 风格 \workspace\… 输入）、相对路径与平台原生绝对路径三种入口。
+func TestResolveRefPathAlwaysSlash(t *testing.T) {
+	ws := t.TempDir()
+	// 平台原生绝对路径：Windows 上含反斜杆，是真实的反斜杆来源
+	nativeAbs := filepath.Join(t.TempDir(), "x", "y.png")
+	for _, ref := range []string{
+		"/workspace/sub/x.png",
+		`\workspace\sub\x.png`,
+		"sub/x.png",
+		nativeAbs,
+	} {
+		got := resolveRefPath(ws, ref)
+		if strings.Contains(got, `\`) {
+			t.Errorf("resolveRefPath(%q) = %q，路径出口须为正斜杆", ref, got)
+		}
 	}
 }
 

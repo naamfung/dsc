@@ -8,6 +8,10 @@ import (
 // TestResolveWorkspaceRoot 默认以启动目录（cwd）为 workspace 根；
 // 仅显式绝对路径配置覆盖；相对路径配置不再参与决定根。
 // DSC_WORKSPACE_ROOT 环境变量显式设置时作为统一根（宿主与插件同源，优先于 cwd）。
+//
+// want 一律正斜杆：workspace 根是路径传播的出入口，须归一为 POSIX 正斜杆——
+// Windows 上 os.Getwd() / filepath.Join 产出反斜杆，原样透传会经工具结果与沙箱
+// 提示进入模型上下文，诱导模型照抄反斜杆写路径。故这里用 ToSlash 表达期望契约。
 func TestResolveWorkspaceRoot(t *testing.T) {
 	cwd := filepath.Join(t.TempDir(), "project")
 	customRoot := filepath.Join(t.TempDir(), "custom")
@@ -20,12 +24,12 @@ func TestResolveWorkspaceRoot(t *testing.T) {
 		envRoot string
 		want    string
 	}{
-		{"默认以启动目录为根", cwd, "", "", cwd},
-		{"相对路径配置忽略", cwd, "./workspace", "", cwd},
-		{"相对路径配置忽略2", cwd, "sub/dir", "", cwd},
-		{"绝对路径覆盖", cwd, customRoot, "", customRoot},
-		{"环境变量覆盖 cwd", cwd, "", envRoot, envRoot},
-		{"绝对路径配置仍优先于环境变量", cwd, customRoot, envRoot, customRoot},
+		{"默认以启动目录为根", cwd, "", "", filepath.ToSlash(cwd)},
+		{"相对路径配置忽略", cwd, "./workspace", "", filepath.ToSlash(cwd)},
+		{"相对路径配置忽略2", cwd, "sub/dir", "", filepath.ToSlash(cwd)},
+		{"绝对路径覆盖", cwd, customRoot, "", filepath.ToSlash(customRoot)},
+		{"环境变量覆盖 cwd", cwd, "", envRoot, filepath.ToSlash(envRoot)},
+		{"绝对路径配置仍优先于环境变量", cwd, customRoot, envRoot, filepath.ToSlash(customRoot)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

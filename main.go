@@ -1,24 +1,24 @@
 package main
 
 import (
-        "bufio"
-        "context"
-        "encoding/json"
-        "fmt"
-        "io"
-        "net/http"
-        "os"
-        "path/filepath"
-        "runtime"
-        "runtime/debug"
-        "strconv"
-        "strings"
-        "time"
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"time"
 
-        "dsc/core"
-        "dsc/tui"
-        "github.com/hashicorp/go-hclog"
-        "gopkg.in/yaml.v3"
+	"dsc/core"
+	"dsc/tui"
+	"github.com/hashicorp/go-hclog"
+	"gopkg.in/yaml.v3"
 )
 
 // defaultContextWindow 未配置且探测失败时使用的默认上下文窗口大小：128K（按 1024 计）
@@ -28,54 +28,54 @@ const defaultContextWindow = 128 * 1024
 // 通过 GET {baseURL}/models 读取首条模型的 meta.n_ctx（LLAMACPP 提供），
 // 失败或未提供时返回 0，由调用方回退到配置值或默认 128K。
 func probeContextWindow(baseURL string) int {
-        u := strings.TrimRight(baseURL, "/") + "/models"
-        ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-        defer cancel()
-        req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-        if err != nil {
-                return 0
-        }
-        resp, err := http.DefaultClient.Do(req)
-        if err != nil {
-                return 0
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK {
-                return 0
-        }
-        var payload struct {
-                Data []struct {
-                        Meta struct {
-                                Nctx int `json:"n_ctx"`
-                        } `json:"meta"`
-                        MaxModelLen int `json:"max_model_len"`
-                } `json:"data"`
-        }
-        if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-                return 0
-        }
-        if len(payload.Data) == 0 {
-                return 0
-        }
-        if payload.Data[0].Meta.Nctx > 0 {
-                return payload.Data[0].Meta.Nctx
-        }
-        if payload.Data[0].MaxModelLen > 0 {
-                return payload.Data[0].MaxModelLen
-        }
-        return 0
+	u := strings.TrimRight(baseURL, "/") + "/models"
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	var payload struct {
+		Data []struct {
+			Meta struct {
+				Nctx int `json:"n_ctx"`
+			} `json:"meta"`
+			MaxModelLen int `json:"max_model_len"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return 0
+	}
+	if len(payload.Data) == 0 {
+		return 0
+	}
+	if payload.Data[0].Meta.Nctx > 0 {
+		return payload.Data[0].Meta.Nctx
+	}
+	if payload.Data[0].MaxModelLen > 0 {
+		return payload.Data[0].MaxModelLen
+	}
+	return 0
 }
 
 func loadConfig(path string) (*core.Config, error) {
-        data, err := os.ReadFile(path)
-        if err != nil {
-                return nil, err
-        }
-        var cfg core.Config
-        if err := yaml.Unmarshal(data, &cfg); err != nil {
-                return nil, err
-        }
-        return &cfg, nil
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg core.Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
 // getExecutableDir 獲取可執行文件所在目錄的絕對路徑
@@ -86,125 +86,129 @@ func loadConfig(path string) (*core.Config, error) {
 // 再否則默認以啟動目錄 cwd 為根——在哪个目录启动 dsc，就以哪个目录为工作区
 // （对齐 REX/Claude Code 的「以启动目录为工作区」直觉）。相對路徑配置不再
 // 参与決定根（避免 ./workspace 把根推到子目錄）。
+//
+// 返回值一律正斜杆（POSIX 语义）：workspace 根是「路径传播的出入口」——它会被注入
+// 各插件进程、拼进工具结果与沙箱提示、进而进入模型上下文；Windows 上 os.Getwd()
+// 给出的是反斜杆路径，若原样透传，模型会照抄反斜杆去写路径，跨平台行为即漂移。
 func resolveWorkspaceRoot(cwd, cfgRoot string) string {
-        if filepath.IsAbs(cfgRoot) {
-                return core.PClean(cfgRoot)
-        }
-        if env := os.Getenv("DSC_WORKSPACE_ROOT"); env != "" {
-                return core.PClean(env)
-        }
-        if cwd == "" {
-                if wd, err := os.Getwd(); err == nil {
-                        cwd = wd
-                }
-        }
-        return cwd
+	if filepath.IsAbs(cfgRoot) {
+		return core.PClean(cfgRoot)
+	}
+	if env := os.Getenv("DSC_WORKSPACE_ROOT"); env != "" {
+		return core.PClean(env)
+	}
+	if cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = wd
+		}
+	}
+	return core.PClean(cwd)
 }
 
 // sandboxPolicyEnv 返回注入各插件进程的沙箱策略档名（DSC_SANDBOX_POLICY）：
 // 与 Manager 读取 DSC_SANDBOX 的缺省解析一致，未配置时回退 workspace-write。
 func sandboxPolicyEnv() string {
-        switch core.ParseSandboxPolicy(os.Getenv("DSC_SANDBOX")) {
-        case core.SandboxReadOnly:
-                return "read-only"
-        case core.SandboxFullAccess:
-                return "full-access"
-        default:
-                return "workspace-write"
-        }
+	switch core.ParseSandboxPolicy(os.Getenv("DSC_SANDBOX")) {
+	case core.SandboxReadOnly:
+		return "read-only"
+	case core.SandboxFullAccess:
+		return "full-access"
+	default:
+		return "workspace-write"
+	}
 }
 
 func getExecutableDir() (string, error) {
-        exePath, err := os.Executable()
-        if err != nil {
-                return "", err
-        }
-        return core.PDir(exePath), nil
+	exePath, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return core.PDir(exePath), nil
 }
 
 // statBinaryPath 根據 execDir 与可能的相對/絕對 binaryPath，返回用於 os.Stat 檢查的絕對路徑
 func statBinaryPath(execDir, cfgPath string, defaultRel string) string {
-        p := cfgPath
-        if p == "" {
-                p = core.PJoin(execDir, defaultRel)
-        } else {
-                if !filepath.IsAbs(p) {
-                        p = core.PJoin(execDir, p)
-                }
-        }
-        return p
+	p := cfgPath
+	if p == "" {
+		p = core.PJoin(execDir, defaultRel)
+	} else {
+		if !filepath.IsAbs(p) {
+			p = core.PJoin(execDir, p)
+		}
+	}
+	return p
 }
 
 // loadBinaryPath 返回用於傳遞給插件管理器的路徑（通常是配置文件中的相對路徑或默認相對路徑）
 func loadBinaryPath(cfgPath string, defaultRel string) string {
-        if cfgPath != "" {
-                return cfgPath
-        }
-        return defaultRel
+	if cfgPath != "" {
+		return cfgPath
+	}
+	return defaultRel
 }
 
 // runOneTurn 以与 TUI 内部一致的 RunStream 方式运行一组输入（不渲染 TUI），
 // 将流式帧直接输出到 stdout，完成后返回退出码（0=成功，1=失败）。
 // 输入中的 @文件引用 与 TUI 一致解析为附件（图片→dsc-img 多模态，文本→dsc-txt 注入）。
 func runOneTurn(agent core.Agent, ctx context.Context, input string) int {
-        ch, err := agent.RunStream(ctx, input, tui.ResolveFileRefs(input))
-        if err != nil {
-                fmt.Fprintf(os.Stderr, "错误: %v\n", err)
-                return 1
-        }
-        exitCode := 0
-        for frame := range ch {
-                switch frame.Status {
-                case "streaming":
-                        // 模型文本增量，直接输出
-                        fmt.Print(frame.Output)
-                case "tool":
-                        // 工具调用提示（如 [调用工具: shell]），原样输出
-                        fmt.Print(frame.Output)
-                case "success":
-                        // 一轮完成；usage 仅提示到 stderr，不污染 stdout 结果
-                        if frame.Usage != nil && frame.Usage.TotalTokens > 0 {
-                                fmt.Fprintf(os.Stderr, "\n[已用 %d tokens]\n", frame.Usage.TotalTokens)
-                        }
-                case "error":
-                        if frame.Error != "" {
-                                fmt.Fprintf(os.Stderr, "\n错误: %s\n", frame.Error)
-                        }
-                        exitCode = 1
-                case "reasoning":
-                        fmt.Fprintf(os.Stderr, "\\n[REASONING]>%s", frame.Reasoning)
-                }
-        }
-        return exitCode
+	ch, err := agent.RunStream(ctx, input, tui.ResolveFileRefs(input))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+		return 1
+	}
+	exitCode := 0
+	for frame := range ch {
+		switch frame.Status {
+		case "streaming":
+			// 模型文本增量，直接输出
+			fmt.Print(frame.Output)
+		case "tool":
+			// 工具调用提示（如 [调用工具: shell]），原样输出
+			fmt.Print(frame.Output)
+		case "success":
+			// 一轮完成；usage 仅提示到 stderr，不污染 stdout 结果
+			if frame.Usage != nil && frame.Usage.TotalTokens > 0 {
+				fmt.Fprintf(os.Stderr, "\n[已用 %d tokens]\n", frame.Usage.TotalTokens)
+			}
+		case "error":
+			if frame.Error != "" {
+				fmt.Fprintf(os.Stderr, "\n错误: %s\n", frame.Error)
+			}
+			exitCode = 1
+		case "reasoning":
+			fmt.Fprintf(os.Stderr, "\\n[REASONING]>%s", frame.Reasoning)
+		}
+	}
+	return exitCode
 }
 
 // stdinIsRedirected 报告 stdin 是否为非终端（管道/文件重定向），
 // 这是多轮 stdin 驱动的判定依据：只有重定向输入才触发多轮，避免终端手动单轮被阻塞。
 func stdinIsRedirected() bool {
-        fi, err := os.Stdin.Stat()
-        if err != nil {
-                return false
-        }
-        return fi.Mode()&os.ModeCharDevice == 0
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice == 0
 }
 
 // runStdinLoop 从 stdin 逐行读取作为后续每一轮输入，逐轮调用 runOneTurn，
 // 直到 EOF；会话事件溯源在 agent 内累积，故多轮天然共享上下文。
 func runStdinLoop(agent core.Agent, ctx context.Context) int {
-        sc := bufio.NewScanner(os.Stdin)
-        sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-        exitCode := 0
-        for sc.Scan() {
-                line := strings.TrimSpace(sc.Text())
-                if line == "" {
-                        continue
-                }
-                fmt.Fprintf(os.Stderr, "\n>>> %s\n", line)
-                if code := runOneTurn(agent, ctx, line); code != 0 {
-                        exitCode = code
-                }
-        }
-        return exitCode
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	exitCode := 0
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "\n>>> %s\n", line)
+		if code := runOneTurn(agent, ctx, line); code != 0 {
+			exitCode = code
+		}
+	}
+	return exitCode
 }
 
 // runInputMode 以非 TUI 模式运行 agent（-input 启动时使用）：
@@ -212,699 +216,699 @@ func runStdinLoop(agent core.Agent, ctx context.Context) int {
 // 则继续逐行驱动多轮，直到 EOF。始终不进入 TUI 事件循环，故 ADMIN API / DEBUGGER
 // 端点可在进程存活期间持续观察。
 func runInputMode(agent core.Agent, ctx context.Context, input string) int {
-        if code := runOneTurn(agent, ctx, input); code != 0 {
-                return code
-        }
-        if !stdinIsRedirected() {
-                // 终端手动单轮：跑完 -input 即退出，维持原来的便利行为
-                return 0
-        }
-        return runStdinLoop(agent, ctx)
+	if code := runOneTurn(agent, ctx, input); code != 0 {
+		return code
+	}
+	if !stdinIsRedirected() {
+		// 终端手动单轮：跑完 -input 即退出，维持原来的便利行为
+		return 0
+	}
+	return runStdinLoop(agent, ctx)
 }
 
 // ptcEnvEnabled 是否由环境变量 DSC_PTC 显式开启 PTC 呈现（判定与 agent 侧 ptcEnabled 一致）。
 func ptcEnvEnabled() bool {
-        switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_PTC"))) {
-        case "1", "true", "on", "ptc", "yes":
-                return true
-        }
-        return false
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_PTC"))) {
+	case "1", "true", "on", "ptc", "yes":
+		return true
+	}
+	return false
 }
 
 func main() {
-        // 捕获 panic：打印完整堆栈而非仅值，并以非零码退出——否则 recover 后 main
-        // 落到 os.Exit(exitCode) 时 exitCode 仍为默认 0，CI 会把崩溃误判为成功。
-        defer func() {
-                if r := recover(); r != nil {
-                        fmt.Fprintf(os.Stderr, "panic: %v\n%s\n", r, debug.Stack())
-                        os.Exit(1)
-                }
-        }()
+	// 捕获 panic：打印完整堆栈而非仅值，并以非零码退出——否则 recover 后 main
+	// 落到 os.Exit(exitCode) 时 exitCode 仍为默认 0，CI 会把崩溃误判为成功。
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "panic: %v\n%s\n", r, debug.Stack())
+			os.Exit(1)
+		}
+	}()
 
-        // dsc version：输出版本信息后直接退出（不加载插件、不进 TUI）。
-        if isVersionCommand(os.Args[1:]) {
-                printVersion()
-                os.Exit(0)
-        }
+	// dsc version：输出版本信息后直接退出（不加载插件、不进 TUI）。
+	if isVersionCommand(os.Args[1:]) {
+		printVersion()
+		os.Exit(0)
+	}
 
-        // 獲取可執行文件所在目錄的絕對路徑
-        execDir, err := getExecutableDir()
-        if err != nil {
-                fmt.Fprintf(os.Stderr, "failed to get executable directory: %v\n", err)
-                os.Exit(1)
-        }
+	// 獲取可執行文件所在目錄的絕對路徑
+	execDir, err := getExecutableDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to get executable directory: %v\n", err)
+		os.Exit(1)
+	}
 
-        // 图像附件库目录（对齐 sessions/、memory/ 等可执行目录旧例）：未显式配置
-        // DSC_ATTACHMENT_DIR 时注入 <ExecDir>/attachments，宿主与各插件进程
-        //（buildEnv 继承宿主环境）路径天然一致。
-        if os.Getenv("DSC_ATTACHMENT_DIR") == "" {
-                os.Setenv("DSC_ATTACHMENT_DIR", core.PJoin(execDir, "attachments"))
-        }
+	// 图像附件库目录（对齐 sessions/、memory/ 等可执行目录旧例）：未显式配置
+	// DSC_ATTACHMENT_DIR 时注入 <ExecDir>/attachments，宿主与各插件进程
+	//（buildEnv 继承宿主环境）路径天然一致。
+	if os.Getenv("DSC_ATTACHMENT_DIR") == "" {
+		os.Setenv("DSC_ATTACHMENT_DIR", core.PJoin(execDir, "attachments"))
+	}
 
-        // 临时目录（操作截图等 24 小时生命周期的工具产物，宿主启动时对 temp/
-        // 内超时子目录统一清理，见 core/manager.go cleanupOldTempDirs）：未显式
-        // 配置 DSC_TEMP_DIR 时注入 <ExecDir>/temp，插件进程继承后引用解析路径一致。
-        if os.Getenv("DSC_TEMP_DIR") == "" {
-                os.Setenv("DSC_TEMP_DIR", core.PJoin(execDir, "temp"))
-        }
+	// 临时目录（操作截图等 24 小时生命周期的工具产物，宿主启动时对 temp/
+	// 内超时子目录统一清理，见 core/manager.go cleanupOldTempDirs）：未显式
+	// 配置 DSC_TEMP_DIR 时注入 <ExecDir>/temp，插件进程继承后引用解析路径一致。
+	if os.Getenv("DSC_TEMP_DIR") == "" {
+		os.Setenv("DSC_TEMP_DIR", core.PJoin(execDir, "temp"))
+	}
 
-        // 会话日志目录（agent-react-loop 写入会话事件 JSONL）：未显式配置
-        // DSC_SESSION_DIR 时注入 <ExecDir>/sessions，与宿主 Store 路径
-        // （core/manager.go sessionStore 用 m.config.ExecDir/sessions）保持一致。
-        // 否则插件进程的 fallback "sessions"（CWD 相对）会与宿主 <ExecDir>/sessions
-        // 静默分歧——插件写一份、宿主读另一份，会话恢复失败。
-        if os.Getenv("DSC_SESSION_DIR") == "" {
-                os.Setenv("DSC_SESSION_DIR", core.PJoin(execDir, "sessions"))
-        }
+	// 会话日志目录（agent-react-loop 写入会话事件 JSONL）：未显式配置
+	// DSC_SESSION_DIR 时注入 <ExecDir>/sessions，与宿主 Store 路径
+	// （core/manager.go sessionStore 用 m.config.ExecDir/sessions）保持一致。
+	// 否则插件进程的 fallback "sessions"（CWD 相对）会与宿主 <ExecDir>/sessions
+	// 静默分歧——插件写一份、宿主读另一份，会话恢复失败。
+	if os.Getenv("DSC_SESSION_DIR") == "" {
+		os.Setenv("DSC_SESSION_DIR", core.PJoin(execDir, "sessions"))
+	}
 
-        // 技能目录（dsc-system 的 skill 工具与 TUI 的 listSkills 都需引用）：
-        // 未显式配置 DSC_SKILLS_DIR 时注入 <ExecDir>/skills，避免插件 fallback
-        // "./skills"（CWD 相对）与 TUI 的 <exeDir>/skills 不一致。
-        if os.Getenv("DSC_SKILLS_DIR") == "" {
-                os.Setenv("DSC_SKILLS_DIR", core.PJoin(execDir, "skills"))
-        }
+	// 技能目录（dsc-system 的 skill 工具与 TUI 的 listSkills 都需引用）：
+	// 未显式配置 DSC_SKILLS_DIR 时注入 <ExecDir>/skills，避免插件 fallback
+	// "./skills"（CWD 相对）与 TUI 的 <exeDir>/skills 不一致。
+	if os.Getenv("DSC_SKILLS_DIR") == "" {
+		os.Setenv("DSC_SKILLS_DIR", core.PJoin(execDir, "skills"))
+	}
 
-        // dsc setup：交互式配置向导（不加载插件，直接读写 config.yaml）。
-        // 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
-        if isSetupCommand(os.Args[1:]) {
-                os.Exit(runSetup(bufio.NewScanner(os.Stdin), os.Stdout,
-                        core.ConfigPath,
-                        core.PJoin(execDir, "plugins")))
-        }
+	// dsc setup：交互式配置向导（不加载插件，直接读写 config.yaml）。
+	// 检测规则：第一个非 flag 参数（- 开头之外）为 "setup" 时进入向导。
+	if isSetupCommand(os.Args[1:]) {
+		os.Exit(runSetup(bufio.NewScanner(os.Stdin), os.Stdout,
+			core.ConfigPath,
+			core.PJoin(execDir, "plugins")))
+	}
 
-        // 啟動目錄（cwd）：默認 workspace 根。用戶在哪个目录启动 dsc，
-        // 就以哪个目录为工作区（对齐 REX/Claude Code）；獲取失敗時退化為可執行目錄。
-        cwd, err := os.Getwd()
-        if err != nil {
-                cwd = execDir
-        }
+	// 啟動目錄（cwd）：默認 workspace 根。用戶在哪个目录启动 dsc，
+	// 就以哪个目录为工作区（对齐 REX/Claude Code）；獲取失敗時退化為可執行目錄。
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = execDir
+	}
 
-        // 解析啟動參數
-        logToScreen := false
-        logToFile := ""
-        mode := "standard"      // 默認標準模式
-        inputText := ""         // -input：一次性提示文本（自動化測試入口，不經 TUI）
-        debuggerOpen := false   // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
-        adminAddr := ""         // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
-        headless := false       // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
-        hooksPath := ""         // -hooks：外部脚本钩子配置（hooks.json：严格 LUA / 原生可执行）
-        var patchFiles []string // -patch：配置 overlay 文件列表（可重复，按顺序合并）
+	// 解析啟動參數
+	logToScreen := false
+	logToFile := ""
+	mode := "standard"      // 默認標準模式
+	inputText := ""         // -input：一次性提示文本（自動化測試入口，不經 TUI）
+	debuggerOpen := false   // -debugger：開放 /debugger 觀察路由（默認關閉，避免暴露會話隱私）
+	adminAddr := ""         // -admin：管理 API 監聽地址（預設取環境變量 DSC_ADMIN_ADDR，缺省 127.0.0.1:9999）
+	headless := false       // -headless：精简无头模式，专为 CI 单发（不开 ADMIN/热重载/cron，任务来自 -input）
+	hooksPath := ""         // -hooks：外部脚本钩子配置（hooks.json：严格 LUA / 原生可执行）
+	var patchFiles []string // -patch：配置 overlay 文件列表（可重复，按顺序合并）
 
-        // DSC_LOG_LEVEL：宿主运行日志级别（debug|info|warn|error，默认 info）。
-        // 仅在 -log 启用（文件或屏幕）时有意义；无 -log 时默认静默（io.Discard）设计
-        // 不变——无日志需求时零噪音；开启后即获得 DSH 等价的分级全链路能力
-        //（llm request / tool execution / workflow / 插件生命周期 / 会话操作）。
-        logLevel := hclog.Info
-        switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_LOG_LEVEL"))) {
-        case "debug":
-                logLevel = hclog.Debug
-        case "warn":
-                logLevel = hclog.Warn
-        case "error":
-                logLevel = hclog.Error
-        }
+	// DSC_LOG_LEVEL：宿主运行日志级别（debug|info|warn|error，默认 info）。
+	// 仅在 -log 启用（文件或屏幕）时有意义；无 -log 时默认静默（io.Discard）设计
+	// 不变——无日志需求时零噪音；开启后即获得 DSH 等价的分级全链路能力
+	//（llm request / tool execution / workflow / 插件生命周期 / 会话操作）。
+	logLevel := hclog.Info
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DSC_LOG_LEVEL"))) {
+	case "debug":
+		logLevel = hclog.Debug
+	case "warn":
+		logLevel = hclog.Warn
+	case "error":
+		logLevel = hclog.Error
+	}
 
-        for i, arg := range os.Args {
-                if arg == "-log" {
-                        if i+1 < len(os.Args) {
-                                nextArg := os.Args[i+1]
-                                if strings.HasPrefix(nextArg, "-") {
-                                        logToScreen = true
-                                } else {
-                                        logToFile = nextArg
-                                }
-                        } else {
-                                logToScreen = true
-                        }
-                } else if arg == "-mode" {
-                        // -mode 后跟模式名（来自 config/presets/<name>.yaml）。
-                        // 不在此硬编码允许列表——SwitchMode 后续读 preset 文件时
-                        // 会自然校验，用户新增 preset（如 thin.yaml）无需改此处的允许列表。
-                        // 错误的 mode 名会让 SwitchMode 报"failed to read preset config"。
-                        if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
-                                mode = os.Args[i+1]
-                        }
-                } else if arg == "-input" {
-                        // -input 後跟提示文本作為參數值（以 - 開頭的視為缺失，避免吞掉後續選項）
-                        if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
-                                inputText = os.Args[i+1]
-                        }
-                } else if arg == "-headless" {
-                        // 精简无头模式：单发任务、不开 ADMIN 端口 / 热重载 / cron，专为 CI 脚本
-                        headless = true
-                } else if arg == "-debugger" {
-                        // 顯式開放 /debugger 觀察路由（含完整會話歷史，屬敏感信息，默認不開放）
-                        debuggerOpen = true
-                } else if arg == "-admin" {
-                        if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
-                                adminAddr = os.Args[i+1]
-                        }
-                } else if arg == "-hooks" {
-                        if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
-                                hooksPath = os.Args[i+1]
-                        }
-                } else if arg == "-patch" {
-                        // -patch <file.yaml>：加载 patch overlay 文件（可重复指定，按顺序合并）。
-                        // 对齐 DSH --patch overlay 机制（Go 风格单 - 选项）。
-                        // patch 文件含插件条目配置（如 MCP 客户端的 serverName/transport/command），
-                        // 合并到 config.yaml 后启动时自动应用（如自动连接 MCP 服务器）。
-                        if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
-                                patchFiles = append(patchFiles, os.Args[i+1])
-                        }
-                }
-        }
+	for i, arg := range os.Args {
+		if arg == "-log" {
+			if i+1 < len(os.Args) {
+				nextArg := os.Args[i+1]
+				if strings.HasPrefix(nextArg, "-") {
+					logToScreen = true
+				} else {
+					logToFile = nextArg
+				}
+			} else {
+				logToScreen = true
+			}
+		} else if arg == "-mode" {
+			// -mode 后跟模式名（来自 config/presets/<name>.yaml）。
+			// 不在此硬编码允许列表——SwitchMode 后续读 preset 文件时
+			// 会自然校验，用户新增 preset（如 thin.yaml）无需改此处的允许列表。
+			// 错误的 mode 名会让 SwitchMode 报"failed to read preset config"。
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				mode = os.Args[i+1]
+			}
+		} else if arg == "-input" {
+			// -input 後跟提示文本作為參數值（以 - 開頭的視為缺失，避免吞掉後續選項）
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				inputText = os.Args[i+1]
+			}
+		} else if arg == "-headless" {
+			// 精简无头模式：单发任务、不开 ADMIN 端口 / 热重载 / cron，专为 CI 脚本
+			headless = true
+		} else if arg == "-debugger" {
+			// 顯式開放 /debugger 觀察路由（含完整會話歷史，屬敏感信息，默認不開放）
+			debuggerOpen = true
+		} else if arg == "-admin" {
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				adminAddr = os.Args[i+1]
+			}
+		} else if arg == "-hooks" {
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				hooksPath = os.Args[i+1]
+			}
+		} else if arg == "-patch" {
+			// -patch <file.yaml>：加载 patch overlay 文件（可重复指定，按顺序合并）。
+			// 对齐 DSH --patch overlay 机制（Go 风格单 - 选项）。
+			// patch 文件含插件条目配置（如 MCP 客户端的 serverName/transport/command），
+			// 合并到 config.yaml 后启动时自动应用（如自动连接 MCP 服务器）。
+			if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+				patchFiles = append(patchFiles, os.Args[i+1])
+			}
+		}
+	}
 
-        // -headless 精简无头模式校验：任务必须来自 -input 且非空白（对齐 harness headless：
-        // 缺失/空白任务为用法错误，任何东西都不执行并退出 1）
-        if headless {
-                if strings.TrimSpace(inputText) == "" {
-                        fmt.Fprintln(os.Stderr, "headless mode requires -input <task>")
-                        os.Exit(1)
-                }
-        }
+	// -headless 精简无头模式校验：任务必须来自 -input 且非空白（对齐 harness headless：
+	// 缺失/空白任务为用法错误，任何东西都不执行并退出 1）
+	if headless {
+		if strings.TrimSpace(inputText) == "" {
+			fmt.Fprintln(os.Stderr, "headless mode requires -input <task>")
+			os.Exit(1)
+		}
+	}
 
-        logger := hclog.New(&hclog.LoggerOptions{
-                Name:   "dsc-host",
-                Level:  logLevel,
-                Output: os.Stderr,
-        })
+	logger := hclog.New(&hclog.LoggerOptions{
+		Name:   "dsc-host",
+		Level:  logLevel,
+		Output: os.Stderr,
+	})
 
-        // 初始化 logger 与 coreLogger (根據 logToFile 与 logToScreen 調整)
-        var coreLogger hclog.Logger
-        var logOutput io.Writer
+	// 初始化 logger 与 coreLogger (根據 logToFile 与 logToScreen 調整)
+	var coreLogger hclog.Logger
+	var logOutput io.Writer
 
-        if logToFile != "" {
-                // 日志静默写到设定的path去
-                f, err := os.OpenFile(logToFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-                if err != nil {
-                        // 如果打開文件失敗，回退到屏幕
-                        logOutput = os.Stderr
-                        logger = hclog.New(&hclog.LoggerOptions{
-                                Name:   "dsc-host",
-                                Level:  logLevel,
-                                Output: logOutput,
-                        })
-                        coreLogger = hclog.New(&hclog.LoggerOptions{
-                                Name:   "core",
-                                Level:  logLevel,
-                                Output: logOutput,
-                        })
-                } else {
-                        logOutput = f
-                        logger = hclog.New(&hclog.LoggerOptions{
-                                Name:   "dsc-host",
-                                Level:  logLevel,
-                                Output: logOutput,
-                        })
-                        coreLogger = hclog.New(&hclog.LoggerOptions{
-                                Name:   "core",
-                                Level:  logLevel,
-                                Output: logOutput,
-                        })
-                        // 確保在退出時關閉文件
-                        defer f.Close()
-                }
-        } else if logToScreen {
-                // -log 无指定路径时似如今一样打印日志到屏幕
-                logOutput = os.Stderr
-                logger = hclog.New(&hclog.LoggerOptions{
-                        Name:   "dsc-host",
-                        Level:  logLevel,
-                        Output: logOutput,
-                })
-                coreLogger = hclog.New(&hclog.LoggerOptions{
-                        Name:   "core",
-                        Level:  logLevel,
-                        Output: logOutput,
-                })
-        } else {
-                // 無參數時，日誌静默放棄，不作記錄
-                logOutput = io.Discard
-                logger = hclog.New(&hclog.LoggerOptions{
-                        Name:   "dsc-host",
-                        Level:  hclog.NoLevel,
-                        Output: logOutput,
-                })
-                coreLogger = hclog.New(&hclog.LoggerOptions{
-                        Name:   "core",
-                        Level:  hclog.NoLevel,
-                        Output: logOutput,
-                })
-        }
+	if logToFile != "" {
+		// 日志静默写到设定的path去
+		f, err := os.OpenFile(logToFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			// 如果打開文件失敗，回退到屏幕
+			logOutput = os.Stderr
+			logger = hclog.New(&hclog.LoggerOptions{
+				Name:   "dsc-host",
+				Level:  logLevel,
+				Output: logOutput,
+			})
+			coreLogger = hclog.New(&hclog.LoggerOptions{
+				Name:   "core",
+				Level:  logLevel,
+				Output: logOutput,
+			})
+		} else {
+			logOutput = f
+			logger = hclog.New(&hclog.LoggerOptions{
+				Name:   "dsc-host",
+				Level:  logLevel,
+				Output: logOutput,
+			})
+			coreLogger = hclog.New(&hclog.LoggerOptions{
+				Name:   "core",
+				Level:  logLevel,
+				Output: logOutput,
+			})
+			// 確保在退出時關閉文件
+			defer f.Close()
+		}
+	} else if logToScreen {
+		// -log 无指定路径时似如今一样打印日志到屏幕
+		logOutput = os.Stderr
+		logger = hclog.New(&hclog.LoggerOptions{
+			Name:   "dsc-host",
+			Level:  logLevel,
+			Output: logOutput,
+		})
+		coreLogger = hclog.New(&hclog.LoggerOptions{
+			Name:   "core",
+			Level:  logLevel,
+			Output: logOutput,
+		})
+	} else {
+		// 無參數時，日誌静默放棄，不作記錄
+		logOutput = io.Discard
+		logger = hclog.New(&hclog.LoggerOptions{
+			Name:   "dsc-host",
+			Level:  hclog.NoLevel,
+			Output: logOutput,
+		})
+		coreLogger = hclog.New(&hclog.LoggerOptions{
+			Name:   "core",
+			Level:  hclog.NoLevel,
+			Output: logOutput,
+		})
+	}
 
-        // 统一把宿主日志与插件日志的扇出接到 ADMIN /logs SSE：`logOutput` 已锁定
-        // 最终目的地（os.Stderr / 日志文件 / io.Discard），以其构建一个 LogFanout，
-        // 让 logger 与 coreLogger 同时写原始目的地并广播给 /logs 订阅者。这样即便
-        // 默认静默模式（io.Discard），也能按需经 ADMIN API 观察运行时日志。
-        logFanout := core.NewLogFanout(logOutput)
-        logger = hclog.New(&hclog.LoggerOptions{
-                Name:   "dsc-host",
-                Level:  logLevel,
-                Output: logFanout,
-        })
-        coreLogger = hclog.New(&hclog.LoggerOptions{
-                Name:   "core",
-                Level:  logLevel,
-                Output: logFanout,
-        })
+	// 统一把宿主日志与插件日志的扇出接到 ADMIN /logs SSE：`logOutput` 已锁定
+	// 最终目的地（os.Stderr / 日志文件 / io.Discard），以其构建一个 LogFanout，
+	// 让 logger 与 coreLogger 同时写原始目的地并广播给 /logs 订阅者。这样即便
+	// 默认静默模式（io.Discard），也能按需经 ADMIN API 观察运行时日志。
+	logFanout := core.NewLogFanout(logOutput)
+	logger = hclog.New(&hclog.LoggerOptions{
+		Name:   "dsc-host",
+		Level:  logLevel,
+		Output: logFanout,
+	})
+	coreLogger = hclog.New(&hclog.LoggerOptions{
+		Name:   "core",
+		Level:  logLevel,
+		Output: logFanout,
+	})
 
-        logger.Info("starting dsc", "mode", mode)
+	logger.Info("starting dsc", "mode", mode)
 
-        // 加載 preset 配置文件
-        presetPath := core.PJoin(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
-        presetCfg, err := loadConfig(presetPath)
-        if err != nil {
-                // 如果 preset 配置文件不存在或加載失敗，回退到默認 config.yaml
-                logger.Info("preset config not found or invalid, using default config", "presetPath", presetPath, "error", err)
-                presetCfg = nil
-        }
+	// 加載 preset 配置文件
+	presetPath := core.PJoin(execDir, "config", "presets", fmt.Sprintf("%s.yaml", mode))
+	presetCfg, err := loadConfig(presetPath)
+	if err != nil {
+		// 如果 preset 配置文件不存在或加載失敗，回退到默認 config.yaml
+		logger.Info("preset config not found or invalid, using default config", "presetPath", presetPath, "error", err)
+		presetCfg = nil
+	}
 
-        // 從主配置 config/config.yaml 讀取工作空間根。
-        // workspace_root 為統一工作空間根（對齊 DSH ctx.sandboxPolicy 的單一根來源），
-        // 同時供 sandbox 判定與注入給各工具插件進程。默認以啟動目錄（cwd）為根——
-        // 在哪个目录启动 dsc，就以哪个目录为工作区（对齐 REX/Claude Code）；
-        // 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
-        // 沙箱策略（read-only / workspace-write / full-access）由 TUI /sandbox 命令
-        // 运行时切换，见 core.Manager.SetSandboxPolicy。
-        mainCfg, err := loadConfig(core.ConfigPath)
-        if err == nil && mainCfg != nil {
-                core.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
-        }
+	// 從主配置 config/config.yaml 讀取工作空間根。
+	// workspace_root 為統一工作空間根（對齊 DSH ctx.sandboxPolicy 的單一根來源），
+	// 同時供 sandbox 判定與注入給各工具插件進程。默認以啟動目錄（cwd）為根——
+	// 在哪个目录启动 dsc，就以哪个目录为工作区（对齐 REX/Claude Code）；
+	// 僅當配置顯式提供絕對路徑時覆蓋（相對路徑配置不再参与決定根）。
+	// 沙箱策略（read-only / workspace-write / full-access）由 TUI /sandbox 命令
+	// 运行时切换，见 core.Manager.SetSandboxPolicy。
+	mainCfg, err := loadConfig(core.ConfigPath)
+	if err == nil && mainCfg != nil {
+		core.WorkspaceRoot = resolveWorkspaceRoot(cwd, mainCfg.WorkspaceRoot)
+	}
 
-        // -patch overlay 合并：加载所有 patch 文件并合并到 mainCfg（对齐 DSH --patch）。
-        // patch 文件含插件条目配置（如 MCP 客户端），合并后启动时自动应用。
-        if len(patchFiles) > 0 {
-                overlays, perr := core.LoadPatchFiles(patchFiles)
-                if perr != nil {
-                        fmt.Fprintf(os.Stderr, "load patch overlay failed: %v\n", perr)
-                        os.Exit(1)
-                }
-                if len(overlays) > 0 {
-                        for _, ov := range overlays {
-                                logger.Info("applying patch overlay", "source", ov.Source, "entries", len(ov.Entries))
-                        }
-                        if mainCfg == nil {
-                                mainCfg = &core.Config{}
-                        }
-                        mainCfg = core.ApplyPatchOverlays(mainCfg, overlays)
-                }
-        }
-        // 打印统一用正斜杆（ToSlash），与模型 system prompt 中注入的工作区路径格式一致，
-        // 避免 Windows 下日志显示反斜杆路径造成人类与模型所见不一致。
-        logger.Info("workspace root", "root", filepath.ToSlash(core.WorkspaceRoot))
+	// -patch overlay 合并：加载所有 patch 文件并合并到 mainCfg（对齐 DSH --patch）。
+	// patch 文件含插件条目配置（如 MCP 客户端），合并后启动时自动应用。
+	if len(patchFiles) > 0 {
+		overlays, perr := core.LoadPatchFiles(patchFiles)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "load patch overlay failed: %v\n", perr)
+			os.Exit(1)
+		}
+		if len(overlays) > 0 {
+			for _, ov := range overlays {
+				logger.Info("applying patch overlay", "source", ov.Source, "entries", len(ov.Entries))
+			}
+			if mainCfg == nil {
+				mainCfg = &core.Config{}
+			}
+			mainCfg = core.ApplyPatchOverlays(mainCfg, overlays)
+		}
+	}
+	// 打印统一用正斜杆（ToSlash），与模型 system prompt 中注入的工作区路径格式一致，
+	// 避免 Windows 下日志显示反斜杆路径造成人类与模型所见不一致。
+	logger.Info("workspace root", "root", filepath.ToSlash(core.WorkspaceRoot))
 
-        // /settings history 持久化的历史注入编码（config.yaml history_injection）在启动时
-        // 下发 agent 子进程：0 未定义（默认不限制，不设）；-1 禁止（不注入）→ agent 0；
-        // N>0 启用并注入 N 条 → agent N。
-        if mainCfg != nil && mainCfg.HistoryInjection != 0 {
-                agentCount := mainCfg.HistoryInjection
-                if agentCount == -1 {
-                        agentCount = 0 // config 禁止 → agent off
-                }
-                os.Setenv("DSC_HISTORY_INJECTION", strconv.Itoa(agentCount))
-                logger.Info("history injection from config", "encoded", mainCfg.HistoryInjection, "agent", agentCount)
-        }
+	// /settings history 持久化的历史注入编码（config.yaml history_injection）在启动时
+	// 下发 agent 子进程：0 未定义（默认不限制，不设）；-1 禁止（不注入）→ agent 0；
+	// N>0 启用并注入 N 条 → agent N。
+	if mainCfg != nil && mainCfg.HistoryInjection != 0 {
+		agentCount := mainCfg.HistoryInjection
+		if agentCount == -1 {
+			agentCount = 0 // config 禁止 → agent off
+		}
+		os.Setenv("DSC_HISTORY_INJECTION", strconv.Itoa(agentCount))
+		logger.Info("history injection from config", "encoded", mainCfg.HistoryInjection, "agent", agentCount)
+	}
 
-        // 放大 go-core GRPCBroker 的连接超时（库默认 5 秒，见 EnvConnTimeout）：
-        // 宿主与插件进程同时加载超大本地模型、传输通道被挤占时，接收方收到 ConnInfo
-        // 后可能未能及时 Dial，一旦超过一次性窗口即被丢弃且无法重连。统一经环境变量
-        // 下发，所有插件子进程（buildEnv 继承宿主环境）同样生效；外部已显式设置时尊重之。
-        if os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT") == "" {
-                os.Setenv("PLUGIN_BROKER_CONN_TIMEOUT", "5m")
-        }
-        logger.Info("core broker conn timeout", "timeout", os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT"))
+	// 放大 go-core GRPCBroker 的连接超时（库默认 5 秒，见 EnvConnTimeout）：
+	// 宿主与插件进程同时加载超大本地模型、传输通道被挤占时，接收方收到 ConnInfo
+	// 后可能未能及时 Dial，一旦超过一次性窗口即被丢弃且无法重连。统一经环境变量
+	// 下发，所有插件子进程（buildEnv 继承宿主环境）同样生效；外部已显式设置时尊重之。
+	if os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT") == "" {
+		os.Setenv("PLUGIN_BROKER_CONN_TIMEOUT", "5m")
+	}
+	logger.Info("core broker conn timeout", "timeout", os.Getenv("PLUGIN_BROKER_CONN_TIMEOUT"))
 
-        mgr := core.NewManager(&core.ManagerConfig{
-                PluginDir:       core.PJoin(execDir, "plugins"),
-                ExecDir:         execDir,
-                Handshake:       core.Handshake,
-                Logger:          logger,
-                PluginLogger:    coreLogger,
-                LogFanout:       logFanout,
-                DebuggerEnabled: debuggerOpen,
-                EnableHotReload: mainCfg != nil && mainCfg.HotReload,
-                // PTC 呈现：-mode=ptc 或显式 DSC_PTC 开启（与 agent 侧 ptcEnabled 判定一致）
-                PTC: mode == core.ModePTC || ptcEnvEnabled(),
-        })
-        defer mgr.Shutdown()
-        // 安装退出信号处理：直接关闭终端等终止信号也能先逐只 Kill 插件子进程再退出，
-        // 避免 defers 不执行时孤儿插件进程残留（Windows console 关闭事件亦一并兜底）。
-        installShutdownSignals(mgr)
-        // 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
-        // 使运行期增删的插件在进程重启后依旧保留
-        mgr.SetConfigPath(core.ConfigPath)
+	mgr := core.NewManager(&core.ManagerConfig{
+		PluginDir:       core.PJoin(execDir, "plugins"),
+		ExecDir:         execDir,
+		Handshake:       core.Handshake,
+		Logger:          logger,
+		PluginLogger:    coreLogger,
+		LogFanout:       logFanout,
+		DebuggerEnabled: debuggerOpen,
+		EnableHotReload: mainCfg != nil && mainCfg.HotReload,
+		// PTC 呈现：-mode=ptc 或显式 DSC_PTC 开启（与 agent 侧 ptcEnabled 判定一致）
+		PTC: mode == core.ModePTC || ptcEnvEnabled(),
+	})
+	defer mgr.Shutdown()
+	// 安装退出信号处理：直接关闭终端等终止信号也能先逐只 Kill 插件子进程再退出，
+	// 避免 defers 不执行时孤儿插件进程残留（Windows console 关闭事件亦一并兜底）。
+	installShutdownSignals(mgr)
+	// 通知 Manager 动态注入/卸载要写回的 config.yaml 路径，
+	// 使运行期增删的插件在进程重启后依旧保留
+	mgr.SetConfigPath(core.ConfigPath)
 
-        // 外部脚本钩子（-hooks hooks.json）：严格 LUA 脚本（go-lua 进程内解释）或
-        // 原生可执行文件（直接 exec 不经 shell），在工具流水线 BeforeTool/AfterTool
-        // 参与裁定。加载失败不致命（配置错误即无钩子），日志留痕便于排查。
-        if hooksPath != "" {
-                if err := mgr.LoadLuaHooks(hooksPath); err != nil {
-                        logger.Warn("lua hooks load failed; continuing without hooks", "path", hooksPath, "error", err.Error())
-                }
-        }
+	// 外部脚本钩子（-hooks hooks.json）：严格 LUA 脚本（go-lua 进程内解释）或
+	// 原生可执行文件（直接 exec 不经 shell），在工具流水线 BeforeTool/AfterTool
+	// 参与裁定。加载失败不致命（配置错误即无钩子），日志留痕便于排查。
+	if hooksPath != "" {
+		if err := mgr.LoadLuaHooks(hooksPath); err != nil {
+			logger.Warn("lua hooks load failed; continuing without hooks", "path", hooksPath, "error", err.Error())
+		}
+	}
 
-        // fail 記錄錯誤後先清理已加載的插件子進程再退出，避免 os.Exit 跳過 defer 導致殘留孤兒進程
-        fail := func(format string, args ...interface{}) {
-                logger.Error(fmt.Sprintf(format, args...))
-                mgr.Shutdown()
-                os.Exit(1)
-        }
+	// fail 記錄錯誤後先清理已加載的插件子進程再退出，避免 os.Exit 跳過 defer 導致殘留孤兒進程
+	fail := func(format string, args ...interface{}) {
+		logger.Error(fmt.Sprintf(format, args...))
+		mgr.Shutdown()
+		os.Exit(1)
+	}
 
-        // ===== 声明式加载：合并 config.yaml + preset，交给 Manager 按能力依赖拓扑加载 =====
-        ext := ""
-        if runtime.GOOS == "windows" {
-                ext = ".exe"
-        }
+	// ===== 声明式加载：合并 config.yaml + preset，交给 Manager 按能力依赖拓扑加载 =====
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
 
-        // 从 config.yaml 收集启用的 LLM 条目与 agent 条目（沿用其 binary_path/env 声明）
-        var llmEntries []core.PluginEntry
-        var agentEntry *core.PluginEntry
-        if mainCfg != nil {
-                for i := range mainCfg.Plugins {
-                        e := mainCfg.Plugins[i]
-                        if !e.Enabled {
-                                continue
-                        }
-                        switch e.Type {
-                        case "llm":
-                                llmEntries = append(llmEntries, e)
-                        case "agent":
-                                if agentEntry == nil {
-                                        agentEntry = &mainCfg.Plugins[i]
-                                }
-                        }
-                }
-        }
+	// 从 config.yaml 收集启用的 LLM 条目与 agent 条目（沿用其 binary_path/env 声明）
+	var llmEntries []core.PluginEntry
+	var agentEntry *core.PluginEntry
+	if mainCfg != nil {
+		for i := range mainCfg.Plugins {
+			e := mainCfg.Plugins[i]
+			if !e.Enabled {
+				continue
+			}
+			switch e.Type {
+			case "llm":
+				llmEntries = append(llmEntries, e)
+			case "agent":
+				if agentEntry == nil {
+					agentEntry = &mainCfg.Plugins[i]
+				}
+			}
+		}
+	}
 
-        // 若 config.yaml 未声明任何启用的 LLM，则按 环境变量 → DefaultLLM → 发现机制回退构造默认条目
-        if len(llmEntries) == 0 {
-                llmName := os.Getenv("LLM_PROVIDER")
-                if llmName == "" && mainCfg != nil {
-                        llmName = mainCfg.DefaultLLM
-                }
-                if llmName == "" {
-                        // 发现机制：扫描 plugins/llm-* 目录取首个（与 setup.go 一致），
-                        // 不再硬编码 "openai"（对齐 AGENTS.md §8）。
-                        llmName = discoverFirstLLMPlugin()
-                }
-                if llmName == "" {
-                        fail("no LLM provider configured: set default_llm in config.yaml, LLM_PROVIDER env, or install a plugin under plugins/llm-*/")
-                }
-                llmEntries = append(llmEntries, core.PluginEntry{
-                        Name:       llmName,
-                        Type:       "llm",
-                        Enabled:    true,
-                        BinaryPath: loadBinaryPath("", "./plugins/llm-"+llmName+"/llm-"+llmName+ext),
-                })
-        }
+	// 若 config.yaml 未声明任何启用的 LLM，则按 环境变量 → DefaultLLM → 发现机制回退构造默认条目
+	if len(llmEntries) == 0 {
+		llmName := os.Getenv("LLM_PROVIDER")
+		if llmName == "" && mainCfg != nil {
+			llmName = mainCfg.DefaultLLM
+		}
+		if llmName == "" {
+			// 发现机制：扫描 plugins/llm-* 目录取首个（与 setup.go 一致），
+			// 不再硬编码 "openai"（对齐 AGENTS.md §8）。
+			llmName = discoverFirstLLMPlugin()
+		}
+		if llmName == "" {
+			fail("no LLM provider configured: set default_llm in config.yaml, LLM_PROVIDER env, or install a plugin under plugins/llm-*/")
+		}
+		llmEntries = append(llmEntries, core.PluginEntry{
+			Name:       llmName,
+			Type:       "llm",
+			Enabled:    true,
+			BinaryPath: loadBinaryPath("", "./plugins/llm-"+llmName+"/llm-"+llmName+ext),
+		})
+	}
 
-        // 确定“活跃 LLM”用于探测上下文窗口与展示模型名：LLM_PROVIDER → DefaultLLM → 首个启用条目
-        // （agent 的 primary LLM 由宿主按能力依赖解析，main 不再直接读 agent.depends_on.llm）
-        activeLLMName := ""
-        if v := os.Getenv("LLM_PROVIDER"); v != "" {
-                activeLLMName = v
-        } else if mainCfg != nil && mainCfg.DefaultLLM != "" {
-                activeLLMName = mainCfg.DefaultLLM
-        }
-        if activeLLMName == "" && len(llmEntries) > 0 {
-                activeLLMName = llmEntries[0].Name
-        }
+	// 确定“活跃 LLM”用于探测上下文窗口与展示模型名：LLM_PROVIDER → DefaultLLM → 首个启用条目
+	// （agent 的 primary LLM 由宿主按能力依赖解析，main 不再直接读 agent.depends_on.llm）
+	activeLLMName := ""
+	if v := os.Getenv("LLM_PROVIDER"); v != "" {
+		activeLLMName = v
+	} else if mainCfg != nil && mainCfg.DefaultLLM != "" {
+		activeLLMName = mainCfg.DefaultLLM
+	}
+	if activeLLMName == "" && len(llmEntries) > 0 {
+		activeLLMName = llmEntries[0].Name
+	}
 
-        activeLLMBinary := ""
-        activeLLMEnv := map[string]string{}
-        for _, e := range llmEntries {
-                if e.Name == activeLLMName {
-                        activeLLMEnv = e.Env
-                        rel := e.BinaryPath
-                        if rel == "" {
-                                rel = "./plugins/llm-" + activeLLMName + "/llm-" + activeLLMName + ext
-                        }
-                        activeLLMBinary = statBinaryPath(execDir, rel, "./plugins/llm-"+activeLLMName+"/llm-"+activeLLMName+ext)
-                        break
-                }
-        }
-        if activeLLMBinary == "" {
-                activeLLMBinary = statBinaryPath(execDir, "", "./plugins/llm-"+activeLLMName+"/llm-"+activeLLMName+ext)
-        }
-        if _, err := os.Stat(activeLLMBinary); os.IsNotExist(err) {
-                fail("LLM binary not found for provider %q at %q", activeLLMName, activeLLMBinary)
-        }
+	activeLLMBinary := ""
+	activeLLMEnv := map[string]string{}
+	for _, e := range llmEntries {
+		if e.Name == activeLLMName {
+			activeLLMEnv = e.Env
+			rel := e.BinaryPath
+			if rel == "" {
+				rel = "./plugins/llm-" + activeLLMName + "/llm-" + activeLLMName + ext
+			}
+			activeLLMBinary = statBinaryPath(execDir, rel, "./plugins/llm-"+activeLLMName+"/llm-"+activeLLMName+ext)
+			break
+		}
+	}
+	if activeLLMBinary == "" {
+		activeLLMBinary = statBinaryPath(execDir, "", "./plugins/llm-"+activeLLMName+"/llm-"+activeLLMName+ext)
+	}
+	if _, err := os.Stat(activeLLMBinary); os.IsNotExist(err) {
+		fail("LLM binary not found for provider %q at %q", activeLLMName, activeLLMBinary)
+	}
 
-        // 上下文窗口容量（token 数）：配置 context_window 显式 → 探测 LLAMACPP /v1/models 的
-        // n_ctx → 默认 128K×1024。探测总是执行（OPENAI_BASE_URL 缺席回退 ANTHROPIC_BASE_URL，
-        // 同一 llama.cpp 端口 /v1/models 同源）：命中即取探测值（最准），未命中（云端）取配置
-        // 值或默认——窗口来源随端点自然切换，该值同时是注入 LLM 插件的默认输出上限（见后）。
-        probeWindow := 0
-        if baseURL := activeLLMEnv["OPENAI_BASE_URL"]; baseURL != "" {
-                probeWindow = probeContextWindow(baseURL)
-        } else if baseURL := activeLLMEnv["ANTHROPIC_BASE_URL"]; baseURL != "" {
-                // llm-anthropic 直连同一 LLAMACPP 端口（/v1/models 与 /v1/messages 同源），
-                // OPENAI_BASE_URL 缺席时回退探测 anthropic 端点。
-                probeWindow = probeContextWindow(baseURL)
-        }
-        if probeWindow > 0 {
-                logger.Info("context window probed from llm server", "window", probeWindow)
-        }
-        contextWindow := 0
-        windowSource := "default"
-        if mainCfg != nil && mainCfg.ContextWindow > 0 {
-                contextWindow = mainCfg.ContextWindow
-                windowSource = "config"
-        }
-        if contextWindow == 0 && probeWindow > 0 {
-                contextWindow = probeWindow
-                windowSource = "probe"
-        }
-        if contextWindow == 0 {
-                contextWindow = defaultContextWindow
-        }
-        logger.Info("context window", "window", contextWindow, "source", windowSource)
-        // 文本引用注入上限随上下文容量换算（TUI 与 -input 共用；窗口未知保持默认 1 MiB）
-        tui.SetTextRefContextWindow(contextWindow)
+	// 上下文窗口容量（token 数）：配置 context_window 显式 → 探测 LLAMACPP /v1/models 的
+	// n_ctx → 默认 128K×1024。探测总是执行（OPENAI_BASE_URL 缺席回退 ANTHROPIC_BASE_URL，
+	// 同一 llama.cpp 端口 /v1/models 同源）：命中即取探测值（最准），未命中（云端）取配置
+	// 值或默认——窗口来源随端点自然切换，该值同时是注入 LLM 插件的默认输出上限（见后）。
+	probeWindow := 0
+	if baseURL := activeLLMEnv["OPENAI_BASE_URL"]; baseURL != "" {
+		probeWindow = probeContextWindow(baseURL)
+	} else if baseURL := activeLLMEnv["ANTHROPIC_BASE_URL"]; baseURL != "" {
+		// llm-anthropic 直连同一 LLAMACPP 端口（/v1/models 与 /v1/messages 同源），
+		// OPENAI_BASE_URL 缺席时回退探测 anthropic 端点。
+		probeWindow = probeContextWindow(baseURL)
+	}
+	if probeWindow > 0 {
+		logger.Info("context window probed from llm server", "window", probeWindow)
+	}
+	contextWindow := 0
+	windowSource := "default"
+	if mainCfg != nil && mainCfg.ContextWindow > 0 {
+		contextWindow = mainCfg.ContextWindow
+		windowSource = "config"
+	}
+	if contextWindow == 0 && probeWindow > 0 {
+		contextWindow = probeWindow
+		windowSource = "probe"
+	}
+	if contextWindow == 0 {
+		contextWindow = defaultContextWindow
+	}
+	logger.Info("context window", "window", contextWindow, "source", windowSource)
+	// 文本引用注入上限随上下文容量换算（TUI 与 -input 共用；窗口未知保持默认 1 MiB）
+	tui.SetTextRefContextWindow(contextWindow)
 
-        // 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy/dsc
-        // （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_dsc_plugin
-        // 安装的 —— 亦并入，按名去重、preset 优先（同名取 preset），使模型安装的插件能跨重启生效）
-        merged := assembleMerged(llmEntries, agentEntry, mainCfg, presetCfg, contextWindow, headless, inputText)
+	// 组装合并配置：LLM + agent（来自 config.yaml）+ tool/policy/dsc
+	// （来自 preset；config.yaml 中启用的 tool/policy/dsc —— 含 install_dsc_plugin
+	// 安装的 —— 亦并入，按名去重、preset 优先（同名取 preset），使模型安装的插件能跨重启生效）
+	merged := assembleMerged(llmEntries, agentEntry, mainCfg, presetCfg, contextWindow, headless, inputText)
 
-        // 注入当前模式 + 工作根 + 沙箱档到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
-        // 「插件创造」仅在创造模式（creation）下允许。
-        injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
+	// 注入当前模式 + 工作根 + 沙箱档到所有插件进程（DSC_MODE）：tool-lua-host 据此限制
+	// 「插件创造」仅在创造模式（creation）下允许。
+	injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
 
-        // 输出上限统一语义（不分本地/云端，行为一致）：向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS
-        // =有效上下文窗口值。探测命中（本地 LLAMACPP）注入探测窗口值；探测不命中（云端）注入
-        // 配置 context_window 值（含 128K 兜底默认）——窗口来源切换、注入行为不变，用户对
-        // context_window 的调整在任何端点都同样生效。anthropic 兼容口把 max_tokens 视为
-        // required，字段缺席时服务端自填保守默认（laamaafung server-chat.cpp 对缺席值填
-        // 4096），「不携带=等模型自然结束」在其上退化为服务端默认截断；显式携带窗口值在
-        // LLAMACPP 侧被服务端上下文自然钳制（生成至 EOS 或窗口满）。云端若模型输出上限低于
-        // 注入值而被 400 拒绝，属用户可显式调整的范围：下调 context_window，或设插件 env
-        // （ANTHROPIC_/OPENAI_MAX_OUTPUT_TOKENS=0）恢复不携带——可调整性优先于差异化默认。
-        injectMaxOutputTokens(merged, contextWindow)
-        logger.Info("max output tokens defaulted to effective context window", "max_tokens", contextWindow, "source", windowSource)
+	// 输出上限统一语义（不分本地/云端，行为一致）：向 LLM 插件注入 DSC_MAX_OUTPUT_TOKENS
+	// =有效上下文窗口值。探测命中（本地 LLAMACPP）注入探测窗口值；探测不命中（云端）注入
+	// 配置 context_window 值（含 128K 兜底默认）——窗口来源切换、注入行为不变，用户对
+	// context_window 的调整在任何端点都同样生效。anthropic 兼容口把 max_tokens 视为
+	// required，字段缺席时服务端自填保守默认（laamaafung server-chat.cpp 对缺席值填
+	// 4096），「不携带=等模型自然结束」在其上退化为服务端默认截断；显式携带窗口值在
+	// LLAMACPP 侧被服务端上下文自然钳制（生成至 EOS 或窗口满）。云端若模型输出上限低于
+	// 注入值而被 400 拒绝，属用户可显式调整的范围：下调 context_window，或设插件 env
+	// （ANTHROPIC_/OPENAI_MAX_OUTPUT_TOKENS=0）恢复不携带——可调整性优先于差异化默认。
+	injectMaxOutputTokens(merged, contextWindow)
+	logger.Info("max output tokens defaulted to effective context window", "max_tokens", contextWindow, "source", windowSource)
 
-        // 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
-        // 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
-        // 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
-        mainConfigPath := core.ConfigPath
-        pluginsDir := core.PJoin(execDir, "plugins")
-        pluginsSnap := pluginsDir + "-backup"
-        loadErr := mgr.LoadFromConfig(merged)
-        if loadErr != nil {
-                // 先锁定最近「正常」备份（避免把下面刚备份的坏版当成正常版回读），
-                // 再把当前坏版各自备份留档，最后分别还原各自最近正常备份续启
-                latestCfg, _ := core.LatestGoodBackup(mainConfigPath)
-                latestPreset, _ := core.LatestGoodBackup(presetPath)
-                badCfg, _ := core.BackupGoodFile(mainConfigPath, logger)
-                badPreset, _ := core.BackupGoodFile(presetPath, logger)
-                recovered := ""
-                if latestCfg != "" {
-                        if err := core.RestoreGoodFile(mainConfigPath, latestCfg, logger); err == nil {
-                                recovered = latestCfg
-                        }
-                }
-                if latestPreset != "" {
-                        if err := core.RestoreGoodFile(presetPath, latestPreset, logger); err == nil && recovered == "" {
-                                recovered = latestPreset
-                        }
-                }
-                if recovered != "" {
-                        // 用还原后的 config.yaml / preset 重建插件集并重试
-                        if newMain, _ := loadConfig(mainConfigPath); newMain != nil {
-                                newPreset := presetCfg
-                                if p, _ := loadConfig(presetPath); p != nil {
-                                        newPreset = p
-                                }
-                                merged = assemblePluginSet(newMain, newPreset, contextWindow, headless, inputText)
-                                // 对齐插件目录：先从「上次正常」快照回拷缺失/损坏（容错，跳过被运行进程锁住的）；
-                                // 回拷完成后，报告「未被还原后配置引用」的孤立插件目录——仅告警、不删除。
-                                // （孤立插件未启用过，无从判断其可用性，亦不能替用户保证将来不用，故先保留；
-                                // 日后若用户启用其却导致启动失败，再由本恢复机制兜底处理。）
-                                if err := core.RestorePluginsDir(pluginsSnap, pluginsDir, logger); err != nil {
-                                        logger.Warn("plugins dir restore skipped (no snapshot?)", "err", err)
-                                }
-                                core.ReportOrphanPlugins(pluginsDir, core.RequiredPluginDirBases(merged), logger)
-                                injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
-                                injectMaxOutputTokens(merged, contextWindow)
-                                logger.Warn("启动加载失败，已还原最近正常配置并重试（降级模式）",
-                                        "cause", loadErr, "recovered", recovered, "badConfig", badCfg, "badPreset", badPreset)
-                                if err := mgr.LoadFromConfig(merged); err != nil {
-                                        fail("failed to load plugins declaratively (even after config restore): %v", err)
-                                }
-                                loadErr = nil
-                        }
-                }
-                if loadErr != nil {
-                        fail("failed to load plugins declaratively: %v", loadErr)
-                }
-        }
+	// 声明式加载：Manager 内做依赖拓扑排序 + PENDING + 聚合 Tool 服务 + 一次性 RegisterServices。
+	// 失败则自愈：把 config.yaml 与 preset 各自备份当前（坏）版、分别还原各自最近正常
+	// 备份，再用还原后的配置重建插件集重试一次；仍失败才退出。
+	mainConfigPath := core.ConfigPath
+	pluginsDir := core.PJoin(execDir, "plugins")
+	pluginsSnap := pluginsDir + "-backup"
+	loadErr := mgr.LoadFromConfig(merged)
+	if loadErr != nil {
+		// 先锁定最近「正常」备份（避免把下面刚备份的坏版当成正常版回读），
+		// 再把当前坏版各自备份留档，最后分别还原各自最近正常备份续启
+		latestCfg, _ := core.LatestGoodBackup(mainConfigPath)
+		latestPreset, _ := core.LatestGoodBackup(presetPath)
+		badCfg, _ := core.BackupGoodFile(mainConfigPath, logger)
+		badPreset, _ := core.BackupGoodFile(presetPath, logger)
+		recovered := ""
+		if latestCfg != "" {
+			if err := core.RestoreGoodFile(mainConfigPath, latestCfg, logger); err == nil {
+				recovered = latestCfg
+			}
+		}
+		if latestPreset != "" {
+			if err := core.RestoreGoodFile(presetPath, latestPreset, logger); err == nil && recovered == "" {
+				recovered = latestPreset
+			}
+		}
+		if recovered != "" {
+			// 用还原后的 config.yaml / preset 重建插件集并重试
+			if newMain, _ := loadConfig(mainConfigPath); newMain != nil {
+				newPreset := presetCfg
+				if p, _ := loadConfig(presetPath); p != nil {
+					newPreset = p
+				}
+				merged = assemblePluginSet(newMain, newPreset, contextWindow, headless, inputText)
+				// 对齐插件目录：先从「上次正常」快照回拷缺失/损坏（容错，跳过被运行进程锁住的）；
+				// 回拷完成后，报告「未被还原后配置引用」的孤立插件目录——仅告警、不删除。
+				// （孤立插件未启用过，无从判断其可用性，亦不能替用户保证将来不用，故先保留；
+				// 日后若用户启用其却导致启动失败，再由本恢复机制兜底处理。）
+				if err := core.RestorePluginsDir(pluginsSnap, pluginsDir, logger); err != nil {
+					logger.Warn("plugins dir restore skipped (no snapshot?)", "err", err)
+				}
+				core.ReportOrphanPlugins(pluginsDir, core.RequiredPluginDirBases(merged), logger)
+				injectRuntimeEnv(merged, mode, core.WorkspaceRoot, sandboxPolicyEnv())
+				injectMaxOutputTokens(merged, contextWindow)
+				logger.Warn("启动加载失败，已还原最近正常配置并重试（降级模式）",
+					"cause", loadErr, "recovered", recovered, "badConfig", badCfg, "badPreset", badPreset)
+				if err := mgr.LoadFromConfig(merged); err != nil {
+					fail("failed to load plugins declaratively (even after config restore): %v", err)
+				}
+				loadErr = nil
+			}
+		}
+		if loadErr != nil {
+			fail("failed to load plugins declaratively: %v", loadErr)
+		}
+	}
 
-        // 成功启动：把已生效的 config.yaml 与当前 preset 各自独立备份一次（配置自愈基础——
-        // 之后若被改坏，可分别还原各自最近正常版本续启）
-        if _, err := core.BackupGoodFile(mainConfigPath, logger); err != nil {
-                logger.Warn("failed to backup config after successful start", "err", err)
-        }
-        if _, err := core.BackupGoodFile(presetPath, logger); err != nil {
-                logger.Warn("failed to backup preset after successful start", "err", err)
-        }
-        // 维护 plugins 目录「上次正常」快照（二进制大，仅当有新内容才刷新）
-        if done, err := core.BackupPluginsDir(pluginsDir, pluginsSnap, logger); err != nil {
-                logger.Warn("failed to snapshot plugins dir", "err", err)
-        } else if done {
-                logger.Info("plugins dir snapshot refreshed", "snap", pluginsSnap)
-        }
+	// 成功启动：把已生效的 config.yaml 与当前 preset 各自独立备份一次（配置自愈基础——
+	// 之后若被改坏，可分别还原各自最近正常版本续启）
+	if _, err := core.BackupGoodFile(mainConfigPath, logger); err != nil {
+		logger.Warn("failed to backup config after successful start", "err", err)
+	}
+	if _, err := core.BackupGoodFile(presetPath, logger); err != nil {
+		logger.Warn("failed to backup preset after successful start", "err", err)
+	}
+	// 维护 plugins 目录「上次正常」快照（二进制大，仅当有新内容才刷新）
+	if done, err := core.BackupPluginsDir(pluginsDir, pluginsSnap, logger); err != nil {
+		logger.Warn("failed to snapshot plugins dir", "err", err)
+	} else if done {
+		logger.Info("plugins dir snapshot refreshed", "snap", pluginsSnap)
+	}
 
-        // 后台监听/调度仅在常规模式启用；-headless 精简无头模式不开端口、不起常驻轮询，
-        // 对齐 harness headless「进程只存活于单发、不留任何后台」的契约。
-        if !headless {
-                // -patch overlay 注入的 MCP 客户端配置：扫描 merged.Plugins 中含
-                // config.mcp 的条目，启动时自动连接（对齐 DSH cordis.yml 的 mcp-client
-                // 插件实例化）。每个条目的 config.mcp 字段含 server_name/endpoint 等。
-                autoConnectMCPFromConfig(mgr, merged, logger)
+	// 后台监听/调度仅在常规模式启用；-headless 精简无头模式不开端口、不起常驻轮询，
+	// 对齐 harness headless「进程只存活于单发、不留任何后台」的契约。
+	if !headless {
+		// -patch overlay 注入的 MCP 客户端配置：扫描 merged.Plugins 中含
+		// config.mcp 的条目，启动时自动连接（对齐 DSH cordis.yml 的 mcp-client
+		// 插件实例化）。每个条目的 config.mcp 字段含 server_name/endpoint 等。
+		autoConnectMCPFromConfig(mgr, merged, logger)
 
-                // 版本化二进制自动热重载（config.yaml hot_reload: true 时启用）：fsnotify + 周期扫描
-                if err := mgr.StartHotReloadWatcher(); err != nil {
-                        logger.Warn("failed to start hot-reload watcher", "err", err)
-                }
+		// 版本化二进制自动热重载（config.yaml hot_reload: true 时启用）：fsnotify + 周期扫描
+		if err := mgr.StartHotReloadWatcher(); err != nil {
+			logger.Warn("failed to start hot-reload watcher", "err", err)
+		}
 
-                // 启动 cron 定时任务调度器（失败仅告警，不阻塞主流程）
-                if err := mgr.StartCron(); err != nil {
-                        logger.Warn("failed to start cron scheduler", "err", err)
-                } else {
-                        logger.Info("cron scheduler started")
-                }
+		// 启动 cron 定时任务调度器（失败仅告警，不阻塞主流程）
+		if err := mgr.StartCron(); err != nil {
+			logger.Warn("failed to start cron scheduler", "err", err)
+		} else {
+			logger.Info("cron scheduler started")
+		}
 
-                // 启动管理 API（管理能力）：
-                // 管理能力是一种「可选能力」——只有需要它的插件（如 tool-harness-webui）
-                // 才声明依赖。宿主按以下优先级决定是否启动管理 API：
-                //   1. 用户显式 -admin <addr>：强制启动
-                //   2. DSC_ADMIN_ADDR 环境变量：强制启动
-                //   3. 配置中有插件声明 Requires: dsc/admin 能力依赖：自动启动
-                //   4. DSC_NO_ADMIN=1：强制关闭（即使有插件需要也不启动，插件应优雅降级）
-                //   5. 默认：关闭（TUI 终端用户通常不需要管理 API）
-                needAdmin := false
-                if adminAddr != "" {
-                        // 用户显式 -admin
-                        needAdmin = true
-                } else if os.Getenv("DSC_ADMIN_ADDR") != "" {
-                        needAdmin = true
-                        adminAddr = os.Getenv("DSC_ADMIN_ADDR")
-                } else if os.Getenv("DSC_NO_ADMIN") != "1" && os.Getenv("DSC_NO_ADMIN") != "true" {
-                        // 检查是否有插件声明了 requires/dsc/admin 能力依赖
-                        if mgr.HasPluginRequiringCapability("dsc", "admin") {
-                                needAdmin = true
-                                logger.Info("admin api auto-enabled (plugin requires admin capability)")
-                        }
-                }
+		// 启动管理 API（管理能力）：
+		// 管理能力是一种「可选能力」——只有需要它的插件（如 tool-harness-webui）
+		// 才声明依赖。宿主按以下优先级决定是否启动管理 API：
+		//   1. 用户显式 -admin <addr>：强制启动
+		//   2. DSC_ADMIN_ADDR 环境变量：强制启动
+		//   3. 配置中有插件声明 Requires: dsc/admin 能力依赖：自动启动
+		//   4. DSC_NO_ADMIN=1：强制关闭（即使有插件需要也不启动，插件应优雅降级）
+		//   5. 默认：关闭（TUI 终端用户通常不需要管理 API）
+		needAdmin := false
+		if adminAddr != "" {
+			// 用户显式 -admin
+			needAdmin = true
+		} else if os.Getenv("DSC_ADMIN_ADDR") != "" {
+			needAdmin = true
+			adminAddr = os.Getenv("DSC_ADMIN_ADDR")
+		} else if os.Getenv("DSC_NO_ADMIN") != "1" && os.Getenv("DSC_NO_ADMIN") != "true" {
+			// 检查是否有插件声明了 requires/dsc/admin 能力依赖
+			if mgr.HasPluginRequiringCapability("dsc", "admin") {
+				needAdmin = true
+				logger.Info("admin api auto-enabled (plugin requires admin capability)")
+			}
+		}
 
-                if !needAdmin {
-                        logger.Info("admin api disabled (use -admin <addr> or DSC_ADMIN_ADDR to enable)")
-                } else {
-                        if adminAddr == "" {
-                                adminAddr = "127.0.0.1:9999"
-                        }
-                        finalAddr := mgr.StartAdmin(adminAddr)
-                        if finalAddr != adminAddr {
-                                logger.Warn("admin api port auto-incremented due to conflict",
-                                        "requested", adminAddr, "actual", finalAddr)
-                        }
-                        adminAddr = finalAddr
-                        logger.Info("admin api started", "addr", adminAddr)
-                        // 把实际监听地址注入到环境变量，供 tool-harness-webui 等插件子进程读取
-                        os.Setenv("DSC_ADMIN_ADDR", adminAddr)
-                }
-        }
+		if !needAdmin {
+			logger.Info("admin api disabled (use -admin <addr> or DSC_ADMIN_ADDR to enable)")
+		} else {
+			if adminAddr == "" {
+				adminAddr = "127.0.0.1:9999"
+			}
+			finalAddr := mgr.StartAdmin(adminAddr)
+			if finalAddr != adminAddr {
+				logger.Warn("admin api port auto-incremented due to conflict",
+					"requested", adminAddr, "actual", finalAddr)
+			}
+			adminAddr = finalAddr
+			logger.Info("admin api started", "addr", adminAddr)
+			// 把实际监听地址注入到环境变量，供 tool-harness-webui 等插件子进程读取
+			os.Setenv("DSC_ADMIN_ADDR", adminAddr)
+		}
+	}
 
-        // 获取 Agent 并运行（经事件包装：RunStream 回合完成时广播 agent/status，
-        // 供 notify 等程序性插件订阅；对齐 DSH agent-loop 原生发 agent/status）
-        agentName := mgr.GetMainAgentName()
-        if agentName == "" {
-                // 发现机制兜底：扫描 plugins/agent-* 目录取首个（与 assembleMerged 一致），
-                // 不再硬编码 "agent-react-loop"（对齐 AGENTS.md §8）。
-                agentName = "agent-" + discoverFirstAgentPlugin()
-        }
-        agent, ok := mgr.EventAgent()
-        if !ok {
-                fail("agent %s not found after loading", agentName)
-        }
+	// 获取 Agent 并运行（经事件包装：RunStream 回合完成时广播 agent/status，
+	// 供 notify 等程序性插件订阅；对齐 DSH agent-loop 原生发 agent/status）
+	agentName := mgr.GetMainAgentName()
+	if agentName == "" {
+		// 发现机制兜底：扫描 plugins/agent-* 目录取首个（与 assembleMerged 一致），
+		// 不再硬编码 "agent-react-loop"（对齐 AGENTS.md §8）。
+		agentName = "agent-" + discoverFirstAgentPlugin()
+	}
+	agent, ok := mgr.EventAgent()
+	if !ok {
+		fail("agent %s not found after loading", agentName)
+	}
 
-        // 从配置提取 LLM 模型名称用于 TUI 展示
-        llmModelName := "Unknown"
-        for _, e := range llmEntries {
-                if e.Name == activeLLMName {
-                        if v, ok := e.Env["ANTHROPIC_MODEL"]; ok {
-                                llmModelName = v
-                        } else if v, ok := e.Env["OPENAI_MODEL"]; ok {
-                                llmModelName = v
-                        } else if v, ok := e.Env["OLLAMA_MODEL"]; ok {
-                                llmModelName = v
-                        }
-                        break
-                }
-        }
-        if llmModelName == "Unknown" {
-                // 從環境變量獲取
-                if v := os.Getenv("OPENAI_MODEL"); v != "" {
-                        llmModelName = v
-                } else if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
-                        llmModelName = v
-                } else if v := os.Getenv("OLLAMA_MODEL"); v != "" {
-                        llmModelName = v
-                } else {
-                        llmModelName = "Agentic-Model" // 默認值
-                }
-        }
+	// 从配置提取 LLM 模型名称用于 TUI 展示
+	llmModelName := "Unknown"
+	for _, e := range llmEntries {
+		if e.Name == activeLLMName {
+			if v, ok := e.Env["ANTHROPIC_MODEL"]; ok {
+				llmModelName = v
+			} else if v, ok := e.Env["OPENAI_MODEL"]; ok {
+				llmModelName = v
+			} else if v, ok := e.Env["OLLAMA_MODEL"]; ok {
+				llmModelName = v
+			}
+			break
+		}
+	}
+	if llmModelName == "Unknown" {
+		// 從環境變量獲取
+		if v := os.Getenv("OPENAI_MODEL"); v != "" {
+			llmModelName = v
+		} else if v := os.Getenv("ANTHROPIC_MODEL"); v != "" {
+			llmModelName = v
+		} else if v := os.Getenv("OLLAMA_MODEL"); v != "" {
+			llmModelName = v
+		} else {
+			llmModelName = "Agentic-Model" // 默認值
+		}
+	}
 
-        ctx := context.Background()
+	ctx := context.Background()
 
-        exitCode := 0
-        if inputText != "" {
-                // -input：一次性模式，不显示 TUI，完成后自然退出
-                logger.Info("running in input mode", "input", inputText)
-                exitCode = runInputMode(agent, ctx, inputText)
-                logger.Info("input mode finished", "exitCode", exitCode)
+	exitCode := 0
+	if inputText != "" {
+		// -input：一次性模式，不显示 TUI，完成后自然退出
+		logger.Info("running in input mode", "input", inputText)
+		exitCode = runInputMode(agent, ctx, inputText)
+		logger.Info("input mode finished", "exitCode", exitCode)
 
-                // 回合完成音效宽限：notify 等程序性通知插件在 agent 回合完成时异步播放完成音效
-                // （success/error，约 0.29s）。-input 单发回合结束后宿主随即回收插件子进程
-                // （Windows 上为强杀，不跑 defer），可能导致音效被截断。已加载通知插件且非
-                // headless（CI 单发无需报声）时，短暂宽限让音效播完再关闭；headless 保持快速退出。
-                // 按能力探测（notify），任何声明该能力的插件均触发宽限，避免绑死
-                // 具体插件名（对齐 AGENTS.md §8：宿主核心不得硬编码插件名）。
-                if !headless && mgr.HasPluginProvidingCapability("notify") {
-                        const completionSoundGrace = 800 * time.Millisecond
-                        logger.Info("draining completion sound", "grace", completionSoundGrace.String())
-                        time.Sleep(completionSoundGrace)
-                }
-        } else {
-                if err := tui.Run(agent, mgr, ctx, llmModelName, mode, contextWindow); err != nil {
-                        logger.Error("tui run failed", "error", err)
-                        exitCode = 1
-                }
-                logger.Info("tui exited")
-        }
+		// 回合完成音效宽限：notify 等程序性通知插件在 agent 回合完成时异步播放完成音效
+		// （success/error，约 0.29s）。-input 单发回合结束后宿主随即回收插件子进程
+		// （Windows 上为强杀，不跑 defer），可能导致音效被截断。已加载通知插件且非
+		// headless（CI 单发无需报声）时，短暂宽限让音效播完再关闭；headless 保持快速退出。
+		// 按能力探测（notify），任何声明该能力的插件均触发宽限，避免绑死
+		// 具体插件名（对齐 AGENTS.md §8：宿主核心不得硬编码插件名）。
+		if !headless && mgr.HasPluginProvidingCapability("notify") {
+			const completionSoundGrace = 800 * time.Millisecond
+			logger.Info("draining completion sound", "grace", completionSoundGrace.String())
+			time.Sleep(completionSoundGrace)
+		}
+	} else {
+		if err := tui.Run(agent, mgr, ctx, llmModelName, mode, contextWindow); err != nil {
+			logger.Error("tui run failed", "error", err)
+			exitCode = 1
+		}
+		logger.Info("tui exited")
+	}
 
-        // 完成完整的清理過程再退出
-        logger.Info("shutting down...")
-        mgr.Shutdown()
-        os.Exit(exitCode)
+	// 完成完整的清理過程再退出
+	logger.Info("shutting down...")
+	mgr.Shutdown()
+	os.Exit(exitCode)
 }

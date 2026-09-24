@@ -103,6 +103,9 @@ func TestMapWorkspacePathWiring(t *testing.T) {
 // TestResolveWorkspacePath 解析语义：相对路径锚定工作空间根（非进程 cwd——
 // 插件进程 cwd 是 ExecDir，锚 cwd 会把工作空间相对路径落到安装目录）；
 // /workspace 前缀映射到根下；盘符绝对路径原样求净。
+//
+// 期望值一律经 ToSlash 表达：本函数是路径传播的出入口，结果统一 POSIX 正斜杆
+// （Windows 上 filepath.Join/Abs 产出反斜杆，原样进入模型上下文即诱导模型照抄）。
 func TestResolveWorkspacePath(t *testing.T) {
 	root := t.TempDir()
 	setWorkspaceRoot(t, root)
@@ -111,7 +114,7 @@ func TestResolveWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relative resolve: %v", err)
 	}
-	if want := filepath.Join(root, "docs", "architecture.md"); rel != want {
+	if want := filepath.ToSlash(filepath.Join(root, "docs", "architecture.md")); rel != want {
 		t.Errorf("relative = %q, want %q", rel, want)
 	}
 
@@ -119,8 +122,8 @@ func TestResolveWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("/workspace resolve: %v", err)
 	}
-	if ws != filepath.Join(root, "docs", "architecture.md") {
-		t.Errorf("/workspace = %q, want %q", ws, filepath.Join(root, "docs", "architecture.md"))
+	if want := filepath.ToSlash(filepath.Join(root, "docs", "architecture.md")); ws != want {
+		t.Errorf("/workspace = %q, want %q", ws, want)
 	}
 
 	abs, err := ResolveWorkspacePath("/docs/architecture.md")
@@ -134,10 +137,10 @@ func TestResolveWorkspacePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abs: %v", err)
 	}
-	if abs != wantAbs {
+	if wantAbs = filepath.ToSlash(wantAbs); abs != wantAbs {
 		t.Errorf("bare / = %q, want %q（真实根语义，非工作区锚定）", abs, wantAbs)
 	}
-	if abs == filepath.Join(root, "docs", "architecture.md") {
+	if anchored := filepath.ToSlash(filepath.Join(root, "docs", "architecture.md")); abs == anchored {
 		t.Errorf("bare / 不得再锚定工作空间根（真实根语义）: %q", abs)
 	}
 }

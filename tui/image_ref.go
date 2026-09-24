@@ -257,17 +257,25 @@ func saveTextAttachment(path string) (string, error) {
 
 // resolveRefPath 把 @ 引用路径解析为绝对路径：/workspace 虚拟根映射到工作区
 // 真实根（与 sandbox/编辑器工具的别名约定一致），其余相对路径按工作区根解析。
+//
+// 返回值一律正斜杆：这是路径传播的出入口——解析结果会进入「图片未解析: @<路径>」
+// 之类可见提示、并作为附件引用被后续读写，原样透传 Windows 反斜杆会污染模型上下文
+// （模型照抄反斜杆写路径即跨平台漂移）。os.* 系列接受正斜杆，语义不变。
 func resolveRefPath(wsRoot, ref string) string {
 	if strings.HasPrefix(ref, "/workspace") || strings.HasPrefix(ref, "\\workspace") {
 		rel := strings.TrimPrefix(strings.TrimPrefix(ref, "/workspace"), "\\workspace")
 		rel = strings.TrimPrefix(rel, "/")
+		// 别名后的余下部分显式把反斜杆视作分隔符（对齐 core.mapWorkspacePathFor 的
+		// 同款处理）：模型/用户可能写 \workspace\sub\x.png，而 POSIX 宿主上反斜杆
+		// 不是分隔符、filepath.ToSlash 也是空操作，必须显式替换才能宿主无关。
+		rel = strings.ReplaceAll(rel, "\\", "/")
 		if wsRoot != "" {
 			return core.PJoin(wsRoot, rel)
 		}
-		return rel
+		return core.PClean(rel)
 	}
 	if filepath.IsAbs(ref) {
-		return ref
+		return core.PClean(ref)
 	}
 	if wsRoot != "" {
 		return core.PJoin(wsRoot, ref)
@@ -275,5 +283,5 @@ func resolveRefPath(wsRoot, ref string) string {
 	if abs, err := core.PAbs(ref); err == nil {
 		return abs
 	}
-	return ref
+	return core.PClean(ref)
 }
