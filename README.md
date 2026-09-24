@@ -221,9 +221,9 @@ TUI 輸入框按 `@` 會彈出當前工作區的文件候選篩選列表（對�
 - `tool-lisp-eval`（Lisp/Scheme 精確有理數求值：`+ - * /` 變參精確運算、`3/4` 分數字面量、任意精度整數；浮點走 `f+ f- f* f/` 逃生艙；提供 `lisp-eval` 能力）
 
 
-- `tool-lua-host`（LUA 腳本宿主：腳本註冊工具，宿主互通複用 LLM/Tool/Notify；內置只讀 `list_lua_tools` 枚舉當前已註冊的 LUA 腳本工具；腳本工具在創造模式下熱加載（約 2s 輪詢掃描 `scripts/`），宿主會節流同步其到模型可直接調用的工具目錄——新腳本工具無需重啓即可被模型直接調用）
+- `tool-lua-host`（LUA 腳本宿主：腳本註冊工具，宿主互通複用 LLM/Tool/Notify；內置只讀 `list_lua_tools` 枚舉當前已註冊的 LUA 腳本工具；腳本註冊的工具以**腳本名為前綴**暴露（腳本 `example` 的 `ping` → `example_ping`，故模型從工具名即知它出自哪個腳本，`dsc.script.name` 供腳本拼自身工具名）；腳本工具在創造模式下熱加載（約 2s 輪詢掃描 `scripts/`），宿主會節流同步其到模型可直接調用的工具目錄——新腳本工具無需重啓即可被模型直接調用）
 
-- `tool-sql-host`（.dsp 插件宿主：.dsp 是「dsc's plugin」，實質是一個 SQLite 庫——插件的元數據（`dsp_meta`）、代碼（`dsp_blobs`）、運行期狀態（`dsp_state`）同處一庫，即「程序即數據」；宿主打開後取出其中的 LUA 代碼執行並把註冊的工具以 `dsp_` 前綴暴露（內置只讀 `list_dsp_plugins` 概覽已加載插件），插件經 `dsc.sql.*` 對自己那個庫做 SQL、經 `dsc.store.*` 讀寫自身狀態（宿主重啓後仍在，因為狀態就在它自己的文件裏）；後綴強制校驗 + SQLite 魔數 + `application_id=0x44535031`（"DSP1"）四道門禁自證身份；腳本側 SQL 加保守守衞（禁 ATTACH/DETACH、禁改元數據與代碼表、禁運行期 DDL，自有表由打包期 `schema.sql` 落庫）；創造模式下按**產物哈希**（只覆蓋元數據與代碼，狀態寫入不觸發）熱加載，並可用 `pack_dsp` 把源目錄打包成 .dsp；參考實現來自 SelfDB 的「可執行文件即數據庫」思路，但去掉了內核層——不需要可執行位與 binfmt_misc，執行主體是 Go 宿主進程）
+- `tool-sql-host`（.dsp 插件宿主：.dsp 是「dsc's plugin」，實質是一個 SQLite 庫——插件的元數據（`dsp_meta`）、代碼（`dsp_blobs`）、運行期狀態（`dsp_state`）同處一庫，即「程序即數據」；宿主打開後取出其中的 LUA 代碼執行並把註冊的工具以**插件名為前綴**暴露（插件 `hello` 的 `greet` → `hello_greet`，與 `list_dsp_plugins` 列出的插件名逐字對應、歸屬一眼可查；內置只讀 `list_dsp_plugins` 概覽已加載插件），插件經 `dsc.sql.*` 對自己那個庫做 SQL、經 `dsc.store.*` 讀寫自身狀態（宿主重啓後仍在，因為狀態就在它自己的文件裏）；後綴強制校驗 + SQLite 魔數 + `application_id=0x44535031`（"DSP1"）四道門禁自證身份；腳本側 SQL 加保守守衞（禁 ATTACH/DETACH、禁改元數據與代碼表、禁運行期 DDL，自有表由打包期 `schema.sql` 落庫）；創造模式下按**產物哈希**（只覆蓋元數據與代碼，狀態寫入不觸發）熱加載，並可用 `pack_dsp` 把源目錄打包成 .dsp；參考實現來自 SelfDB 的「可執行文件即數據庫」思路，但去掉了內核層——不需要可執行位與 binfmt_misc，執行主體是 Go 宿主進程）
 
 - `tool-memory-service`（記憶庫工具：完整增刪改查——`memory_search` 檢索（FTS5 + LIKE，時間衰減排序）、`memory_add` 新增（內容去重）、`memory_delete` 按 ID 刪除、`memory_update` 按 ID 修改、`memory_list` 分頁列表；AfterTool 自動記憶鈎子把其他工具成功執行結果寫入記憶庫，落點宿主可執行目錄 `memory/`，跨會話共享；提供 `memory` 能力）
 
