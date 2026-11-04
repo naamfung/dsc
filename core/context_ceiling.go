@@ -139,8 +139,9 @@ func (m *Manager) ceilingInflation(sessionID, model string) float64 {
 // 消息；放在首条 system（部署指令）之后、保留段之前。
 //
 // 规则：
-//   - 首条 system 保留：它是部署写的指令，丢了模型就失去了行为约束，而它通常只占
-//     很小一部分；
+//   - 首条 system 保留：它是部署写的指令（人格 + 技能 + 记忆 + 上下文片段），丢了模型就
+//     失去了行为约束。它并**不**小——大型装配下稳定在 2~3 万 token，占 256K 窗口的一成，
+//     所以它必须和保留段一起记进预算（见下）；
 //   - 保留段的起点不能是 tool 消息：那会留下一个没有对应调用的孤儿结果（provider
 //     直接 400），并且要落到 user 上（Anthropic 要求首条非 system 是 user）；
 //   - 至少保留最后一条：用户这一句或最新的工具结果绝不能丢。
@@ -168,12 +169,22 @@ func CapMessagesToWindow(msgs []*proto.Message, toolsTokens, limit int) (kept []
 
 	// 预留切除说明的位置：它也要占预算，否则裁完 + 一行说明又顶出去。
 	limit -= slideNoteCap
-	if limit <= 0 {
-		limit = 1
-	}
 	head := 0
 	if msgs[0].GetRole() == "system" && len(msgs) > 1 {
 		head = 1 // 首条 system 永久保留
+	}
+	// 首条 system 同样要占预算：它被永久保留，就必然出现在发出去的表面里。
+	//
+	// 漏掉它一次，`after` 就恒比 `limit` 大出「system 的大小」——收口判据（after <= limit）
+	// 于是成了「只要 system 大于切除说明的 64 token 预留就必然失败」。实测现场（256K 窗口、
+	// 收口 80%）：裁到只剩 system + 本轮尾部，`after` = 236,004 = 上限 209,715 + system
+	// 26,289，一个 90% 窗口、其实完全装得下的请求被判超窗，整轮直接失败；报错还把 236,004
+	// 说成「超出上下文窗口 262,144」，用户拿计算器一算就发现对不上。
+	if head == 1 {
+		limit -= per[0]
+	}
+	if limit <= 0 {
+		limit = 1
 	}
 	// 从尾部累加，找到最靠前的起点 cut，使 msgs[cut:] + tools 仍能装下。
 	cut := len(msgs) - 1 // 至少保留最后一条
@@ -312,12 +323,7 @@ func enforceRequestCeilingAt(msgs []*proto.Message, toolsTokens, window int, inf
 	if effective <= window {
 		return msgs, 0, before, before, true
 	}
-	limit := int(float64(window) * ratio)
-	// 裁剪按「真实估算」做，但预算按放大后的口径收紧：把 limit 除以 inflation，
-	// 等价于「让 provider 看到的不超过 limit」。
-	if inflation > 1 {
-		limit = int(float64(limit) / inflation)
-	}
+	limit := ceilingLimit(window, inflation, ratio)
 	out, dropped = CapMessagesToWindow(msgs, toolsTokens, limit)
 	after = EstimateProtoMessagesTokens(out) + toolsTokens
 	if dropped == 0 {
@@ -327,4 +333,26 @@ func enforceRequestCeilingAt(msgs []*proto.Message, toolsTokens, window int, inf
 	}
 	// 丢完仍超：同样是「剩下的这一段本身太大」（通常是最后一条工具结果），不折叠。
 	return out, dropped, before, after, after <= limit
+}
+
+// ceilingLimit 返回本帧的收口预算（token）：窗口×比例，再按偏差系数折算成
+// 「我们自己的估算口径」（除以 inflation，等价于让 provider 看到的不超过 window×ratio）。
+//
+// 单独成函数是因为它是**判定值**，报错文案也要报这个数：用户看到「滑窗后仍有 236,004
+// tokens（窗口 262,144）」时只能得出「没超窗」的结论——真正卡住他的是这个收口上限。
+func ceilingLimit(window int, inflation, ratio float64) int {
+	if window <= 0 {
+		return 0
+	}
+	if inflation < 1 {
+		inflation = 1
+	}
+	if ratio <= 0 || ratio > 1 {
+		ratio = contextCeilingRatio
+	}
+	limit := int(float64(window) * ratio)
+	if inflation > 1 {
+		limit = int(float64(limit) / inflation)
+	}
+	return limit
 }

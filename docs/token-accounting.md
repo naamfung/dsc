@@ -717,7 +717,7 @@ provider 的 4xx 只作为「估算失真」的兜底，不是发现超窗的手
   条数膨胀、首条 system 丢失、出现位置式 id 都会让构建失败。
 
 **调阈值**：窗口 `DSC_CONTEXT_WINDOW`（宿主注入）/ `DSC_COMPACTION_BASIC_CONTEXT_WINDOW`（插件专属，优先）；
-触发比例 `DSC_COMPACTION_BASIC_THRESHOLD`（默认 0.80）；保留尾部 `DSC_COMPACTION_BASIC_RETAIN_RATIO`（默认 0.16）。
+触发比例 `DSC_COMPACTION_BASIC_THRESHOLD`（默认 0.70：必须低于宿主 80% 收口，否则一次估算偏差就把它顶成整轮失败）；保留尾部 `DSC_COMPACTION_BASIC_RETAIN_RATIO`（默认 0.16）。
 注意阈值比较的是"投影压力"，不是原始历史大小。
 
 **动滑窗逻辑**（`core/context_ceiling.go` 的 `enforceRequestCeiling` / `CapMessagesToWindow`）：

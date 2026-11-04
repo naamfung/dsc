@@ -622,3 +622,63 @@ func TestFinishPreStepFillsMaxTokens(t *testing.T) {
 		t.Fatalf("已显式给值的请求不得被改写，got %d", out2.GetMaxTokens())
 	}
 }
+
+// TestEnforceCeilingChargesKeptSystem 首条 system 是**发得出去**的那一份的一部分，
+// 必须同样占预算。
+//
+// 现场（256K 窗口、收口比例 80%）：历史 839,918，滑窗裁到只剩「system + 本轮尾部」，
+// after = 236,004 = 上限 209,715 + system 26,289——收口判据 after <= limit 恒假，
+// 一个 236,004 < 262,144 的请求被判「超出上下文窗口」整轮失败，报错文案还把
+// 236,004 说成超了 262,144（用户拿计算器一算就发现对不上）。根因是
+// CapMessagesToWindow 只把 system 保住、却没把它记进 limit。
+func TestEnforceCeilingChargesKeptSystem(t *testing.T) {
+	window := 262144
+	// 26,000 token 的 system（部署指令 + 技能 + 记忆的实测量级）：ASCII 约 4 字节/token
+	msgs := []*proto.Message{{Role: "system", Content: strings.Repeat("a", 26000*4)}}
+	// 可裁的历史：200 条 × ~2,000 token
+	block := strings.Repeat("h", 2000*4)
+	for i := 0; i < 200; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		msgs = append(msgs, &proto.Message{Role: role, Content: block})
+	}
+
+	trimmed, dropped, _, after, fits := enforceRequestCeiling(msgs, 0, window, 1)
+	if dropped == 0 {
+		t.Fatal("夹具应触发滑窗")
+	}
+	limit := ceilingLimit(window, 1, contextCeilingRatio)
+	if !fits {
+		t.Fatalf("system 记进预算后应当装得下：after=%d limit=%d window=%d", after, limit, window)
+	}
+	if after > limit {
+		t.Fatalf("收口后仍超上限：after=%d > limit=%d（首条 system 没记进预算）", after, limit)
+	}
+	if got := sizeOf(trimmed); got != after {
+		t.Fatalf("报告的 after 与实际保留段不一致：%d != %d", after, got)
+	}
+	// 关键：结果必须真的小于窗口，否则「没超窗却报超窗」还会再犯
+	if after >= window {
+		t.Fatalf("无关的窗口值：after=%d", after)
+	}
+}
+
+// TestCapMessagesToWindowChargesSystemBudget 单测直接钉住预算算法：预算里必须
+// 扣掉首条 system 与切除说明，否则 kept 的大小一定比 limit 大出 system 那一截。
+func TestCapMessagesToWindowChargesSystemBudget(t *testing.T) {
+	sys := strings.Repeat("s", 8000*4) // ~8,000 token
+	msgs := []*proto.Message{{Role: "system", Content: sys}}
+	for i := 0; i < 20; i++ {
+		msgs = append(msgs, &proto.Message{Role: "user", Content: strings.Repeat("u", 1000*4)})
+	}
+	limit := 12000
+	kept, dropped := CapMessagesToWindow(msgs, 0, limit)
+	if dropped == 0 {
+		t.Fatal("夹具应触发裁剪")
+	}
+	if got := sizeOf(kept); got > limit {
+		t.Fatalf("裁剪后超预算：%d > %d（system 未计入预算）", got, limit)
+	}
+}

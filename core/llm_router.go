@@ -356,11 +356,22 @@ func (s *llmAggregateServer) finishPreStep(req *proto.ChatRequest, msgs []*proto
 		trimmed, dropped, before, after, fits = enforceRequestCeilingAt(msgs, toolsTokens, window, inflation, ratio)
 		surface = after
 		if !fits {
-			// 滑窗之后仍超：剩下的这一段本身就是这一轮的内容（通常是最后一条工具结果），
-			// 没有合法切点可丢。宁可在这里明确报错，也不改写原文，更不发出去换一个 400。
-			return nil, fmt.Errorf("本轮内容超出上下文窗口：滑窗后仍有 %d tokens（窗口 %d，偏差系数 %.2f）。"+
-				"更早的消息已全部省略，剩下的是这一轮本身——请缩短本次输入（如大文件/长输出）或换更大窗口的模型",
-				after, window, inflation)
+			// 两种失败要分开说，否则用户没法判断该怎么做：
+			//   - 真超窗：provider 一定会拒，只能缩输入/换模型；
+			//   - 没超窗但装不进收口余量：这是本地的保守预算（窗口×比例），
+			//     用户看到的数字比窗口小，却收到「超出上下文窗口」——现场就是这么
+			//     误导的：236,004 < 262,144 被判超窗，报错还写着窗口 262,144。
+			limit := ceilingLimit(window, inflation, ratio)
+			if after > window {
+				return nil, fmt.Errorf("本轮内容超出上下文窗口：滑窗后仍有 %d tokens（窗口 %d，偏差系数 %.2f）。"+
+					"更早的消息已全部省略，剩下的是这一轮本身——请缩短本次输入（如大文件/长输出）或换更大窗口的模型",
+					after, window, inflation)
+			}
+			return nil, fmt.Errorf("本轮内容塞不进收口余量：滑窗后仍有 %d tokens"+
+				"（收口上限 %d = 窗口 %d × %.0f%%，偏差系数 %.2f）——内容本身没有超窗，"+
+				"但首条 system（部署指令/技能/记忆）与本轮这一段就占满了余量，已无可丢的历史。"+
+				"请缩短本次输入（如大文件/长输出）、换更大窗口的模型，或精简 system 装配",
+				after, limit, window, ratio*100, inflation)
 		}
 		if dropped > 0 {
 			s.m.logger.Warn("llm request: trimmed to fit the context window",

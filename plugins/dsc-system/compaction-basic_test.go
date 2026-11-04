@@ -6,6 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	dsc "dsc-sdk"
 
 	"dsc/proto"
 )
@@ -139,7 +142,7 @@ func TestCompactionBasicDisabledByZeroWindow(t *testing.T) {
 // TestCompactionBasicPressureLLMSummary 压力触发：超阈值时保留尾部、前段经 LLM 摘要、
 // 返回 {"messages":[...]}；同载荷重放复用状态（LLM 不再被调用）。
 func TestCompactionBasicPressureLLMSummary(t *testing.T) {
-	s := newTestCompactionBasicServer(t, 10000) // 阈值 8000；保留预算 max(1600,1024)=1600
+	s := newTestCompactionBasicServer(t, 10000) // 阈值 7000；保留预算 max(1600,1024)=1600
 	fake := &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
 	s.llm = fake
 
@@ -253,7 +256,7 @@ func TestCompactionBasicIgnoresOverflowEvent(t *testing.T) {
 // TestCompactionBasicSmallHistoryNoOp 消息太少/用量低：零开销不改写。
 func TestCompactionBasicSmallHistoryNoOp(t *testing.T) {
 	s := newTestCompactionBasicServer(t, 10000)
-	msgs := bigMsgs(3, 400) // 300 token << 8000
+	msgs := bigMsgs(3, 400) // 300 token << 7000
 	if res := mustPreStep(t, s, msgs); res != "" {
 		t.Fatalf("small history must not rewrite, got %q", res)
 	}
@@ -264,13 +267,13 @@ func TestCompactionBasicSmallHistoryNoOp(t *testing.T) {
 // （实测真实 83.56% 而插件估算仅 60.08%），但宿主已透传上次服务端上报用量
 // （last_usage_tokens）超阈值时，必须触发压缩改写。
 func TestCompactionBasicTriggersOnReportedUsage(t *testing.T) {
-	s := newTestCompactionBasicServer(t, 10000) // 阈值 8000
+	s := newTestCompactionBasicServer(t, 10000) // 阈值 7000
 	s.llm = &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
 
 	msgs := bigMsgs(8, 1200) // 每条 1204 token（CJK 感知估算），共 9632
 	res := mustPreStepUsage(t, s, "sess-u1", msgs, 9000)
 	if res == "" {
-		t.Fatalf("上报用量 9000 >= 阈值 8000 时必须触发压缩")
+		t.Fatalf("上报用量 9000 >= 阈值 7000 时必须触发压缩")
 	}
 	got := parseRewrite(t, res)
 	if len(got) >= len(msgs) || !strings.Contains(got[0].GetContent(), "LLM-SUMMARY") {
@@ -284,7 +287,7 @@ func TestCompactionBasicTriggersOnReportedUsage(t *testing.T) {
 //     若照用会把已压到 ~2 条的视图当成 900k → 每步再摘要一次（回归：把 80% 阈值
 //     退化成「保留区一满就压」，实测会多打一次 LLM）。
 func TestCompactionBasicMeasuresItsOwnSurface(t *testing.T) {
-	s := newTestCompactionBasicServer(t, 10000) // 阈值 8000
+	s := newTestCompactionBasicServer(t, 10000) // 阈值 7000
 	fake := &fakeCompactionBasicLLM{content: "LLM-SUMMARY"}
 	s.llm = fake
 
@@ -298,9 +301,9 @@ func TestCompactionBasicMeasuresItsOwnSurface(t *testing.T) {
 		t.Fatalf("应只摘要一次，got %d", fake.calls)
 	}
 
-	// ② 无记录：宿主投影 7000 < 阈值 → 不压缩（插件不得用本地估算越权决策）
+	// ② 无记录：宿主投影 6500 < 阈值 7000 → 不压缩（插件不得用本地估算越权决策）
 	big := bigMsgs(8, 1200)
-	if res := mustPreStepProjected(t, s, "sess-own-2", big, 7000, 7000); res != "" {
+	if res := mustPreStepProjected(t, s, "sess-own-2", big, 6500, 6500); res != "" {
 		t.Fatalf("宿主投影低于阈值时不得压缩，got %q", res)
 	}
 
@@ -316,7 +319,7 @@ func TestCompactionBasicMeasuresItsOwnSurface(t *testing.T) {
 		t.Fatal("有记录时应返回既有改写（否则模型看到未压缩的全量历史）")
 	}
 	if fake.calls != before {
-		t.Fatalf("渲染后表面 ~2.4k << 阈值 8000，不得再摘要；摘要次数 %d → %d", before, fake.calls)
+		t.Fatalf("渲染后表面 ~2.4k << 阈值 7000，不得再摘要；摘要次数 %d → %d", before, fake.calls)
 	}
 
 	// ④ 尾部长到渲染后表面超阈值 → 允许再摘要
@@ -439,5 +442,133 @@ func TestCompactionBasicAttachRealLLMStillWorks(t *testing.T) {
 	}
 	if got := parseRewrite(t, res); !strings.Contains(got[0].GetContent(), "摘要正文") {
 		t.Fatalf("应使用 LLM 摘要，got %q", got[0].GetContent())
+	}
+}
+
+// sizeRecordingLLM 记录每次摘要请求的规模（按 SDK 统一估算），用于验证分块边界。
+type sizeRecordingLLM struct {
+	calls   int
+	prompts []int
+}
+
+func (r *sizeRecordingLLM) Chat(_ context.Context, msgs []*proto.Message, maxTokens int32) (*proto.ChatResponse, error) {
+	r.calls++
+	r.prompts = append(r.prompts, dsc.EstimateProtoMessagesTokens(msgs))
+	if maxTokens > summaryMaxTokens {
+		panic("摘要输出预算超出上限")
+	}
+	return &proto.ChatResponse{Content: "S"}, nil
+}
+
+// ctxAwareLLM 按 ctx 取消的 fake：验证「预算耗尽就停在已完成的块上」。
+type ctxAwareLLM struct {
+	calls int
+	delay time.Duration
+}
+
+func (c *ctxAwareLLM) Chat(ctx context.Context, _ []*proto.Message, _ int32) (*proto.ChatResponse, error) {
+	c.calls++
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(c.delay):
+		return &proto.ChatResponse{Content: "S"}, nil
+	}
+}
+
+// TestCompactionBasicDefaultThreshold 默认阈值 0.70：宿主的收口预算是窗口的 80%
+// （估算偏差的兜底余量），压缩阈值必须留在它之下才留得出余量——贴得太近时，
+// 一次估算偏差或一轮的增量（工具结果动辄几万 token）就能把「压缩」直接推成
+// 「撞收口后整轮失败」。
+func TestCompactionBasicDefaultThreshold(t *testing.T) {
+	t.Setenv("DSC_COMPACTION_BASIC_THRESHOLD", "")
+	t.Setenv("DSC_COMPACTION_BASIC_CONTEXT_WINDOW", "")
+	t.Setenv("DSC_CONTEXT_WINDOW", "")
+	s := newCompactionBasicServer()
+	if s.threshold != 0.70 {
+		t.Fatalf("默认阈值应为 0.70，got %v", s.threshold)
+	}
+	if s.threshold >= 0.80 {
+		t.Fatalf("阈值 %v 没给宿主的 80%% 收口留出余量", s.threshold)
+	}
+	// 显式覆盖仍然有效（用户自己承担与收口预算贴太近的后果）
+	t.Setenv("DSC_COMPACTION_BASIC_THRESHOLD", "0.55")
+	if got := newCompactionBasicServer().threshold; got != 0.55 {
+		t.Fatalf("显式阈值应生效，got %v", got)
+	}
+}
+
+// TestCompactionBasicChunksLargeRegion 大区间必须分块摘要：整段塞进一条 prompt 时，
+// 请求本身会顶到窗口收口预算、又跑不完宿主 30s 的分发预算（现场：摘要超时 → 宿主的
+// 改写被丢弃 → 全量历史照旧发出 → 撞收口整轮失败；同时摘要退化成截断式，15 万 token
+// 换一句话永久落盘）。
+//
+// 分块后每块都在预算内，且每条记录连续覆盖前缀（多块 = 多段摘要）。
+func TestCompactionBasicChunksLargeRegion(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 200000) // 阈值 140000；保留 32000
+	fake := &sizeRecordingLLM{}
+	s.llm = fake
+	msgs := bigMsgs(60, 4000) // 每条 ~4004 token，共 ~240k
+
+	res := mustPreStepSession(t, s, "sess-chunk", msgs)
+	if res == "" {
+		t.Fatal("超阈值应改写")
+	}
+	if fake.calls < 2 {
+		t.Fatalf("20 万 token 的区间必须分块摘要，实际只调了 %d 次", fake.calls)
+	}
+	st := s.states["sess-chunk"]
+	if len(st.Records) != fake.calls {
+		t.Fatalf("记录数应与摘要次数一致：%d != %d", len(st.Records), fake.calls)
+	}
+	for i, p := range fake.prompts {
+		if p > summaryChunkTokens+5000 {
+			t.Fatalf("第 %d 块 prompt 过大（%d token）：分块失效", i, p)
+		}
+	}
+	// 覆盖连续、且止于保留边界：记录首尾相接（中间不许有缝），否则 applyRecords 会丢掉一段历史
+	prev := 0
+	for i, r := range st.Records {
+		if i == 0 {
+			if r.UpTo-r.Covered < 0 {
+				t.Fatalf("首条记录起点非法: %+v", r)
+			}
+			prev = r.Covered
+			continue
+		}
+		if r.UpTo-r.Covered != prev {
+			t.Fatalf("第 %d 块与上一块不连续：起点 %d，上块止于 %d", i, r.UpTo-r.Covered, prev)
+		}
+		prev = r.UpTo
+	}
+	last := st.Records[len(st.Records)-1]
+	if last.UpTo >= len(msgs) {
+		t.Fatalf("压缩不得越过保留区：up_to=%d，共 %d 条", last.UpTo, len(msgs))
+	}
+	if got := parseRewrite(t, res); len(got) != len(st.Records)+len(msgs)-last.UpTo {
+		t.Fatalf("改写应为 %d 段摘要 + %d 条尾段，实际 %d 条", len(st.Records), len(msgs)-last.UpTo, len(got))
+	}
+}
+
+// TestCompactionBasicStopsOnDeadlineWithoutTruncating 摘要预算耗尽时必须停在
+// 已完成的块上，**不得**退化成截断式摘要：那会把没摘要过的历史换成一句话永久落盘
+// （现场 5 条记录全是 source=truncated，每段 15 万 token 的历史被压成 2 千字符）。
+func TestCompactionBasicStopsOnDeadlineWithoutTruncating(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 10000)
+	s.llmBudget = 20 * time.Millisecond
+	fake := &ctxAwareLLM{delay: 5 * time.Second}
+	s.llm = fake
+
+	msgs := bigMsgs(16, 1200)
+	start := time.Now()
+	res := mustPreStepSession(t, s, "sess-deadline", msgs)
+	if res != "" {
+		t.Fatalf("一块都没压成时不得返回改写，got %q", res)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("必须按预算提前返回（否则宿主 30s 分发超时会把改写丢掉），耗时 %v", elapsed)
+	}
+	if st := s.states["sess-deadline"]; len(st.Records) != 0 {
+		t.Fatalf("超时不得落任何记录（尤其不能是截断式摘要）：%+v", st.Records)
 	}
 }

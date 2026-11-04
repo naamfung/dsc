@@ -46,7 +46,7 @@ const helpText = `DSC — 纯 Go 的 AI Agent 宿主（TUI + 插件化工具/模
   DSC_MODE / DSC_SANDBOX_POLICY / DSC_APPROVAL     运行模式、沙箱策略、审批策略
   DSC_CONTEXT_WINDOW                               上下文窗口（0=未设，按探测或 128K 兜底）
   DSC_HISTORY_INJECTION                            恢复历史注入：负值=不注入、0=未定义(不限制)、N=最近 N 条
-  DSC_COMPACTION_THRESHOLD                         自动压缩触发比例（默认 0.80）
+  DSC_COMPACTION_BASIC_THRESHOLD                   压缩触发比例（默认 0.70；须低于宿主 80% 收口预算）
   DSC_<PROVIDER>_API_KEY / _BASE_URL / _MODEL      LLM 连接（PROVIDER=OPENAI/ANTHROPIC/DEEPSEEK/...）
 
 配置：<可执行目录>/config/config.yaml；会话与会话日志在 <可执行目录>/sessions/

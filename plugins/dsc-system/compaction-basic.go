@@ -4,11 +4,22 @@
 // 同一协议，agent 与协议零改动）：
 //
 //   - agent/pre-step（waterfall 拦截）：收到本步消息列表（MessagesJSON）；
-//     估算用量超过阈值（默认窗口 80%，对齐 compaction-basic 压力语义；接管靠
+//     估算用量超过阈值（默认窗口 70%，对齐 compaction-basic 压力语义；接管靠
 //     能力声明驱动——谁声明 Provides compaction 且当值，谁收到完整消息列表，
 //     与阈值无关）时保留尾部（RetainRatio / RetainTokensMin 取大），把未压缩前段
-//     经 LLM 生成摘要（interconnect 聚合 LLM；未互联或调用失败退化为截断式摘要），
-//     以 {"messages": [...]} 返回改写后的消息列表。
+//     **按块**经 LLM 生成摘要（interconnect 聚合 LLM；未互联或调用失败退化为截断式
+//     摘要），以 {"messages": [...]} 返回改写后的消息列表。
+//
+// 为什么阈值是 70% 而不是 80%：宿主的收口预算（enforceRequestCeiling）是窗口的 80%
+// ——它是「估算可能偏低」的兜底余量。压缩阈值与收口预算贴得越近，留给偏差的空间越小：
+// 实测一次真实事故里，压力判到 80% 才触发，压缩还没完成宿主就撞上收口，整轮失败。
+// 留 10 个点给估算误差与一轮的增量（工具结果常常一次几万 token），压得早一点、稳一点。
+//
+// 为什么摘要要分块 + 限时：压缩是在 agent/pre-step 里**同步**跑的，而宿主的整条事件
+// 分发只有 30s 预算。一次把 20 万 token 塞进一条摘要 prompt，既跑不完（超时后宿主的
+// 改写被丢弃，全量历史照旧发出去），又会退化成截断式摘要（15 万 token 换一句话，永久
+// 落盘）。分块后每块都能在预算内跑完；跑不完就停在已完成的块上（前缀已经缩短，下一轮
+// 从这里继续），绝不为了「一次压完」丢整段历史。
 //
 // 溢出（provider 4xx）不由本插件处理：超窗的处置权归宿主（滑窗，无损），本插件只在
 // pre-step 按压力改写。曾经的「request-error 紧急压缩」会跳过 LLM、用截断摘要把整段
@@ -26,10 +37,12 @@
 //
 // 配置（DSC_ 前缀 env 白名单天然可见）：
 //   - DSC_COMPACTION_BASIC_CONTEXT_WINDOW  上下文窗口 token 数（默认 131072；0 = 驻留禁用）
-//   - DSC_COMPACTION_BASIC_THRESHOLD       触发阈值比例（默认 0.80，对齐 compaction-basic；
-//     可调，与接管机制无关）
+//   - DSC_COMPACTION_BASIC_THRESHOLD       触发阈值比例（默认 0.70，须低于宿主收口预算
+//     0.80 才留得出余量；可调，与接管机制无关）
 //   - DSC_COMPACTION_BASIC_RETAIN_RATIO    保留尾部比例（默认 0.16）
 //   - DSC_COMPACTION_BASIC_RETAIN_MIN      保留尾部最少 token 数（默认 1024）
+//   - DSC_COMPACTION_BASIC_LLM_TIMEOUT     单轮摘要的总时间预算（秒，默认 20；必须小于
+//     宿主 pre-step 分发的 30s，否则辛苦算出来的摘要会被超时丢弃）
 package main
 
 import (
@@ -88,10 +101,11 @@ type compactionBasicServer struct {
 	llm        llmChat // interconnect 聚合 LLM（未互联为 nil → 截断式退化）
 	compacting bool    // 防重入：同一时间只允许一次压缩
 
-	window      int     // 上下文窗口 token 数（0 = 驻留禁用）
-	threshold   float64 // 压力触发阈值比例
-	retainRatio float64 // 保留尾部比例
-	retainMin   int     // 保留尾部最少 token 数
+	window      int           // 上下文窗口 token 数（0 = 驻留禁用）
+	threshold   float64       // 压力触发阈值比例
+	retainRatio float64       // 保留尾部比例
+	retainMin   int           // 保留尾部最少 token 数
+	llmBudget   time.Duration // 单轮摘要的总时间预算（须小于宿主事件分发预算）
 
 	states map[string]*compactionState // per-session 压缩记录（进程内，须持 mu）
 
@@ -103,14 +117,31 @@ type compactionBasicServer struct {
 	logWindowOnce sync.Once
 }
 
+// 摘要分块与限时的三个常量（理由见文件头与 compactRegion）。
+const (
+	// defaultSummarizeBudget 单轮摘要的总时间预算。宿主的 pre-step 分发是 30s 硬超时
+	// （core 的事件分发），超时后它按「未改写」发出全量历史——摘要白算、改写被丢。
+	// 留 10s 给序列化、传输与宿主收口。
+	defaultSummarizeBudget = 20 * time.Second
+
+	// summaryChunkTokens 单块摘要的 token 预算。50K 是实测出来的敏感点：再大，
+	// 单块摘要就容易跑不完 30s 的分发预算（宿主的改写随即被超时丢弃）。
+	summaryChunkTokens = 50_000
+
+	// summaryMaxTokens 单次摘要的输出上限（token）。按窗口/8 给（256K 窗口 → 32K）
+	// 会让模型啰嗦到几十秒；摘要的目的是「压缩」，每块 2K 足够写下决策与当前任务。
+	summaryMaxTokens = 2048
+)
+
 // newCompactionBasicServer 读 env 构建驻留（fail-soft：非法配置逐项回退默认；
 // window<=0 即禁用——与 timeout/spill 的 0 禁用同款语义）。
 func newCompactionBasicServer() *compactionBasicServer {
 	s := &compactionBasicServer{
 		window:      131072,
-		threshold:   0.80,
+		threshold:   0.70,
 		retainRatio: 0.16,
 		retainMin:   1024,
+		llmBudget:   defaultSummarizeBudget,
 	}
 	// 窗口来源优先级：DSC_COMPACTION_BASIC_CONTEXT_WINDOW（插件专属）>
 	// DSC_CONTEXT_WINDOW（宿主按配置 context_window / 端点探测下发的有效值）> 128K 默认。
@@ -137,6 +168,11 @@ func newCompactionBasicServer() *compactionBasicServer {
 	if v := os.Getenv("DSC_COMPACTION_BASIC_RETAIN_MIN"); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
 			s.retainMin = n
+		}
+	}
+	if v := os.Getenv("DSC_COMPACTION_BASIC_LLM_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			s.llmBudget = time.Duration(n) * time.Second
 		}
 	}
 	s.states = map[string]*compactionState{}
@@ -180,7 +216,7 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 		return "", nil // 驻留禁用
 	}
 	// 首次 pre-step 打印实际生效的压缩参数（此时 gRPC 已握手，stderr 由宿主转发到日志）。
-	// 用于核对云端 1M 窗口：应看到 window=1048576、阈值=0.8 → 约 838k tokens 才触发。
+	// 用于核对云端 1M 窗口：应看到 window=1048576、阈值=0.70 → 约 734k tokens 才触发。
 	s.logWindowOnce.Do(func() {
 		fmt.Fprintf(os.Stderr, "dsc-system: compaction-basic window=%d threshold=%.2f retain_ratio=%.2f\n",
 			s.window, s.threshold, s.retainRatio)
@@ -221,7 +257,7 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 	// 压力 = **我们即将发出的那个表面**的大小（message + 工具目录）。这不是可选项：
 	// 压缩后视图只剩「摘要 + 保留尾部」，若拿原始列表（或按原始列表算出的宿主投影）
 	// 当压力，压完永远是 900k → 每步再压一次（实测：渲染后仅 2 条消息仍触发第二次
-	// 摘要，等于把 80% 阈值变成「保留区一满就压」）。
+	// 摘要，等于把阈值退化成「保留区一满就压」）。
 	//
 	// 所以分两种情况，各自用有效的那个数：
 	//   - 尚无压缩记录：我们的表面 == 请求表面 → 用宿主投影（ev.ProjectedTokens，
@@ -279,22 +315,19 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 		return "", nil
 	}
 
-	summary, id, source := s.summarize(ctx, msgs[base:retainIdx])
-	rec := compactionRecord{
-		UpTo:      retainIdx,
-		HeadHash:  fingerprint(msgs[:retainIdx]),
-		Summary:   summary,
-		Shadowed:  dsc.EstimateProtoMessagesTokens(msgs[base:retainIdx]),
-		ID:        id,
-		Covered:   retainIdx - base,
-		Model:     dsc.EnvStr("DSC_MODEL", ""),
-		Source:    source,
-		CreatedMS: time.Now().UnixMilli(),
+	recs := s.compactRegion(ctx, msgs, base, retainIdx)
+	if len(recs) == 0 {
+		// 这一段没压成（摘要超时 / 防重入）：返回当前视图，超窗交给宿主滑窗兜住。
+		// 绝不能在这里退化成截断式摘要——那会把没摘要过的历史换成一句话永久落盘。
+		if len(records) > 0 {
+			return rewriteJSON(rewritten)
+		}
+		return "", nil
 	}
 	// 先更新内存、再落盘（顺序无关紧要，但快照必须在解锁后使用：此前这里在解锁后
 	// 直接读 st.Records，与同会话的其他 pre-step 存在数据竞争）。
 	s.mu.Lock()
-	st.Records = append(records, rec)
+	st.Records = append(records, recs...)
 	saved := append([]compactionRecord(nil), st.Records...)
 	s.mu.Unlock()
 	// 落盘是尽力而为：写失败只影响「重启后要不要重压」，不影响本次请求。
@@ -310,15 +343,17 @@ func (s *compactionBasicServer) persistState(sess string, records []compactionRe
 	s.store.Save(sess, records)
 }
 
-// summarize 生成 [region] 的摘要，返回（摘要, 记录 id, 来源）。
-// 来源只有两种：LLM 路径（"llm"）与退化截断（"truncated"，未互联或调用失败）——
-// 审计记录里必须能区分「这条摘要是模型写的」还是「只是一段截断」，否则事后无法判断
-// 某段历史为什么变得这么简略。
+// compactRegion 把 [base, end) 压成一条或多条记录：按块摘要，每块独立成记录
+// （记录即「已压缩前缀」的连续覆盖，多块就是多段摘要）。
 //
-// 没有「紧急模式」这个参数了：超窗的处置权归宿主（滑窗），不再由本插件在
-// request-error 里做有损的紧急压缩——那会跳过 LLM、用截断摘要把整段真实消息永久埋掉。
-func (s *compactionBasicServer) summarize(ctx context.Context, region []*proto.Message) (string, string, string) {
-	id := fmt.Sprintf("compact-%d", time.Now().UnixMilli())
+// 分块 + 限时的理由见文件头。两个硬约束都体现在这里：
+//   - 每块都不超过 summaryChunkBudget，摘要请求本身不会顶到宿主的收口预算；
+//   - 整轮只在 llmBudget 内跑，跑不完就停在已完成的块上——前缀已经缩短，下一轮
+//     从新的 base 继续，绝不为了「一次压完」把没摘要的历史换成截断式摘要。
+//
+// 返回空表示本轮没压成（LLM 忙 / 超时且一块都没完成）：调用方返回既有视图，
+// 超窗由宿主滑窗兜住（无损，只影响这一次请求）。
+func (s *compactionBasicServer) compactRegion(ctx context.Context, msgs []*proto.Message, base, end int) []compactionRecord {
 	s.mu.Lock()
 	llm := s.llm
 	busy := s.compacting
@@ -326,17 +361,85 @@ func (s *compactionBasicServer) summarize(ctx context.Context, region []*proto.M
 		s.compacting = true
 	}
 	s.mu.Unlock()
-	if llm != nil && !busy {
-		summary, err := s.llmSummary(ctx, llm, region)
+
+	if llm == nil {
+		// 未互联：截断式摘要整段替换（本来就只有这一步可做，分段没有意义）。
+		return []compactionRecord{s.newRecord(msgs, base, end, truncateSummary(msgs[base:end]), "truncated")}
+	}
+	if busy {
+		// 防重入：上一次摘要还没回来（同一进程极少发生，但发生了就宁可本轮不压）。
+		return nil
+	}
+	defer func() {
 		s.mu.Lock()
 		s.compacting = false
 		s.mu.Unlock()
-		if err == nil && summary != "" {
-			return summary, id, "llm"
+	}()
+
+	deadline := time.Now().Add(s.llmBudget)
+	var out []compactionRecord
+	for cur := base; cur < end; {
+		if !time.Now().Before(deadline) {
+			break // 预算用完：已完成的块照常落库，剩下的下一轮继续
 		}
-		// LLM 失败：退化截断式（不把失败上抛——压缩尽力而为）
+		next := s.chunkEnd(msgs, cur, end)
+		if next <= cur {
+			break
+		}
+		chunkCtx, cancel := context.WithDeadline(ctx, deadline)
+		summary, err := s.llmSummary(chunkCtx, llm, msgs[cur:next])
+		cancel()
+		if err == nil && summary != "" {
+			out = append(out, s.newRecord(msgs, cur, next, summary, "llm"))
+			cur = next
+			continue
+		}
+		// 宿主已经撤了这个事件（ctx 取消）或预算耗尽：已完成的块落库，剩下的下轮继续。
+		// 注意这里**不**退化成截断式摘要——那正是「15 万 token 换一句话」的来源。
+		if len(out) > 0 || ctx.Err() != nil || !time.Now().Before(deadline) {
+			break
+		}
+		// 第一块就失败且不是超时：LLM 路径不可用（未就绪 / 被拒），整段走截断式，
+		// 与从前的「压缩尽力而为」语义一致。
+		return []compactionRecord{s.newRecord(msgs, base, end, truncateSummary(msgs[base:end]), "truncated")}
 	}
-	return truncateSummary(region), id, "truncated"
+	return out
+}
+
+// newRecord 组装一条压缩记录（一条记录 = 一段被摘要替换的前缀）。
+func (s *compactionBasicServer) newRecord(msgs []*proto.Message, from, to int, summary, source string) compactionRecord {
+	now := time.Now()
+	return compactionRecord{
+		UpTo:     to,
+		HeadHash: fingerprint(msgs[:to]),
+		Summary:  summary,
+		// 同一毫秒内可能产出多条（小块连压），id 带上界避免撞号。
+		ID:        fmt.Sprintf("compact-%d-%d", now.UnixMilli(), to),
+		Shadowed:  dsc.EstimateProtoMessagesTokens(msgs[from:to]),
+		Covered:   to - from,
+		Model:     dsc.EnvStr("DSC_MODEL", ""),
+		Source:    source,
+		CreatedMS: now.UnixMilli(),
+	}
+}
+
+// chunkEnd 返回本块的上界：从 from 起累加到「再加一条就超块预算」为止（至少一条）。
+//
+// 块预算固定 50K，不随窗口缩放：区间长度本来就受窗口约束（≤ 窗口 − 保留区），
+// 而「一次摘要多大才跑得完」是模型端的速度问题，与窗口无关。小于 50K 的区间
+// 因此仍是一条记录、一次调用（与从前完全一致），只有真正的大区间才被切开。
+func (s *compactionBasicServer) chunkEnd(msgs []*proto.Message, from, end int) int {
+	acc := 0
+	for i := from; i < end; i++ {
+		acc += dsc.EstimateProtoMessageTokens(msgs[i])
+		if acc > summaryChunkTokens {
+			if i == from {
+				return from + 1 // 单条就超预算：只能自成一块，再切就切碎消息了
+			}
+			return i
+		}
+	}
+	return end
 }
 
 // llmSummary 构建压缩请求并调用聚合 LLM（提示词与宿主原引擎逐字一致）。
@@ -354,6 +457,9 @@ func (s *compactionBasicServer) llmSummary(ctx context.Context, llm llmChat, reg
 		{Role: "user", Content: "请压缩上述对话历史。"},
 	}
 	maxTokens := s.window / 8
+	if maxTokens > summaryMaxTokens {
+		maxTokens = summaryMaxTokens
+	}
 	if maxTokens < 512 {
 		maxTokens = 512
 	}

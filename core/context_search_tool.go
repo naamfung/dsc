@@ -257,11 +257,10 @@ func (m *Manager) requestHeadroomTokens(sessionID string, msgs []*proto.Message)
 
 	surface := EstimateProtoMessagesTokens(msgs) + EstimateProtoToolTokens(tools)
 	inflation := m.ceilingInflation(sessionID, model)
-	limit := float64(window) * contextCeilingRatio
-	if inflation > 1 {
-		limit /= inflation
-	}
-	headroom := int(limit) - surface
+	// 预算直接取收口函数的同一个数（ceilingLimit），不在别处再写一遍乘除：
+	// 两处各算一次就必然在改比例/折算时漂开。
+	limit := ceilingLimit(window, inflation, contextCeilingRatio)
+	headroom := limit - surface
 	if headroom < contextSearchMinFetchTokens {
 		// 已经贴着上限（或超出）：仍给一个最小配额。宿主会滑窗腾地方，
 		// 回一句「没地方了」对模型毫无用处。
