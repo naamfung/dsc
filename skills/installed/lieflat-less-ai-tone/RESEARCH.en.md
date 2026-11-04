@@ -2,7 +2,28 @@
 
 [中文](RESEARCH.md) | English
 
-This document records the **hypothesis and measured outcome for every rule**, including the hypotheses that were overturned. Rules rest on locatable formal features; the figures only decide whether a construction qualifies for inclusion.
+## V2 update: matched-pair replication
+
+The current rule set is based on **two rounds**, not the 629-article comparison alone. Round one screened 300 model-written and 329 human-written articles (2,826,972 Chinese characters). Round two used 270 matched pairs: each model-written article used the same topic and factual material as its human counterpart, with article length aligned. GPT-5.6 and Claude Opus 4.6 each wrote 135 second-round articles. Across both rounds the corpus is about 5.2 million Chinese characters.
+
+Round two measured 90 countable features across 540 articles and used paired Wilcoxon tests with Cliff's delta (|δ| ≥ 0.33 as the reported significance threshold). Semantic features were assessed with closed criteria through about 431,000 Jev judgments during the study. Human review handled metaphor aptness and sampled machine errors. These methods have distinct jobs; an item does not need to be significant by all three methods.
+
+The matched design overturned several round-one editing rules:
+
+| Earlier hypothesis | Second-round result | Current treatment |
+|---|---|---|
+| Numbered subheadings mark generated text | Human side 8.6% vs generated side 4.9% | Rejected; do not edit |
+| “This means” restatements mark generated text | More common on the human side under three definitions | Rejected; do not edit |
+| Introductory sentence before a list marks generated text | Much more common on the human side | Rejected; do not edit |
+| Generated text systematically replaces concrete details with vague summaries | Symmetric review: 24.7% became more vague, 26.0% more specific; paired numerical density showed no difference | Rule withdrawn; preserve source facts through information conservation |
+
+Model results must be kept separate. For em dashes, Cliff's δ was −0.54 for GPT-5.6 and +0.95 for Opus 4.6: a pooled result would cancel opposing model fingerprints. Such features are reported with direction rather than turned into universal editing rules. Metaphor aptness is reserved for human review because model agreement was too low to support automatic edits. The current detection and rewrite policy is in [SKILL.md](./SKILL.md) and [DETECT.md](./DETECT.md); the full second-round tables and later corrections are in [RESEARCH.md](./RESEARCH.md).
+
+## First round: historical record
+
+The remainder of this English document preserves the original first-round methods and findings. **Its “adopted as rules” and rewrite recommendations are historical; the V2 files linked above govern current behavior.** This distinction matters especially for numbered subheadings, list introductions, concrete-detail replacement, and metaphor handling.
+
+This first-round record documents the **hypotheses and measured outcomes**, including hypotheses later overturned. Rules were originally based on locatable formal features; the later matched-pair results determine current inclusion.
 
 An early round of ratios based on 30 generated samples (sentence-length CV ×51, tripartite parallelism ×7.3, paragraph-initial ordinals 29%, em dashes "unique to Claude") failed to replicate against a larger corpus and has been discarded in full. Causes appear in the final section.
 
@@ -73,7 +94,7 @@ Three further conditions apply beyond the ratio.
 
 **Locatable trigger.** A rule must identify which sentence and which word to change. "Reads too uniformly" cannot be verified and is excluded. Discourse-level judgments — whether a metaphor is apt, whether parallel cases are padding — are excluded on the same grounds, however much they resemble AI tone subjectively.
 
-**Rewrite compatible with the whitelist.** Material density runs 2.8× higher among humans, a clear direction, but "add numbers" violates information conservation. Only the executable half survives, namely that existing concrete data must not be overwritten by a summary phrase. Particles are analogous: genuinely sparse in generated text, but "add particles" cannot be verified, so the item was dropped.
+**Rewrite compatible with the whitelist (historical first-round interpretation).** Material density ran 2.8× higher among humans in the unpaired corpus, but "add numbers" would violate information conservation. A narrower rule against replacing existing concrete data with a summary phrase was later proposed and then **withdrawn** after the symmetric second-round check found a near-zero net difference. Particles were likewise dropped because "add particles" could not be verified.
 
 ### Operators
 
@@ -91,7 +112,7 @@ This is a substantive defect rather than a disclaimer. Unverifiable figures leav
 
 The ratio column is uniformly generated ÷ human; above 1 means generated text uses it more, which is the precondition for treating it as an artifact.
 
-### Confirmed, adopted as rules
+### Confirmed in round one (not necessarily retained as V2 rules)
 
 | Feature | Hypothesis | Measured | *R* | Rule |
 |---|---|---|---|---|
@@ -130,7 +151,7 @@ The ratio column is uniformly generated ÷ human; above 1 means generated text u
 
 ### Colons: only meaningful when split by function
 
-One human source uses colons far more heavily than the others, accounting for 77% of all colons in the human corpus and dominating any aggregate. The table below excludes that source; the human side is 189 articles.
+A small subset of the human articles (mostly interview-format pieces) uses colons far more heavily than the rest, accounting for 77% of all colons in the human corpus and dominating any aggregate. The table below excludes that subset; the human side is 189 articles.
 
 Total colon density is 5.30 per thousand characters for generated text against 3.65 for human, a ratio of 1.45. But the two human groups sit at 2.39 and 6.05, one of them above the generated side. Internal variation approaches the human-machine gap, so totals cannot serve as a criterion. Split by function:
 

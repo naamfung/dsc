@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Agent 的记忆问题｜去 AI 味改前改后对照</title>
+  <style>
+    :root { --paper:#f6f3ed; --card:#fffefa; --ink:#192332; --muted:#677384; --line:#d9dce1; --blue:#123b58; --blue-soft:#e6eef3; --red:#a33d38; --red-bg:#fbe5e1; --green:#25634e; --green-bg:#ddf1e5; --shadow:0 16px 40px rgba(21,39,52,.075); }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--paper); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; line-height:1.72; }
+    a { color:var(--blue); text-decoration-thickness:1px; text-underline-offset:3px; }
+    button { font:inherit; cursor:pointer; }
+    .shell { width:min(1440px,calc(100% - 48px)); margin:auto; }
+    .hero { padding:54px 0 32px; border-bottom:1px solid var(--line); background:linear-gradient(145deg,#f6f3ed 0%,#edf1f0 100%); }
+    .eyebrow { color:var(--blue); font-size:12px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
+    h1 { font-size:clamp(32px,4.3vw,62px); letter-spacing:-.035em; line-height:1.15; margin:14px 0 16px; max-width:1100px; }
+    .deck { max-width:860px; font-size:17px; color:#455365; margin:0 0 24px; }
+    .stage-nav { display:flex; flex-wrap:wrap; gap:12px 22px; margin:24px 0 30px; font-size:14px; font-weight:650; }
+    .stage-nav a { text-decoration:none; border-bottom:1px solid currentColor; }
+    .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+    .stat { padding:17px 20px; background:rgba(255,255,255,.74); border:1px solid #dce3e6; border-radius:14px; }
+    .stat strong { display:block; font-size:28px; line-height:1.2; color:var(--blue); }
+    .stat span { display:block; color:var(--muted); font-size:12px; margin-top:5px; }
+    .intro { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:24px; align-items:end; padding:28px 0 16px; }
+    .intro h2 { margin:0 0 6px; font-size:24px; }
+    .intro p { margin:0; color:var(--muted); max-width:800px; font-size:14px; }
+    .controls { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }
+    .control { border:1px solid #c7d1d6; border-radius:9px; background:#fffefa; color:var(--blue); padding:8px 12px; font-size:13px; font-weight:700; }
+    .control:hover,.control:focus-visible { border-color:var(--blue); outline:none; box-shadow:0 0 0 3px rgba(18,59,88,.14); }
+    .control.active { background:var(--blue); color:white; border-color:var(--blue); }
+    .legend { display:flex; gap:16px; flex-wrap:wrap; align-items:center; color:var(--muted); font-size:13px; padding:8px 0 16px; }
+    .legend mark { padding:1px 4px; }
+    .compare { border:1px solid var(--line); border-radius:16px; overflow:hidden; background:var(--card); box-shadow:var(--shadow); margin-bottom:44px; }
+    .column-head { position:sticky; top:0; z-index:10; display:grid; grid-template-columns:1fr 1fr; background:var(--blue); color:white; }
+    .column-head div { padding:13px 25px; font-weight:800; font-size:14px; letter-spacing:.04em; }
+    .column-head div:first-child { border-right:1px solid rgba(255,255,255,.22); }
+    .compare-row { display:grid; grid-template-columns:1fr 1fr; border-top:1px solid var(--line); scroll-margin-top:64px; }
+    .compare-row:first-of-type { border-top:0; }
+    .row-meta { grid-column:1/-1; display:flex; gap:10px; align-items:center; padding:7px 24px; background:#f3f5f5; border-bottom:1px solid #e5e8e8; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.02em; }
+    .row-number { font-variant-numeric:tabular-nums; color:var(--blue); }
+    .change-badge { margin-left:auto; color:var(--green); background:var(--green-bg); border-radius:99px; padding:1px 8px; }
+    .text-cell { padding:20px 24px 23px; min-width:0; font-size:15px; line-height:1.9; overflow-wrap:anywhere; }
+    .text-cell.before { border-right:1px solid var(--line); }
+    .is-changed .text-cell.before { background:#fffdfb; }
+    .is-changed .text-cell.after { background:#fcfffd; }
+    .copy { white-space:pre-wrap; }
+    .heading .copy { font-weight:800; font-size:17px; }
+    .list .copy { padding-left:1.15em; text-indent:-1.15em; }
+    mark { border-radius:3px; box-decoration-break:clone; -webkit-box-decoration-break:clone; padding:1px 0; }
+    mark.removed { background:var(--red-bg); color:var(--red); text-decoration:line-through; text-decoration-thickness:1px; }
+    mark.added { background:var(--green-bg); color:var(--green); font-weight:650; }
+    .mobile-label { display:none; }
+    .only-changes .is-unchanged { display:none; }
+    .focus-row { outline:3px solid #e5b866; outline-offset:-3px; }
+    .footer { border-top:1px solid var(--line); padding:24px 0 42px; color:var(--muted); font-size:13px; }
+    .footer p { max-width:920px; }
+    @media (max-width:900px) { .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .intro { grid-template-columns:1fr; } .controls { justify-content:flex-start; } }
+    @media (max-width:680px) { .shell { width:min(100% - 26px,1440px); } .hero { padding:34px 0 24px; } h1 { font-size:31px; } .deck { font-size:15px; } .stats { gap:7px; } .stat { padding:13px; } .stat strong { font-size:23px; } .column-head { display:none; } .compare-row { grid-template-columns:1fr; } .text-cell { padding:14px 16px 17px; font-size:14px; } .text-cell.before { border-right:0; border-bottom:1px dashed var(--line); } .mobile-label { display:block; text-transform:uppercase; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.13em; margin-bottom:4px; } .row-meta { padding:7px 16px; } }
+    @media print { body { background:white; } .hero { padding:20px 0; background:white; } .controls,.stage-nav { display:none; } .compare { box-shadow:none; border-radius:0; } .only-changes .is-unchanged { display:grid; } .column-head { position:static; } .compare-row { break-inside:avoid; } }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="shell">
+      <div class="eyebrow">Lieflat Less AI Tone · 案例 01 · 阶段二</div>
+      <h1>Agent 的记忆问题<br>改前 / 改后对照</h1>
+      <p class="deck">同一篇文章逐段并列。左边是原稿，右边是改稿；红色和绿色标出改动前后的对应片段。默认只显示改过的段落，也可以展开全文。</p>
+      <nav class="stage-nav" aria-label="案例文件">
+        <a href="01-改前检测与修改建议.md">阶段一：检测与建议</a>
+        <a href="00-原稿.md">原稿全文</a>
+        <a href="02-改后全文.md">改后全文</a>
+        <a href="04-复测结论.md">复测结论</a>
+      </nav>
+      <div class="stats">
+        <div class="stat"><strong>11 段</strong><span>本轮实际改动</span></div>
+        <div class="stat"><strong>2 → 0</strong><span>“不是 A 而是 B”句式</span></div>
+        <div class="stat"><strong>10 → 4</strong><span>密集并列；剩余 4 处是清单</span></div>
+        <div class="stat"><strong>8.7 → 4.35</strong><span>相邻句同构 / 百段</span></div>
+      </div>
+    </div>
+  </header>
+  <main class="shell">
+    <section class="intro" aria-labelledby="compare-title">
+      <div><h2 id="compare-title">逐段对照</h2><p>改动限定在套式转折、正文密集并列、结论提示冒号和一组三句同构。数字、引文、比喻和章节顺序保留。行号沿用原稿。</p></div>
+      <div class="controls"><button class="control active" id="changesBtn" aria-pressed="true">仅看修改</button><button class="control" id="allBtn" aria-pressed="false">查看全文</button><button class="control" id="prevBtn">上一处</button><button class="control" id="nextBtn">下一处</button></div>
+    </section>
+    <div class="legend"><span><mark class="removed">改前片段</mark></span><span><mark class="added">改后片段</mark></span><span>两列按原稿段落对齐；相邻的细小改动合并显示</span></div>
+    <section class="compare only-changes" id="compare" aria-label="改前改后逐段对照">
+      <div class="column-head"><div>改前 · 原稿</div><div>改后 · 去 AI 味版</div></div>
+
+    <article class="compare-row is-unchanged heading"
+             id="row-1" data-changed="false">
+      <div class="row-meta"><span class="row-number">01</span><span>引子</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">Agent 的记忆问题：为什么你的 AI 助手总在失忆</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">Agent 的记忆问题：为什么你的 AI 助手总在失忆</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-3" data-changed="false">
+      <div class="row-meta"><span class="row-number">03</span><span>引子</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">一个日本音乐人花了 10 小时向 AI 倾诉她的全部计划，第二天付了 30 美元。付费后 9 分钟，她发现 AI 把一切都忘了。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">一个日本音乐人花了 10 小时向 AI 倾诉她的全部计划，第二天付了 30 美元。付费后 9 分钟，她发现 AI 把一切都忘了。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-5" data-changed="false">
+      <div class="row-meta"><span class="row-number">05</span><span>引子</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">她留下的最后一句话是：&quot;結局何も積み重なっていかない。&quot;（最终什么都积累不起来。）</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">她留下的最后一句话是：&quot;結局何も積み重なっていかない。&quot;（最终什么都积累不起来。）</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-7" data-changed="true">
+      <div class="row-meta"><span class="row-number">07</span><span>引子</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">这不是个案。几乎所有做 Agent 产品的团队<mark class="removed">，都在面对同一个尴尬事实：</mark>用户把 AI 当伙伴来信任，但 AI 的记忆力连一条金鱼都不如。金鱼好歹没有给用户许诺过&quot;我会记住&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">这不是个案。几乎所有做 Agent 产品的团队<mark class="added">都面对同一个尴尬事实。</mark>用户把 AI 当伙伴来信任，但 AI 的记忆力连一条金鱼都不如。金鱼好歹没有给用户许诺过&quot;我会记住&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-9" data-changed="false">
+      <div class="row-meta"><span class="row-number">09</span><span>引子</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">行业里有个热闹的话题叫&quot;Agent Memory&quot;。LangChain 在做 OpenWiki Brains，OriginTrail 在做 agent 共享记忆系统，几乎每家 AI 公司都声称自己&quot;解决了记忆问题&quot;。但仔细看会发现，大多数方案在解决的其实是一个错误的问题。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">行业里有个热闹的话题叫&quot;Agent Memory&quot;。LangChain 在做 OpenWiki Brains，OriginTrail 在做 agent 共享记忆系统，几乎每家 AI 公司都声称自己&quot;解决了记忆问题&quot;。但仔细看会发现，大多数方案在解决的其实是一个错误的问题。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged heading"
+             id="row-11" data-changed="false">
+      <div class="row-meta"><span class="row-number">11</span><span>01 被命名歪了的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">01 被命名歪了的问题</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">01 被命名歪了的问题</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-13" data-changed="true">
+      <div class="row-meta"><span class="row-number">13</span><span>01 被命名歪了的问题</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">把冰箱想象成你的大脑。你从超市买回来的东西（新对话里获得的信息），确实需要一个地方放。<mark class="removed">但真正决定你明天做饭时能不能找到那包虾仁的，不是冰箱的容量，而是你把它放在了哪层、贴没贴标签、以及你打开冰箱门时眼睛</mark>先看哪里。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">把冰箱想象成你的大脑。你从超市买回来的东西（新对话里获得的信息），确实需要一个地方放。<mark class="added">冰箱容量并不能决定你明天做饭时能否找到那包虾仁。更要紧的是把它放在哪层、有没有贴标签，以及打开冰箱门时</mark>先看哪里。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-15" data-changed="true">
+      <div class="row-meta"><span class="row-number">15</span><span>01 被命名歪了的问题</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">&quot;Agent Memory&quot;这个名字把所有人的注意力引向了&quot;怎么存&quot;，但真正决定效果的是&quot;在回答某个具体问题时，能不能把对的内容<mark class="removed">、以对的形式、以对的</mark>顺序送进 LLM&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">&quot;Agent Memory&quot;这个名字把所有人的注意力引向了&quot;怎么存&quot;，但真正决定效果的是&quot;在回答某个具体问题时，能不能把对的内容<mark class="added">，按合适的形式和</mark>顺序送进 LLM&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-17" data-changed="false">
+      <div class="row-meta"><span class="row-number">17</span><span>01 被命名歪了的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">研发团队做了一轮系统评测，对比了市面上六大流派的记忆方案。结论有点反直觉。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">研发团队做了一轮系统评测，对比了市面上六大流派的记忆方案。结论有点反直觉。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-19" data-changed="false">
+      <div class="row-meta"><span class="row-number">19</span><span>01 被命名歪了的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">在相同的测试条件下，最简单的做法（保留原始对话文本 + 用关键词搜索）跑出来的分数，比绝大多数精心设计的复杂工程都高。BM25，一个诞生于上世纪的文本检索算法，在三轮评测里稳居前列。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">在相同的测试条件下，最简单的做法（保留原始对话文本 + 用关键词搜索）跑出来的分数，比绝大多数精心设计的复杂工程都高。BM25，一个诞生于上世纪的文本检索算法，在三轮评测里稳居前列。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-21" data-changed="true">
+      <div class="row-meta"><span class="row-number">21</span><span>01 被命名歪了的问题</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">这意味着什么？那些花大力气做&quot;记忆提炼&quot;的方案（用 LLM 把对话压缩成事实卡片、再存进向量数据库），其实在压缩的过程中把关键细节丢掉了。用户说<mark class="removed">过的语气、上下文、条件限定，压缩完</mark>全没了。等到需要调用的时候，检索系统拿到的是一堆干巴巴的结论，失去了原来的温度和精确性。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">这意味着什么？那些花大力气做&quot;记忆提炼&quot;的方案（用 LLM 把对话压缩成事实卡片、再存进向量数据库），其实在压缩的过程中把关键细节丢掉了。用户说<mark class="added">话时的语气和上下文，连同条件限定，压缩后</mark>全没了。等到需要调用的时候，检索系统拿到的是一堆干巴巴的结论，失去了原来的温度和精确性。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-23" data-changed="false">
+      <div class="row-meta"><span class="row-number">23</span><span>01 被命名歪了的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">评测数据很清楚：保留原文的方案（MemMachine 得分 0.9169）显著高于事实提取流派（Mem0 约 0.68）。一次性的 LLM 抽取，是明确的负 ROI 动作。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">评测数据很清楚：保留原文的方案（MemMachine 得分 0.9169）显著高于事实提取流派（Mem0 约 0.68）。一次性的 LLM 抽取，是明确的负 ROI 动作。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-25" data-changed="true">
+      <div class="row-meta"><span class="row-number">25</span><span>01 被命名歪了的问题</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">这条结论还有一个重要的边界条件。如果在&quot;读&quot;的阶段让 Agent 自己决定搜什么、<mark class="removed">搜几次、用不</mark>用搜到的内容（类似 Letta 的做法），那压缩造成的损失可以被补回来。但如果压缩完就存着、等被动检索来命中，错过就是错过了。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">这条结论还有一个重要的边界条件。如果在&quot;读&quot;的阶段让 Agent 自己决定搜什么、<mark class="added">要搜几次，以及是否采</mark>用搜到的内容（类似 Letta 的做法），那压缩造成的损失可以被补回来。但如果压缩完就存着、等被动检索来命中，错过就是错过了。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-27" data-changed="false">
+      <div class="row-meta"><span class="row-number">27</span><span>01 被命名歪了的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">所以问题其实不是&quot;怎么让 AI 记住更多&quot;。问题是&quot;怎么在对的时刻把对的信息递到 AI 手里&quot;。存只是第一步，取才是关键。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">所以问题其实不是&quot;怎么让 AI 记住更多&quot;。问题是&quot;怎么在对的时刻把对的信息递到 AI 手里&quot;。存只是第一步，取才是关键。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged heading"
+             id="row-29" data-changed="false">
+      <div class="row-meta"><span class="row-number">29</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-31" data-changed="true">
+      <div class="row-meta"><span class="row-number">31</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">回到那位日本音乐人 Naomi 的故事。她的 AI 助手为什么会在一夜之间忘掉所有？技术层面的原因其实不复杂<mark class="removed">：</mark>每次开新对话（Session）时，AI 看到的是一张白纸。上一次对话的上下文消失了，没有任何机制把昨天聊过的关键信息传递到今天。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">回到那位日本音乐人 Naomi 的故事。她的 AI 助手为什么会在一夜之间忘掉所有？技术层面的原因其实不复杂<mark class="added">。</mark>每次开新对话（Session）时，AI 看到的是一张白纸。上一次对话的上下文消失了，没有任何机制把昨天聊过的关键信息传递到今天。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-33" data-changed="false">
+      <div class="row-meta"><span class="row-number">33</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">这像什么呢？像一个公司里没有交接制度。你的同事昨天跟客户聊了三小时，今天轮到你接班，但他什么都没留下。客户打来电话，你只能说&quot;您好，请问您是哪位？&quot;</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">这像什么呢？像一个公司里没有交接制度。你的同事昨天跟客户聊了三小时，今天轮到你接班，但他什么都没留下。客户打来电话，你只能说&quot;您好，请问您是哪位？&quot;</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-35" data-changed="false">
+      <div class="row-meta"><span class="row-number">35</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">现在的做法是分三层来解决：</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">现在的做法是分三层来解决：</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-37" data-changed="false">
+      <div class="row-meta"><span class="row-number">37</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">短期记忆（Short-term Memory）——最近 7 天的任务状态摘要，每小时刷新一次。它回答的是&quot;最近在忙什么&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">短期记忆（Short-term Memory）——最近 7 天的任务状态摘要，每小时刷新一次。它回答的是&quot;最近在忙什么&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-39" data-changed="true">
+      <div class="row-meta"><span class="row-number">39</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">核心记忆（Core Memory）——跨对话都稳定适用的偏好和约定，每次对话开始时无条件注入。它是&quot;我不问你也应该知道的事&quot;。比如用户<mark class="removed">的沟通风格偏好、团队的技术栈、</mark>几个绝对不能碰的红线。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">核心记忆（Core Memory）——跨对话都稳定适用的偏好和约定，每次对话开始时无条件注入。它是&quot;我不问你也应该知道的事&quot;。比如用户<mark class="added">偏好的沟通方式、团队使用的技术栈，以及</mark>几个绝对不能碰的红线。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-41" data-changed="false">
+      <div class="row-meta"><span class="row-number">41</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">档案记忆（Archival Memory）——全历史对话的向量检索，需要时主动查询。它是&quot;我们之前讨论过的所有事&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">档案记忆（Archival Memory）——全历史对话的向量检索，需要时主动查询。它是&quot;我们之前讨论过的所有事&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-43" data-changed="false">
+      <div class="row-meta"><span class="row-number">43</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">为什么需要三层而不是一层大而全？</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">为什么需要三层而不是一层大而全？</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-45" data-changed="true">
+      <div class="row-meta"><span class="row-number">45</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">因为三层对应的是三种完全不同的调用时机。短期记忆像工位上的便利贴，抬头就看见；核心记忆<mark class="removed">像你的身份证，走到哪里都带着；档案记忆</mark>像公司的文件柜，知道要找什么的时候才去翻。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">因为三层对应的是三种完全不同的调用时机。短期记忆像工位上的便利贴，抬头就看见；核心记忆<mark class="added">得随身带着，像身份证；档案记忆则</mark>像公司的文件柜，知道要找什么的时候才去翻。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-47" data-changed="true">
+      <div class="row-meta"><span class="row-number">47</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">把所有记忆都放一层的方案确实存在。测试里它的分数也确实最高（LoCoMo 评测中 generic-roster 方案以 79% 的 pass rate 排第一）。但代价是每次对话要消耗一万多 token 的上下文。对<mark class="removed">于免费用户、轻量对话、快速响应</mark>场景，这个成本完全不可接受。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">把所有记忆都放一层的方案确实存在。测试里它的分数也确实最高（LoCoMo 评测中 generic-roster 方案以 79% 的 pass rate 排第一）。但代价是每次对话要消耗一万多 token 的上下文。对<mark class="added">免费用户、轻量对话，以及需要快速响应的</mark>场景，这个成本完全不可接受。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-49" data-changed="true">
+      <div class="row-meta"><span class="row-number">49</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">核心记忆（Core Memory）是整套设计里最微妙的一层。现有的 benchmark 全部在测&quot;用户问了一个问题，系统能不能从历史里找到答案&quot;。但核心记忆解决的是<mark class="removed">完全不同的一个问题：&quot;用户什么都没问，Agent 也应该知道什么。&quot;</mark>这个维度在任何现有评测里都无法被测到。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">核心记忆（Core Memory）是整套设计里最微妙的一层。现有的 benchmark 全部在测&quot;用户问了一个问题，系统能不能从历史里找到答案&quot;。但核心记忆解决的是<mark class="added">另一个问题。用户什么都没问时，Agent 也应该知道什么？</mark>这个维度在任何现有评测里都无法被测到。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-51" data-changed="false">
+      <div class="row-meta"><span class="row-number">51</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">Naomi 的期望其实很简单：我告诉过你我的月收入目标是 40-50 万日元（&quot;必达&quot;），我被之前的 AI 伤过所以对&quot;忘事&quot;零容忍，我不要你自动去发社交媒体帖子。这些事不需要我每次都说，你应该记着。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">Naomi 的期望其实很简单：我告诉过你我的月收入目标是 40-50 万日元（&quot;必达&quot;），我被之前的 AI 伤过所以对&quot;忘事&quot;零容忍，我不要你自动去发社交媒体帖子。这些事不需要我每次都说，你应该记着。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-53" data-changed="false">
+      <div class="row-meta"><span class="row-number">53</span><span>02 三层记忆：从&quot;失忆&quot;到&quot;知道该记什么&quot;</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">如果这三条在她第二天开新对话时被自动注入，信任就不会崩塌。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">如果这三条在她第二天开新对话时被自动注入，信任就不会崩塌。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged heading"
+             id="row-55" data-changed="false">
+      <div class="row-meta"><span class="row-number">55</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">03 组织级的记忆：不只是 Agent 个人的事</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">03 组织级的记忆：不只是 Agent 个人的事</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-57" data-changed="false">
+      <div class="row-meta"><span class="row-number">57</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">到目前为止我们讨论的都是单个 Agent 的记忆。但在一个团队协作的场景里，问题会升级一个维度。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">到目前为止我们讨论的都是单个 Agent 的记忆。但在一个团队协作的场景里，问题会升级一个维度。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-59" data-changed="false">
+      <div class="row-meta"><span class="row-number">59</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">一个 PM 和 AI 讨论了两周的产品方向，形成了一系列判断和决策。这些判断有的已经拍板确认了，有的还只是个人思考。新加入的研发同事问 AI：&quot;这个功能为什么要这么做？&quot;AI 应该引用哪个版本？</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">一个 PM 和 AI 讨论了两周的产品方向，形成了一系列判断和决策。这些判断有的已经拍板确认了，有的还只是个人思考。新加入的研发同事问 AI：&quot;这个功能为什么要这么做？&quot;AI 应该引用哪个版本？</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-61" data-changed="false">
+      <div class="row-meta"><span class="row-number">61</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">如果它引用了一段还在讨论中的草稿，当成定论告诉研发，后果是什么？误导。如果它引用了一段已经拍板的共识但没标明来源，研发追问的时候 AI 说不出依据是什么，后果是什么？不信任。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">如果它引用了一段还在讨论中的草稿，当成定论告诉研发，后果是什么？误导。如果它引用了一段已经拍板的共识但没标明来源，研发追问的时候 AI 说不出依据是什么，后果是什么？不信任。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-63" data-changed="false">
+      <div class="row-meta"><span class="row-number">63</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">这是一个更底层的问题：团队的知识也需要&quot;记忆层级&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">这是一个更底层的问题：团队的知识也需要&quot;记忆层级&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-65" data-changed="false">
+      <div class="row-meta"><span class="row-number">65</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">在内部把团队空间里的所有文件按可信度分了四层：</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">在内部把团队空间里的所有文件按可信度分了四层：</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged list"
+             id="row-67" data-changed="false">
+      <div class="row-meta"><span class="row-number">67</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">- 原始材料（raw）——用户访谈原话、数据截图、外部文章原文。一手事实，不改不删，Agent 引用时只能当事实转述、不能解读。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">- 原始材料（raw）——用户访谈原话、数据截图、外部文章原文。一手事实，不改不删，Agent 引用时只能当事实转述、不能解读。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged list"
+             id="row-68" data-changed="false">
+      <div class="row-meta"><span class="row-number">68</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">- 分析供料（compiled）——基于原始材料的分析、调研、思考。有依据但未拍板。Agent 引用时必须标明&quot;这是某人某日的分析，非团队共识&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">- 分析供料（compiled）——基于原始材料的分析、调研、思考。有依据但未拍板。Agent 引用时必须标明&quot;这是某人某日的分析，非团队共识&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged list"
+             id="row-69" data-changed="false">
+      <div class="row-meta"><span class="row-number">69</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">- 团队共识（canon）——经过正式流程拍板确认的决策。Agent 可以直接当&quot;当前真相&quot;引用，不需要加任何前缀。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">- 团队共识（canon）——经过正式流程拍板确认的决策。Agent 可以直接当&quot;当前真相&quot;引用，不需要加任何前缀。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged list"
+             id="row-70" data-changed="false">
+      <div class="row-meta"><span class="row-number">70</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">- 工作过程件（workspace）——PRD 草稿、会议记录、RFC。它们会&quot;毕业&quot;（上线、定稿、归档），但在毕业之前，Agent 必须标明&quot;在变中、未定稿&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">- 工作过程件（workspace）——PRD 草稿、会议记录、RFC。它们会&quot;毕业&quot;（上线、定稿、归档），但在毕业之前，Agent 必须标明&quot;在变中、未定稿&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-72" data-changed="false">
+      <div class="row-meta"><span class="row-number">72</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">为什么要这么做？因为 Agent 不像人，人读一份草稿的时候自然知道&quot;这还没定&quot;，但 AI 读到文字就会当成事实去用。回到 Naomi 的故事：她的 AI 读到一份周会准备草稿，把上面的数字当成已确认的分析结论来引用，结果被用户当场识别为&quot;幻觉&quot;。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">为什么要这么做？因为 Agent 不像人，人读一份草稿的时候自然知道&quot;这还没定&quot;，但 AI 读到文字就会当成事实去用。回到 Naomi 的故事：她的 AI 读到一份周会准备草稿，把上面的数字当成已确认的分析结论来引用，结果被用户当场识别为&quot;幻觉&quot;。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-74" data-changed="false">
+      <div class="row-meta"><span class="row-number">74</span><span>03 组织级的记忆：不只是 Agent 个人的事</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">把可信度直接编码进目录位置，Agent 看到文件在哪一层就知道能不能当真相引用。这确实是一种笨办法。但在 AI 还不能自己判断信息可靠性的今天，笨办法是唯一可靠的办法。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">把可信度直接编码进目录位置，Agent 看到文件在哪一层就知道能不能当真相引用。这确实是一种笨办法。但在 AI 还不能自己判断信息可靠性的今天，笨办法是唯一可靠的办法。</div></div>
+    </article>
+
+    <article class="compare-row is-changed text"
+             id="row-76" data-changed="true">
+      <div class="row-meta"><span class="row-number">76</span><span>03 组织级的记忆：不只是 Agent 个人的事</span><span class="change-badge">有修改</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">这套分层和个人记忆的三层其实是同一种思路<mark class="removed">：不是存更多，而是分清楚。</mark>分清楚时效（短期 vs 长期）<mark class="removed">，分清楚</mark>确定性（核心记忆 vs 待检索的历史）<mark class="removed">，分清楚</mark>可信度（拍板的共识 vs 个人的分析）。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">这套分层和个人记忆的三层其实是同一种思路<mark class="added">。存多少之外，还得</mark>分清楚时效（短期 vs 长期）<mark class="added">、</mark>确定性（核心记忆 vs 待检索的历史）<mark class="added">和</mark>可信度（拍板的共识 vs 个人的分析）。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged heading"
+             id="row-78" data-changed="false">
+      <div class="row-meta"><span class="row-number">78</span><span>04 没有解决的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">04 没有解决的问题</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">04 没有解决的问题</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-80" data-changed="false">
+      <div class="row-meta"><span class="row-number">80</span><span>04 没有解决的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">说了这么多，有几件事必须坦承还没解决好。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">说了这么多，有几件事必须坦承还没解决好。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-82" data-changed="false">
+      <div class="row-meta"><span class="row-number">82</span><span>04 没有解决的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">Session 闭环的时机。对话结束时应该自动提炼出关键信息写入长期记忆。但&quot;对话结束&quot;本身是个模糊概念。用户可能随时回来。触发太早丢信息，触发太晚等于没触发。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">Session 闭环的时机。对话结束时应该自动提炼出关键信息写入长期记忆。但&quot;对话结束&quot;本身是个模糊概念。用户可能随时回来。触发太早丢信息，触发太晚等于没触发。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-84" data-changed="false">
+      <div class="row-meta"><span class="row-number">84</span><span>04 没有解决的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">核心记忆的写入标准。什么算&quot;稳定偏好&quot;？用户说了一次&quot;我喜欢简洁&quot;算不算？说了三次才算？如果她下周改主意了呢？隐式偏好（每次收到长回答都会说&quot;短一点&quot;）更难捕捉——没有明确的陈述可以被向量检索命中。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">核心记忆的写入标准。什么算&quot;稳定偏好&quot;？用户说了一次&quot;我喜欢简洁&quot;算不算？说了三次才算？如果她下周改主意了呢？隐式偏好（每次收到长回答都会说&quot;短一点&quot;）更难捕捉——没有明确的陈述可以被向量检索命中。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-86" data-changed="false">
+      <div class="row-meta"><span class="row-number">86</span><span>04 没有解决的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">写入成本与检索效果的永恒矛盾。评测数据揭示了一条行业级规律：写入越严谨（多次 LLM 分析、构建知识图谱）的方案，在数据量大的时候越容易崩溃。四个复杂方案在长对话测试中全部因为写入超时而直接失败。没有&quot;写入便宜 + 更新严谨 + 检索零 LLM 消耗&quot;三全其美的方案。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">写入成本与检索效果的永恒矛盾。评测数据揭示了一条行业级规律：写入越严谨（多次 LLM 分析、构建知识图谱）的方案，在数据量大的时候越容易崩溃。四个复杂方案在长对话测试中全部因为写入超时而直接失败。没有&quot;写入便宜 + 更新严谨 + 检索零 LLM 消耗&quot;三全其美的方案。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-88" data-changed="false">
+      <div class="row-meta"><span class="row-number">88</span><span>04 没有解决的问题</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">跨 Agent 的记忆共享。一个团队里有多个 AI 角色。负责客服的 Agent 知道用户发过脾气，负责产品的 Agent 需不需要知道？该共享多少？这个问题今天没有好的答案。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">跨 Agent 的记忆共享。一个团队里有多个 AI 角色。负责客服的 Agent 知道用户发过脾气，负责产品的 Agent 需不需要知道？该共享多少？这个问题今天没有好的答案。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged heading"
+             id="row-90" data-changed="false">
+      <div class="row-meta"><span class="row-number">90</span><span>最后</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">最后</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">最后</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-92" data-changed="false">
+      <div class="row-meta"><span class="row-number">92</span><span>最后</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">记忆是 Agent 产品里最不性感的基础设施。没有人会因为&quot;你的 AI 记住了我上周说的话&quot;而发一条朋友圈。但它决定了一个根本性的东西：AI 和人之间能不能真正积累信任。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">记忆是 Agent 产品里最不性感的基础设施。没有人会因为&quot;你的 AI 记住了我上周说的话&quot;而发一条朋友圈。但它决定了一个根本性的东西：AI 和人之间能不能真正积累信任。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-94" data-changed="false">
+      <div class="row-meta"><span class="row-number">94</span><span>最后</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">那位日本音乐人最后说的&quot;什么都积累不起来&quot;，其实是对整个 Agent 行业的拷问。如果 AI 没有可靠的记忆，它就只能是一个每次见面都要重新介绍自己的陌生人。不管它的推理能力多强、工具调用多快，信任就是攒不起来。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">那位日本音乐人最后说的&quot;什么都积累不起来&quot;，其实是对整个 Agent 行业的拷问。如果 AI 没有可靠的记忆，它就只能是一个每次见面都要重新介绍自己的陌生人。不管它的推理能力多强、工具调用多快，信任就是攒不起来。</div></div>
+    </article>
+
+    <article class="compare-row is-unchanged text"
+             id="row-96" data-changed="false">
+      <div class="row-meta"><span class="row-number">96</span><span>最后</span></div>
+      <div class="text-cell before"><span class="mobile-label">改前</span><div class="copy">行业正在从&quot;Agent 能做什么&quot;转向&quot;Agent 能记住什么&quot;。这个转变没有 GPT-5 发布那么热闹，但它可能比任何一次模型更新都更决定产品的实际体验。</div></div>
+      <div class="text-cell after"><span class="mobile-label">改后</span><div class="copy">行业正在从&quot;Agent 能做什么&quot;转向&quot;Agent 能记住什么&quot;。这个转变没有 GPT-5 发布那么热闹，但它可能比任何一次模型更新都更决定产品的实际体验。</div></div>
+    </article>
+    </section>
+  </main>
+  <footer class="footer"><div class="shell"><strong>案例说明</strong><p>本页展示的是这次对话中已经生成的改稿，作为新版 skill 的对照页示例。新版流程要求先展示阶段一报告，收到用户回复后才制作改稿；本页不代表可以跳过这一步。检测数字来自规则脚本，需结合正文复核误报。</p></div></footer>
+  <script>
+    const panel=document.getElementById('compare');
+    const changed=[...document.querySelectorAll('.compare-row.is-changed')];
+    const changesBtn=document.getElementById('changesBtn');
+    const allBtn=document.getElementById('allBtn');
+    let focusIndex=-1;
+    function setMode(only){panel.classList.toggle('only-changes',only);changesBtn.classList.toggle('active',only);allBtn.classList.toggle('active',!only);changesBtn.setAttribute('aria-pressed',String(only));allBtn.setAttribute('aria-pressed',String(!only));}
+    function move(delta){if(!changed.length)return;focusIndex=(focusIndex+delta+changed.length)%changed.length;changed.forEach(el=>el.classList.remove('focus-row'));const target=changed[focusIndex];target.classList.add('focus-row');target.scrollIntoView({behavior:'smooth',block:'start'});}
+    changesBtn.addEventListener('click',()=>setMode(true));
+    allBtn.addEventListener('click',()=>setMode(false));
+    document.getElementById('prevBtn').addEventListener('click',()=>move(-1));
+    document.getElementById('nextBtn').addEventListener('click',()=>move(1));
+  </script>
+</body>
+</html>
