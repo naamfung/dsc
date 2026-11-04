@@ -4,7 +4,6 @@ import (
 	dsc "dsc-sdk"
 	"strings"
 	"testing"
-
 )
 
 // TestInterjectionSystemMessageKeepsSystemPrompt 插播消息（role=system 追加在消息末尾）

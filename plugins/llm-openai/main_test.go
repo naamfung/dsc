@@ -1,8 +1,8 @@
 package main
 
 import (
-	dsc "dsc-sdk"
 	"bytes"
+	dsc "dsc-sdk"
 	"encoding/base64"
 	"encoding/json"
 	"image"

@@ -300,10 +300,10 @@ func (f *fakeNotifyTransport) RoundTrip(_ context.Context, req map[string]any) (
 	return map[string]any{"result": map[string]any{key: []any{}}}, nil
 }
 
-func (f *fakeNotifyTransport) Reset(Logger) error   { return nil }
-func (f *fakeNotifyTransport) Close()               {}
-func (f *fakeNotifyTransport) Kind() string         { return "fake" }
-func (f *fakeNotifyTransport) Describe() string     { return "fake" }
+func (f *fakeNotifyTransport) Reset(Logger) error                   { return nil }
+func (f *fakeNotifyTransport) Close()                               {}
+func (f *fakeNotifyTransport) Kind() string                         { return "fake" }
+func (f *fakeNotifyTransport) Describe() string                     { return "fake" }
 func (f *fakeNotifyTransport) Notifications() <-chan map[string]any { return f.notes }
 
 var _ = strings.TrimSpace

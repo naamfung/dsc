@@ -125,4 +125,3 @@ const getPromptSchema = `{
   "required": ["name"],
   "additionalProperties": false
 }`
-

@@ -51,8 +51,8 @@ type Manager struct {
 	// 一次性注入给 Agent（RegisterServices.ToolServiceId），热重载时沿用同一 ID。
 	agentToolServiceID  uint32
 	llmServiceIDs       map[string]uint32                  // llm name -> serviceID
-	maxOutputBudget     int                               // 启动期探测到的 max_tokens 上限（0 = 未探到）
-	maxOutputExplicit   bool                              // 用户在插件 env 里显式给了值：宿主不填，交给插件
+	maxOutputBudget     int                                // 启动期探测到的 max_tokens 上限（0 = 未探到）
+	maxOutputExplicit   bool                               // 用户在插件 env 里显式给了值：宿主不填，交给插件
 	llmOrder            []string                           // LLM provider 加载顺序（多 provider 路由的 fallback 序）
 	agentLLMServiceID   uint32                             // 聚合 LLM 服务 ID（多 provider 路由，agent 一次性注入）
 	agentLLMName        string                             // agent 声明的 primary LLM（路由优先）

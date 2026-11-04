@@ -812,4 +812,3 @@ func (t *stdioTransport) replyMethodNotFound(msg map[string]any) {
 	}
 	_, _ = stdin.Write(append(payload, '\n'))
 }
-

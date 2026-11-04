@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	billion "dsc-billion-context/billion"
 	bcadapter "dsc-billion-context/adapter"
+	billion "dsc-billion-context/billion"
 
 	dsc "dsc-sdk"
 )
