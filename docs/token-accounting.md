@@ -720,6 +720,15 @@ provider 的 4xx 只作为「估算失真」的兜底，不是发现超窗的手
 触发比例 `DSC_COMPACTION_BASIC_THRESHOLD`（默认 0.70：必须低于宿主 80% 收口，否则一次估算偏差就把它顶成整轮失败）；保留尾部 `DSC_COMPACTION_BASIC_RETAIN_RATIO`（默认 0.16）。
 注意阈值比较的是"投影压力"，不是原始历史大小。
 
+**调摘要速度**：块大小**不是常量**，由"剩余预算 × 实测吞吐"算出（`planChunk`），输出上限同理；
+吞吐估计初值取本地引擎量级（prefill 1.2K / decode 30 tok/s），每次调用按实测耗时修正——
+撞预算就减半（下一块一定更小），跑得快就放大（上限 1.5×/轮）。所以：
+固定 50K 块在本地引擎上必然超时（40K 的块光读 prompt 就要 26s），而"用同样的块反复重试"
+会让上下文一直涨、一次也压不成（现场 144 轮全部超时，压缩记录为 0）。
+时间预算两头要配套：宿主 `DSC_EVENT_DISPATCH_TIMEOUT`（默认 30s）与插件
+`DSC_COMPACTION_BASIC_LLM_TIMEOUT`（默认取宿主预算 − 10s）——本地引擎想"一轮压完"
+就把两者一起放大（如 120 / 110）；不放大也能压，只是分成十几轮、每轮一条记录。
+
 **动滑窗逻辑**（`core/context_ceiling.go` 的 `enforceRequestCeiling` / `CapMessagesToWindow`）：
 这是**唯一**会丢历史的路径（agent 侧已无裁剪，§7.1）。三条不变量不能碰：
 

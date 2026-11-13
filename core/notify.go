@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +15,35 @@ import (
 	plugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 )
+
+// 事件分发的单次预算。
+//
+// 30s 对「一步一次的小事件」绰绰有余，但 agent/pre-step 里挂的是**压缩后端**：它要在这
+// 一步内真的跑完一次模型摘要，而摘要耗时与模型速度成正比。本地引擎（prefill 1~2K tok/s、
+// decode 20~40 tok/s）上，一次 40K 的摘要光读 prompt 就要 25s，于是每一轮都撞满预算、
+// 摘要被丢弃——现场表现就是「上下文涨到窗口的 88% 仍然一次没压缩」，而会话日志里一条
+// 压缩记录都没有。
+//
+// 这类部署只能靠放大预算解决，所以开放 DSC_EVENT_DISPATCH_TIMEOUT（秒，5~600）。
+// 压缩后端从**同一个**变量推导自己的单轮预算（少 10s 给序列化与收口），两边不会互相踩。
+const (
+	defaultEventDispatchBudget = 30 * time.Second
+	minEventDispatchBudget     = 5 * time.Second
+	maxEventDispatchBudget     = 600 * time.Second
+)
+
+// eventDispatchTimeout 返回单次事件分发的预算（DSC_EVENT_DISPATCH_TIMEOUT，非法值回默认）。
+func eventDispatchTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("DSC_EVENT_DISPATCH_TIMEOUT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			d := time.Duration(n) * time.Second
+			if d >= minEventDispatchBudget && d <= maxEventDispatchBudget {
+				return d
+			}
+		}
+	}
+	return defaultEventDispatchBudget
+}
 
 // 插件通知服务（互通机制 2，插件→宿主）：插件进程经 broker 连接本服务，
 // 把事件（含后台任务完成通知）发布到宿主事件总线，供 TUI/其他插件订阅。
@@ -679,7 +710,7 @@ func (m *Manager) dispatchEventToPlugins(name EventName, data any) (any, error) 
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), eventDispatchTimeout())
 	defer cancel()
 
 	switch mode {

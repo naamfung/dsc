@@ -47,6 +47,10 @@ const helpText = `DSC — 纯 Go 的 AI Agent 宿主（TUI + 插件化工具/模
   DSC_CONTEXT_WINDOW                               上下文窗口（0=未设，按探测或 128K 兜底）
   DSC_HISTORY_INJECTION                            恢复历史注入：负值=不注入、0=未定义(不限制)、N=最近 N 条
   DSC_COMPACTION_BASIC_THRESHOLD                   压缩触发比例（默认 0.70；须低于宿主 80% 收口预算）
+  DSC_COMPACTION_BASIC_LLM_TIMEOUT                 单轮摘要时间预算（秒，默认取宿主分发预算减 10s）
+  DSC_EVENT_DISPATCH_TIMEOUT                       事件分发单轮预算（秒，默认 30）。本地引擎
+                                                   （prefill 1~2K tok/s）要一轮压完摘要，把它与
+                                                   上面两项一起放大（如 120 / 110）
   DSC_<PROVIDER>_API_KEY / _BASE_URL / _MODEL      LLM 连接（PROVIDER=OPENAI/ANTHROPIC/DEEPSEEK/...）
 
 配置：<可执行目录>/config/config.yaml；会话与会话日志在 <可执行目录>/sessions/

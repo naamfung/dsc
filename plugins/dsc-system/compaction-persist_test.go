@@ -47,8 +47,9 @@ func TestSummariesSurviveRestart(t *testing.T) {
 	if res == "" {
 		t.Fatal("超阈值应改写")
 	}
-	if llm1.calls != 1 {
-		t.Fatalf("首次压缩应调用一次 LLM，got %d", llm1.calls)
+	// 块数由「剩余预算 × 吞吐估计」决定（慢引擎多块、快引擎一块），这里只要求真的压过。
+	if llm1.calls < 1 {
+		t.Fatalf("首次压缩应至少调用一次 LLM，got %d", llm1.calls)
 	}
 	if _, err := os.Stat(stateFile(t, dir, "sess-restart")); err != nil {
 		t.Fatalf("应写出状态文件: %v", err)
@@ -88,8 +89,8 @@ func TestRestartStateCarriesAuditFields(t *testing.T) {
 	if f.Schema != compactionStateSchema || f.Session != "sess-audit" {
 		t.Fatalf("文件头不符: %+v", f)
 	}
-	if len(f.Records) != 1 {
-		t.Fatalf("应有 1 条记录，got %d", len(f.Records))
+	if len(f.Records) < 1 {
+		t.Fatalf("应有压缩记录，got %d", len(f.Records))
 	}
 	r := f.Records[0]
 	if r.Source != "llm" || r.Covered <= 0 || r.CreatedMS <= 0 || r.HeadHash == "" {
@@ -137,7 +138,7 @@ func TestChangedPrefixDiscardsPersistedState(t *testing.T) {
 	llm2 := &fakeCompactionBasicLLM{content: "NEW"}
 	second.llm = llm2
 	res := mustPreStepSession(t, second, "sess-changed", tampered)
-	if llm2.calls != 1 {
+	if llm2.calls < 1 {
 		t.Fatalf("前缀失配后必须重新摘要（LLM calls = %d）", llm2.calls)
 	}
 	if got := parseRewrite(t, res); !strings.Contains(got[0].GetContent(), "NEW") {
@@ -182,8 +183,8 @@ func TestSchemaMismatchDiscardsState(t *testing.T) {
 	llm2 := &fakeCompactionBasicLLM{content: "V2"}
 	second.llm = llm2
 	mustPreStepSession(t, second, "sess-schema", msgs)
-	if llm2.calls != 1 {
-		t.Fatalf("丢弃后应重新摘要一次，LLM calls = %d", llm2.calls)
+	if llm2.calls < 1 {
+		t.Fatalf("丢弃后应重新摘要，LLM calls = %d", llm2.calls)
 	}
 }
 

@@ -153,27 +153,28 @@ func TestCompactionBasicPressureLLMSummary(t *testing.T) {
 	}
 	got := parseRewrite(t, res)
 	// 保留尾部：预算 1600，单条 1204 → 只留最后 1 条（1204≤1600、2408>1600 →
-	// retainIdx=15）；改写 = 1 摘要 + 1 条尾段
-	if len(got) != 2 {
-		t.Fatalf("rewrite = %d messages, want 2 (summary + tail)", len(got))
+	// retainIdx=15）。前段 15 条（~18K）按「剩余预算 × 吞吐估计」切成若干块，
+	// 每块一条摘要（块数由速度决定，不是固定 1）：改写 = N 段摘要 + 1 条尾段。
+	if len(got) < 2 {
+		t.Fatalf("rewrite = %d messages，至少要有一段摘要 + 尾段", len(got))
 	}
 	if !strings.Contains(got[0].GetContent(), "LLM-SUMMARY") {
 		t.Fatalf("head must be LLM summary, got %q", got[0].GetContent())
 	}
-	if got[1].GetContent() != msgs[15].GetContent() {
+	if tail := got[len(got)-1]; tail.GetContent() != msgs[15].GetContent() {
 		t.Fatalf("tail message must be preserved verbatim")
 	}
-	if fake.calls != 1 {
-		t.Fatalf("LLM must be called once, got %d", fake.calls)
+	if n := fake.calls; len(got) != n+1 {
+		t.Fatalf("前段应全被摘要覆盖：%d 次调用 → 改写应为 %d 条摘要 + 尾段，实际 %d 条", n, n, len(got))
 	}
 
 	// 同载荷重放：指纹命中，状态复用，不再调 LLM
 	res2 := mustPreStep(t, s, msgs)
 	got2 := parseRewrite(t, res2)
-	if len(got2) != 2 || got2[0].GetContent() != got[0].GetContent() {
+	if len(got2) != len(got) || got2[0].GetContent() != got[0].GetContent() {
 		t.Fatalf("replay must reuse state deterministically")
 	}
-	if fake.calls != 1 {
+	if fake.calls != len(got)-1 {
 		t.Fatalf("replay must not re-summarize, LLM calls = %d", fake.calls)
 	}
 }
@@ -189,6 +190,10 @@ func TestCompactionBasicFingerprintMismatchResets(t *testing.T) {
 		t.Fatalf("must rewrite")
 	}
 	// 改写历史头部 → 指纹失配
+	first := fake.calls // 首轮按速度分了 first 块（first ≥ 1）
+	if first == 0 {
+		t.Fatalf("首轮应已发生摘要调用")
+	}
 	msgs[0].Content = "rewritten-history"
 	fake.content = "S2"
 	res := mustPreStep(t, s, msgs)
@@ -196,8 +201,8 @@ func TestCompactionBasicFingerprintMismatchResets(t *testing.T) {
 	if !strings.Contains(got[0].GetContent(), "S2") {
 		t.Fatalf("stale records must be discarded and re-summarized, got %q", got[0].GetContent())
 	}
-	if fake.calls != 2 {
-		t.Fatalf("LLM calls after reset = %d, want 2", fake.calls)
+	if fake.calls <= first {
+		t.Fatalf("指纹失配后必须整段重新摘要：调用数 %d → %d", first, fake.calls)
 	}
 }
 
@@ -570,5 +575,106 @@ func TestCompactionBasicStopsOnDeadlineWithoutTruncating(t *testing.T) {
 	}
 	if st := s.states["sess-deadline"]; len(st.Records) != 0 {
 		t.Fatalf("超时不得落任何记录（尤其不能是截断式摘要）：%+v", st.Records)
+	}
+}
+
+// TestCompactionBasicChunkFitsBudget 块大小必须由「剩余预算 × 吞吐估计」推出，
+// 而不是定死 50K：定死时本地引擎（prefill ~1.5K tok/s、decode ~30 tok/s）上一块
+// 40K 的摘要光读 prompt 就要 26s，20s 预算必然掐断——每一轮都白跑，历史永不压缩。
+//
+// 断言的是**时间模型**而不是某个具体 token 数：块大小是速度的函数。
+func TestCompactionBasicChunkFitsBudget(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 262144)
+	// 保守种子（本地引擎量级）：块与输出都必须在预算内算完。
+	inTok, outTok := s.planChunk(s.llmBudget)
+	in, out := s.throughput()
+	model := float64(inTok)/in + float64(outTok)/out
+	if model > 0.9*s.llmBudget.Seconds() {
+		t.Fatalf("按种子吞吐算出的块 %d/%d 预计要 %.1fs，超出预算 %s（必然超时）",
+			inTok, outTok, model, s.llmBudget)
+	}
+	if inTok < summaryChunkTokensMin || outTok < summaryMinTokens {
+		t.Fatalf("块预算不得低于下限：in=%d out=%d", inTok, outTok)
+	}
+	if inTok >= summaryChunkTokens {
+		t.Fatalf("慢引擎不该一次读满 %d token（种子吞吐下必然读不完）", summaryChunkTokens)
+	}
+
+	// 快模型（云端量级）：算出来就该是上限——与从前的固定值一致。
+	s.inTPS, s.outTPS = 50_000, 300
+	inTok, outTok = s.planChunk(s.llmBudget)
+	if inTok != summaryChunkTokens {
+		t.Fatalf("快模型的块应顶到上限 %d，got %d", summaryChunkTokens, inTok)
+	}
+	if outTok != summaryMaxTokens {
+		t.Fatalf("快模型的输出应顶到上限 %d，got %d", summaryMaxTokens, outTok)
+	}
+}
+
+// TestCompactionBasicShrinksAfterTimeout 撞预算后必须把吞吐估计减半，下一轮换更小的块。
+//
+// 现场就是没做到这一点：同一个 40,331 token 的块被重发 144 次，每次都撞同一堵墙，
+// 一次也没压成（宿主侧一条压缩记录都没有，上下文涨到窗口的 88%）。
+func TestCompactionBasicShrinksAfterTimeout(t *testing.T) {
+	// 规划层：真实预算（20s）下，一次撞预算要换来一个明显更小的块。
+	s := newTestCompactionBasicServer(t, 262144)
+	firstIn, firstOut := s.planChunk(s.llmBudget)
+	s.learnSummarySpeed(firstIn, firstOut, s.llmBudget, false)
+	secondIn, secondOut := s.planChunk(s.llmBudget)
+	if secondIn >= firstIn || secondOut >= firstOut {
+		t.Fatalf("超时后下一块必须更小：%d/%d → %d/%d", firstIn, firstOut, secondIn, secondOut)
+	}
+
+	// 整轮：一块都没压成时既要报「没改写」，又要留下收紧后的估计。
+	// 这里的预算压到 200ms（低于块下限 1000 token 的读入时间），是为了让用例跑得快；
+	// 该量级下块已被下限夹住、不再随估计变化，所以「块变小」只在上面按真实预算断言。
+	s = newTestCompactionBasicServer(t, 10000)
+	s.llmBudget = 200 * time.Millisecond
+	s.llm = &ctxAwareLLM{delay: 5 * time.Second}
+	before, beforeOut := s.throughput()
+	if res := mustPreStepSession(t, s, "sess-shrink", bigMsgs(16, 1200)); res != "" {
+		t.Fatalf("一块都没压成时不得返回改写，got %q", res)
+	}
+	after, afterOut := s.throughput()
+	if after >= before || afterOut >= beforeOut {
+		t.Fatalf("超时后吞吐估计必须下调：in %v→%v, out %v→%v", before, after, beforeOut, afterOut)
+	}
+	if st := s.states["sess-shrink"]; len(st.Records) != 0 {
+		t.Fatalf("超时不得落任何记录：%+v", st.Records)
+	}
+}
+
+// TestCompactionBasicLearnsFasterModel 成功的摘要要按实测耗时放大吞吐估计：
+// 云端模型第一轮成功后很快回到 50K 块，不必永远按本地引擎的小块去压。
+func TestCompactionBasicLearnsFasterModel(t *testing.T) {
+	s := newTestCompactionBasicServer(t, 200000)
+	fake := &fakeCompactionBasicLLM{content: "摘要正文"}
+	s.llm = fake
+	before, _ := s.throughput()
+	if res := mustPreStepSession(t, s, "sess-learn", bigMsgs(60, 4000)); res == "" {
+		t.Fatal("超阈值应改写")
+	}
+	after, _ := s.throughput()
+	if after <= before {
+		t.Fatalf("瞬时返回的摘要应放大吞吐估计：%v → %v", before, after)
+	}
+}
+
+// TestCompactionBasicBudgetFollowsHostDispatch 单轮摘要预算与宿主分发预算同源：
+// 宿主放大 DSC_EVENT_DISPATCH_TIMEOUT 后，摘要预算自动跟随（少 10s 余量），
+// 不必两处手调；显式专属键仍然优先。
+func TestCompactionBasicBudgetFollowsHostDispatch(t *testing.T) {
+	t.Setenv("DSC_COMPACTION_BASIC_LLM_TIMEOUT", "")
+	t.Setenv("DSC_EVENT_DISPATCH_TIMEOUT", "")
+	if got := newCompactionBasicServer().llmBudget; got != defaultSummarizeBudget {
+		t.Fatalf("缺省应为 %s，got %s", defaultSummarizeBudget, got)
+	}
+	t.Setenv("DSC_EVENT_DISPATCH_TIMEOUT", "120")
+	if got := newCompactionBasicServer().llmBudget; got != 110*time.Second {
+		t.Fatalf("宿主预算 120s → 摘要预算应为 110s，got %s", got)
+	}
+	t.Setenv("DSC_COMPACTION_BASIC_LLM_TIMEOUT", "45")
+	if got := newCompactionBasicServer().llmBudget; got != 45*time.Second {
+		t.Fatalf("专属键应优先，got %s", got)
 	}
 }

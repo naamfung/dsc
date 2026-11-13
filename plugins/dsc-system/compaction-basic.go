@@ -16,10 +16,19 @@
 // 留 10 个点给估算误差与一轮的增量（工具结果常常一次几万 token），压得早一点、稳一点。
 //
 // 为什么摘要要分块 + 限时：压缩是在 agent/pre-step 里**同步**跑的，而宿主的整条事件
-// 分发只有 30s 预算。一次把 20 万 token 塞进一条摘要 prompt，既跑不完（超时后宿主的
-// 改写被丢弃，全量历史照旧发出去），又会退化成截断式摘要（15 万 token 换一句话，永久
-// 落盘）。分块后每块都能在预算内跑完；跑不完就停在已完成的块上（前缀已经缩短，下一轮
-// 从这里继续），绝不为了「一次压完」丢整段历史。
+// 分发只有 30s 预算（DSC_EVENT_DISPATCH_TIMEOUT 可放大）。一次把 20 万 token 塞进一条
+// 摘要 prompt，既跑不完（超时后宿主的改写被丢弃，全量历史照旧发出去），又会退化成截断式
+// 摘要（15 万 token 换一句话，永久落盘）。分块后每块都能在预算内跑完；跑不完就停在已完成
+// 的块上（前缀已经缩短，下一轮从这里继续），绝不为了「一次压完」丢整段历史。
+//
+// 为什么块大小必须按**实测速度**算，而不是定死 50K：预算（20s）与分发超时（30s）是时间
+// 预算，摘要耗时却由模型速度决定。云端模型 prefill 几万 tok/s，50K 的块两三秒读完；
+// 本地引擎只有 1~2K tok/s、decode 20~40 tok/s——50K 的块光读 prompt 就要 30s+，再加
+// 2K 输出，**每一轮都必然撞满预算**。现场就是这样：同一个 40,331 token 的块被重发 144
+// 次（每次都在 ~21s 处被掐断、读进度停在 32,768），一次也没压成，而宿主侧一条压缩记录
+// 都没有，上下文一路涨到窗口的 88%，用户看到的是「过了阈值却始终没压缩」。
+// 所以：块大小与输出上限都由「剩余预算 × 吞吐估计」推出，吞吐估计每轮按实测修正
+// （撞预算就减半，跑得快就放大），任何速度的引擎都能在预算内跑完第一块。
 //
 // 溢出（provider 4xx）不由本插件处理：超窗的处置权归宿主（滑窗，无损），本插件只在
 // pre-step 按压力改写。曾经的「request-error 紧急压缩」会跳过 LLM、用截断摘要把整段
@@ -41,8 +50,10 @@
 //     0.80 才留得出余量；可调，与接管机制无关）
 //   - DSC_COMPACTION_BASIC_RETAIN_RATIO    保留尾部比例（默认 0.16）
 //   - DSC_COMPACTION_BASIC_RETAIN_MIN      保留尾部最少 token 数（默认 1024）
-//   - DSC_COMPACTION_BASIC_LLM_TIMEOUT     单轮摘要的总时间预算（秒，默认 20；必须小于
-//     宿主 pre-step 分发的 30s，否则辛苦算出来的摘要会被超时丢弃）
+//   - DSC_COMPACTION_BASIC_LLM_TIMEOUT     单轮摘要的总时间预算（秒，默认取宿主分发预算
+//     DSC_EVENT_DISPATCH_TIMEOUT 减 10s，即默认 20s；必须小于宿主分发预算，否则辛苦算出来
+//     的摘要会被超时丢弃）。本地引擎要「一轮压完」而不必分十几轮时，把它与宿主分发预算
+//     一起放大（例如两者分别 110 / 120）。
 package main
 
 import (
@@ -107,6 +118,15 @@ type compactionBasicServer struct {
 	retainMin   int           // 保留尾部最少 token 数
 	llmBudget   time.Duration // 单轮摘要的总时间预算（须小于宿主事件分发预算）
 
+	// inTPS / outTPS 是摘要请求的吞吐估计（token/s，须持 mu）：输入侧（prefill）与输出
+	// 侧（decode）。种子取本地引擎的量级，每次调用按实测耗时修正——块大小与输出上限都由
+	// 它推出（见 planChunk），所以「第一步就撞满预算」这种单向故障不会再自我复制。
+	inTPS  float64
+	outTPS float64
+
+	// lastShrinkWarn 上一次「摘要超出预算」告警的时间（限流用，须持 mu）。
+	lastShrinkWarn time.Time
+
 	states map[string]*compactionState // per-session 压缩记录（进程内，须持 mu）
 
 	// store 摘要缓存的落盘通道（nil = 纯内存：测试与未装配时走这条）。
@@ -117,20 +137,46 @@ type compactionBasicServer struct {
 	logWindowOnce sync.Once
 }
 
-// 摘要分块与限时的三个常量（理由见文件头与 compactRegion）。
+// 摘要分块与限时的常量（理由见文件头与 compactRegion/planChunk）。
 const (
-	// defaultSummarizeBudget 单轮摘要的总时间预算。宿主的 pre-step 分发是 30s 硬超时
-	// （core 的事件分发），超时后它按「未改写」发出全量历史——摘要白算、改写被丢。
-	// 留 10s 给序列化、传输与宿主收口。
+	// defaultSummarizeBudget 单轮摘要的默认总时间预算。宿主的 pre-step 分发是硬超时
+	// （见 core/notify.go 的 eventDispatchTimeout），超时后它按「未改写」发出全量历史
+	// ——摘要白算、改写被丢。默认取宿主预算减 10s（留给序列化、传输与宿主收口）；
+	// 宿主预算被放大时这里自动跟随，不必两处手调。
 	defaultSummarizeBudget = 20 * time.Second
 
-	// summaryChunkTokens 单块摘要的 token 预算。50K 是实测出来的敏感点：再大，
-	// 单块摘要就容易跑不完 30s 的分发预算（宿主的改写随即被超时丢弃）。
+	// summaryDispatchReserve 摘要预算与宿主分发预算之间要留的余量。
+	summaryDispatchReserve = 10 * time.Second
+
+	// summaryChunkTokens 单块摘要的**上限**（token）。它是一个天花板，不是每次的目标：
+	// 实际块大小由 planChunk 按「剩余预算 × 实测吞吐」算出来（慢引擎只有几千 token）。
+	// 50K 这个值只对「prefill 几万 tok/s」的云端模型有意义。
 	summaryChunkTokens = 50_000
 
-	// summaryMaxTokens 单次摘要的输出上限（token）。按窗口/8 给（256K 窗口 → 32K）
-	// 会让模型啰嗦到几十秒；摘要的目的是「压缩」，每块 2K 足够写下决策与当前任务。
+	// summaryChunkTokensMin 单块摘要的下限（token）。再小就切碎消息了，且摘要质量
+	// 与输入篇幅强相关（一句话的输入换不来有用的摘要）。
+	summaryChunkTokensMin = 1_000
+
+	// summaryMaxTokens 单次摘要的输出上限（token）——同样是天花板，实际值见 planChunk。
+	// 按窗口/8 给（256K 窗口 → 32K）会让模型啰嗦到几十秒；摘要的目的是「压缩」。
 	summaryMaxTokens = 2048
+
+	// summaryMinTokens 单次摘要的输出下限：低于这个篇幅的摘要不含决策与当前任务。
+	summaryMinTokens = 256
+
+	// 吞吐估计的种子（token/s）。取本地引擎的实测量级：prefill ~1.2K tok/s、
+	// decode ~30 tok/s。**宁可第一轮小一点**——块太大会撞满预算、一块也压不出来，
+	// 而块偏小只是多压几轮（每轮都真的产出一条记录）。云端模型第一轮成功后按实测放大。
+	seedSummaryInputTPS  = 1200.0
+	seedSummaryOutputTPS = 30.0
+
+	// 吞吐估计的夹取范围：防一次异常耗时（被外界暂停、调度抖动）把估计推到不可用。
+	minSummaryInputTPS   = 100.0
+	maxSummaryInputTPS   = 200_000.0
+	minSummaryOutputTPS  = 3.0
+	maxSummaryOutputTPS  = 500.0
+	summarySpeedGrowMax  = 1.5 // 单轮最多放大到 1.5×（收敛，不跳变）
+	summarySpeedShrinkBy = 0.5 // 撞预算即减半
 )
 
 // newCompactionBasicServer 读 env 构建驻留（fail-soft：非法配置逐项回退默认；
@@ -141,7 +187,9 @@ func newCompactionBasicServer() *compactionBasicServer {
 		threshold:   0.70,
 		retainRatio: 0.16,
 		retainMin:   1024,
-		llmBudget:   defaultSummarizeBudget,
+		llmBudget:   derivedSummarizeBudget(),
+		inTPS:       seedSummaryInputTPS,
+		outTPS:      seedSummaryOutputTPS,
 	}
 	// 窗口来源优先级：DSC_COMPACTION_BASIC_CONTEXT_WINDOW（插件专属）>
 	// DSC_CONTEXT_WINDOW（宿主按配置 context_window / 端点探测下发的有效值）> 128K 默认。
@@ -177,6 +225,27 @@ func newCompactionBasicServer() *compactionBasicServer {
 	}
 	s.states = map[string]*compactionState{}
 	return s
+}
+
+// derivedSummarizeBudget 从宿主的分发预算推出本插件的单轮摘要预算。
+//
+// 两者必须同源：宿主预算（DSC_EVENT_DISPATCH_TIMEOUT，默认 30s）决定「这一步最多能花
+// 多久」，摘要必须在这之内跑完，否则改写会被超时丢弃（白算）。所以放大宿主预算时，
+// 摘要预算自动跟随，少 10s 留给序列化、gRPC 与宿主收口。
+func derivedSummarizeBudget() time.Duration {
+	v := strings.TrimSpace(os.Getenv("DSC_EVENT_DISPATCH_TIMEOUT"))
+	if v == "" {
+		return defaultSummarizeBudget
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return defaultSummarizeBudget
+	}
+	b := time.Duration(n)*time.Second - summaryDispatchReserve
+	if b < 5*time.Second {
+		b = 5 * time.Second
+	}
+	return b
 }
 
 // attachLLM 缓存 interconnect 聚合 LLM 客户端（宿主挂载后回调注入）。
@@ -218,8 +287,8 @@ func (s *compactionBasicServer) handlePreStep(ctx context.Context, dataJSON stri
 	// 首次 pre-step 打印实际生效的压缩参数（此时 gRPC 已握手，stderr 由宿主转发到日志）。
 	// 用于核对云端 1M 窗口：应看到 window=1048576、阈值=0.70 → 约 734k tokens 才触发。
 	s.logWindowOnce.Do(func() {
-		fmt.Fprintf(os.Stderr, "dsc-system: compaction-basic window=%d threshold=%.2f retain_ratio=%.2f\n",
-			s.window, s.threshold, s.retainRatio)
+		fmt.Fprintf(os.Stderr, "dsc-system: compaction-basic window=%d threshold=%.2f retain_ratio=%.2f budget=%s\n",
+			s.window, s.threshold, s.retainRatio, s.llmBudget)
 	})
 	var ev dsc.AgentPreStepEvent
 	if err := json.Unmarshal([]byte(dataJSON), &ev); err != nil {
@@ -346,10 +415,13 @@ func (s *compactionBasicServer) persistState(sess string, records []compactionRe
 // compactRegion 把 [base, end) 压成一条或多条记录：按块摘要，每块独立成记录
 // （记录即「已压缩前缀」的连续覆盖，多块就是多段摘要）。
 //
-// 分块 + 限时的理由见文件头。两个硬约束都体现在这里：
-//   - 每块都不超过 summaryChunkBudget，摘要请求本身不会顶到宿主的收口预算；
+// 分块 + 限时的理由见文件头。三个硬约束都体现在这里：
+//   - 每块的输入/输出预算由 planChunk 按「剩余预算 × 实测吞吐」推出，任何速度的模型
+//     都能在预算内跑完第一块（定死 50K 块的做法在本地引擎上必然超时，见文件头）；
 //   - 整轮只在 llmBudget 内跑，跑不完就停在已完成的块上——前缀已经缩短，下一轮
-//     从新的 base 继续，绝不为了「一次压完」把没摘要的历史换成截断式摘要。
+//     从新的 base 继续，绝不为了「一次压完」把没摘要的历史换成截断式摘要；
+//   - 一块撞了预算就把吞吐估计减半：下一轮的块一定更小。**不能**用同样的块再撞一次
+//     同一堵墙（现场：同一个 40,331 token 的块被重发 144 次，全部超时，一次没压成）。
 //
 // 返回空表示本轮没压成（LLM 忙 / 超时且一块都没完成）：调用方返回既有视图，
 // 超窗由宿主滑窗兜住（无损，只影响这一次请求）。
@@ -379,17 +451,22 @@ func (s *compactionBasicServer) compactRegion(ctx context.Context, msgs []*proto
 	deadline := time.Now().Add(s.llmBudget)
 	var out []compactionRecord
 	for cur := base; cur < end; {
-		if !time.Now().Before(deadline) {
+		left := time.Until(deadline)
+		if left <= 0 {
 			break // 预算用完：已完成的块照常落库，剩下的下一轮继续
 		}
-		next := s.chunkEnd(msgs, cur, end)
+		inTok, outTok := s.planChunk(left)
+		next := s.chunkEnd(msgs, cur, end, inTok)
 		if next <= cur {
 			break
 		}
 		chunkCtx, cancel := context.WithDeadline(ctx, deadline)
-		summary, err := s.llmSummary(chunkCtx, llm, msgs[cur:next])
+		t0 := time.Now()
+		summary, err := s.llmSummary(chunkCtx, llm, msgs[cur:next], outTok)
+		elapsed := time.Since(t0)
 		cancel()
 		if err == nil && summary != "" {
+			s.learnSummarySpeed(inTok, outTok, elapsed, true)
 			out = append(out, s.newRecord(msgs, cur, next, summary, "llm"))
 			cur = next
 			continue
@@ -397,6 +474,12 @@ func (s *compactionBasicServer) compactRegion(ctx context.Context, msgs []*proto
 		// 宿主已经撤了这个事件（ctx 取消）或预算耗尽：已完成的块落库，剩下的下轮继续。
 		// 注意这里**不**退化成截断式摘要——那正是「15 万 token 换一句话」的来源。
 		if len(out) > 0 || ctx.Err() != nil || !time.Now().Before(deadline) {
+			// 撞了预算就把估计减半：这块在预算内没跑完是**上界实证**，下一轮必须更小。
+			// 宿主自己撤了事件时不算（那不是速度问题）。
+			if ctx.Err() == nil {
+				s.learnSummarySpeed(inTok, outTok, elapsed, false)
+				s.warnSlowSummary(inTok, next-cur)
+			}
 			break
 		}
 		// 第一块就失败且不是超时：LLM 路径不可用（未就绪 / 被拒），整段走截断式，
@@ -404,6 +487,112 @@ func (s *compactionBasicServer) compactRegion(ctx context.Context, msgs []*proto
 		return []compactionRecord{s.newRecord(msgs, base, end, truncateSummary(msgs[base:end]), "truncated")}
 	}
 	return out
+}
+
+// planChunk 按「剩余时间 + 当前吞吐估计」给出这一块的输入/输出预算。
+//
+// 模型：一次摘要的耗时 ≈ inTokens/inTPS + outTokens/outTPS。预算对半分给两侧——块越大
+// 压得越多、输出越大摘要越完整，两者都要时间；对慢引擎 decode 往往是更贵的那一半
+// （30 tok/s 时 1K 输出就要 33s）。
+//
+// 这是「同一份预算在不同引擎上都成立」的关键：云端模型算出来就是 50K 块 + 2K 输出
+// （与从前的固定值一致），本地引擎算出来是几千 token 块 + 两三百 token 输出——两者
+// 都能在预算内跑完，而后者至少**能真的压出一条记录**。
+func (s *compactionBasicServer) planChunk(remaining time.Duration) (inTok, outTok int) {
+	inTPS, outTPS := s.throughput()
+	usable := remaining - remaining/10 // 留一成给序列化、gRPC 与宿主收口
+	if usable < time.Second {
+		usable = time.Second
+	}
+	share := (usable / 2).Seconds()
+	inTok = int(share * inTPS)
+	outTok = int(share * outTPS)
+	if inTok < summaryChunkTokensMin {
+		inTok = summaryChunkTokensMin
+	}
+	if inTok > summaryChunkTokens {
+		inTok = summaryChunkTokens
+	}
+	if outTok < summaryMinTokens {
+		outTok = summaryMinTokens
+	}
+	if outTok > summaryMaxTokens {
+		outTok = summaryMaxTokens
+	}
+	return inTok, outTok
+}
+
+// throughput 读取当前吞吐估计（须持 mu）。
+func (s *compactionBasicServer) throughput() (in, out float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inTPS, s.outTPS
+}
+
+// learnSummarySpeed 按一次调用的实测耗时修正吞吐估计。
+//
+// 失败（撞预算）→ 两侧一起减半：这是「按当前估计一定跑不完」的实证，下一轮必须更小，
+// 否则就是「同一块撞同一堵墙」（现场 144 次同样大小、同样超时）。
+// 成功 → 按「模型预期耗时 / 实测耗时」放大，单轮最多 1.5×（收敛而非跳变）；贴着预算
+// 完成则略收一点，给下一次留余量。
+func (s *compactionBasicServer) learnSummarySpeed(inTok, outTok int, elapsed time.Duration, ok bool) {
+	// 计时下限：Windows 上 time.Since 的分辨率足以让「秒回」的调用取到 0，整段命中
+	// 前缀缓存时也接近 0。按 0 直接丢弃这条实证，冷启动的保守种子就永远放不大
+	// （云端模型会一直用本地引擎量级的小块去压）。
+	if elapsed < time.Millisecond {
+		elapsed = time.Millisecond
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	scale := 1.0
+	if !ok {
+		scale = summarySpeedShrinkBy
+	} else if model := float64(inTok)/s.inTPS + float64(outTok)/s.outTPS; model > 0 {
+		actual := elapsed.Seconds()
+		switch {
+		case actual*3 < model: // 明显比估计快：放大（上限 1.5×/轮）
+			scale = model / actual
+			if scale > summarySpeedGrowMax {
+				scale = summarySpeedGrowMax
+			}
+		case actual*1.2 > model: // 贴着预算完成：略收，别把下一次推到超时
+			scale = 0.9
+		}
+	}
+	s.inTPS = clampFloat(s.inTPS*scale, minSummaryInputTPS, maxSummaryInputTPS)
+	s.outTPS = clampFloat(s.outTPS*scale, minSummaryOutputTPS, maxSummaryOutputTPS)
+}
+
+// warnSlowSummary 打印一次「摘要跑不完预算」的告警（30s 限流，避免每步刷屏）。
+//
+// 这行日志是这类故障唯一的外部可见证据：不打印时，用户只能看到「过了阈值却一直没压缩」，
+// 而引擎侧看到的只是「客户端断开」。它同时给出下一步的自愈动作与可调项。
+func (s *compactionBasicServer) warnSlowSummary(inTok, msgCount int) {
+	s.mu.Lock()
+	if !s.lastShrinkWarn.IsZero() && time.Since(s.lastShrinkWarn) < 30*time.Second {
+		s.mu.Unlock()
+		return
+	}
+	s.lastShrinkWarn = time.Now()
+	inTPS, outTPS := s.inTPS, s.outTPS
+	budget := s.llmBudget
+	s.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "dsc-system: compaction-basic: 摘要超出单轮预算（%s 内没跑完 ~%d token / %d 条消息的块），"+
+		"吞吐估计降到 %.0f tok/s 输入 / %.0f tok/s 输出，下一块会更小。"+
+		"本地引擎想一轮压完（而不是分十几轮），把 DSC_EVENT_DISPATCH_TIMEOUT 与 "+
+		"DSC_COMPACTION_BASIC_LLM_TIMEOUT 一起放大（如 120 / 110）\n",
+		budget, inTok, msgCount, inTPS, outTPS)
+}
+
+// clampFloat 夹取（避免为一行夹取再引入 math）。
+func clampFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // newRecord 组装一条压缩记录（一条记录 = 一段被摘要替换的前缀）。
@@ -423,16 +612,19 @@ func (s *compactionBasicServer) newRecord(msgs []*proto.Message, from, to int, s
 	}
 }
 
-// chunkEnd 返回本块的上界：从 from 起累加到「再加一条就超块预算」为止（至少一条）。
+// chunkEnd 返回本块的上界：从 from 起累加到「再加一条就超额」为止（至少一条）。
 //
-// 块预算固定 50K，不随窗口缩放：区间长度本来就受窗口约束（≤ 窗口 − 保留区），
-// 而「一次摘要多大才跑得完」是模型端的速度问题，与窗口无关。小于 50K 的区间
-// 因此仍是一条记录、一次调用（与从前完全一致），只有真正的大区间才被切开。
-func (s *compactionBasicServer) chunkEnd(msgs []*proto.Message, from, end int) int {
+// limit 是 planChunk 按剩余预算与实测吞吐算出来的输入预算，不是常量：一次摘要能读
+// 多少由「这段时间内模型能读完多少」决定，与窗口无关（区间长度本就被窗口约束：
+// ≤ 窗口 − 保留区）。
+func (s *compactionBasicServer) chunkEnd(msgs []*proto.Message, from, end, limit int) int {
+	if limit <= 0 {
+		limit = summaryChunkTokensMin
+	}
 	acc := 0
 	for i := from; i < end; i++ {
 		acc += dsc.EstimateProtoMessageTokens(msgs[i])
-		if acc > summaryChunkTokens {
+		if acc > limit {
 			if i == from {
 				return from + 1 // 单条就超预算：只能自成一块，再切就切碎消息了
 			}
@@ -443,7 +635,8 @@ func (s *compactionBasicServer) chunkEnd(msgs []*proto.Message, from, end int) i
 }
 
 // llmSummary 构建压缩请求并调用聚合 LLM（提示词与宿主原引擎逐字一致）。
-func (s *compactionBasicServer) llmSummary(ctx context.Context, llm llmChat, region []*proto.Message) (string, error) {
+// maxTokens 由 planChunk 按剩余预算与输出吞吐给出。
+func (s *compactionBasicServer) llmSummary(ctx context.Context, llm llmChat, region []*proto.Message, maxTokens int) (string, error) {
 	prompt := "你是对话压缩器。请将下面的对话历史压缩成一段精简但信息完整的摘要。\n" +
 		"压缩优先级：① 永远先保留用户【当前正在推进的最紧要任务/事项】——压缩后模型仍须明确知道" +
 		"现在要做什么、卡在哪、下一步是什么；② 保留重要决策、关键结论、工具结果与文件路径等后续仍要用的事实；" +
@@ -456,12 +649,13 @@ func (s *compactionBasicServer) llmSummary(ctx context.Context, llm llmChat, reg
 		{Role: "system", Content: prompt},
 		{Role: "user", Content: "请压缩上述对话历史。"},
 	}
-	maxTokens := s.window / 8
+	// 输出上限由调用方按「剩余预算 × 输出吞吐」给出（planChunk）；这里只做兜底夹取，
+	// 防止非法值把输出预算推到离谱的量级。
 	if maxTokens > summaryMaxTokens {
 		maxTokens = summaryMaxTokens
 	}
-	if maxTokens < 512 {
-		maxTokens = 512
+	if maxTokens < summaryMinTokens {
+		maxTokens = summaryMinTokens
 	}
 	resp, err := llm.Chat(ctx, compactMsgs, int32(maxTokens))
 	if err != nil {
